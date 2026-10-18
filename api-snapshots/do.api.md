@@ -406,6 +406,7 @@ abstract class ShardDO {
     protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
+    protected readonly secretValues: SecretValueHost;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;

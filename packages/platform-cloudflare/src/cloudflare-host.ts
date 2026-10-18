@@ -17,10 +17,12 @@
 import type { DurableObjectNamespace, DurableObjectState, DurableObjectStub, WebSocket } from "@cloudflare/workers-types";
 import { LunoraError } from "@lunora/errors";
 import type {
+    SecretValueHost,
     ShardAlarms,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
+    ShardKvListOptions,
     ShardKvStore,
     ShardRegionHint,
     ShardSqlExec,
@@ -28,6 +30,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "@lunora/platform";
+import { assertSecretValueSize, clampSecretValueTtl } from "@lunora/platform";
 
 /**
  * Raw cursor returned by Cloudflare's `SqlStorage.exec` — already iterable with
@@ -258,29 +261,152 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
 interface KvStorageLike {
     delete: (key: string) => Promise<boolean | number>;
     get: <T = unknown>(key: string) => Promise<T | undefined>;
-    list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
+    list?: <T = unknown>(options?: { limit?: number; prefix?: string }) => Promise<Map<string, T>>;
     put: (key: string, value: unknown) => Promise<void>;
 }
 
 /**
+ * {@link KvStorageLike} plus `transaction`, which {@link createSecretValueHost}
+ * needs for its read-check-bind in `take`. Method syntax on purpose, so the real
+ * `DurableObjectStorage` (whose transaction closure takes its own transaction
+ * type) is accepted without a cast.
+ */
+interface SecretStorageLike extends KvStorageLike {
+    list: <T = unknown>(options?: { limit?: number; prefix?: string }) => Promise<Map<string, T>>;
+    transaction: <T>(closure: (txn: KvStorageLike) => Promise<T>) => Promise<T>;
+}
+
+/**
+ * Key prefix the secret-value records live under, in the same `state.storage`
+ * as the shard's KV surface. {@link createShardKvStore} hides every key under it,
+ * so `ShardKvStore` can neither list nor read a secret, and a ref cannot be used
+ * to bypass the claimant check.
+ */
+const SECRET_VALUE_KEY_PREFIX = "__lunora_secret_value:";
+
+/** Expired records one `put` may remove. Bounds the sweep; an expired record past this cap waits for a later put. */
+const SECRET_VALUE_SWEEP_LIMIT = 32;
+
+const isReservedKey = (key: string): boolean => key.startsWith(SECRET_VALUE_KEY_PREFIX);
+
+const assertNotReservedKey = (key: string): void => {
+    if (isReservedKey(key)) {
+        throw new TypeError(`key "${key}" is in the reserved secret-value namespace`);
+    }
+};
+
+/**
  * Turn a Durable Object's `state.storage` into the provider-neutral
  * {@link ShardKvStore}. The DO's KV surface already matches the contract
- * method-for-method; this adapter only normalizes the return of `delete`
- * (workerd resolves a boolean, some doubles a number) and fails closed on a
- * `list` the underlying storage does not provide.
+ * method-for-method; this adapter normalizes the return of `delete` (workerd
+ * resolves a boolean, some doubles a number), fails closed on a `list` the
+ * underlying storage does not provide, and keeps the reserved secret-value
+ * namespace invisible: `get` answers `undefined` for it, `list` omits it, and
+ * `put`/`delete` refuse it.
  */
 const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
     return {
-        delete: async (key) => Boolean(await storage.delete(key)),
-        get: (key) => storage.get(key),
-        list: (options) => {
+        delete: async (key) => {
+            assertNotReservedKey(key);
+
+            return Boolean(await storage.delete(key));
+        },
+        get: async (key) => (isReservedKey(key) ? undefined : storage.get(key)),
+        list: async <T = unknown>(options?: ShardKvListOptions) => {
             if (typeof storage.list !== "function") {
                 throw new TypeError("storage.list is not available on this DurableObjectStorage");
             }
 
-            return storage.list(options);
+            const entries = await storage.list<T>(options);
+
+            // Filtered after the read rather than by a narrower query: storage.list
+            // has no exclude, and the reserved namespace only ever holds a bounded
+            // number of records (see SECRET_VALUE_SWEEP_LIMIT).
+            for (const key of entries.keys()) {
+                if (isReservedKey(key)) {
+                    entries.delete(key);
+                }
+            }
+
+            return entries;
         },
-        put: (key, value) => storage.put(key, value),
+        put: async (key, value) => {
+            assertNotReservedKey(key);
+
+            await storage.put(key, value);
+        },
+    };
+};
+
+/** One stored secret. `expiresAt` is absolute, so a restored record still expires on time. */
+interface SecretRecord {
+    claimant?: string;
+    expiresAt: number;
+    scope: string;
+    value: string;
+}
+
+/**
+ * Turn a Durable Object's `state.storage` into a {@link SecretValueHost}.
+ *
+ * Records live under {@link SECRET_VALUE_KEY_PREFIX} in the shard's own
+ * key-value storage. Keys sort by expiry (a zero-padded `expiresAt` leads the
+ * ref), so the sweep in `put` reads the earliest-expiring records first and stops
+ * at the first live one in a page.
+ *
+ * `take` runs its read, claimant bind and write inside `storage.transaction`, so
+ * two takes cannot both observe the ref unbound. `options.now` exists for the
+ * conformance suite's clock and defaults to `Date.now`.
+ */
+const createSecretValueHost = (storage: SecretStorageLike, options: { now?: () => number } = {}): SecretValueHost => {
+    const now = options.now ?? Date.now;
+    const keyOf = (ref: string): string => `${SECRET_VALUE_KEY_PREFIX}${ref}`;
+
+    return {
+        discard: async (ref) => Boolean(await storage.delete(keyOf(ref))),
+        put: async (value, put) => {
+            assertSecretValueSize(value);
+
+            const at = now();
+            const expiresAt = at + clampSecretValueTtl(put.ttlMs);
+            const ref = `${String(expiresAt).padStart(15, "0")}.${crypto.randomUUID()}`;
+
+            await storage.put(keyOf(ref), { expiresAt, scope: put.scope, value } satisfies SecretRecord);
+
+            const earliest = await storage.list<SecretRecord>({ limit: SECRET_VALUE_SWEEP_LIMIT, prefix: SECRET_VALUE_KEY_PREFIX });
+            const expired = [...earliest].filter(([, record]) => record.expiresAt <= at).map(([key]) => key);
+
+            await Promise.all(expired.map(async (key) => storage.delete(key)));
+
+            return ref;
+        },
+        take: (ref, take) =>
+            storage.transaction(async (txn) => {
+                const key = keyOf(ref);
+                const record = await txn.get<SecretRecord>(key);
+
+                if (record === undefined) {
+                    return undefined;
+                }
+
+                if (record.expiresAt <= now()) {
+                    await txn.delete(key);
+
+                    return undefined;
+                }
+
+                if (record.scope !== take.scope) {
+                    return undefined;
+                }
+
+                if (record.claimant === undefined) {
+                    await txn.put(key, { ...record, claimant: take.claimant } satisfies SecretRecord);
+
+                    return record.value;
+                }
+
+                return record.claimant === take.claimant ? record.value : undefined;
+            }),
     };
 };
 
@@ -588,5 +714,5 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
     return directory;
 };
 
-export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
+export { createSecretValueHost, createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
 export type { SqlStorageCursor };

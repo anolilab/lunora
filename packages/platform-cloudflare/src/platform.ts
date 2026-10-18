@@ -45,10 +45,10 @@
  * {@link WorkerPlatform.scheduler} is `undefined`, which callers already handle.
  */
 
-import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
+import type { PlatformCapabilities, SchedulerHost, SecretValueHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 
-import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
+import { createSecretValueHost, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 
 /**
  * The contracts available inside one Durable Object instance.
@@ -60,6 +60,8 @@ import { createShardDirectory, createShardHost, createShardKvStore, createSocket
 export interface ShardPlatform {
     /** Durable key-value storage for this shard. */
     kv: ShardKvStore;
+    /** Human-supplied secret values held for one durable step, kept out of `kv`'s reach. */
+    secretValues: SecretValueHost;
     /** Single-writer execution, local SQL, transactions, alarms, identity. */
     shard: ShardHost;
     /** Hibernated WebSocket subscriptions for this shard. */
@@ -121,6 +123,7 @@ export const createShardPlatform = (state: unknown): ShardPlatform => {
     return {
         kv: createShardKvStore(durableState.storage),
         shard: createShardHost(durableState),
+        secretValues: createSecretValueHost(durableState.storage),
         sockets: createSocketHost(durableState),
     };
 };
