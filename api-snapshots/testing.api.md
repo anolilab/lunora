@@ -27,7 +27,7 @@ interface AgentHarnessOptions {
     env?: Record<string, unknown>;
     exportName?: string;
     functions?: Record<string, HarnessFunction>;
-    script: AgentGenerateResult[];
+    script?: AgentGenerateResult[];
 }
 ```
 
@@ -36,6 +36,8 @@ interface AgentHarnessOptions {
 ```ts
 interface AgentRunOverrides {
     instanceId?: string;
+    model?: LanguageModel;
+    onTokenDelta?: (delta: AgentTokenDelta) => void;
     script?: AgentGenerateResult[];
 }
 ```
@@ -259,6 +261,28 @@ interface RecordEvaluationInput {
 }
 ```
 
+### `RecordedStreamPart` (type)
+
+```ts
+type RecordedStreamPart = ModelStreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
+```
+
+### `RecordedTurn` (interface)
+
+```ts
+interface RecordedTurn {
+    error?: {
+        after: number;
+        cause: unknown;
+    };
+    parts: ReadonlyArray<RecordedStreamPart>;
+    pause?: {
+        after: number;
+        gate: StreamGate;
+    };
+}
+```
+
 ### `RetrievalScorerOptions` (interface)
 
 ```ts
@@ -327,6 +351,16 @@ interface SentQueueMessage {
     contentType?: QueueContentType;
     delaySeconds?: number;
     queue: string;
+}
+```
+
+### `StreamGate` (interface)
+
+```ts
+interface StreamGate {
+    readonly reached: Promise<void>;
+    release: () => void;
+    wait: () => Promise<void>;
 }
 ```
 
@@ -410,6 +444,12 @@ const containsScorer: (needle: string, options?: {
 const createArtifactsFake: (options?: {
     namespace?: string;
 }) => ArtifactsFake;
+```
+
+### `createStreamGate` (const)
+
+```ts
+const createStreamGate: () => StreamGate;
 ```
 
 ### `evaluate` (const)
@@ -504,6 +544,12 @@ const recallAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
 
 ```ts
 const recordEvaluation: (input: RecordEvaluationInput) => Record<string, EvaluationAttributeValue>;
+```
+
+### `recordedModel` (const)
+
+```ts
+const recordedModel: (turns: ReadonlyArray<RecordedTurn>) => MockLanguageModelV4;
 ```
 
 ### `regexScorer` (const)
@@ -647,6 +693,12 @@ type InlineMutationFunction<R> = (context: MutationCtx) => Promise<R> | R;
 
 ```ts
 type InlineQueryFunction<R> = (context: QueryCtx) => Promise<R> | R;
+```
+
+### `ModelStreamResult` (type)
+
+```ts
+type ModelStreamResult = Awaited<ReturnType<InstanceType<typeof MockLanguageModelV4>["doStream"]>>;
 ```
 
 ### `RecordedWideEvent` (interface)
