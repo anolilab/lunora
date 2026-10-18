@@ -299,16 +299,30 @@ caller on an ownerless thread, is refused, because an ownerless thread is readab
 by anyone who knows its key. A second supply, or a supply after the wait has timed
 out, is a `CONFLICT` and stores nothing.
 
+**From a client.** The framework chat hooks answer the request with
+`supplySecret(toolCallId, value)` or `declineSecret(toolCallId)`. The pending
+request is an `awaiting-secret` entry in `useAgentToolEvents`, and it drops out
+once the server retires it. `supplySecret` always sends `onlineOnly: true`, so the
+value is never queued or persisted and the call rejects with `OFFLINE_NOT_QUEUED`
+while the connection is down. The hook keeps no copy of the value.
+
+```tsx
+const { events } = useAgentToolEvents({ api, threadKey });
+const request = events.find((event) => event.type === "awaiting-secret");
+
+if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallId, apiKeyFromTheForm);
+```
+
 **Limits you must design for.**
 
 - **The plaintext transits the supply mutation's arguments.** The argument is
   named `secret` so the request log masks it. Anything else that records mutation
   arguments in transit would see it too.
-- **Offline queueing persists the value.** `@lunora/client` writes a queued
-  mutation's arguments to IndexedDB or AsyncStorage when the device is offline.
-  Until a per-mutation online-only option exists, the global `persistence: false`
-  is the only opt-out, and it applies to everything. Do not ship a supply UI on
-  top of an offline-capable client yet.
+- **Offline queueing would persist the value.** A mutation without
+  `onlineOnly: true` is queued while the device is offline, and its arguments
+  land in IndexedDB or AsyncStorage. The framework `supplySecret` always sets
+  `onlineOnly`, so it is refused (`OFFLINE_NOT_QUEUED`) rather than queued. A
+  direct `client.mutation(agentSupplySecret, …)` call must pass the option itself.
 - **Point-in-time recovery can bring a discarded value back** for the database's
   recovery window (30 days). Discard removes the value from the store, not from
   backups.
@@ -338,18 +352,25 @@ references your app exposes.
   terminates the in-flight instance (a no-op when nothing is running or no
   cancel ref was supplied); `status`/`thread` flow live from `agents:agentThread`.
 - **`useAgentChat`** is the batteries-included chat surface:
-  `{ send, approve, approveForThread, reject, approvalGrants, revokeGrant, cancel, messages, status, streamingText }`.
+  `{ send, approve, approveForThread, reject, supplySecret, declineSecret, approvalGrants, revokeGrant, cancel, messages, status, streamingText }`.
   `send` appends an optimistic user turn then starts/continues the run;
   `approve`/`reject` resolve a pending tool approval; `messages` is the live thread.
   `approveForThread` is `approve` plus a thread grant for that tool. `approvalGrants`
   is the live list of the thread's grants, and `revokeGrant(toolName)` removes one,
-  so a grant is never visible without a way out.
+  so a grant is never visible without a way out. `supplySecret(toolCallId, value)`
+  and `declineSecret(toolCallId)` answer a `requestSecretTool` pause. The value is
+  sent with `onlineOnly: true`, so it is never queued or persisted, and the hook
+  keeps no copy. A pending secret request is an `awaiting-secret` entry in
+  `useAgentToolEvents`, and it drops out once the server retires its marker.
 
 ```tsx
 // React
 const chat = useAgentChat({ api, cancel: api.chat.cancelRun, send: api.chat.startRun, threadKey });
 chat.send("Refund my last order");
 if (chat.status === "awaiting_input") chat.approve(toolCallId);
+// A secret request: supply the value (online-only) or refuse it.
+await chat.supplySecret(toolCallId, apiKeyFromTheForm);
+await chat.declineSecret(toolCallId);
 ```
 
 The same hooks exist as Vue composables (`useAgent`/`useAgentChat`), Solid
