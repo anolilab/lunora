@@ -3395,6 +3395,7 @@ interface StartLocalHyperdriveOptions {
     load?: () => Promise<PgliteRuntime | undefined>;
     onWarning?: (message: string) => void;
     projectRoot: string;
+    wranglerConfigPath?: string;
 }
 ```
 

@@ -60,6 +60,16 @@ describe("local hyperdrive", () => {
             expect(bindingsNeedingDatabase(root, { [`${VAR}DB_C`]: "postgres://env" })).toStrictEqual(["DB_A"]);
         });
 
+        it("reads the wrangler config the session runs when it is not the project's own", () => {
+            expect.assertions(2);
+
+            writeWrangler([{ binding: "ROOT_DB", id: "a" }]);
+            writeFileSync(join(root, "custom.jsonc"), JSON.stringify({ hyperdrive: [{ binding: "CUSTOM_DB", id: "c" }] }), "utf8");
+
+            expect(bindingsNeedingDatabase(root, {})).toStrictEqual(["ROOT_DB"]);
+            expect(bindingsNeedingDatabase(root, {}, undefined, join(root, "custom.jsonc"))).toStrictEqual(["CUSTOM_DB"]);
+        });
+
         it("reads a named environment's own Hyperdrive array, since the binding does not inherit", () => {
             expect.assertions(3);
 
@@ -462,6 +472,26 @@ describe("local hyperdrive", () => {
 
             expect(close).toHaveBeenCalledTimes(1);
             expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("closes the database when the socket server cannot even be constructed", async () => {
+            expect.assertions(2);
+
+            const close = vi.fn<() => Promise<void>>(async () => {});
+            const broken: PgliteParts = {
+                PGLiteSocketServer: function PGLiteSocketServer() {
+                    throw new Error("bad options");
+                } as unknown as PgliteParts["PGLiteSocketServer"],
+                PGlite: {
+                    create: async () => {
+                        return { close };
+                    },
+                },
+            };
+
+            await expect(serveDatabase(broken, join(root, "data"))).rejects.toThrow("bad options");
+
+            expect(close).toHaveBeenCalledTimes(1);
         });
 
         it("closes the database even when the socket's shutdown fails", async () => {

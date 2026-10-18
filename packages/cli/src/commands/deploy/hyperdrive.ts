@@ -88,14 +88,17 @@ const HASH_SUFFIX = 7;
  * long names that share a prefix still get names of their own.
  */
 const configName = (workerName: string, binding: string): string => {
-    const identity = `${workerName}-${binding}`.toLowerCase().replaceAll(NON_NAME_CHARACTER, "-");
+    const raw = `${workerName}-${binding}`.toLowerCase();
+    const identity = raw.replaceAll(NON_NAME_CHARACTER, "-");
 
-    if (identity.length <= NAME_LIMIT) {
+    // A name that needed no change keeps its readable form. One that was cleaned (`billing_api` and `billing-api`
+    // would both read `billing-api`) or is too long is closed with a short hash of the original, which keeps them apart.
+    if (identity === raw && identity.length <= NAME_LIMIT) {
         return identity;
     }
 
     const hash = createHash("sha256")
-        .update(identity)
+        .update(raw)
         .digest("hex")
         .slice(0, HASH_SUFFIX - 1);
 
@@ -128,6 +131,17 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
         // Not a URL, or invalid percent-encoding in it: the caller reports it as unusable.
         return undefined;
     }
+};
+
+/** An API error can echo what was submitted: the password and any URL are removed before it is shown. */
+const redact = (reason: string, origin: Record<string, number | string> | undefined): string => {
+    const password = typeof origin?.password === "string" ? origin.password : "";
+    const withoutPassword = password === "" ? reason : reason.replaceAll(password, "<redacted>");
+
+    return withoutPassword
+        .split(" ")
+        .map((word) => (word.includes("://") ? "<url>" : word))
+        .join(" ");
 };
 
 /** The bindings still carrying the placeholder id, with their position in the array. */
@@ -439,7 +453,8 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
 
             writeFileSync(wranglerPath, text, "utf8");
         } catch (error) {
-            const message = `deploy blocked: the "${binding}" Hyperdrive config could not be set up: ${error instanceof Error ? error.message : String(error)}`;
+            const reason = error instanceof Error ? error.message : String(error);
+            const message = `deploy blocked: the "${binding}" Hyperdrive config could not be set up: ${redact(reason, origins[position]?.origin)}`;
 
             options.logger.error(message);
 
@@ -473,7 +488,7 @@ const blockTemporary = (cwd: string, options: Pick<DeployCommandOptions, "env" |
         return undefined;
     }
 
-    const message = `deploy blocked: the "${binding}" Hyperdrive binding has no config, and a --temporary deploy cannot create one: it would be made in your account while the Worker goes to a temporary one. Deploy without --temporary, or remove the binding for this run.`;
+    const message = `deploy blocked: the "${binding}" Hyperdrive binding has no config, and a --temporary deploy cannot create one: it would be made in your account while the Worker goes to a temporary one, which a temporary account has no database for. Deploy without --temporary.`;
 
     options.logger.error(message);
 

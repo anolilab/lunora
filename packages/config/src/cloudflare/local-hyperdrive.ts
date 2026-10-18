@@ -45,6 +45,8 @@ interface StartLocalHyperdriveOptions {
     /** Called once with a line to show the developer when the database could not be started. */
     onWarning?: (message: string) => void;
     projectRoot: string;
+    /** The wrangler config the session actually runs (the Cloudflare plugin's `configPath`); defaults to the project's own. */
+    wranglerConfigPath?: string;
 }
 
 interface LocalHyperdrive {
@@ -59,8 +61,13 @@ const hasLocalDatabase = (binding: string, entry: { localConnectionString?: unkn
     LOCAL_CONNECTION_STRING_PREFIXES.some((prefix) => (env[`${prefix}${binding}`] ?? "") !== "");
 
 /** The Hyperdrive bindings in `wrangler.jsonc` that nothing local backs yet. */
-const bindingsNeedingDatabase = (projectRoot: string, env: NodeJS.ProcessEnv, wranglerEnvironment: string | undefined = env["CLOUDFLARE_ENV"]): string[] => {
-    const wranglerPath = findWranglerFile(projectRoot);
+const bindingsNeedingDatabase = (
+    projectRoot: string,
+    env: NodeJS.ProcessEnv,
+    wranglerEnvironment: string | undefined = env["CLOUDFLARE_ENV"],
+    configPath?: string,
+): string[] => {
+    const wranglerPath = configPath ?? findWranglerFile(projectRoot);
     type Entries = ReadonlyArray<{ binding?: string; localConnectionString?: string } | null>;
     const parsed =
         wranglerPath === undefined
@@ -95,13 +102,15 @@ const serveDatabase = async (
     dataDirectory: string,
 ): Promise<{ connectionString: string; stop: () => Promise<void> }> => {
     const database = await PGlite.create({ dataDir: dataDirectory, ...(vector === undefined ? {} : { extensions: { vector } }) });
-    // Port 0 lets the OS pick a free one; a pool opens several connections, which PGlite's single-connection default would refuse.
-    const server = new PGLiteSocketServer({ db: database as never, host: "127.0.0.1", maxConnections: 16, port: 0 });
+    let server: InstanceType<PgliteParts["PGLiteSocketServer"]> | undefined;
 
     try {
+        // Port 0 lets the OS pick a free one; a pool opens several connections, which PGlite's single-connection default would refuse.
+        server = new PGLiteSocketServer({ db: database as never, host: "127.0.0.1", maxConnections: 16, port: 0 });
         await server.start();
     } catch (error) {
-        await Promise.allSettled([server.stop(), database.close()]);
+        // The caller gets no handle for a server that failed to start, so the open database is closed here.
+        await Promise.allSettled([server?.stop(), database.close()]);
 
         throw error;
     }
@@ -401,7 +410,7 @@ const noDatabaseWarning = (bindings: ReadonlyArray<string>, mysql: boolean): str
  */
 const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promise<LocalHyperdrive | undefined> => {
     const env = options.env ?? process.env;
-    const bindings = bindingsNeedingDatabase(options.projectRoot, env);
+    const bindings = bindingsNeedingDatabase(options.projectRoot, env, undefined, options.wranglerConfigPath);
 
     if (bindings.length === 0) {
         return undefined;

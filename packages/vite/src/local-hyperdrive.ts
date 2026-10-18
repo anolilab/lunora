@@ -30,6 +30,8 @@ interface LocalHyperdriveOptions {
     projectRoot: string;
     /** Injection seam; defaults to the real PGlite. */
     start?: typeof startLocalHyperdrive;
+    /** The wrangler config the Cloudflare plugin runs, when it is not the project's own. */
+    wranglerConfigPath?: string;
 }
 
 /** What a project has running in this process. */
@@ -87,7 +89,7 @@ const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
     return timer;
 };
 
-const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyperdriveOptions): Plugin => {
+const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerConfigPath }: LocalHyperdriveOptions): Plugin => {
     // Close callbacks of middleware-mode servers, which have no httpServer to listen on.
     const pendingMiddlewareCloses: PendingCloseMap = new Map();
 
@@ -111,6 +113,7 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
                         console.warn(lunoraLine(message));
                     },
                     projectRoot,
+                    wranglerConfigPath,
                 });
 
                 if (local !== undefined) {

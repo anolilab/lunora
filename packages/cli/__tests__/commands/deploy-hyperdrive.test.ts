@@ -75,7 +75,7 @@ describe("hyperdrive on deploy", () => {
             expect(result).toBeUndefined();
             expect(readWrangler().hyperdrive).toStrictEqual([{ binding: "HYPERDRIVE", id: "new-config-id" }]);
             expect(JSON.parse(post?.[1]?.body as string)).toStrictEqual({
-                name: "my-app-hyperdrive",
+                name: expect.stringMatching(/^my-app-hyperdrive-[0-9a-f]{6}$/u),
                 origin: { database: "shop", host: "db.example.com", password: "p/ss", port: 6543, scheme: "postgres", user: "app@corp" },
             });
             expect(errors).toStrictEqual([]);
@@ -499,6 +499,56 @@ describe("hyperdrive on deploy", () => {
 
             expect(port(postgres)).toBe(5432);
             expect(port(mysql)).toBe(3306);
+        });
+
+        it("keeps Worker names that differ only in punctuation apart, since cleaning would otherwise give them one config name", async () => {
+            expect.assertions(2);
+
+            const names: string[] = [];
+
+            for (const name of ["billing_api", "billing-api"]) {
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name });
+
+                const api = hyperdriveApi([]);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one file, rewritten between runs
+                await provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                });
+
+                names.push((JSON.parse(api.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body as string) as { name: string }).name);
+            }
+
+            expect(new Set(names).size).toBe(2);
+            expect(names.every((name) => name.length <= 32)).toBe(true);
+        });
+
+        it("keeps the submitted password and any URL out of a failure it reports", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const echoing = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                init?.method === "POST"
+                    ? Response.json(
+                          { errors: [{ code: 1, message: "bad origin postgres://u:s3cretPass@h/db with password s3cretPass" }], success: false },
+                          { status: 400 },
+                      )
+                    : Response.json({ errors: [], result: [], success: true }),
+            );
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:s3cretPass@h/db" }, // gitleaks:allow -- a placeholder, not a real secret
+                fetch: echoing,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("bad origin");
+            expect(result).not.toContain("s3cretPass");
+            expect(result).not.toContain("postgres://");
         });
 
         it("keeps two long Worker names that share a prefix apart, inside the 32-character limit", async () => {

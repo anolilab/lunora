@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { resolve as resolvePath } from "node:path";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { isRunnableTarget, resolveLazyFunctions, resolveTargetOrThrow, runnableTargetIds, targetRunsOwnDevServer } from "@lunora/config";
@@ -135,6 +136,13 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
  * so they're imported statically — opt out per-feature via the options rather
  * than relying on whether they're installed.
  */
+/** The Cloudflare plugin's `configPath`, made absolute against the project, or `undefined` for the project's own wrangler config. */
+const cloudflareConfigPath = (options: object, projectRoot: string): string | undefined => {
+    const { configPath } = options as { configPath?: unknown };
+
+    return typeof configPath === "string" && configPath !== "" ? resolvePath(projectRoot, configPath) : undefined;
+};
+
 const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     const resolved = resolveOptions(options);
     // Shared, mutable context threaded through every Lunora sub-plugin so the
@@ -214,6 +222,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // `validateWrangler`: this copy would go a binding short whenever it was off.
     plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
 
+    // A project that brings its own `cloudflare()` plugin (`cloudflare: false`) still needs the local Hyperdrive
+    // database before that plugin resolves its bindings; Lunora's own branch below registers it with its plugin.
+    if (cloudflareOptions === undefined) {
+        plugins.push(localHyperdrive({ projectRoot: resolved.projectRoot }));
+    }
+
     if (cloudflareOptions !== undefined) {
         plugins.push(serviceWorkersPlugin(cloudflareOptions, resolved.projectRoot));
 
@@ -232,7 +246,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         plugins.push(
             ...withoutDevWhen(
                 [
-                    localHyperdrive({ projectRoot: resolved.projectRoot }),
+                    localHyperdrive({ projectRoot: resolved.projectRoot, wranglerConfigPath: cloudflareConfigPath(cloudflareOptions, resolved.projectRoot) }),
                     localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }),
                     ...withWorkerStartupHint(cloudflare(cloudflareOptions)),
                 ],

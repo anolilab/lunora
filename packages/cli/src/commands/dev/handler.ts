@@ -552,7 +552,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         // After the incumbent check, so a second `lunora dev` never opens a second
         // database on the same data directory.
-        handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
+        // Not in attached mode (`--no-worker`): an external runner starts the worker, which would never see the
+        // address this process puts in its own environment. That worker starts its own database (the Vite plugin does).
+        if (plan.workerEnabled) {
+            handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
+        }
 
         await offerDevVariablesScaffold(options, cwd, discoveryCache);
 
