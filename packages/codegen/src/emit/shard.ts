@@ -81,6 +81,13 @@ interface EmitShardOptions {
     hasSockets?: boolean;
 
     /**
+     * The target can hold a human-supplied secret value AND the app imports
+     * `requestSecretTool`. Wires `agentSecrets` onto the ctx alongside `agents`; with
+     * no agents, or on a target that rates `secretValues` unsupported, nothing is wired.
+     */
+    hasSecretValues?: boolean;
+
+    /**
      * The target platform supports a vector store. `false` withholds the whole
      * Vectorize wiring — the `@lunora/bindings/vectors` imports, the
      * `createVectorSyncHook` write hook and `vectors` on the runtime ctx — even
@@ -140,6 +147,7 @@ const emitShard = ({
     hasFlags = false,
     hasNotify = false,
     hasRooms = false,
+    hasSecretValues = false,
     hasSockets = false,
     lazyFunctions = false,
     hasVectors = true,
@@ -202,7 +210,12 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         importLines: workflowImportLines,
         specs: workflowSpecs,
     } = emitWorkflowFragments(workflows);
-    const { build: agentsBuild, contextField: agentsContextField, importLines: agentImportLines, specs: agentSpecs } = emitAgentFragments(agents);
+    const {
+        build: agentsBuild,
+        contextField: agentsContextField,
+        importLines: agentImportLines,
+        specs: agentSpecs,
+    } = emitAgentFragments(agents, hasSecretValues && agents.length > 0);
     const {
         build: paymentsBuild,
         configField: paymentsConfigField,
