@@ -17312,6 +17312,19 @@ abstract class ShardDO {
         this.liveSubscribers.set(connectionId, subscriber);
         this.startLiveKeepalive();
 
+        // An abrupt disconnect reaches the request's signal even when nothing cancels the body, so
+        // listen to both: the stream's own `cancel` covers a reader that went away, this covers a peer that did.
+        const forget = (): void => {
+            this.liveSubscribers.delete(connectionId);
+            subscriber.close();
+        };
+
+        if (request.signal.aborted) {
+            forget();
+        } else {
+            request.signal.addEventListener("abort", forget, { once: true });
+        }
+
         return new Response(stream, { headers: { ...LIVE_SSE_HEADERS, [LIVE_CONNECTION_HEADER]: connectionId } });
     }
 
