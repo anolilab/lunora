@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.60...@lunora/errors@1.0.0-alpha.61) (2026-10-18)
+
+### Bug Fixes
+
+* harden live stream delivery on the server and node host ([#1247](https://github.com/anolilab/lunora/issues/1247)) ([0074c55](https://github.com/anolilab/lunora/commit/0074c55e1a7910f89b6d4b2b4275b4dbe8113edf))
+
 ## @lunora/errors [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.59...@lunora/errors@1.0.0-alpha.60) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
