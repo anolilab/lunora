@@ -230,6 +230,40 @@ const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void 
 };
 
 /**
+ * Drop the expression indexes this module created for a table that its schema no
+ * longer declares.
+ *
+ * `CREATE INDEX IF NOT EXISTS` only ever adds, so a `.unique()` taken off a column
+ * kept rejecting duplicates (as `ConflictError`) forever, and an index removed from
+ * a table's declarations kept taxing every write.
+ *
+ * Only indexes this module could have created are candidates: named
+ * `<table>_<something>` (the `<table>__` prefix is internal — the default-order
+ * index lives there), and built over the document column's JSON path or ending in
+ * the {@link INDEX_SORT_KEYS} suffix. An index added by hand under another shape,
+ * and the implicit indexes SQLite makes for constraints (`sql` is NULL), are left
+ * alone.
+ */
+const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: ReadonlySet<string>): void => {
+    const held = runDrizzle<{ name: string; sql: null | string }>(
+        sql,
+        dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} AND sql IS NOT NULL`,
+    ).toArray();
+
+    for (const { name, sql: statement } of held) {
+        const createdHere =
+            name.startsWith(`${tableName}_`) &&
+            !name.startsWith(`${tableName}__`) &&
+            statement !== null &&
+            (statement.includes("json_extract(") || statement.trimEnd().endsWith(", _creationTime, id)"));
+
+        if (createdHere && !declared.has(name)) {
+            runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
+        }
+    }
+};
+
+/**
  * Create the secondary + `.unique()` expression indexes declared on a table.
  *
  * A UNIQUE index does NOT get the sort keys appended: they would become part of
@@ -238,13 +272,17 @@ const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void 
  * corruption rather than a slow query, so the two cases are split deliberately.
  */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, blocked: string[] | undefined): void => {
+    const declared = new Set<string>();
+
     for (const index of definition.indexes) {
         const indexName = `${tableName}_${index.name}`;
+
         const unique = index.unique ?? false;
         const refs = index.fields.map((field) => jsonPathSql(field));
         const fields = dsql.join(refs, dsql`, `);
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
+        declared.add(indexName);
         deferIfBlocked(blocked, () => {
             dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
             createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
@@ -259,11 +297,15 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         }
 
         const reference = jsonPathSql(field);
+        const indexName = `${tableName}_unique_${field}`;
 
+        declared.add(indexName);
         deferIfBlocked(blocked, () => {
-            createIndexGuarded(sql, `${tableName}_unique_${field}`, tableName, reference, true, [reference]);
+            createIndexGuarded(sql, indexName, tableName, reference, true, [reference]);
         });
     }
+
+    dropUndeclaredIndexes(sql, tableName, declared);
 };
 
 /**
