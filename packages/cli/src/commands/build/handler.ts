@@ -46,6 +46,8 @@ interface BuildCommandOptions {
     logger: Logger;
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
+    /** `false` skips evaluating lazy function modules before the bundle is written. */
+    smokeLoad?: boolean;
     spawner?: Spawner;
 
     /**
@@ -134,6 +136,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         interactive: jsonMode ? false : undefined,
         logger,
         outDir: outDirectory,
+        smokeLoad: options.smokeLoad,
         spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
         strictAdvisories: options.strictAdvisories,
         target: options.target,
@@ -180,6 +183,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildC
         format,
         logger,
         outDir: options.outDir,
+        smokeLoad: options.smokeLoad,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
     });

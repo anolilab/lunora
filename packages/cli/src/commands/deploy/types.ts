@@ -128,6 +128,13 @@ interface DeployCommandOptions {
     skipCodegen?: boolean;
     /** Deploy only the app, leaving the `lunora.config` services it binds as they are (`--skip-services`). */
     skipServices?: boolean;
+
+    /**
+     * Evaluate every lazy function module in workerd before shipping, so a module that throws on
+     * load fails the deploy instead of its first caller. Nothing to check for an eager
+     * registry; `false` (`--no-smoke-load`) skips it. Default on.
+     */
+    smokeLoad?: boolean;
     spawner?: Spawner;
 
     /**

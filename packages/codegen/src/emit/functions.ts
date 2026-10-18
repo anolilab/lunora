@@ -747,6 +747,26 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
 
     return getLoadedFunction(functionPath);
 };
+
+/**
+ * Evaluate every lazy module now and report the ones that fail, keyed by function path. A lazy
+ * registry defers a broken module's error to its first call; \`lunora build\` and \`deploy\` run this
+ * inside workerd so the error surfaces before the Worker ships instead of in front of a user.
+ */
+export const loadAllFunctions = async (): Promise<{ checked: number; failures: ReadonlyArray<{ functionPath: string; message: string }> }> => {
+    const failures: { functionPath: string; message: string }[] = [];
+    const functionPaths = Object.keys(LUNORA_FUNCTION_MANIFEST);
+
+    for (const functionPath of functionPaths) {
+        try {
+            await loadFunction(functionPath);
+        } catch (error) {
+            failures.push({ functionPath, message: error instanceof Error ? error.message : String(error) });
+        }
+    }
+
+    return { checked: functionPaths.length, failures };
+};
 `
         : "";
 
