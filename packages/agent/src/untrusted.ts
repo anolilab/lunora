@@ -21,8 +21,12 @@ const COMMAND_TRIGGER = /(^|\s)(\/)/gu;
 /** Line breaks inside a header value, which would otherwise start a fake header line. */
 const LINE_BREAKS = /[\r\n]+/gu;
 
-/** Header names whose values are credentials. Matched anywhere in the name, case-insensitively. */
-const CREDENTIAL_HEADER = /authorization|cookie|api-?key|token|secret/iu;
+/**
+ * Header names whose values are credentials. Matched anywhere in the name, case-insensitively, so
+ * `X-Api_Key` and `X-Password` are caught as well as `Authorization`. Over-matching is the safe side:
+ * a name that only contains one of these words is shown redacted.
+ */
+const CREDENTIAL_HEADER = /authorization|cookie|api[-_]?key|token|secret|passw(?:or)?d|passphrase|credential|session|signature/iu;
 
 const REDACTED = "[redacted]";
 

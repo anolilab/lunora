@@ -97,6 +97,28 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("Body:\nbody");
     });
 
+    it("redacts password, passphrase and key-shaped header names, and leaves a harmless header visible", () => {
+        const headers = new Headers({
+            "Content-Type": "application/json",
+            "X-Api_Key": "key-3",
+            "X-Credential": "cred-4",
+            "X-Passphrase": "pass-2",
+            "X-Password": "pw-1",
+        });
+        const wrapped = wrapUntrusted("body", headers);
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        for (const leaked of ["pw-1", "pass-2", "key-3", "cred-4"]) {
+            expect(inside).not.toContain(leaked);
+        }
+
+        expect(inside).toContain("x-password: [redacted]");
+        expect(inside).toContain("x-passphrase: [redacted]");
+        expect(inside).toContain("x-api_key: [redacted]");
+        expect(inside).toContain("x-credential: [redacted]");
+        expect(inside).toContain("content-type: application/json");
+    });
+
     it("accepts a plain record as the header map", () => {
         const wrapped = wrapUntrusted("body", { "x-signature-token": "abc", accept: "text/plain" });
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));
