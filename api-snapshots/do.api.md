@@ -364,9 +364,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface SensitiveScope {
-    add: (values: ReadonlyArray<string>) => void;
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
     clear: () => void;
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
     text: (text: string) => string;
     value: <T>(value: T) => T;
 }

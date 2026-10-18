@@ -13,11 +13,11 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 interface AgentHarness {
-    awaitWait: (name: string) => Promise<void>;
+    awaitWait: (instanceId: string, name: string) => Promise<void>;
     decline: (threadKey: string, toolCallId: string) => void;
-    deliver: (name: string, payload: unknown) => void;
+    deliver: (instanceId: string, name: string, payload: unknown) => void;
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
-    expire: (name: string) => void;
+    expire: (instanceId: string, name: string) => void;
     journalEntries: () => unknown[];
     messages: (threadKey: string) => AgentMessageRow[];
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
