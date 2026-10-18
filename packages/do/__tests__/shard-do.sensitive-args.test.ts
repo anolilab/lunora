@@ -15,6 +15,9 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * as usual.
  */
 const SECRET = "hunter2-the-real-secret";
+/** A marked value with a newline, a quote, a backslash and a tab: JSON writes each one as an escape. */
+const TRICKY = 'line one\n"quoted"\tand \\ back';
+const TRICKY_ESCAPED = JSON.stringify(TRICKY).slice(1, -1);
 
 class SensitiveShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- test double: the dispatch result is fixed, no shard state is needed
@@ -178,6 +181,27 @@ class TelemetryShard extends ShardDO {
             return { ok: true };
         }
 
+        if (functionPath === "vault:serialize") {
+            // A handler that quotes its whole argument bag, as JSON, in a log line and in a
+            // failure: the marked value appears in its escaped spelling, not its raw one.
+            const serialized = JSON.stringify(args);
+
+            log.info(`sent ${serialized}`, { label: args["label"] as string });
+
+            const trace = this.makeTracer(functionPath, this.sink, anchor, sensitive);
+
+            await trace(
+                "serialize",
+                () => {
+                    throw new Error(`rejected ${serialized}`);
+                },
+                { label: args["label"] as string },
+            ).catch(() => undefined);
+
+            // The dispatch itself fails with the same text, so the request-log row carries it too.
+            throw new Error(`failed ${serialized}`);
+        }
+
         if (functionPath === "vault:hold") {
             if (args["label"] === "first") {
                 await this.release;
@@ -260,6 +284,34 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
 
             expect(named?.fields).toStrictEqual({ [SENSITIVE_ARG_MASK]: "x", label: "primary" });
             expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a marked value that a handler logs as JSON, in the log line, the span error and the request log", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+        const spans: SpanEvent[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: (span) => spans.push(span) };
+
+            await shard.fetch(telemetryRpc("vault:serialize", { label: "primary", value: TRICKY }));
+
+            const sent = logs.find((event) => event.message.startsWith("sent "));
+            const serialize = spans.find((span) => span.name === "serialize");
+            const [row] = readRequestLog(database.sql, { outcome: "error" });
+            const masked = JSON.stringify({ label: "primary", value: SENSITIVE_ARG_MASK });
+
+            expect(sent?.message).toBe(`sent ${masked}`);
+            expect(serialize?.error?.message).toBe(`rejected ${masked}`);
+            expect(row?.errorMessage).toBe(`failed ${masked}`);
+            expect(JSON.stringify([readRequestLog(database.sql), logs, spans])).not.toContain(TRICKY_ESCAPED);
         } finally {
             database.close();
         }

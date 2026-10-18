@@ -1257,7 +1257,9 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
  * and the offline queue treat the argument as a secret (see
  * {@link containsSensitive}). In a recorded string the value is masked wherever it
  * appears if it is four or more characters, as a whole word or number if it is
- * three, and only as the whole string if it is shorter.
+ * three, and only as the whole string if it is shorter. A string of four or more
+ * characters is also matched in its JSON-escaped spelling, since a handler that
+ * serializes its arguments writes that form.
  *
  * A marker is a meta flag on the same kind rather than a kind of its own, so
  * every `switch (kind)` and `kind === "optional"` test keeps its meaning and
