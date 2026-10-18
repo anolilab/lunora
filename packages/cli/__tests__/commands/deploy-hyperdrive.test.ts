@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -81,6 +81,31 @@ describe("hyperdrive on deploy", () => {
             expect(errors).toStrictEqual([]);
             // The password is sent to Cloudflare and nowhere else.
             expect(messages.join(" ")).not.toContain("p/ss");
+        });
+
+        it("writes the id into the generated config a framework build points wrangler at, not only the source", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            // What `vite build` leaves: a resolved copy of the config and a redirect to it.
+            const generated = join(root, "dist", "app", "wrangler.json");
+
+            mkdirSync(join(root, "dist", "app"), { recursive: true });
+            mkdirSync(join(root, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(generated, JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" }), "utf8");
+            writeFileSync(join(root, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/app/wrangler.json" }), "utf8");
+
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: hyperdriveApi([]),
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toBeUndefined();
+            expect(readWrangler().hyperdrive[0]?.id).toBe("new-config-id");
+            expect((JSON.parse(readFileSync(generated, "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id).toBe("new-config-id");
         });
 
         it("reuses a config of the same name instead of creating a second one", async () => {

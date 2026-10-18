@@ -287,7 +287,8 @@ have not declared your own:
 - `ctx.sql` ([Hyperdrive](/docs/packages/hyperdrive)) gets a `HYPERDRIVE` binding with a placeholder
   `id`. `lunora dev` serves it from an embedded Postgres, and `lunora deploy`
   creates the config from the connection string in `LUNORA_HYPERDRIVE_URL` and writes
-  the real `id`. `lunora prepare` stops while the placeholder is still there.
+  the real `id`, in `wrangler.jsonc` and in the generated config a framework build
+  points wrangler at. `lunora prepare` stops while the placeholder is still there.
 
 `ctx.artifacts` is not written for you: its binding is remote-only (a `lunora dev`
 without a Cloudflare login cannot start with it), and a namespace made by the first

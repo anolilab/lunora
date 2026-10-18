@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import { applyModify, findWranglerFile, HYPERDRIVE_PLACEHOLDER_ID, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -313,8 +314,8 @@ interface BindingSetup {
     wranglerPath: string;
 }
 
-/** Create (or reuse) one binding's config and return `wrangler.jsonc`'s text with its id in; throws on an API failure. */
-const setUpBinding = async (setup: BindingSetup, text: string): Promise<string> => {
+/** Create (or reuse) one binding's config and return `wrangler.jsonc`'s text with its id in, and the id; throws on an API failure. */
+const setUpBinding = async (setup: BindingSetup, text: string): Promise<{ id: string; text: string }> => {
     const name = configName(setup.workerName, setup.binding);
     const { id, reused } = await configId(
         async (requestPath, init) =>
@@ -331,7 +332,49 @@ const setUpBinding = async (setup: BindingSetup, text: string): Promise<string> 
 
     setup.logger.success(`${reused ? "reusing" : "created"} Hyperdrive config "${name}" for ${setup.binding} → ${setup.wranglerPath}`);
 
-    return applyModify(text, [...setup.path, setup.index, "id"], id);
+    return { id, text: applyModify(text, [...setup.path, setup.index, "id"], id) };
+};
+
+/** The generated copy a framework build points wrangler at, through `.wrangler/deploy/config.json`, instead of the source config. */
+const generatedConfigPath = (wranglerPath: string): string | undefined => {
+    const redirect = join(dirname(wranglerPath), ".wrangler", "deploy", "config.json");
+
+    try {
+        const { configPath } = JSON.parse(readFileSync(redirect, "utf8")) as { configPath?: unknown };
+
+        return typeof configPath === "string" ? resolve(dirname(redirect), configPath) : undefined;
+    } catch {
+        // No build has run, or the redirect is not readable: wrangler deploys the source config.
+        return undefined;
+    }
+};
+
+/**
+ * The build copied the placeholder into the generated config wrangler deploys, so a framework project
+ * built before `lunora deploy` would ship it. The generated config is already resolved for its
+ * environment, so its Hyperdrive array is the top-level one.
+ */
+const recordInGeneratedConfig = (wranglerPath: string, binding: string, id: string): void => {
+    const generatedPath = generatedConfigPath(wranglerPath);
+
+    if (generatedPath === undefined || generatedPath === wranglerPath) {
+        return;
+    }
+
+    let read: ReturnType<typeof readWranglerJsonc<HyperdriveWrangler>>;
+
+    try {
+        read = readWranglerJsonc<HyperdriveWrangler>(generatedPath);
+    } catch {
+        // The build output is gone: there is nothing to deploy from it.
+        return;
+    }
+
+    const entry = placeholderEntries(read.parsed?.hyperdrive).find((candidate) => candidate.binding === binding);
+
+    if (entry !== undefined) {
+        writeFileSync(generatedPath, applyModify(read.text, ["hyperdrive", entry.index, "id"], id), "utf8");
+    }
 };
 
 /** What `wrangler.jsonc` holds for Hyperdrive in the environment being deployed. */
@@ -461,12 +504,13 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         try {
             // Written after each binding: a config that exists in the account is recorded at once.
             // eslint-disable-next-line no-await-in-loop -- one config at a time keeps the log in binding order
-            const text = await setUpBinding(
+            const { id, text } = await setUpBinding(
                 { accountId, binding, fetch: options.fetch, index, logger: options.logger, origin, path, token, workerName: scan.workerName, wranglerPath },
                 readFileSync(wranglerPath, "utf8"),
             );
 
             writeFileSync(wranglerPath, text, "utf8");
+            recordInGeneratedConfig(wranglerPath, binding, id);
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             const message = `deploy blocked: the "${binding}" Hyperdrive config could not be set up: ${redact(reason, origins[position]?.origin)}`;
