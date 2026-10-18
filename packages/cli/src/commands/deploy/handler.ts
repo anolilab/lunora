@@ -750,6 +750,9 @@ const warnDurableObjectBudget = async (wranglerPath: string | undefined, target:
     }
 };
 
+/** Only a real, non-temporary deploy may create account resources: a dry run must leave the account alone, and a temporary deploy's Worker goes to an account that would never see them. */
+const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): boolean => options.dryRun !== true && options.temporary !== true;
+
 /**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
  * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
@@ -826,7 +829,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const driver = resolveDeployDriver(pipeline.target);
 
     // The Artifacts lookup runs on `--dry-run` too: a dry run reports what a real
-    // deploy would refuse. Only a real deploy creates a missing namespace.
+    // deploy would refuse. Only a real, non-temporary deploy creates a missing namespace: a temporary one uploads the Worker to a throwaway account that would never see it.
     const preflightError =
         validateMigrateDeployPreflight(options) ??
         (await checkArtifactsNamespaces(
@@ -836,7 +839,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
             options.env,
             options.logger,
             options.discoveryCache,
-            options.dryRun !== true,
+            createsAccountResources(options),
         ));
 
     if (preflightError !== undefined) {

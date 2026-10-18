@@ -137,32 +137,75 @@ const describeFailure = (outcome: { status: number; text: string }): string => {
 const asText = (value: unknown): string | undefined => (typeof value === "string" || typeof value === "number" ? value.toString() : undefined);
 
 /** The fields of an existing config's origin that say which database it reaches. */
-const ORIGIN_IDENTITY = ["host", "port", "database", "user"] as const;
+const ORIGIN_IDENTITY = ["scheme", "host", "port", "database", "user"] as const;
+
+/** `postgres` and `postgresql` name the same engine; compare them as one. */
+const normalizeScheme = (scheme: string | undefined): string | undefined => (scheme === "postgresql" ? "postgres" : scheme);
+
+/** An origin field as text, with the engine's two Postgres spellings treated alike. */
+const identityOf = (field: (typeof ORIGIN_IDENTITY)[number], value: unknown): string | undefined => {
+    const text = asText(value);
+
+    return field === "scheme" ? normalizeScheme(text) : text;
+};
+
+/** Pages after which a listing is given up on: no account holds this many Hyperdrive configs. */
+const MAX_PAGES = 50;
+
+interface ListedConfig {
+    id?: unknown;
+    name?: unknown;
+    origin?: Record<string, unknown>;
+}
+
+/** The config called `name`, following the listing's pages until it is found or they run out. Throws on an API failure. */
+const findConfig = async (request: Request, name: string): Promise<ListedConfig | undefined> => {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+        // eslint-disable-next-line no-await-in-loop -- each page is only asked for if the previous one didn't have it
+        const listed = await request(page === 1 ? "/hyperdrive/configs" : `/hyperdrive/configs?page=${String(page)}`);
+
+        if (!listed.ok) {
+            throw new Error(`listing Hyperdrive configs failed (${describeFailure(listed)})`);
+        }
+
+        const configs = Array.isArray(listed.body.result) ? (listed.body.result as ListedConfig[]) : [];
+        const found = configs.find((entry) => entry.name === name);
+        const info = (typeof listed.body.result_info === "object" && listed.body.result_info !== null ? listed.body.result_info : {}) as {
+            total_pages?: unknown;
+        };
+
+        if (found !== undefined || typeof info.total_pages !== "number" || page >= info.total_pages) {
+            return found;
+        }
+    }
+
+    return undefined;
+};
 
 /**
  * The id of the config called `name`, creating it when there is none. A config of that name that
- * reaches another database is not reused: its id would point the binding at the wrong one.
- * Throws on an API failure or a mismatch.
+ * reaches another database is not reused: its id would point the binding at the wrong one. One that
+ * does is updated with the connection string's password, so a rotated password reaches the deployed
+ * binding. Throws on an API failure or a mismatch.
  */
 const configId = async (request: Request, name: string, origin: Record<string, number | string>): Promise<{ id: string; reused: boolean }> => {
-    const listed = await request("/hyperdrive/configs");
-
-    if (!listed.ok) {
-        throw new Error(`listing Hyperdrive configs failed (${describeFailure(listed)})`);
-    }
-
-    const configs = Array.isArray(listed.body.result) ? (listed.body.result as { id?: unknown; name?: unknown; origin?: Record<string, unknown> }[]) : [];
-    const existing = configs.find((entry) => entry.name === name);
+    const existing = await findConfig(request, name);
 
     if (typeof existing?.id === "string") {
         // Every field must be listed and equal: a config whose origin can't be confirmed is not reused.
         // The password is never listed.
-        const differs = ORIGIN_IDENTITY.filter((field) => asText(existing.origin?.[field]) !== asText(origin[field]));
+        const differs = ORIGIN_IDENTITY.filter((field) => identityOf(field, existing.origin?.[field]) !== identityOf(field, origin[field]));
 
         if (differs.length > 0) {
             throw new Error(
                 `a Hyperdrive config named "${name}" already exists for a different origin, or one that can't be confirmed (${differs.join(", ")}). Delete it, or rename the Worker, so the binding does not reach the wrong database.`,
             );
+        }
+
+        const updated = await request(`/hyperdrive/configs/${encodeURIComponent(existing.id)}`, { body: JSON.stringify({ origin }), method: "PATCH" });
+
+        if (!updated.ok) {
+            throw new Error(`updating its credentials failed (${describeFailure(updated)})`);
         }
 
         return { id: existing.id, reused: true };

@@ -600,6 +600,29 @@ describe("lunora deploy", () => {
                 expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
             });
 
+            it("creates nothing on a --temporary deploy, whose Worker goes to an account that would never see the namespace", async () => {
+                expect.assertions(2);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                    temporary: true,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(result.error).toContain("does not exist");
+            });
+
             it("creates nothing on a dry run, and reports the namespace as missing instead", async () => {
                 expect.assertions(2);
 

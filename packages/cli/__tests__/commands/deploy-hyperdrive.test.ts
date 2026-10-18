@@ -88,7 +88,9 @@ describe("hyperdrive on deploy", () => {
 
             writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
 
-            const api = hyperdriveApi([{ id: "existing-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, user: "u" } } as never]);
+            const api = hyperdriveApi([
+                { id: "existing-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, scheme: "postgres", user: "u" } } as never,
+            ]);
 
             await provisionHyperdrive({
                 cwd: root,
@@ -99,7 +101,7 @@ describe("hyperdrive on deploy", () => {
 
             expect(readWrangler().hyperdrive[0]?.id).toBe("existing-id");
             expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
-            expect(api).toHaveBeenCalledTimes(1);
+            expect(api).toHaveBeenCalledTimes(2);
         });
 
         it("does nothing, and calls nothing, once the binding has a real id", async () => {
@@ -256,7 +258,13 @@ describe("hyperdrive on deploy", () => {
             const api = vi.fn<typeof globalThis.fetch>(async () =>
                 Response.json({
                     errors: [],
-                    result: [{ id: "other-id", name: "app-hyperdrive", origin: { database: "db", host: "someone-else.example.com", port: 5432, user: "u" } }],
+                    result: [
+                        {
+                            id: "other-id",
+                            name: "app-hyperdrive",
+                            origin: { database: "db", host: "someone-else.example.com", port: 5432, scheme: "postgres", user: "u" },
+                        },
+                    ],
                     success: true,
                 }),
             );
@@ -270,6 +278,91 @@ describe("hyperdrive on deploy", () => {
             expect(result).toContain("different origin, or one that can't be confirmed (host)");
             expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
             expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        });
+
+        it("updates the reused config's credentials, so a rotated password reaches the deployed binding", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                Response.json({
+                    errors: [],
+                    result:
+                        init?.method === "PATCH"
+                            ? { id: "existing-id" }
+                            : [
+                                  {
+                                      id: "existing-id",
+                                      name: "app-hyperdrive",
+                                      origin: { database: "db", host: "h", port: 5432, scheme: "postgresql", user: "u" },
+                                  },
+                              ],
+                    success: true,
+                }),
+            );
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:rotated@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
+
+            expect(patch?.[0]).toBe("https://api.cloudflare.com/client/v4/accounts/acc/hyperdrive/configs/existing-id");
+            expect(JSON.parse(patch?.[1]?.body as string)).toStrictEqual({
+                origin: { database: "db", host: "h", password: "rotated", port: 5432, scheme: "postgres", user: "u" },
+            });
+            expect(readWrangler().hyperdrive[0]?.id).toBe("existing-id");
+        });
+
+        it("does not reuse a same-named config that speaks the other engine", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = hyperdriveApi([
+                { id: "mysql-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, scheme: "mysql", user: "u" } } as never,
+            ]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("(scheme)");
+            expect(api.mock.calls.some(([, init]) => init?.method === "PATCH" || init?.method === "POST")).toBe(false);
+        });
+
+        it("follows the listing's pages to find a config on a later one, rather than creating a duplicate", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const mine = { id: "page-two-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, scheme: "postgres", user: "u" } };
+            const api = vi.fn<typeof globalThis.fetch>(async (url, init) => {
+                if (init?.method === "PATCH") {
+                    return Response.json({ errors: [], result: mine, success: true });
+                }
+
+                return (url as string).includes("page=2")
+                    ? Response.json({ errors: [], result: [mine], result_info: { page: 2, total_pages: 2 }, success: true })
+                    : Response.json({ errors: [], result: [{ id: "other", name: "other" }], result_info: { page: 1, total_pages: 2 }, success: true });
+            });
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(readWrangler().hyperdrive[0]?.id).toBe("page-two-id");
+            expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+            expect(api.mock.calls.filter(([url]) => (url as string).includes("/configs?page=2"))).toHaveLength(1);
         });
 
         it("does not reuse a config whose origin the listing leaves out, since it can't be confirmed", async () => {
