@@ -38,9 +38,9 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" });
+        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("secret:call_1");
+        await harness.awaitWait("run-1", "secret:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
 
         await expect(run).resolves.toStrictEqual({ stopped: "final", text: "done", turns: 3 });
@@ -61,9 +61,9 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key, stopping")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" });
+        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("secret:call_1");
+        await harness.awaitWait("run-1", "secret:call_1");
         harness.decline("thread-1", "call_1");
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
@@ -81,9 +81,9 @@ describe("agentHarness — requestSecretTool", () => {
             secrets,
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" });
+        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("secret:call_1");
+        await harness.awaitWait("run-1", "secret:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
         secrets.advanceClock(TTL);
 
@@ -99,13 +99,38 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", {}), finalTurn("no key")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" });
+        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("secret:call_1");
-        harness.expire("secret:call_1");
+        await harness.awaitWait("run-1", "secret:call_1");
+        harness.expire("run-1", "secret:call_1");
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
         expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
+    });
+});
+
+describe("agentHarness — concurrent runs", () => {
+    it("keeps two runs that wait on the same event name apart", async () => {
+        expect.assertions(3);
+
+        const harness = agentHarness(billingAgent([]), {});
+        const script = [toolCallTurn("call_1", "requestKey", {}), finalTurn("no key")];
+
+        const first = harness.run({ input: "charge my card", threadKey: "thread-a" }, { instanceId: "run-a", script });
+        const second = harness.run({ input: "charge my card", threadKey: "thread-b" }, { instanceId: "run-b", script });
+
+        await harness.awaitWait("run-a", "secret:call_1");
+        await harness.awaitWait("run-b", "secret:call_1");
+
+        // Declining run-a's request wakes run-a only; run-b keeps waiting until it is expired.
+        harness.decline("thread-a", "call_1");
+
+        await expect(first).resolves.toMatchObject({ stopped: "final" });
+
+        harness.expire("run-b", "secret:call_1");
+
+        await expect(second).resolves.toMatchObject({ stopped: "final" });
+        expect(harness.messages("thread-b").find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
     });
 });
 
