@@ -1946,9 +1946,9 @@ interface FanoutPathCounters {
     peakSocketsIterated: number;
 
     /**
-     * Sockets a frame was sent to, summed across every pass. The shape-poke path
-     * counts only confirmed sends (`sendPoke` returned `true`); the whisper path
-     * likewise counts only successful sends.
+     * Successful frame handoffs to sockets, summed across every pass. Both the
+     * shape-poke and whisper paths count only sends that completed without
+     * throwing. This does not confirm receipt by the client.
      */
     socketsDelivered: number;
     /** Sockets visited, summed across every pass — the O(subscribers) iteration cost. */
