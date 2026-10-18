@@ -30,24 +30,38 @@ const lunoraSeedFiles = (lunoraDirectory: string): string[] => {
 };
 
 /**
- * The source files one `runCodegen` reads or syncs, so a `"lunora"`-scope Project
- * holds them before the first type query: the sources under `lunora/`, the worker
- * entries and `lunora.config.*` the security lints scan, and the `_generated/`
- * files already on disk — `syncProjectFile` overwrites those in place, a no-op when
- * the content is unchanged, instead of creating them (a change) when absent. A file
- * added AFTER the program exists throws the program (and its type checker, the
- * expensive part) away, so one left out here is not a missed file but a rebuild.
+ * The `_generated/*.ts` files already on disk. `syncProjectFile` overwrites them in
+ * place, a no-op when the content is unchanged, instead of creating them (a change)
+ * when absent. Listed here so a cold start and a warm refresh hold the same set.
  */
-const programSeedFiles = (lunoraDirectory: string): string[] => {
+const generatedSeedFiles = (lunoraDirectory: string): string[] => {
     const generatedDirectory = join(lunoraDirectory, "_generated");
-    const generated = existsSync(generatedDirectory)
+
+    return existsSync(generatedDirectory)
         ? readdirSync(generatedDirectory)
               .filter((name) => name.endsWith(".ts"))
               .map((name) => join(generatedDirectory, name))
         : [];
-
-    return [...new Set([...lunoraSeedFiles(lunoraDirectory), ...listSecurityScanFiles(lunoraDirectory).map(({ filePath }) => filePath), ...generated])];
 };
+
+/**
+ * The source files one `runCodegen` reads or syncs, so a `"lunora"`-scope Project
+ * holds them before the first type query: the sources under `lunora/`, the worker
+ * entries and `lunora.config.*` the security lints scan, and the `_generated/`
+ * files. A file added AFTER the program exists throws the program (and its type
+ * checker, the expensive part) away, so one left out here is not a missed file but
+ * a rebuild.
+ */
+const programSeedFiles = (lunoraDirectory: string): string[] => [
+    ...new Set([
+        ...lunoraSeedFiles(lunoraDirectory),
+        ...listSecurityScanFiles(lunoraDirectory).map(({ filePath }) => filePath),
+        ...generatedSeedFiles(lunoraDirectory),
+    ]),
+];
+
+/** Declaration files a tsconfig can list: `.d.ts`, `.d.mts` and `.d.cts`. */
+const DECLARATION_FILE_RE = /\.d\.(?:ts|mts|cts)$/;
 
 /**
  * The `.d.ts` files a tsconfig includes. Ambient declarations (a generated
@@ -59,7 +73,11 @@ const programSeedFiles = (lunoraDirectory: string): string[] => {
 const ambientDeclarationFiles = (tsconfigPath: string): string[] => {
     const host = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: (): void => {} };
 
-    return (ts.getParsedCommandLineOfConfigFile(tsconfigPath, undefined, host)?.fileNames ?? []).filter((path) => path.endsWith(".d.ts"));
+    // `files` entries are listed whether or not they exist, so a declaration that
+    // wrangler has not generated yet must be skipped here, not read and thrown on.
+    return (ts.getParsedCommandLineOfConfigFile(tsconfigPath, undefined, host)?.fileNames ?? []).filter(
+        (path) => DECLARATION_FILE_RE.test(path) && existsSync(path),
+    );
 };
 
 /**
@@ -160,7 +178,10 @@ export const createCodegenProject = (lunoraDirectory: string, programScope: Code
  * reinstate close to the full re-parse cost this cache exists to avoid.
  */
 export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
-    const diskPaths = lunoraSeedFiles(lunoraDirectory);
+    // The cold-start set (see `programSeedFiles`) minus the security-scan entries,
+    // which live outside `lunora/`. Keeping `_generated/` in it stops the removal
+    // below from dropping them on every warm run.
+    const diskPaths = [...lunoraSeedFiles(lunoraDirectory), ...generatedSeedFiles(lunoraDirectory)];
 
     for (const path of diskPaths) {
         const existing = project.getSourceFile(path);
@@ -188,10 +209,6 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
         }
     }
 
-    // A `lunora/` file may have started importing a file outside it since the
-    // Project was built. Under `"lunora"` scope nothing else registers that file,
-    // so register it now — BEFORE the pass below, which is what re-reads it from
-    // disk; done after, it would be registered at the text the compiler last saw.
     // A `lunora/` file may have started importing a file outside it since the
     // Project was built. Under `"lunora"` scope nothing else registers that file,
     // so register it now — BEFORE the pass below, which is what re-reads it from

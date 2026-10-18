@@ -213,4 +213,53 @@ export const listItems = query({
                 .filter((path) => !seeded.has(path)),
         ).toStrictEqual([]);
     });
+
+    it("reads a `program` wrapped in `as const` or `satisfies` as written", () => {
+        expect.assertions(1);
+
+        writeConfig(`export default { codegen: { program: "tsconfig" as const } };\n`);
+
+        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
+    });
+
+    it("does not crash on a tsconfig `files` entry for a declaration that is not on disk yet", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { strict: true }, files: ["worker-configuration.d.ts"], include: ["lunora/**/*"] }),
+            "utf8",
+        );
+
+        expect(() => createCodegenProject(lunoraDirectory)).not.toThrow();
+    });
+
+    it("loads `.d.mts` and `.d.cts` declarations the tsconfig includes", () => {
+        expect.assertions(2);
+
+        const modulePath = join(workdir, "src", "globals.d.mts");
+        const commonPath = join(workdir, "src", "legacy.d.cts");
+
+        writeFileSync(modulePath, "export {};\n", "utf8");
+        writeFileSync(commonPath, "export {};\n", "utf8");
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true }, include: ["src/**/*", "lunora/**/*"] }), "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, modulePath)).toBe(true);
+        expect(loaded(project, commonPath)).toBe(true);
+    });
+
+    it("keeps the `_generated/` files a cold start seeded through a warm refresh", () => {
+        expect.assertions(1);
+
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        const generatedPath = join(lunoraDirectory, "_generated", "api.ts");
+        const project = createCodegenProject(lunoraDirectory, "lunora");
+
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, generatedPath)).toBe(true);
+    });
 });

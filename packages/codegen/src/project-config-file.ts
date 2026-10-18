@@ -419,8 +419,10 @@ const readCodegenProgram = (declared: TsNode | undefined, sourceFile: SourceFile
         return {};
     }
 
-    if ("literal" in member && (TsNode.isStringLiteral(member.literal) || TsNode.isNoSubstitutionTemplateLiteral(member.literal))) {
-        const value = member.literal.getLiteralValue();
+    const literal = "literal" in member ? unwrapLiteral(member.literal) : undefined;
+
+    if (literal !== undefined && (TsNode.isStringLiteral(literal) || TsNode.isNoSubstitutionTemplateLiteral(literal))) {
+        const value = literal.getLiteralValue();
 
         if (value === "lunora" || value === "tsconfig") {
             return { program: value };
