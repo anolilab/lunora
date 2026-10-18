@@ -16323,6 +16323,8 @@ abstract class ShardDO {
         }
         let scanned = 0;
         let delivered = 0;
+        // Only a route topic needs the per-socket route re-check; decided once, so an ordinary whisper adds no call per member.
+        const routeTopic = topic.startsWith(SOCKET_TOPIC_PREFIX);
 
         for (const ws of this.runner.sockets()) {
             scanned += 1;
@@ -16339,7 +16341,7 @@ abstract class ShardDO {
 
             // A route topic's membership outlives the deployment that granted it. Re-check the socket's
             // route against the current one, so a route that now requires auth stops feeding an anonymous socket.
-            if (!this.socketMayReceiveRouteTopic(attachment, topic)) {
+            if (routeTopic && !this.socketMayReceiveRouteTopic(attachment, topic)) {
                 continue;
             }
 
