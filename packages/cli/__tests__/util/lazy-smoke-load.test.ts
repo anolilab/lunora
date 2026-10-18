@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type { DevProcess, DevProcessOptions, DriverToolchain } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -129,7 +129,7 @@ describe(runLazySmokeLoad, () => {
             const captured = { content: "", path: "" };
 
             startDevProcess.mockImplementation(async () => {
-                captured.path = dev.mock.lastCall?.[0].extraArgs?.[0] ?? "";
+                captured.path = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
                 captured.content = readFileSync(captured.path, "utf8");
 
                 return { crashed: new Promise(() => {}), stop };
@@ -233,5 +233,18 @@ describe(runLazySmokeLoad, () => {
         respondWith({ checked: 1, failures: [{ functionPath: "ratelimit:consume", message: "boom" }] });
 
         await expect(run()).resolves.toContain("  lunora/ratelimit/index.ts (consume): boom");
+    });
+
+    it("passes the entry and the config as project-relative paths", async () => {
+        expect.assertions(2);
+
+        respondWith({ checked: 1, failures: [] });
+
+        await run({ configPath: join(cwd, "wrangler.jsonc") });
+
+        const request = dev.mock.calls[0]?.[0] as { configPath?: string; extraArgs: string[] };
+
+        expect(isAbsolute(request.extraArgs[0] ?? "")).toBe(false);
+        expect(request.configPath).toBe("wrangler.jsonc");
     });
 });

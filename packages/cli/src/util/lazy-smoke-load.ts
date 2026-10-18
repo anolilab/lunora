@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { extname, join, resolve, sep } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 
 import type { DriverToolchain } from "@lunora/config";
 import { resolveSchemaDirectory, startDevProcess } from "@lunora/config";
@@ -60,11 +60,11 @@ const functionFilesByNamespace = (cwd: string): Map<string, string> => {
     const schemaDirectory = resolveSchemaDirectory(cwd);
     const files = new Map<string, string>();
 
-    for (const relative of readdirSync(join(cwd, schemaDirectory), { recursive: true, encoding: "utf8" })) {
-        const extension = extname(relative);
+    for (const file of readdirSync(join(cwd, schemaDirectory), { recursive: true, encoding: "utf8" })) {
+        const extension = extname(file);
 
-        if (MODULE_EXTENSIONS.has(extension) && !relative.split(sep).some((part) => part === "_generated" || part === "node_modules")) {
-            files.set(sanitizeNamespace(relative.slice(0, -extension.length).split(sep).join("/")), join(schemaDirectory, relative));
+        if (MODULE_EXTENSIONS.has(extension) && !file.split(sep).some((part) => part === "_generated" || part === "node_modules")) {
+            files.set(sanitizeNamespace(file.slice(0, -extension.length).split(sep).join("/")), join(schemaDirectory, file));
         }
     }
 
@@ -218,9 +218,14 @@ export default {
 
         const port = await findAvailablePort(SMOKE_PORT);
         // `--local-protocol http`: a config that sets `dev.local_protocol` to https would otherwise refuse the plain-http probe.
+        // Paths go in relative to `cwd`: on Windows the child runs through a shell that does not quote an absolute path containing a space.
         const { args, command } = toolchainExecArgs(
             detectPackageManager(cwd),
-            toolchain.dev({ configPath, environment, extraArgs: [entry, "--local", "--local-protocol", "http", "--ip", "127.0.0.1", "--port", String(port)] }),
+            toolchain.dev({
+                configPath: configPath === undefined ? undefined : relative(cwd, configPath),
+                environment,
+                extraArgs: [relative(cwd, entry), "--local", "--local-protocol", "http", "--ip", "127.0.0.1", "--port", String(port)],
+            }),
         );
 
         logger.info("smoke-loading lazy function modules in workerd");
