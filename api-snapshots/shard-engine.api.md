@@ -2416,6 +2416,7 @@ interface ReplicaFollowerHost extends ShardSiblingHost {
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{
         errors: ReadonlyArray<unknown>;
     }>;
+    reportError?: (scope: string, error: unknown) => void;
 }
 ```
 

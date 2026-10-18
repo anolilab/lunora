@@ -210,6 +210,8 @@ interface ReplicaFollowerHost extends ShardSiblingHost {
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
     /** Insert a bootstrap snapshot verbatim (explicit ids preserved), reporting what did not land. */
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{ errors: ReadonlyArray<unknown> }>;
+    /** Surface a failure the follow loop absorbed (a page that would not apply) so an operator can see why reads fell back to the owner. */
+    reportError?: (scope: string, error: unknown) => void;
 }
 
 /** A replica's durable follow position. */
@@ -567,10 +569,7 @@ class ShardReplica {
             const page = await this.pull(state.appliedSeq);
 
             if (page === undefined) {
-                // The owner is unreachable. Anything already applied is still
-                // valid, so a read with no cursor requirement can still be
-                // served from it; one that needs a newer cursor cannot.
-                return minSeq === undefined && this.isFreshEnough(state, undefined) ? "fresh" : "unavailable";
+                return this.whenOwnerUnreachable(state, minSeq);
             }
 
             if (this.hasDiverged(state, page)) {
@@ -584,7 +583,13 @@ class ShardReplica {
             const exhausted = page.changes.length < PULL_PAGE_SIZE;
 
             // eslint-disable-next-line no-await-in-loop -- see above: pages must be applied in commit order.
-            state = await this.applyPage(page, state, exhausted);
+            const applied = await this.applyPage(page, state, exhausted);
+
+            if (applied === undefined) {
+                return "unavailable";
+            }
+
+            state = applied;
 
             if (exhausted || this.isFreshEnough(state, minSeq)) {
                 return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
@@ -592,6 +597,15 @@ class ShardReplica {
         }
 
         return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
+    }
+
+    /**
+     * What a read gets when the owner cannot be reached. Anything already applied
+     * is still valid, so a read with no cursor requirement can still be served
+     * from it; one that needs a newer cursor cannot.
+     */
+    private whenOwnerUnreachable(state: ReplicaState, minSeq: number | undefined): ReplicaReadiness {
+        return minSeq === undefined && this.isFreshEnough(state, undefined) ? "fresh" : "unavailable";
     }
 
     /**
@@ -604,10 +618,25 @@ class ShardReplica {
      * the page that drained the log (`exhausted`), `from`'s for a full page with
      * more behind it. Stamping now on a partial page made the staleness window
      * vouch for a replica still thousands of changes behind.
+     *
+     * A change that will not replay fails identically on every retry, so letting
+     * it reject made each read 500 and re-pull the same page for the life of the
+     * DO. It latches {@link divergent} instead, like any other timeline the
+     * replica cannot follow: the cursor stays put (the host applies a page
+     * atomically or not at all), reads go to the owner, and a restarted DO tries
+     * again.
+     * @returns the new position, or `undefined` when the page could not be applied
      */
-    private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState> {
-        if (page.changes.length > 0) {
-            await this.host.applyChanges(page.changes);
+    private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState | undefined> {
+        try {
+            if (page.changes.length > 0) {
+                await this.host.applyChanges(page.changes);
+            }
+        } catch (error) {
+            this.divergent = true;
+            this.host.reportError?.("replica.applyPage", error);
+
+            return undefined;
         }
 
         const state: ReplicaState = { appliedSeq: page.cursor, epoch: page.epoch, syncedAtMs: exhausted ? Date.now() : from.syncedAtMs };

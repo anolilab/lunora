@@ -235,6 +235,58 @@ describe("read replicas", () => {
         expect(replica?.appliedSeq()).toBe(2);
     });
 
+    it("latches divergence instead of rejecting when a page cannot be applied", async () => {
+        expect.assertions(6);
+
+        const reported: unknown[] = [];
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async () => {
+                throw new Error("poison change");
+            },
+            reportError: (_scope: string, error: unknown) => {
+                reported.push(error);
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.changes = [change(1, "a")];
+
+        // A page that throws on apply must not reject the read: the owner can answer it.
+        await expect(replica?.ensureFresh(1)).resolves.toBe("unavailable");
+
+        const pullsAfterFailure = owner.pulls;
+
+        // Sticky: the same doomed page is not re-pulled and re-applied on every read.
+        await expect(replica?.ensureFresh(1)).resolves.toBe("unavailable");
+        expect(owner.pulls).toBe(pullsAfterFailure);
+        expect(replica?.isDivergent()).toBe(true);
+        expect(reported).toHaveLength(1);
+        // The cursor never moved past the page that did not apply.
+        expect(replica?.appliedSeq()).toBe(0);
+    });
+
+    it("answers 421 rather than throwing from the dispatch gate when a page cannot be applied", async () => {
+        expect.assertions(2);
+
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async () => {
+                throw new Error("poison change");
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.changes = [change(1, "a")];
+
+        const response = await gateReplicaDispatch(replica!, replicaRead({ "x-lunora-min-seq": "1" }), "posts:list");
+
+        expect(response?.status).toBe(421);
+        expect(response?.headers.get("x-lunora-replica-fallback")).toBe("unavailable");
+    });
+
     it("carries wire-typed leaves across the control channel intact", async () => {
         expect.assertions(4);
 

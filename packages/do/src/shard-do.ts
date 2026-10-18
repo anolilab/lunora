@@ -3237,7 +3237,10 @@ abstract class ShardDO {
         this.replica = createReplicaLink({
             ...sibling,
             applyChanges: async (changes) => {
-                const { applied } = await this.runShardApplyCdc({ changes });
+                // One storage transaction per page: the follow cursor only moves past a
+                // whole page, so a change that throws midway must not leave the rows
+                // before it applied behind a cursor that says they were not.
+                const { applied } = await this.runInTransaction(() => this.runShardApplyCdc({ changes }));
 
                 // Same post-replay step the `applyCdc` admin RPC takes: replayed
                 // rows are real writes, so any live subscriber on this DO has to
@@ -3247,6 +3250,9 @@ abstract class ShardDO {
                 return applied;
             },
             importRows: async (rows) => this.runShardImport({ rows }),
+            reportError: (scope, error) => {
+                this.recordShapeError(scope, error);
+            },
         });
 
         this.armWebSocketKeepalive();
