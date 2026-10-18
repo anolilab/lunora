@@ -1048,14 +1048,32 @@ class TestOnlineOnlyWrites(unittest.TestCase):
         store = _Store()
         client, posts = self._disconnected(store)
 
+        # A subscription on the write's own path and args, primed with a server value,
+        # so an overlay the write applied would be displayed.
+        seen = []
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": self.SECRET}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        client.detach_socket()
+
         with self.assertRaises(OfflineError) as refused:
-            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                        optimistic=lambda current: [*(current or []), "c"],
+                    )
+                )
+            )
 
         self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
         self.assertEqual(client.pending_mutation_count, 0)
         self.assertEqual(store.appended, [])
         self.assertNotIn(self.SECRET, json.dumps(store.records))
         self.assertEqual(posts, [])
+        self.assertNotIn(["a", "c"], seen, "a refused write's overlay is never displayed")
 
     def test_an_online_only_write_is_sent_when_connected(self):
         covers("offline_online_only_sends_when_connected")
