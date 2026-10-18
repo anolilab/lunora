@@ -10,7 +10,10 @@
  * both backends (in-process fumadocs, remote HTTP) get identical behaviour and
  * the behaviour is unit-testable against a stub index.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { McpTool } from "../compose";
+import { errorResult } from "../tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "../tool-types";
 import type { DocsIndex } from "./types";
 
@@ -81,10 +84,6 @@ const ok = (value: unknown): ToolResult => {
     return { content: [{ text: JSON.stringify(value, undefined, 2), type: "text" }] };
 };
 
-const fail = (message: string): ToolResult => {
-    return { content: [{ text: message, type: "text" }], isError: true };
-};
-
 /**
  * Longest accepted string argument.
  *
@@ -101,11 +100,11 @@ const readStringArgument = (input: Record<string, unknown>, key: string): string
     const value = input[key];
 
     if (typeof value !== "string" || value.trim().length === 0) {
-        throw new TypeError(`"${key}" is required and must be a non-empty string`);
+        throw new LunoraError("BAD_REQUEST", `"${key}" is required and must be a non-empty string`);
     }
 
     if (value.length > MAX_ARGUMENT_LENGTH) {
-        throw new RangeError(`"${key}" must be at most ${String(MAX_ARGUMENT_LENGTH)} characters`);
+        throw new LunoraError("BAD_REQUEST", `"${key}" must be at most ${String(MAX_ARGUMENT_LENGTH)} characters`);
     }
 
     return value.trim();
@@ -259,7 +258,7 @@ const docsTools = (index: DocsIndex): ReadonlyArray<McpTool> => [
             const page = await index.getPage(url);
 
             if (page === undefined) {
-                return fail(`documentation page not found: ${url}. Use lunora_search_docs or lunora_list_docs to find a valid url.`);
+                return errorResult("NOT_FOUND", `documentation page not found: ${url}. Use lunora_search_docs or lunora_list_docs to find a valid url.`);
             }
 
             // Returned as raw Markdown, not JSON: the body is the payload, and

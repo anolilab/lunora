@@ -319,11 +319,13 @@ const screenWriteConfirmation = async (client: LunoraClient, proposal: ProposedW
 
     if (verdict === "expired") {
         return errorResult(
+            "CONFIRMATION_EXPIRED",
             `confirmation rejected: this actionDigest has expired. A confirmation is good for ${String(CONFIRMATION_TTL_MS / 60_000)} minutes from the proposal that issued it, so an approval cannot be replayed in a later session. Nothing was written. Call ${proposal.tool} again WITHOUT confirmed to get a fresh actionDigest, have it reviewed, then resubmit those same arguments with it.`,
         );
     }
 
     return errorResult(
+        "CONFIRMATION_MISMATCH",
         `confirmation rejected: the actionDigest does not match this call. A digest is bound to the exact tool, function path, arguments, shard key and idempotency key it was issued for, so any edit to the proposal invalidates it — and a digest from another deployment never matches. Nothing was written. Call ${proposal.tool} again WITHOUT confirmed to get a fresh actionDigest for the current arguments, have it reviewed, then resubmit those same arguments with it.`,
     );
 };

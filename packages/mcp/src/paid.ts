@@ -54,7 +54,8 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validatio
 import { memoizePromise } from "../../../shared/promise-memo";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
 import callToolName from "./tool-call";
-import type { ToolInputSchema, ToolResult } from "./tools";
+import { errorFromThrown, errorResult } from "./tool-result";
+import type { ToolAnnotations, ToolInputSchema, ToolResult } from "./tool-types";
 
 /** A tool handler: receives the call's `arguments` bag, returns an MCP tool result. */
 
@@ -105,8 +106,8 @@ type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> 
 
 /** Registration shape for a free tool. */
 interface RegisterToolOptions {
-    /** Optional MCP tool annotations (`readOnlyHint`, `title`, …). */
-    annotations?: Tool["annotations"];
+    /** MCP tool annotations. Required: a paid tool declares its access the same as every other tool. */
+    annotations: ToolAnnotations;
     /** Human/model-facing description of what the tool does. */
     description: string;
     /** JSON-Schema object describing the tool's arguments. */
@@ -201,7 +202,7 @@ const getSchemaValidator = (): CfWorkerJsonSchemaValidator => {
 const argumentsRejection = (entry: RegisteredTool, name: string, arguments_: Record<string, unknown>): CallToolResult | undefined => {
     const result = entry.validate(arguments_);
 
-    return result.valid ? undefined : { content: [{ text: `invalid arguments for tool "${name}": ${result.errorMessage}`, type: "text" }], isError: true };
+    return result.valid ? undefined : errorResult("BAD_REQUEST", `invalid arguments for tool "${name}": ${result.errorMessage}`);
 };
 
 /** Default server identity when the caller doesn't supply one. */
@@ -312,11 +313,12 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         // `ToolInputSchema` (properties: `Record<string, unknown>`) is structurally
         // a valid JSON-Schema object; the SDK's `Tool.inputSchema` types property
         // values as `object` — cast to bridge the narrower value type.
-        const definition: Tool = { description: options.description, inputSchema: options.inputSchema as Tool["inputSchema"], name: options.name };
-
-        if (options.annotations !== undefined) {
-            definition.annotations = options.annotations;
-        }
+        const definition: Tool = {
+            annotations: options.annotations,
+            description: options.description,
+            inputSchema: options.inputSchema as Tool["inputSchema"],
+            name: options.name,
+        };
 
         tools.set(options.name, { definition, handler, validate: getSchemaValidator().getValidator(definition.inputSchema) });
 
@@ -339,7 +341,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             // Unknown tools surface as an `isError` result (not a rejection), per
             // the MCP convention `callTool` follows in `tools.ts`.
             if (entry === undefined) {
-                return { content: [{ text: `unknown tool: ${request.params.name}`, type: "text" }], isError: true };
+                return errorResult("NOT_FOUND", `unknown tool: ${request.params.name}`);
             }
 
             const callArguments = request.params.arguments ?? {};
@@ -350,7 +352,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             }
 
             try {
-                return (await entry.handler(callArguments)) as CallToolResult;
+                return await entry.handler(callArguments);
             } catch (error: unknown) {
                 // An `isError` result, not a rejection — the SDK turns a handler
                 // rejection into a JSON-RPC protocol `error`, which a client that
@@ -358,7 +360,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
                 // this transport the payment has ALREADY settled by the time
                 // dispatch runs, so "paid, and the model saw no answer" is the
                 // failure to avoid. Matches `compose.ts` / `tools.ts`.
-                return { content: [{ text: error instanceof Error ? error.message : String(error), type: "text" }], isError: true };
+                return errorFromThrown(error);
             }
         });
 

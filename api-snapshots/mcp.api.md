@@ -180,7 +180,7 @@ interface ServeStatelessOptions extends HandleRequestOptions {
 
 ```ts
 interface ToolDefinition {
-    annotations?: ToolAnnotations;
+    annotations: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -202,17 +202,17 @@ interface ToolInputSchema {
 }
 ```
 
-### `ToolResult` (interface)
+### `ToolResult` (type)
 
 ```ts
-interface ToolResult {
+type ToolResult = {
     content: {
         text: string;
         type: "text";
     }[];
     isError?: boolean;
     structuredContent?: Record<string, unknown>;
-}
+};
 ```
 
 ### `WRITE_TOOL_DEFINITIONS` (const)
@@ -446,7 +446,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
-### `ToolResult` (interface)
+### `ToolResult` (type)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -725,7 +725,7 @@ interface RegisterPaidToolOptions extends RegisterToolOptions {
 
 ```ts
 interface RegisterToolOptions {
-    annotations?: Tool["annotations"];
+    annotations: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -750,7 +750,7 @@ type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> 
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
-### `ToolResult` (interface)
+### `ToolResult` (type)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -822,15 +822,38 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
-### `ToolAnnotations` (interface)
+### `ReadOnlyToolAnnotations` (interface)
 
 ```ts
-interface ToolAnnotations {
-    destructiveHint?: boolean;
+interface ReadOnlyToolAnnotations extends ToolAnnotationsBase {
+    destructiveHint?: false;
     idempotentHint?: boolean;
+    readOnlyHint: true;
+}
+```
+
+### `ToolAnnotations` (type)
+
+```ts
+type ToolAnnotations = ReadOnlyToolAnnotations | WriteToolAnnotations;
+```
+
+### `ToolAnnotationsBase` (interface)
+
+```ts
+interface ToolAnnotationsBase {
     openWorldHint?: boolean;
-    readOnlyHint?: boolean;
     title?: string;
+}
+```
+
+### `WriteToolAnnotations` (interface)
+
+```ts
+interface WriteToolAnnotations extends ToolAnnotationsBase {
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+    readOnlyHint: false;
 }
 ```
 
