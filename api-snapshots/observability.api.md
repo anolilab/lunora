@@ -741,6 +741,12 @@ interface RequestLogWriteOptions {
 type RequestOutcome = "error" | "ok";
 ```
 
+### `SENSITIVE_ARG_MASK` (const)
+
+```ts
+const SENSITIVE_ARG_MASK = "«sensitive»";
+```
+
 ### `SecurityAuditResult` (interface)
 
 ```ts
@@ -1121,6 +1127,12 @@ const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTe
 const latencyBucketIndex: (durationMs: number) => number;
 ```
 
+### `maskSensitiveArgs` (const)
+
+```ts
+const maskSensitiveArgs: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => Record<string, unknown>;
+```
+
 ### `mergeScanAttribution` (const)
 
 ```ts
@@ -1251,6 +1263,18 @@ const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => TraceAnchor & {
     sampled: boolean;
 };
+```
+
+### `scrubSensitiveText` (const)
+
+```ts
+const scrubSensitiveText: (text: string, secrets: ReadonlyArray<string>) => string;
+```
+
+### `sensitiveStrings` (const)
+
+```ts
+const sensitiveStrings: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
 ```
 
 ### `setHostSpanAttributes` (const)

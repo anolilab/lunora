@@ -2,11 +2,20 @@ import { LunoraError } from "@lunora/errors";
 
 import compileArgsValidator from "../compile-validator";
 import type { AgentIR, FunctionIR, MigrationIR, MutatorIR, ShapeIR, ValidatorIR } from "../ir";
+import { validatorContainsSensitive } from "../parse-validator";
 import { sanitizeNamespace } from "../paths";
 import { renderAgentFunctionRegistry, renderSandboxFunctionRegistry } from "./api";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
 import emitServer from "./server";
-import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, renderNamespaceTree, renderObjectKey } from "./shared";
+import {
+    baseSpecifiers,
+    GENERATED_HEADER,
+    IMPORT_PATH_RE,
+    renderArgsType,
+    renderNamespaceTree,
+    renderObjectKey,
+    sensitiveArgNamesOf as sensitiveArgumentNamesOf,
+} from "./shared";
 
 /**
  * Convert a raw file path into a JS-identifier-safe alias used as the
@@ -30,6 +39,7 @@ const renderArgumentDescriptors = (args: Record<string, ValidatorIR>): string =>
                     kind: validator.kind,
                     name,
                     optional,
+                    ...(validatorContainsSensitive(original) ? { sensitive: true } : {}),
                     ...(table === undefined ? {} : { table }),
                     ...(element === undefined || element === "unknown" ? {} : { element }),
                 };
@@ -171,10 +181,16 @@ const renderFunctionRegistry = (
                 return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": ${aliasByPath.get(definition.filePath) ?? ""}.${definition.exportName} as unknown as RegisteredLunoraFunction,`;
             }
 
+            // The lazy stub has no validators until its module loads, so the names of the
+            // sensitive arguments ride on it: a dispatch that fails before the load still
+            // masks them in the request log.
+            const sensitiveArgs = sensitiveArgumentNamesOf(definition.args);
+
             return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ...${JSON.stringify(
                 {
                     argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
                     kind: definition.kind,
+                    ...(sensitiveArgs.length === 0 ? {} : { sensitiveArgs }),
                     ...(definition.channel ? { channel: definition.channel } : {}),
                     ...(definition.expose ? { expose: definition.expose } : {}),
                     ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
@@ -535,6 +551,19 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // keeps output byte-identical.
     const agentRegistry = renderAgentFunctionRegistry(agents, functions);
     const sandboxRegistry = renderSandboxFunctionRegistry(usesSandbox, functions);
+    // The interface field exists only where a stub can carry it, so a project with no
+    // `v.sensitive` argument keeps byte-identical output. Agents count: their runtime
+    // mutations (`agentSupplySecret`) are sensitive and are not in `functions`.
+    const hasSensitiveArgs = agents.length > 0 || functions.some((definition) => sensitiveArgumentNamesOf(definition.args).length > 0);
+    const sensitiveArgsField = hasSensitiveArgs
+        ? `    /**
+     * Names of the arguments whose validators carry a \`v.sensitive\` marker. Read by the
+     * shard before any validator is loaded, so a lazy function's secret args are
+     * masked even on a dispatch that fails before its module evaluates.
+     */
+    sensitiveArgs?: readonly string[];
+`
+        : "";
     const autoLines = [agentRegistry.lines, sandboxRegistry.lines].filter((block) => block.length > 0).join("\n");
     let dispatchBodyWithAgents = dispatchBody;
 
@@ -720,7 +749,7 @@ ${rooms.channelField}    /**
      * paywalls it; the shard refuses to subscribe it (\`isPaidFunction\`).
      */
     x402?: { readonly price: number | string };
-}
+${sensitiveArgsField}}
 ${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client

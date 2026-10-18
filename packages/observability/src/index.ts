@@ -100,11 +100,15 @@ export {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    maskSensitiveArgs,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,
     REQUEST_LOG_TABLE,
+    scrubSensitiveText,
+    SENSITIVE_ARG_MASK,
+    sensitiveStrings,
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
