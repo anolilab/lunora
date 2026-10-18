@@ -168,6 +168,32 @@ const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
 };
 
 /**
+ * Whether `target`'s matrix can serve `feature` at all, judged on the matrix
+ * alone rather than on the app's declarations.
+ *
+ * The signals pass answers "does the app declare it and can the host serve
+ * it", which is the right question for a declaration but the wrong one for a
+ * builder method: that method is emitted whether or not the app calls it, so a
+ * host that cannot back it must withhold it regardless. `false` for an
+ * undeclared rating (fail closed, as {@link gatePlatformFeatures} does), and
+ * `true` for an unregistered target, which is left un-gated.
+ * @param target The resolved codegen target id.
+ * @param feature The `PlatformCapabilities` feature to check.
+ * @returns whether the target's matrix rates the feature `native` or `emulated`.
+ */
+const platformFeatureAvailable = (target: string, feature: PlatformFeatureKey): boolean => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return true;
+    }
+
+    const level = matrix.features[feature]?.level;
+
+    return level === "native" || level === "emulated";
+};
+
+/**
  * The target ids codegen can gate against.
  *
  * `@lunora/config`'s driver registry (`deployTargetIds`) used to assert
@@ -313,6 +339,8 @@ interface PlatformSignals {
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
     crossShardFanout?: boolean;
+    /** A `.deliveryAuthorization(...)` call on the app builder. */
+    deliveryAuthorization?: boolean;
     /** A `.stream(handler, { durable: … })` registration. */
     durableStreams?: boolean;
     /** A `.global()` table. */
@@ -350,6 +378,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "containerSandboxTools",
     "cronTriggers",
     "crossShardFanout",
+    "deliveryAuthorization",
     "durableStreams",
     "globalTables",
     "liveStreams",
@@ -372,6 +401,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
     containerRuntimeScheduling: 'per-instance container images and snapshots (`defineContainer({ schedulingPolicy: "durable_object" })`)',
     containerSandboxTools: "container sandbox helpers — files, directory backups, bucket mounts (`defineContainer({ sandbox: true })`)",
+    deliveryAuthorization: "delivery authorization (`.deliveryAuthorization(...)` on the app builder)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
@@ -642,6 +672,7 @@ export {
     DEFAULT_TARGET,
     gateAgainstMatrix,
     gatePlatformFeatures,
+    platformFeatureAvailable,
     platformMatrixIds,
     readProjectTarget,
     readTargetDiagnostics,

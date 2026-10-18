@@ -295,6 +295,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // already lifts statically, so no separate AST signal is needed.
         containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         containerSandboxTools: containers.some((container) => container.sandbox === true),
+        deliveryAuthorization: codeSignals.deliveryAuthorization,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         liveStreams: codeSignals.liveStreams,

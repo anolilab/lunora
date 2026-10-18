@@ -16,6 +16,8 @@ import { contextPropertiesRead } from "./feature-usage";
 interface PlatformCodeSignals {
     /** A `defineContainer` call carrying an egress policy (`allowedHosts` / `deniedHosts` / `interceptHttps`). */
     containerEgressPolicy: boolean;
+    /** A `.deliveryAuthorization(...)` call on the app builder — the shard answers its authority-fenced routes under it. */
+    deliveryAuthorization: boolean;
     /** A `.stream(handler, { durable: … })` registration — a persisted, socket-outliving stream run. */
     durableStreams: boolean;
     /** A `defineLiveStream` call: a topic SSE stream the shard serves over its subscriber registry. */
@@ -29,7 +31,10 @@ interface PlatformCodeSignals {
 }
 
 /** The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry. */
-const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
+const DECLARATION_SIGNALS: Readonly<Record<string, "deliveryAuthorization" | "liveStreams" | "typedWebSockets">> = {
+    // The app builder's method, not a declaration: it turns on the delivery
+    // authorization that a host without it cannot serve.
+    deliveryAuthorization: "deliveryAuthorization",
     defineLiveStream: "liveStreams",
     defineRoom: "typedWebSockets",
     defineWebSocket: "typedWebSockets",
@@ -152,6 +157,7 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
 const discoverPlatformSignals = (project: Project, lunoraDirectory: string): PlatformCodeSignals => {
     const signals: PlatformCodeSignals = {
         containerEgressPolicy: false,
+        deliveryAuthorization: false,
         durableStreams: false,
         liveStreams: false,
         secrets: false,

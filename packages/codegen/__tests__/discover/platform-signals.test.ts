@@ -39,6 +39,7 @@ describe("discoverPlatformSignals", () => {
 
         expect(signals()).toStrictEqual({
             containerEgressPolicy: false,
+            deliveryAuthorization: false,
             durableStreams: false,
             liveStreams: false,
             secrets: false,
@@ -53,6 +54,25 @@ describe("discoverPlatformSignals", () => {
         write("chat.ts", `export const chat = defineRoom({ name: "chat" });\n`);
 
         expect(signals().typedWebSockets).toBe(true);
+    });
+
+    it("flags a `.deliveryAuthorization(...)` call on the app builder", () => {
+        expect.assertions(1);
+
+        write(
+            "app.ts",
+            `export const authorize = (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined);\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
+    it("does not flag an app builder chain that never calls deliveryAuthorization", () => {
+        expect.assertions(1);
+
+        write("app.ts", `export const built = (app: { build: () => unknown }) => app.build();\n`);
+
+        expect(signals().deliveryAuthorization).toBe(false);
     });
 
     it("flags a defineLiveStream declaration as liveStreams", () => {
