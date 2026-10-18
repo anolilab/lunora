@@ -1260,11 +1260,12 @@ export const agentComponent = (): AgentComponent => {
      * wake-up event, so it never reaches the workflow journal, a message row or
      * this mutation's return (`{ resolved: true }`, which the shard's idempotency
      * row persists). PUBLIC and OWNER-GATED, fail closed (see
-     * {@link ownedSecretThread}). The plaintext transits this mutation's arguments:
-     * the arg is named `secret` so request-log redaction masks it.
+     * {@link ownedSecretThread}). The plaintext transits this mutation's arguments,
+     * so the `secret` arg is marked `v.sensitive`: the request log masks it, a
+     * rejected value is not echoed, and the client never queues it offline.
      */
     const agentSupplySecret = mutation
-        .input({ secret: v.string(), threadKey: v.string(), toolCallId: v.string() })
+        .input({ secret: v.sensitive(v.string()), threadKey: v.string(), toolCallId: v.string() })
         .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
             const thread = ownedSecretThread(
                 await context.db

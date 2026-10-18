@@ -226,6 +226,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -465,7 +466,7 @@ class LunoraClient {
         fn: FunctionReference;
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
-    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
+    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>): Promise<ReturnOf<F>>;
     canQueueOffline(shardKey?: string): boolean;
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
@@ -2340,6 +2341,16 @@ interface OfflineQueueDeps {
     persistence?: PersistenceAdapter;
     version?: string;
 }
+```
+
+### `OnlineOnlyOption` (type)
+
+```ts
+type OnlineOnlyOption<F> = F extends {
+    readonly sensitive: true;
+} ? {
+    onlineOnly?: true;
+} : unknown;
 ```
 
 ### `OptimisticLayer` (interface)

@@ -246,7 +246,7 @@ const listFunctionsCached = (client: LunoraClient): Promise<FunctionDescriptor[]
  * can't reach internal/non-public function paths it invented, and can't run a
  * mutation/action through the query tool (or vice-versa). Throws on any mismatch.
  */
-const assertRunnable = async (client: LunoraClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<void> => {
+const assertRunnable = async (client: LunoraClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<FunctionDescriptor> => {
     const functions = await listFunctionsCached(client);
     const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
@@ -257,6 +257,8 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
     if (descriptor.kind !== expectedKind) {
         throw new LunoraError("BAD_REQUEST", `function ${functionPath} is a ${descriptor.kind}, not a ${expectedKind}`);
     }
+
+    return descriptor;
 };
 
 /**
@@ -276,11 +278,20 @@ const screenWrite = async (
     kind: "action" | "mutation",
     run: { args: Record<string, unknown>; functionPath: string; shardKey: string | undefined },
     input: Record<string, unknown>,
+    sensitiveArgs: ReadonlyArray<string>,
 ): Promise<ToolResult | undefined> => {
     const confirmation = readConfirmation(input);
 
-    return screenWriteConfirmation(client, { ...run, idempotencyKey: confirmation.idempotencyKey, kind, tool }, confirmation);
+    return screenWriteConfirmation(client, { ...run, idempotencyKey: confirmation.idempotencyKey, kind, tool }, confirmation, sensitiveArgs);
 };
+
+/**
+ * The names of a function's `v.sensitive` arguments, from the discovery descriptor.
+ * The proposal shows them masked, and the call is made through a sensitive reference
+ * so the client never queues it offline.
+ */
+const sensitiveArgumentNamesOf = (descriptor: FunctionDescriptor): string[] =>
+    (descriptor.args ?? []).filter((argument) => argument.sensitive === true).map((argument) => argument.name);
 
 /** Dispatch a read-only tool: introspection and query, no gate. */
 const callReadOnlyTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
@@ -331,19 +342,18 @@ const callWriteTool = async (client: LunoraClient, name: string, input: Record<s
     const kind = name === "lunora_run_action" ? "action" : "mutation";
     const { args, functionPath, shardKey } = readRunArguments(input);
 
-    await assertRunnable(client, functionPath, kind);
+    const descriptor = await assertRunnable(client, functionPath, kind);
+    const sensitiveArgs = sensitiveArgumentNamesOf(descriptor);
 
-    const gate = await screenWrite(client, name, kind, { args, functionPath, shardKey }, input);
+    const gate = await screenWrite(client, name, kind, { args, functionPath, shardKey }, input, sensitiveArgs);
 
     if (gate !== undefined) {
         return gate;
     }
 
-    return ok(
-        kind === "action"
-            ? await client.action(reference(functionPath), args, { shardKey })
-            : await client.mutation(reference(functionPath), args, { shardKey }),
-    );
+    const target = sensitiveArgs.length === 0 ? reference(functionPath) : { __lunoraRef: functionPath, sensitive: true as const };
+
+    return ok(kind === "action" ? await client.action(target, args, { shardKey }) : await client.mutation(target, args, { shardKey }));
 };
 
 /** The opt-in flags `toolDefinitions` and `callTool` accept, by name. */

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentComponent } from "@lunora/agent";
+import { sensitiveArgumentNames } from "@lunora/values";
 import { Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -510,8 +511,11 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain(
             'agentRun: FunctionReference<"mutation", { agent: string; input: string; threadKey: string; title?: string }, { id: string; threadKey: string }>;',
         );
+        // The secret is the one sensitive argument: its reference is typed `sensitive`,
+        // so the client refuses to queue it offline. Pinned here, and compared against
+        // the runtime marker in the drift test below.
         expect(content).toContain(
-            'agentSupplySecret: FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
+            'agentSupplySecret: FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }> & { readonly sensitive: true };',
         );
         expect(content).toContain('agentDeclineSecret: FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;');
         // The internal thread-write mutations never surface on the api objects.
@@ -583,7 +587,7 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(9);
+        expect.assertions(10);
 
         // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
@@ -628,6 +632,9 @@ describe("auto-registered agent runtime functions", () => {
             threadKey: { kind: "string", optional: false },
             toolCallId: { kind: "string", optional: false },
         });
+        // The runtime marker must agree with the sensitive argument pinned in
+        // `syntheticAgentApiFunctions`: `secret` alone, nothing else.
+        expect([...sensitiveArgumentNames(runtime.agentSupplySecret.args as Record<string, unknown>)]).toStrictEqual(["secret"]);
         expect(describeArgs(runtime.agentDeclineSecret.args)).toStrictEqual({
             threadKey: { kind: "string", optional: false },
             toolCallId: { kind: "string", optional: false },

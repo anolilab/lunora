@@ -333,14 +333,15 @@ if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallI
 
 **Limits you must design for.**
 
-- **The plaintext transits the supply mutation's arguments.** The argument is
-  named `secret` so the request log masks it. Anything else that records mutation
-  arguments in transit would see it too.
-- **Offline queueing would persist the value.** A mutation without
-  `onlineOnly: true` is queued while the device is offline, and its arguments
-  land in IndexedDB or AsyncStorage. The framework `supplySecret` always sets
-  `onlineOnly`, so it is refused (`OFFLINE_NOT_QUEUED`) rather than queued. A
-  direct `client.mutation(agentSupplySecret, …)` call must pass the option itself.
+- **The plaintext transits the supply mutation's arguments.** The `secret`
+  argument is marked `v.sensitive`, so the request log masks it, a rejected value
+  is not echoed, and the generated reference is typed as sensitive. Anything else
+  that records mutation arguments in transit would see it too.
+- **Offline queueing would persist the value.** The `secret` argument is
+  `v.sensitive`, so the generated reference is always online-only: a direct
+  `client.mutation(agentSupplySecret, …)` call is refused (`OFFLINE_NOT_QUEUED`)
+  when the device is offline rather than queued into IndexedDB or AsyncStorage,
+  and passing `onlineOnly: false` is a type error and a runtime `BAD_REQUEST`.
 - **Point-in-time recovery can bring a discarded value back** for the database's
   recovery window (30 days). Discard removes the value from the store, not from
   backups.

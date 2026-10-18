@@ -303,6 +303,76 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
     return redactValue(maskCredentials(value));
 };
 
+/** What a `v.sensitive` argument is replaced with before it reaches any log row, Logpush event or dev capture. */
+const SENSITIVE_ARG_MASK = "«sensitive»";
+
+/**
+ * Replace the named arguments of one dispatch with {@link SENSITIVE_ARG_MASK},
+ * leaving every other argument as it was. Applied BEFORE {@link redactArgs}: the
+ * `captureRaw` development escape hatch skips redaction entirely, so masking
+ * inside `redactArgs` would leak a marked value in dev. Returns `args` itself when
+ * nothing is sensitive, and never mutates the caller's object.
+ */
+const maskSensitiveArgs = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): Record<string, unknown> => {
+    if (sensitive.size === 0) {
+        return args;
+    }
+
+    return Object.fromEntries(Object.entries(args).map(([name, value]) => [name, sensitive.has(name) ? SENSITIVE_ARG_MASK : value]));
+};
+
+/** How deep {@link sensitiveStrings} walks a marked argument's object tree. */
+const MAX_SENSITIVE_DEPTH = 8;
+
+/**
+ * The string leaves of the named arguments of one dispatch: the values a free-text
+ * sink (an error message) must not echo back. A handler's own thrown message can
+ * quote the argument it rejected, and no key-name rule catches that.
+ */
+const sensitiveStrings = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
+    const visit = (value: unknown, depth: number): void => {
+        if (typeof value === "string") {
+            if (value.length > 0) {
+                found.push(value);
+            }
+
+            return;
+        }
+
+        if (depth > MAX_SENSITIVE_DEPTH || typeof value !== "object" || value === null) {
+            return;
+        }
+
+        for (const child of Object.values(value)) {
+            visit(child, depth + 1);
+        }
+    };
+
+    for (const name of sensitive) {
+        if (Object.hasOwn(args, name)) {
+            visit(args[name], 0);
+        }
+    }
+
+    return found;
+};
+
+/**
+ * Replace every occurrence of a sensitive value in free text with
+ * {@link SENSITIVE_ARG_MASK}. Longest first, so a value that contains another is
+ * masked whole.
+ */
+const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {
+    let scrubbed = text;
+
+    for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
+        scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
+    }
+
+    return scrubbed;
+};
+
 /**
  * SQL handles whose request-log table (and its back-filled columns) have already
  * been ensured in this isolate. Every read and write path calls
@@ -1016,6 +1086,7 @@ export {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    maskSensitiveArgs,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
@@ -1024,6 +1095,9 @@ export {
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
+    scrubSensitiveText,
+    SENSITIVE_ARG_MASK,
+    sensitiveStrings,
 };
 export type {
     AppendRequestLogEntry,

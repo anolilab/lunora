@@ -1357,6 +1357,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -1711,6 +1712,7 @@ const MESSAGE_IDS: readonly [
     "Read and write this table through the typed data model.",
     "Move widget down",
     "Move widget up",
+    "Re-enter the sensitive values before running this again.",
     "Recent errors",
     "Recent logs",
     "Recently visited shards — click to switch",
