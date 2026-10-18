@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.138...@lunora/shard-engine@1.0.0-alpha.139) (2026-10-18)
+
+### Bug Fixes
+
+* harden live stream delivery on the server and node host ([#1247](https://github.com/anolilab/lunora/issues/1247)) ([0074c55](https://github.com/anolilab/lunora/commit/0074c55e1a7910f89b6d4b2b4275b4dbe8113edf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/shard-engine [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.137...@lunora/shard-engine@1.0.0-alpha.138) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
