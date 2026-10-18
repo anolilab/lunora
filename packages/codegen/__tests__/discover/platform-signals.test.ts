@@ -39,12 +39,33 @@ describe("discoverPlatformSignals", () => {
 
         expect(signals()).toStrictEqual({
             containerEgressPolicy: false,
+            deliveryAuthorization: false,
             durableStreams: false,
+            liveContext: false,
             liveStreams: false,
             secrets: false,
             typedWebSockets: false,
             workflowRollback: false,
         });
+    });
+
+    it("detects a ctx.live read", () => {
+        expect.assertions(1);
+
+        write(
+            "announce.ts",
+            `import { action } from "@lunora/server";\n\nexport const announce = action({ args: {}, handler: async (ctx) => {\n    await ctx.live.publish("posts", { id: 1 });\n\n    return null;\n} });\n`,
+        );
+
+        expect(signals().liveContext).toBe(true);
+    });
+
+    it("does not treat a `live` binding that is not read off the context as a ctx.live read", () => {
+        expect.assertions(1);
+
+        write("toggle.ts", `const live = { publish: () => undefined };\n\nexport const toggle = () => live.publish();\n`);
+
+        expect(signals().liveContext).toBe(false);
     });
 
     it("flags a socket route or room declaration as typedWebSockets", () => {
@@ -53,6 +74,14 @@ describe("discoverPlatformSignals", () => {
         write("chat.ts", `export const chat = defineRoom({ name: "chat" });\n`);
 
         expect(signals().typedWebSockets).toBe(true);
+    });
+
+    it("flags a delivery-authorization builder call as deliveryAuthorization", () => {
+        expect.assertions(1);
+
+        write("app.ts", `export const app = defineApp().deliveryAuthorization(() => async () => undefined).build();\n`);
+
+        expect(signals().deliveryAuthorization).toBe(true);
     });
 
     it("flags a defineLiveStream declaration as liveStreams", () => {

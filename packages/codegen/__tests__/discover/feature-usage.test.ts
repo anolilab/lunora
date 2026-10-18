@@ -282,6 +282,14 @@ describe("discover/feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
     });
 
+    it('detects a `ctx.*` helper read with a literal bracket key, as `ctx["storage"]`', () => {
+        expect.assertions(1);
+
+        writeSource("upload.ts", `export const put = async (ctx) => {\n  return ctx["storage"].put("k", new Blob());\n};`);
+
+        expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
+    });
+
     it("reads a quoted destructuring key as its runtime property", () => {
         expect.assertions(2);
 

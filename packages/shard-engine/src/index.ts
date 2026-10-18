@@ -336,6 +336,7 @@ export { describeRelationWrites } from "./relation-writes";
 export type { ApplyOnDeleteOptions } from "./relations";
 export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     PromotionThresholds,

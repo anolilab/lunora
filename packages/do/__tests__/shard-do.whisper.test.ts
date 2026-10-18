@@ -1,5 +1,5 @@
 import { decodeWire, encodeWire } from "@lunora/wire";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -48,6 +48,9 @@ class FakeSocket {
     }
 }
 
+/** The frames a socket got other than the join ack, so a "nothing delivered" check stays about delivery. */
+const withoutAck = (socket: { frames: Frame[] }): Frame[] => socket.frames.filter((frame) => frame.type !== "whisper_subscribed");
+
 class WhisperShard extends ShardDO {
     public sockets: FakeSocket[] = [];
 
@@ -71,7 +74,60 @@ const send = async (shard: WhisperShard, ws: FakeSocket, envelope: Record<string
     await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
 };
 
+/** A shard where `room:` topics resolve to a room handler, so their joins run `onJoin`. */
+class RoomWhisperShard extends WhisperShard {
+    // eslint-disable-next-line class-methods-use-this -- stub; the room test only needs the topic-to-handler mapping
+    protected override roomHandlerPath(topic: string): string | undefined {
+        return topic.startsWith("room:") ? "rooms:handler" : undefined;
+    }
+}
+
+const makeRoomShard = (sockets: FakeSocket[]): WhisperShard => {
+    const state = {
+        acceptWebSocket() {},
+        getWebSockets: () => sockets,
+        storage: { sql: {} },
+    } as unknown as ShardDOState;
+
+    return new RoomWhisperShard(state, {});
+};
+
 describe("shardDO whispering", () => {
+    it("acknowledges an admitted join after recording membership, so a whisper reaches it", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const b = new FakeSocket({ subs: {} });
+        const shard = makeShard([a, b]);
+
+        await send(shard, a, { topic: "cursors", type: "whisper_subscribe" });
+
+        // The ack is the join's answer, and it is the only frame the joiner receives so far.
+        expect(a.frames).toStrictEqual([{ topic: "cursors", type: "whisper_subscribed" }]);
+
+        await send(shard, b, { topic: "cursors", type: "whisper_subscribe" });
+        await send(shard, b, { data: { x: 1 }, topic: "cursors", type: "whisper" });
+
+        // Membership was recorded before the ack, so the whisper relayed to `a` after it.
+        expect(a.frames.slice(1)).toStrictEqual([{ data: { x: 1 }, topic: "cursors", type: "whisper" }]);
+        expect(b.frames[0]).toStrictEqual({ topic: "cursors", type: "whisper_subscribed" });
+    });
+
+    it("acknowledges a live join but never a room join, whose own answer is its history frame", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {} });
+        const shard = makeRoomShard([a]);
+
+        await send(shard, a, { topic: "room:r1", type: "whisper_subscribe" });
+
+        expect(a.frames.filter((frame) => frame.type === "whisper_subscribed")).toStrictEqual([]);
+
+        await send(shard, a, { topic: "cursors", type: "whisper_subscribe" });
+
+        expect(a.frames.filter((frame) => frame.type === "whisper_subscribed")).toStrictEqual([{ topic: "cursors", type: "whisper_subscribed" }]);
+    });
+
     it("fans a whisper out to other topic members but not the sender", async () => {
         expect.assertions(4);
 
@@ -90,16 +146,16 @@ describe("shardDO whispering", () => {
         await send(shard, a, { data: { x: 1 }, topic: "cursors", type: "whisper" });
 
         // Sender never receives its own whisper.
-        expect(a.frames).toHaveLength(0);
+        expect(withoutAck(a)).toHaveLength(0);
         // `b` (same topic) receives it, attributed to the sender.
-        expect(b.frames).toEqual([{ data: { x: 1 }, from: "user-a", topic: "cursors", type: "whisper" }]);
+        expect(withoutAck(b)).toEqual([{ data: { x: 1 }, from: "user-a", topic: "cursors", type: "whisper" }]);
         // `c` (different topic) receives nothing.
-        expect(c.frames).toHaveLength(0);
+        expect(withoutAck(c)).toHaveLength(0);
 
         // No `from` leaks when the sender is anonymous.
         await send(shard, b, { data: { y: 2 }, topic: "cursors", type: "whisper" });
 
-        expect(a.frames[0]).toEqual({ data: { y: 2 }, topic: "cursors", type: "whisper" });
+        expect(withoutAck(a)[0]).toEqual({ data: { y: 2 }, topic: "cursors", type: "whisper" });
     });
 
     it("relays a wire-encoded whisper payload verbatim so bigint/bytes round-trip", async () => {
@@ -119,7 +175,7 @@ describe("shardDO whispering", () => {
 
         await send(shard, a, { data: encodeWire(payload), topic: "cursors", type: "whisper" });
 
-        const relayed = b.frames[0]?.data;
+        const relayed = withoutAck(b)[0]?.data;
 
         // Relayed byte-for-byte as the client encoded it (no re-encode on the hop).
         expect(relayed).toEqual(encodeWire(payload));
@@ -144,7 +200,7 @@ describe("shardDO whispering", () => {
 
         await send(shard, a, { data: 1, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        expect(withoutAck(b)).toHaveLength(0);
     });
 
     it("rate-limits a sender that floods whispers", async () => {
@@ -165,8 +221,8 @@ describe("shardDO whispering", () => {
 
         // Receiver got at most the burst budget (WHISPER_RATE_BURST = 50), not
         // all 200 — the rest were dropped by the token bucket.
-        expect(b.frames.length).toBeLessThanOrEqual(50);
-        expect(b.frames.length).toBeGreaterThan(0);
+        expect(withoutAck(b).length).toBeLessThanOrEqual(50);
+        expect(withoutAck(b).length).toBeGreaterThan(0);
     });
 
     it("drops an over-limit whisper payload", async () => {
@@ -181,7 +237,7 @@ describe("shardDO whispering", () => {
 
         await send(shard, a, { data: { blob: "x".repeat(5000) }, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        expect(withoutAck(b)).toHaveLength(0);
     });
 });
 
@@ -195,8 +251,8 @@ describe("shardDO token-expiry", () => {
         // Any frame on an expired socket is rejected before processing.
         await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify({ id: "s1", query: { functionPath: "x:y" }, type: "subscribe" }));
 
-        expect(ws.frames).toHaveLength(1);
-        expect(ws.frames[0]?.code).toBe("TOKEN_EXPIRED");
+        expect(withoutAck(ws)).toHaveLength(1);
+        expect(withoutAck(ws)[0]?.code).toBe("TOKEN_EXPIRED");
         expect(ws.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
     });
 
@@ -218,9 +274,9 @@ describe("shardDO token-expiry", () => {
 
         await send(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(1);
-        expect(b.frames[0]?.type).not.toBe("whisper");
-        expect(b.frames[0]?.code).toBe("TOKEN_EXPIRED");
+        expect(withoutAck(b)).toHaveLength(1);
+        expect(withoutAck(b)[0]?.type).not.toBe("whisper");
+        expect(withoutAck(b)[0]?.code).toBe("TOKEN_EXPIRED");
         expect(b.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
     });
 
@@ -290,6 +346,34 @@ const sendTo = async (shard: AuthorizedShard, ws: FakeSocket, envelope: Record<s
 };
 
 describe("shardDO whisper authorization", () => {
+    it("acknowledges a join only once its authorization settles, so the ack follows membership", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let release!: (verdict: boolean) => void;
+        const verdict = new Promise<boolean>((resolve) => {
+            release = resolve;
+        });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => verdict });
+
+        const join = sendTo(shard, a, { topic: "room:r1", type: "whisper_subscribe" });
+
+        await vi.waitFor(() => {
+            if (shard.calls.length === 0) {
+                throw new Error("authorizer not reached yet");
+            }
+        });
+
+        // The verdict is still out, so the shard has answered nothing for this join.
+        expect(a.frames).toStrictEqual([]);
+
+        release(true);
+        await join;
+
+        expect(a.frames).toStrictEqual([{ topic: "room:r1", type: "whisper_subscribed" }]);
+        expect(shard.calls).toHaveLength(1);
+    });
+
     it("passes the topic, action and verified identity to the authorizer", async () => {
         expect.assertions(2);
 
@@ -320,7 +404,8 @@ describe("shardDO whisper authorization", () => {
 
         await sendTo(shard, a, { data: { x: 1 }, topic: "room:r1", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        // The denied join gets the same ack an admitted one does, and no whisper.
+        expect(b.frames).toStrictEqual([{ topic: "room:r1", type: "whisper_subscribed" }]);
         // Denial is silent — no error frame to probe topic existence with.
         expect(b.closes).toHaveLength(0);
     });
@@ -340,12 +425,12 @@ describe("shardDO whisper authorization", () => {
 
         await sendTo(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        expect(withoutAck(b)).toHaveLength(0);
 
         // `a` is still joined, so `b`'s (permitted) whisper still reaches it.
         await sendTo(shard, b, { data: { y: 2 }, topic: "t", type: "whisper" });
 
-        expect(a.frames).toEqual([{ data: { y: 2 }, from: "user-b", topic: "t", type: "whisper" }]);
+        expect(withoutAck(a)).toEqual([{ data: { y: 2 }, from: "user-b", topic: "t", type: "whisper" }]);
     });
 
     it("fails closed when the authorizer throws or returns a non-true value", async () => {
@@ -380,9 +465,9 @@ describe("shardDO whisper authorization", () => {
             await sendTo(shard, ws, { data: 1, topic, type: "whisper" });
         }
 
-        expect(listener.frames).toHaveLength(0);
-        expect(thrower.frames).toHaveLength(0);
-        expect(truthy.frames).toHaveLength(0);
+        expect(withoutAck(listener)).toHaveLength(0);
+        expect(withoutAck(thrower)).toHaveLength(0);
+        expect(withoutAck(truthy)).toHaveLength(0);
     });
 
     it("requires every registered authorizer to allow", async () => {
@@ -400,7 +485,7 @@ describe("shardDO whisper authorization", () => {
 
         await sendTo(shard, a, { data: 1, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        expect(withoutAck(b)).toHaveLength(0);
     });
 
     it("memoises the verdict per socket, action and topic so a cursor stream costs one query", async () => {
@@ -420,7 +505,7 @@ describe("shardDO whisper authorization", () => {
 
         // Two joins + one first send. The other 19 sends reused the memoised verdict.
         expect(shard.calls).toHaveLength(3);
-        expect(b.frames).toHaveLength(20);
+        expect(withoutAck(b)).toHaveLength(20);
     });
 
     it("never authorizes a leave, so a revoked member can still unsubscribe", async () => {
@@ -442,7 +527,7 @@ describe("shardDO whisper authorization", () => {
         allow = true;
         await sendTo(shard, a, { data: 1, topic: "t", type: "whisper" });
 
-        expect(b.frames).toHaveLength(0);
+        expect(withoutAck(b)).toHaveLength(0);
         // The leave itself dispatched no authorizer.
         expect(shard.calls.filter((call) => call.event.action === undefined)).toHaveLength(0);
     });
@@ -471,7 +556,7 @@ describe("shardDO whisper authorization cap", () => {
 
         // The dispatch count is the proof: the cap ran BEFORE the authorizer.
         expect(shard.calls).toHaveLength(256);
-        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
+        expect(withoutAck(a).filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
         // Refused pairs are not memoised, so the memo stopped growing at the cap.
         expect(shard.calls.at(-1)?.event.topic).toBe("t255");
     });
@@ -491,7 +576,7 @@ describe("shardDO whisper authorization cap", () => {
         }
 
         expect(shard.calls).toHaveLength(256);
-        expect(a.frames).toHaveLength(0);
+        expect(withoutAck(a)).toHaveLength(0);
 
         // The 257th pair is refused, and costs no dispatch.
         await sendTo(shard, a, { topic: "one-too-many", type: "whisper_subscribe" });
@@ -510,7 +595,7 @@ describe("shardDO whisper authorization cap", () => {
             await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
         }
 
-        expect(a.frames).toHaveLength(0);
+        expect(withoutAck(a)).toHaveLength(0);
 
         // The same over-cap topic, five times. Memoising the refusal would bound
         // the dispatches but NOT the memo — and it would show up here, because
@@ -521,7 +606,7 @@ describe("shardDO whisper authorization cap", () => {
             await sendTo(shard, a, { topic: "over-cap", type: "whisper_subscribe" });
         }
 
-        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(5);
+        expect(withoutAck(a).filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(5);
         // And no refusal cost a dispatch.
         expect(shard.calls).toHaveLength(256);
     });
@@ -540,7 +625,7 @@ describe("shardDO whisper authorization cap", () => {
             await sendTo(shard, a, { topic: `secret-${String(index)}`, type: "whisper_subscribe" });
         }
 
-        const refusals = a.frames.filter((frame) => frame.type === "error");
+        const refusals = withoutAck(a).filter((frame) => frame.type === "error");
 
         expect(refusals).toHaveLength(1);
         expect(shard.calls).toHaveLength(256);
@@ -571,7 +656,7 @@ describe("shardDO whisper authorization cap", () => {
         );
 
         expect(shard.calls).toHaveLength(256);
-        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
+        expect(withoutAck(a).filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
     });
 
     it("collapses a burst naming one pair onto a single authorizer run", async () => {
@@ -590,6 +675,6 @@ describe("shardDO whisper authorization cap", () => {
         );
 
         expect(shard.calls).toHaveLength(1);
-        expect(a.frames).toHaveLength(0);
+        expect(withoutAck(a)).toHaveLength(0);
     });
 });

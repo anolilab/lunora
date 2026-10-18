@@ -583,6 +583,7 @@ export const ERROR_CATALOG = {
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
+    FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
@@ -677,6 +678,8 @@ export const ERROR_CATALOG = {
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
+    LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
+    LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
@@ -695,6 +698,7 @@ export const ERROR_CATALOG = {
         status: 401,
         title: "Authentication token expired",
     },
+    TOO_MANY_LIVE_TOPICS: { status: 429, title: "Too many live topics" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
 
     /**

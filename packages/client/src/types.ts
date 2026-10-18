@@ -916,14 +916,43 @@ export interface ServerWhisperMessage {
 }
 
 /**
+ * The shard processed a `whisper_subscribe` for a live (non-room) `topic` on this socket. It is sent
+ * whether or not the join was admitted, so it carries no authorization signal. A client that must
+ * publish or receive only once its membership took effect waits for it. A room join gets no ack.
+ */
+export interface ServerWhisperSubscribedMessage {
+    topic: string;
+    type: "whisper_subscribed";
+}
+
+/**
+ * A server live publish to a WebSocket member granted `stream` on `topic`. Server-only:
+ * a peer's whisper never carries this type, so a `live` frame is always the server's.
+ * `data` is the published payload, the same as the SSE `live` event.
+ */
+export interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
+}
+
+/**
  * The user the shard authenticated this socket as, sent in reply to every
  * `connect` frame. `subject` is the resolved user id, or `null` when the socket
  * is anonymous. A cookie-session client reads it to learn who it is — a
  * sign-out or another user's sign-in changes nothing else it can see.
+ *
+ * `connectionId` names this socket to the live-stream control route, which grants
+ * it live topics (see `LunoraClient.subscribeLiveTopic`). `whisperAck` is `true` when the
+ * shard answers every live join with `whisper_subscribed`; a client waits for that answer
+ * before it posts a grant, and posts at once when the flag is absent.
  */
 export interface ServerIdentityMessage {
+    connectionId?: string;
     subject: null | string;
     type: "identity";
+    whisperAck?: boolean;
 }
 
 /**
@@ -1017,12 +1046,14 @@ export type ServerMessage =
     | ServerDataMessage
     | ServerErrorMessage
     | ServerIdentityMessage
+    | ServerLiveMessage
     | ServerPokeEndMessage
     | ServerPokePartMessage
     | ServerPokeStartMessage
     | ServerResumeMessage
     | ServerSettledMessage
-    | ServerWhisperMessage;
+    | ServerWhisperMessage
+    | ServerWhisperSubscribedMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's

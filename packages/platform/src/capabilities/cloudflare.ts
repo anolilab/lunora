@@ -19,7 +19,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
         },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
-        liveStreams: { level: "native", note: "The shard DO streams the SSE response; publishes fan out through the DO and the relay hub" },
+        liveStreams: {
+            level: "native",
+            note: "The shard DO streams the SSE response. `ctx.live.publish` reaches the SSE subscribers of the shard it names: from an HTTP action or a queue consumer through the Worker's shard forward, and from a scheduled job's action in-process on the DO it runs in (no hop). A queue consumer has no shard of its own, so it always forwards. There is no cross-shard live fan-out. An in-shard action publish naming another shard is refused, so it reaches no subscriber; the HTTP and queue paths above forward to the shard they name instead",
+        },
         typedWebSockets: { level: "native", note: "Route and room sockets ride DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",

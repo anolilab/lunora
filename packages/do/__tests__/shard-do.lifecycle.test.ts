@@ -250,8 +250,8 @@ describe("shardDO connection-lifecycle dispatch", () => {
         await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
 
         expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([
-            { subject: "user-42", type: "identity" },
-            { subject: "user-42", type: "identity" },
+            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
+            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
         ]);
     });
 
@@ -265,6 +265,6 @@ describe("shardDO connection-lifecycle dispatch", () => {
 
         await shard.driveMessage(ws, connectEnvelope());
 
-        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([{ subject: null, type: "identity" }]);
+        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([{ connectionId: "conn-1", subject: null, type: "identity", whisperAck: true }]);
     });
 });

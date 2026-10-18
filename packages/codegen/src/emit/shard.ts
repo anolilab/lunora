@@ -88,12 +88,20 @@ interface EmitShardOptions {
 
     /** User function handlers are imported through generated per-module loaders. */
     lazyFunctions?: boolean;
+
+    /**
+     * The app declares a `defineLiveStream` that the target serves (post platform
+     * gate) — wires `ctx.live.publish` onto the action ctx, so an action running on
+     * this shard (a scheduled job) publishes to its own stream subscribers.
+     */
+    liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
     /** Queues declared via `defineQueue` / `defineSubscription` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
+
     schema: SchemaIR;
 
     /**
@@ -131,6 +139,7 @@ const emitShard = ({
     hasRooms = false,
     lazyFunctions = false,
     hasVectors = true,
+    liveStreams = false,
     maskMetadata,
     mutators = [],
     queues = [],
@@ -763,8 +772,21 @@ ${schema.tables
     // runtime match). Each helper's ctx field is named after its local, so one
     // list drives both the attach here and the strip from a composed query's view
     // of an action ctx.
-    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : [])];
-    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}`;
+    // `ctx.live.publish` is action-only: an action that runs on this shard hands the
+    // event to the shard's own SSE subscribers in-process. Queries and mutations
+    // never publish (non-deterministic fan-out), and an absent `shardKey` means this
+    // shard — see the base class live publish method.
+    const liveBuild = liveStreams
+        ? `
+            const live = {
+                publish: async (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }): Promise<void> => {
+                    await this.publishLiveFromAction(topic, payload, publishOptions);
+                },
+            };
+`
+        : "";
+    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : []), ...(liveStreams ? ["live"] : [])];
+    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}${liveBuild}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
