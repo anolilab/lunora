@@ -28,7 +28,7 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 interface RelayDouble {
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
-    /** The status this relay answers a forwarded whisper or live frame with; `410` when it holds no sockets. Defaults to `204`. */
+    /** The status this relay answers a forwarded whisper, live frame or shape poke with; `410` when it holds no sockets. Defaults to `204`. */
     frameStatus?: number;
     /** When set, every answer waits for this to settle, so a test can answer after the owner's deadline has passed. */
     gate?: Promise<void>;
@@ -73,7 +73,7 @@ const ownerFor = (
                     });
                 }
 
-                const isFrame = message["type"] === "relay_frame" || message["type"] === "relay_live_frame";
+                const isFrame = message["type"] === "relay_frame" || message["type"] === "relay_live_frame" || message["type"] === "relay_shape_poke";
                 let status = 204;
 
                 if (message["type"] === "relay_live_control") {
@@ -256,6 +256,23 @@ describe("relay hub", () => {
             await owner.onFlush(new Set(["messages"]), 30);
 
             expect(pokesIn(relayAt(relays, 1))[0]).toMatchObject({ checkpoint: 30, fromCursor: 5 });
+        });
+
+        it("drops a relay that answers a shape poke as idle, without rewinding the shape", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const { owner } = ownerFor(database.sql, relays);
+
+            await subscribe(owner, OPEN_SHAPE, 0);
+
+            // The relay's last socket has gone, and only shape traffic reaches it.
+            relayAt(relays, 0).frameStatus = 410;
+            await owner.onFlush(new Set(["messages"]), 20);
+            await owner.onFlush(new Set(["messages"]), 30);
+
+            expect(pokesIn(relayAt(relays, 0))).toHaveLength(1);
+            expect(owner.minShapeCursor()).not.toBe(5);
         });
 
         it("rewinds a per-socket proxy the same way", async () => {

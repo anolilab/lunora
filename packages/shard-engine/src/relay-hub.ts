@@ -311,8 +311,8 @@ abstract class RelayLink {
             return new Response("bad request", { status: 400 });
         }
 
-        // A relay with no sockets answers a forwarded frame as idle, so its owner drops it (see {@link RelayLink.refusesAsIdle}).
-        if ((message.type === "relay_frame" || message.type === "relay_live_frame") && this.refusesAsIdle()) {
+        // A relay with no sockets answers a forwarded frame or shape poke as idle, so its owner drops it (see {@link RelayLink.refusesAsIdle}).
+        if ((message.type === "relay_frame" || message.type === "relay_live_frame" || message.type === "relay_shape_poke") && this.refusesAsIdle()) {
             return new Response(undefined, { status: RELAY_IDLE_STATUS });
         }
 
@@ -566,6 +566,12 @@ class OwnerRelay extends RelayLink {
 
     /** Relay indices that have answered a grant, hydrated once from `__lunora_relay_grants`. See {@link OwnerRelay.liveGrantRelaySet}. */
     private liveGrantRelayCache: Set<number> | undefined;
+
+    /** Whether {@link OwnerRelay.ensureRelayTables} has run its DDL this wake. */
+    private relayTablesReady = false;
+
+    /** Each relay's sequence mark, read once from `__lunora_relay_seqs` and kept in step with it, so a forward costs no query. */
+    private readonly relaySeqMarks = new Map<number, number | undefined>();
 
     /**
      * Relays with a subscribe still unanswered, by count. A subscribe past its deadline may still store the grant, so an unsubscribe
@@ -849,11 +855,18 @@ class OwnerRelay extends RelayLink {
 
     /** The newest attach or detach sequence applied for relay `index`, or `undefined` before the first sequenced frame. */
     private relaySeqMark(index: number): number | undefined {
+        if (this.relaySeqMarks.has(index)) {
+            return this.relaySeqMarks.get(index);
+        }
+
         this.ensureRelayTables();
 
         const [row] = this.host.sql().exec<{ seq: bigint | number }>("SELECT seq FROM __lunora_relay_seqs WHERE idx = ?", index).toArray();
+        const mark = row === undefined ? undefined : Number(row.seq);
 
-        return row === undefined ? undefined : Number(row.seq);
+        this.relaySeqMarks.set(index, mark);
+
+        return mark;
     }
 
     /** Raise relay `index`'s mark to `seq`, never lowering it. A frame without `seq` leaves it as it is. */
@@ -866,6 +879,7 @@ class OwnerRelay extends RelayLink {
 
         if (mark === undefined || seq > mark) {
             this.host.sql().exec("INSERT OR REPLACE INTO __lunora_relay_seqs (idx, seq) VALUES (?, ?)", index, seq);
+            this.relaySeqMarks.set(index, seq);
         }
     }
 
@@ -1017,9 +1031,10 @@ class OwnerRelay extends RelayLink {
     private async multicastToRelays(relays: Set<number>, poke: RelayShapePoke, entry: CohortShapeEntry): Promise<void> {
         const legs = await Promise.all(
             [...relays].map(async (index) => {
-                const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), poke);
+                const { dropped, response } = await this.requestDroppingIdle(index, poke);
 
-                return response?.ok === true;
+                // An idle relay holds no cohort socket, so the poke it refused is owed to nobody: no rewind.
+                return dropped || response?.ok === true;
             }),
         );
 
@@ -1067,12 +1082,12 @@ class OwnerRelay extends RelayLink {
 
     /** POST one per-socket proxy poke to its relay, rewinding the entry's cursor when the POST never landed (same reasoning as {@link OwnerRelay.multicastToRelays}). */
     private async proxyToRelay(poke: RelayShapePoke, entry: ProxyShapeEntry): Promise<void> {
-        const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), {
+        const { dropped, response } = await this.requestDroppingIdle(entry.relayIndex, {
             ...poke,
             targetConnectionId: entry.connectionId,
         });
 
-        if (response?.ok !== true) {
+        if (!dropped && response?.ok !== true) {
             this.rewindShapeCursor(entry, poke.fromCursor);
         }
     }
@@ -1209,6 +1224,11 @@ class OwnerRelay extends RelayLink {
 
     /** Ensure the reserved owner-side relay tables exist (both auto-hidden from the data browser by the `__lunora` prefix). Idempotent, and independent of `runShardMigrations` so the control channel never depends on migration ordering. */
     private ensureRelayTables(): void {
+        if (this.relayTablesReady) {
+            return;
+        }
+
+        this.relayTablesReady = true;
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_grants (idx INTEGER PRIMARY KEY)");
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_seqs (idx INTEGER PRIMARY KEY, seq INTEGER NOT NULL)");
@@ -1401,14 +1421,25 @@ class OwnerRelay extends RelayLink {
      * late or out-of-sequence attach can leave such a relay registered, and nothing else would ever remove it.
      */
     private async forwardToRelay(index: number, message: RelayFrame | RelayLiveFrame): Promise<void> {
-        // An attach that lands while this frame is in flight raises the mark: the relay's idle answer is then stale, and dropping it
-        // would unregister a relay that has a socket again.
+        await this.requestDroppingIdle(index, message);
+    }
+
+    /**
+     * POST `message` to relay `index`, dropping the relay from the set when it answers as idle. An attach that lands while the request is
+     * in flight raises the relay's mark: its idle answer is then stale, and dropping it would unregister a relay that has a socket again.
+     * @returns the relay's response, and whether it was dropped as idle
+     */
+    private async requestDroppingIdle(index: number, message: OwnerRelayFrame): Promise<{ dropped: boolean; response: Response | undefined }> {
         const markBefore = this.relaySeqMark(index);
         const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), message);
 
-        if (response?.status === RELAY_IDLE_STATUS && this.relaySeqMark(index) === markBefore) {
-            this.removeRelayFromSet(index);
+        if (response?.status !== RELAY_IDLE_STATUS || this.relaySeqMark(index) !== markBefore) {
+            return { dropped: false, response };
         }
+
+        this.removeRelayFromSet(index);
+
+        return { dropped: true, response };
     }
 
     /**
