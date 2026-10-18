@@ -1548,7 +1548,7 @@ class OwnerRelay extends RelayLink {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(): Promise<void>;
     releaseRelayShapes(): Promise<void>;
     relayCount(): number;
@@ -2289,7 +2289,7 @@ class RelayMember extends RelayLink {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(closing: ShardSocketLike): Promise<void>;
     releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     relayCount(): number;
@@ -5758,7 +5758,7 @@ abstract class RelayLink {
         code: string;
         message: string;
     }>;
-    abstract announce(): Promise<void>;
+    abstract announce(): Promise<boolean>;
     abstract announceDrain(closing: ShardSocketLike): Promise<void>;
     abstract releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     abstract relayCount(): number;
