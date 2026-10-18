@@ -2,7 +2,16 @@ export type { ActionHandle } from "./action";
 export { action } from "./action";
 export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThreadStatus } from "./agent";
 export { agent } from "./agent";
-export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta } from "./agent-chat";
+export type {
+    AgentApprovalGrant,
+    AgentChatApi,
+    AgentChatHandle,
+    AgentChatMessage,
+    AgentChatOptions,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+} from "./agent-chat";
 export { agentChat } from "./agent-chat";
 export type { AgentStateApi, AgentStateHandle, AgentStateOptions } from "./agent-state";
 export { agentState } from "./agent-state";

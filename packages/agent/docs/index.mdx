@@ -266,9 +266,12 @@ references your app exposes.
   terminates the in-flight instance (a no-op when nothing is running or no
   cancel ref was supplied); `status`/`thread` flow live from `agents:agentThread`.
 - **`useAgentChat`** is the batteries-included chat surface:
-  `{ send, approve, reject, cancel, messages, status, streamingText }`. `send`
-  appends an optimistic user turn then starts/continues the run; `approve`/`reject`
-  resolve a pending tool approval; `messages` is the live thread.
+  `{ send, approve, approveForThread, reject, approvalGrants, revokeGrant, cancel, messages, status, streamingText }`.
+  `send` appends an optimistic user turn then starts/continues the run;
+  `approve`/`reject` resolve a pending tool approval; `messages` is the live thread.
+  `approveForThread` is `approve` plus a thread grant for that tool. `approvalGrants`
+  is the live list of the thread's grants, and `revokeGrant(toolName)` removes one,
+  so a grant is never visible without a way out.
 
 ```tsx
 // React
