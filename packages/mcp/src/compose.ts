@@ -17,6 +17,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, ListResourcesResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import { errorFromThrown, errorResult } from "./tool-result";
 import type { ToolDefinition, ToolResult } from "./tool-types";
 
 /** A tool: what to advertise in `ListTools`, and what to run on `CallTool`. */
@@ -87,18 +88,16 @@ const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>, re
         const tool = dispatch.get(name);
 
         if (tool === undefined) {
-            return { content: [{ text: `unknown tool: ${name}`, type: "text" }], isError: true };
+            return errorResult("NOT_FOUND", `unknown tool: ${name}`);
         }
 
         try {
             // ToolResult is structurally a CallToolResult; the assertion bridges
             // the SDK's open-ended index signature (passthrough zod schema),
             // which a closed interface can't satisfy by inference alone.
-            return (await tool.handle(rawArguments ?? {})) as CallToolResult;
+            return await tool.handle(rawArguments ?? {});
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-
-            return { content: [{ text: message, type: "text" }], isError: true };
+            return errorFromThrown(error);
         }
     });
 

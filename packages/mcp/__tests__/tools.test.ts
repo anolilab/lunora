@@ -408,8 +408,9 @@ describe("callTool", () => {
 
         const result = await proposeAndConfirm(mock.asClient, "lunora_run_action", { functionPath: "sync:stripe" });
 
+        // A plain Error may carry raw upstream text, so only the fixed INTERNAL message reaches the model.
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("boom");
+        expect(result.content[0]!.text).toBe("INTERNAL: the tool call failed unexpectedly");
     });
 
     it("refuses a write tool when writes are disabled (read-only default), without touching the client", async () => {
