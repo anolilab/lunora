@@ -163,5 +163,24 @@ would be. But `node:v8`'s format is explicitly documented by Node as **not** a
 stable cross-version wire format: a value written under one Node/V8 version is
 not guaranteed to `deserialize` under another. A SQLite file carried across a
 Node upgrade can fail to read back values it wrote. See
-`packages/platform-node/src/node-kv-store.ts` and
-[`plans/234-node-host-findings.md`](https://github.com/anolilab/lunora/blob/alpha/plans/234-node-host-findings.md).
+`packages/platform-node/src/node-kv-store.ts`.
+
+**Workflows are emulated on a visulima engine, with gaps.** `pause` and
+`restart` throw `NOT_IMPLEMENTED`; the engine has no equivalent. `create({ id })`
+is honoured through a durable alias row, because the engine mints its own run
+ids, so `instance.id` is the engine's. `terminate` is a barrier within one
+process only: the store handed to the runtime drops writes for terminated ids,
+but a `terminate` in another process cannot do that. `ctx.run` fails (there is
+no Node HTTP server), and a `ctx.parallel` join cannot interleave in one
+trigger.
+
+**Object storage is a development emulation.** `createNodeR2Bucket` is
+filesystem-backed and not production-durable. There is no multipart upload and
+no presigned URLs. Each object is a single file with a trailer carrying its
+metadata, so a crash cannot leave new bytes beside a stale checksum.
+
+**Queues are one SQLite writer.** `createNodeQueueHost` is a durable table with
+the full batch, ack, retry and dead-letter contract, driven by `poll()`. There
+is no timer, because there is no dev server to own one, and `mode: "pull"`
+queues are written but not consumed. That is fine for one process and wrong for
+several. Pluggable queue drivers are not built.

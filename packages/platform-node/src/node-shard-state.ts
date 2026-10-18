@@ -18,8 +18,7 @@
  * `ShardDO` accepts a `ShardPlatform`, whereas a fork is 8,700 lines that
  * diverge forever.
  *
- * It is honest about being a bridge rather than a destination. Recorded as a
- * finding in `plans/234-node-host-findings.md`; the fix belongs in
+ * It is honest about being a bridge rather than a destination. The fix belongs in
  * `@lunora/do`, not here.
  *
  * # What makes it viable

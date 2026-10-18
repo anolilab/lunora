@@ -33,7 +33,7 @@
  * the `SqlDialect` contract it implements. That was not done here because it
  * also requires moving `sqlAffinityForKind` out of `@lunora/d1`'s `dialect.ts`,
  * which the CLI migration emitter imports — a three-package refactor with
- * nothing to do with this target. Filed in `plans/234-node-host-findings.md`.
+ * nothing to do with this target.
  */
 
 import { sqliteDialect } from "@lunora/d1";

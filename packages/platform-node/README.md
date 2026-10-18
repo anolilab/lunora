@@ -12,7 +12,7 @@ const platform = createNodePlatform({ path: "./shard.sqlite3" });
 
 ## Why it exists
 
-Portability was a claim, not a construction check — `PLATFORM_MATRICES` held exactly one entry (`cloudflare`), so nothing had exercised the contract against a second host. This package stands one up and runs the existing conformance TCK (`@lunora/platform/conformance`) against it; every place the engine or the TCK needed something the contract didn't promise is recorded in [`plans/234-node-host-findings.md`](../../plans/234-node-host-findings.md).
+Portability was a claim, not a construction check — `PLATFORM_MATRICES` held exactly one entry (`cloudflare`), so nothing had exercised the contract against a second host. This package stands one up and runs the existing conformance TCK (`@lunora/platform/conformance`) against it; every place the engine or the TCK needed something the contract didn't promise is recorded under [Known divergences](./docs/index.mdx#known-divergences).
 
 ## Scope
 

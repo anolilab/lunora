@@ -41,7 +41,7 @@ import type { PlatformCapabilities } from "./types";
  * a KV store out of a SQL table, and `.global()` tables out of a second SQLite
  * file. `localSql` is the exception, because SQLite genuinely is the platform
  * primitive there. The ratings say who does the work; the notes say how well.
- * Both are argued in detail in `plans/234-node-host-findings.md`.
+ * Both are argued in detail in the platform-node docs.
  */
 const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",

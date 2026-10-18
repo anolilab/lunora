@@ -40,8 +40,7 @@
  * for `provision` — which reports, once, which declared features this target
  * cannot serve, and writes nothing: there is no hosted control plane to deploy
  * to and no `wrangler`-equivalent to shell out to. A deploy driver is not a dev
- * server, which is why both statements above hold at once. See
- * `plans/234-node-host-findings.md`.
+ * server, which is why both statements above hold at once.
  */
 
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";

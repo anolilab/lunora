@@ -33,7 +33,7 @@
  * `failed` → `errored`, `suspended`/`waiting` → `waiting`); `sendEvent` maps to
  * `signal` and rejects unless the run is waiting for exactly that event name.
  *
- * # Known gaps (documented in `plans/234-node-host-findings.md`)
+ * # Known gaps (also listed in the package docs under Known divergences)
  *
  * - `pause`, `restart` throw `NOT_IMPLEMENTED` — the visulima engine has no
  * equivalent. `terminate` drops the run and writes a tombstone in its place, so

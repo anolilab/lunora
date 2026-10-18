@@ -19,15 +19,13 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                             | Title                                                               | Remaining                                                                                            |
-| ------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [527](./527-ratelimit-memory-store-retention.md) | Evict rate-limit memory-store entries past their horizon            | PR #1223 open; debt (negative) entries deliberately kept                                             |
-| [528](./528-durable-ratelimit-row-retention.md)  | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`) | PR #1225 open, stacked on #1223; bounded sweep on write; tests tightened in a stacked follow-up      |
-| [460](./460-cloudflare-artifacts.md)             | Cloudflare Artifacts as an action-only `ctx.artifacts`              | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
-| [463](./463-experimental-graduation.md)          | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
-| [166](./166-enterprise-auth-saml-scim.md)        | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
-| [464](./464-replay-conflict-resolution.md)       | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
-| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Phase 0: codegen spike; legal and tax review open (§10)                                              |
+| Plan                                       | Title                                                           | Remaining                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts`          | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
+| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable                        | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
+| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
+| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
+| [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
 
 ## Open (TODO)
 
@@ -38,7 +36,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                      |
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                    | replay engine, frame handlers, admin surface; decisions D1–D3                            |
 | [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot   | blocked: needs a read-only check of production pool rows for `inFlightIds`               |
-| [482](./482-ratelimit-db-store-atomic-consume.md)      | Make the ratelimit consume atomic on the D1-backed `.global()` table   | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress)        |
 | [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`                                 |
 | [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                         | P2                                                                                       |
 | [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts               | spike; deliverable is a decision                                                         |
@@ -70,6 +67,9 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
 | 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
 | 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
+| 482  | Make the ratelimit consume atomic on the D1-backed `.global()` table        | #1133                |
+| 527  | Evict rate-limit memory-store entries past their horizon                    | #1223                |
+| 528  | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`)         | #1225                |
 
 ## Perf audit 2026-10-16 — measured and rejected
 
@@ -95,7 +95,6 @@ follow-on ships or is rejected.
 | [052](./052-streaming-hook-design.md)               | Typed HTTP-SSE stream consumer (adapter parity, reconnect, POST bodies) |
 | [137](./137-release-train-rehearsal.md)             | Release-train rehearsal, feeds 135 Phase 3                              |
 | [162](./162-phase0-crosstabsync-design.md)          | crossTabSync subscribe relay (CLIENT-01)                                |
-| [234](./234-node-host-findings.md)                  | Node host findings                                                      |
 | [237](./237-admin-auth-hooks-design.md)             | Reactive admin/organization auth hooks; remaining adapters open         |
 | [238](./238-vector-reader-design.md)                | `.withVectorIndex()` reader; codegen wiring + `define-rag` open         |
 | [241](./241-inapp-inbox-design.md)                  | In-app inbox read half; D1 backend open                                 |
