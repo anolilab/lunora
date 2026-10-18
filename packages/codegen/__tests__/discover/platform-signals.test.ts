@@ -127,6 +127,33 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(false);
     });
 
+    it("does not flag a same-named object in a sibling scope as the app builder", () => {
+        expect.assertions(1);
+
+        // The module-level `app` is the builder; the `app` inside `helper` is a
+        // different binding that happens to carry the same method name.
+        write(
+            "worker.ts",
+            `const app = defineApp();\n\nexport const worker = app.build();\n\nfunction helper() {\n    const app = { deliveryAuthorization: (value: unknown) => value };\n    return app.deliveryAuthorization(1);\n}\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(false);
+    });
+
+    it("does not flag a shadowed same-named object inside the lunora.config.* app hook", () => {
+        expect.assertions(1);
+
+        const configFile = join(workdir, "lunora.config.ts");
+
+        writeFileSync(
+            configFile,
+            `export default {\n    target: "node",\n    app: (app: { ai: () => unknown }) => {\n        const run = () => {\n            const app = { deliveryAuthorization: () => 1 };\n            return app.deliveryAuthorization();\n        };\n\n        return run() && app.ai();\n    },\n};\n`,
+            "utf8",
+        );
+
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(false);
+    });
+
     it("does not flag a bare function call named deliveryAuthorization", () => {
         expect.assertions(1);
 

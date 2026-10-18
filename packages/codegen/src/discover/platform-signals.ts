@@ -134,9 +134,12 @@ const isAppHookFunction = (node: Node | undefined): boolean => {
 /**
  * True when `receiver` denotes the app builder: a chain rooted at `defineApp()`,
  * a local variable initialised from one, or the parameter of an `app` hook.
- * Resolution is by name within the file, the same convention
- * {@link resolveObjectLiteral} uses, so it can only over-report a same-named
- * binding elsewhere, never match an unrelated object's method.
+ *
+ * The root identifier is resolved the way the language resolves it: the
+ * innermost enclosing scope that binds its name decides. A same-named object in
+ * a sibling or nested scope is therefore never the builder, which the earlier
+ * whole-file name lookup got wrong. Names bound nowhere in the file (imports,
+ * globals) are not the builder.
  */
 const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined, seen: Set<string> = new Set()): boolean => {
     const root = chainRootOf(receiver);
@@ -157,15 +160,24 @@ const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined
 
     seen.add(name);
 
-    const bound = sourceFile
-        .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
-        .filter((declaration) => declaration.getName() === name)
-        .some((declaration) => isAppBuilderReceiver(sourceFile, declaration.getInitializer(), seen));
+    for (const scope of root.getAncestors()) {
+        if (Node.isParametered(scope) && scope.getParameters().some((parameter) => parameter.getName() === name)) {
+            return isAppHookFunction(scope);
+        }
 
-    return (
-        bound ||
-        sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).some((parameter) => parameter.getName() === name && isAppHookFunction(parameter.getParent()))
-    );
+        if (Node.isBlock(scope) || Node.isSourceFile(scope)) {
+            const declaration = scope
+                .getVariableStatements()
+                .flatMap((statement) => statement.getDeclarations())
+                .find((candidate) => candidate.getName() === name);
+
+            if (declaration !== undefined) {
+                return isAppBuilderReceiver(sourceFile, declaration.getInitializer(), seen);
+            }
+        }
+    }
+
+    return false;
 };
 
 /** True when `call` is `<app builder>.deliveryAuthorization(…)`. A bare call of that name, or a method on any other object, is not. */
