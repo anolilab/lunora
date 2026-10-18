@@ -20,6 +20,7 @@ export type {
     CheckpointWatermark,
     LunoraCollectionConfig,
     LunoraCollectionOptions,
+    LunoraCollectionUtils,
 } from "./collection-options";
 export { CHECKPOINT_FALLBACK_MS, createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions, releaseShardCheckpoints } from "./collection-options";
 export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";

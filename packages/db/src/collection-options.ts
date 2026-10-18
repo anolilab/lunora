@@ -660,6 +660,22 @@ export interface LunoraCollectionConfig<TRow extends Row> {
     shardKey?: string;
 }
 
+/**
+ * What a collection exposes about its subscription's health, as `collection.utils`.
+ *
+ * A rejected subscription still moves the collection out of `loading` (so it never
+ * hangs there), which on its own is indistinguishable from a successful load that
+ * found no rows. This is the difference: `isError()` stays true until rows arrive.
+ */
+export interface LunoraCollectionUtils {
+    /** The last subscription error, or `undefined` once rows have arrived since (or before any error). */
+    error: () => SubscriptionError | undefined;
+    /** Whether the subscription is currently failing. */
+    isError: () => boolean;
+    /** Listen for the error state changing; returns the unsubscribe. Shaped for `useSyncExternalStore`. */
+    subscribeError: (listener: () => void) => () => void;
+}
+
 /** The result of {@link lunoraCollectionOptions}: a TanStack collection config plus its sync controls. */
 export interface LunoraCollectionOptions<TRow extends Row> {
     /** Resolves optimistic-overlay drops against the server's confirmed watermarks — the current scope's shard for a `scopeBy` collection. */
@@ -668,6 +684,8 @@ export interface LunoraCollectionOptions<TRow extends Row> {
     config: CollectionConfig<TRow, string>;
     /** Re-point a `scopeBy` collection's subscription (omit `args` to detach). No-op for unscoped collections. */
     scope: (args?: Record<string, unknown>) => void;
+    /** Subscription health; the same object is on the created collection as `collection.utils`. */
+    utils: LunoraCollectionUtils;
 }
 
 /**
@@ -752,6 +770,33 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     let emit: ((next: Map<string, TRow>) => void) | undefined;
     let unsubscribe: (() => void) | undefined;
     let onErrorHandler: ((error: SubscriptionError) => void) | undefined;
+
+    // The subscription's health, outside `sync.sync` so it outlives a sync restart's callbacks.
+    let lastError: SubscriptionError | undefined;
+    const errorListeners = new Set<() => void>();
+    const setError = (next: SubscriptionError | undefined): void => {
+        if (lastError === next) {
+            return;
+        }
+
+        lastError = next;
+
+        for (const listener of errorListeners) {
+            listener();
+        }
+    };
+    const utils: LunoraCollectionUtils = {
+        error: () => lastError,
+        isError: () => lastError !== undefined,
+        subscribeError: (listener) => {
+            errorListeners.add(listener);
+
+            return () => {
+                errorListeners.delete(listener);
+            };
+        },
+    };
+
     // The last scope args a `scopeBy` collection was pointed at. Remembered here
     // (outside `sync.sync`) so a sync restart after gc cleanup re-opens the same
     // scope instead of remounting empty, and so a `scope(...)` issued before sync
@@ -801,6 +846,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // Typed `unknown` so the one callback satisfies both sync sources: a `list`
         // query's `(data: ReturnOf<F>)` and a shape's `(rows: Record<string, unknown>[])`.
         const onRows = (data: unknown): void => {
+            // Rows arriving again is the recovery: the error state belongs to the failing stretch only.
+            setError(undefined);
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
 
@@ -866,6 +913,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         defaultIndexType: BTreeIndex,
         getKey,
         id: options.id ?? options.list?.__lunoraRef ?? `shape:${options.shape?.name ?? ""}`,
+        utils,
         // `"eager"` syncs at creation; omitted otherwise so the wire stays
         // byte-identical to the lazy default (sync on first subscriber).
         ...(options.load === "eager" ? { startSync: true } : {}),
@@ -875,7 +923,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
                 // Surface a subscription error and move the collection out of
                 // `loading`, so a rejected subscription never hangs it forever.
+                // `markReady` is all TanStack gives a sync source for that, so the
+                // failure is recorded on `utils` as well: otherwise the collection
+                // reads as a successful load that found no rows.
                 const onError = (error: SubscriptionError): void => {
+                    setError(error);
                     writer.markReady();
                     options.onError?.(error);
                 };
@@ -906,6 +958,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                 return () => {
                     emit = undefined;
                     onErrorHandler = undefined;
+                    // A restarted sync begins from a clean slate, not the previous session's failure.
+                    setError(undefined);
                     // The subscription feeding the registry is going; a restart
                     // re-attaches it (`openSubscription` resolves the registry).
                     detach();
@@ -964,5 +1018,6 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         checkpoints: followsScope && options.checkpoints === undefined ? followScopeCheckpoints(currentCheckpoints) : currentCheckpoints(),
         config,
         scope,
+        utils,
     };
 };
