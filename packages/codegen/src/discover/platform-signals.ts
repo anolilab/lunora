@@ -167,11 +167,36 @@ const isAppHookFunction = (node: Node | undefined): boolean => {
 /** The generated builder class (`emit-app.ts`). */
 const APP_BUILDER_CLASS = "AppBuilder";
 
+/** True when `declaration` lives in the generated `_generated/app.ts`. */
+const isGeneratedAppDeclaration = (declaration: Node): boolean => {
+    const file = declaration.getSourceFile();
+
+    return file.getBaseNameWithoutExtension() === "app" && file.getDirectory().getBaseName() === "_generated";
+};
+
 /**
  * True when `node` is typed as the generated `AppBuilder`, whatever its form:
- * an import, a parameter, a `new`, a call result. Untyped values stay unmatched.
+ * an import, a parameter, a `new`, a call result, or a type parameter
+ * constrained to it. A user type that only shares the name is not the builder.
+ * Untyped values stay unmatched.
  */
-const isAppBuilderType = (node: Node): boolean => node.getType().getSymbol()?.getName() === APP_BUILDER_CLASS;
+const isAppBuilderType = (node: Node): boolean => {
+    const type = node.getType();
+    const symbol = (type.getConstraint() ?? type).getSymbol();
+
+    return symbol?.getName() === APP_BUILDER_CLASS && symbol.getDeclarations().some((declaration) => isGeneratedAppDeclaration(declaration));
+};
+
+/**
+ * True when the identifier `root` names the app factory: it is spelled
+ * `defineApp` and is not a local binding of that name. An import, or a name
+ * the file never declares, still counts.
+ */
+const isAppFactory = (root: Node): boolean =>
+    root.getText() === APP_FACTORY &&
+    (root.getSymbol()?.getDeclarations() ?? []).every(
+        (declaration) => Node.isImportSpecifier(declaration) || Node.isImportClause(declaration) || isGeneratedAppDeclaration(declaration),
+    );
 
 /**
  * True when `receiver` denotes the app builder by name: a chain rooted at
@@ -191,11 +216,11 @@ const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined
         return false;
     }
 
-    const name = root.getText();
-
-    if (name === APP_FACTORY) {
+    if (isAppFactory(root)) {
         return true;
     }
+
+    const name = root.getText();
 
     if (seen.has(name)) {
         return false;

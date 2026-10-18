@@ -188,6 +188,42 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(true);
     });
 
+    it("flags a `.deliveryAuthorization(...)` call on a generic parameter constrained to AppBuilder", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "_generated"));
+        writeFileSync(
+            join(workdir, "_generated", "app.ts"),
+            `export class AppBuilder<Env extends object> {\n    deliveryAuthorization(selector: (env: Env) => unknown): this {\n        return this;\n    }\n}\n`,
+            "utf8",
+        );
+        write(
+            "helper.ts",
+            `import type { AppBuilder } from "../_generated/app";\n\nexport const configure = <T extends AppBuilder<object>>(builder: T) => builder.deliveryAuthorization(() => undefined);\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
+    it("does not flag a user class that only shares the AppBuilder name, or a local defineApp", () => {
+        expect.assertions(2);
+
+        write(
+            "builder.ts",
+            `class AppBuilder {\n    deliveryAuthorization(value: unknown) {\n        return value;\n    }\n}\n\nexport const verdict = new AppBuilder().deliveryAuthorization(1);\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(false);
+
+        write(
+            "builder.ts",
+            `const defineApp = () => ({ deliveryAuthorization: (value: unknown) => value });\n\nexport const verdict = defineApp().deliveryAuthorization(1);\n`,
+        );
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        expect(signals().deliveryAuthorization).toBe(false);
+    });
+
     it("flags a bracket-form `.deliveryAuthorization(...)` call on the app builder", () => {
         expect.assertions(1);
 
