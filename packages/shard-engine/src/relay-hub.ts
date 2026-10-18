@@ -518,6 +518,12 @@ class OwnerRelay extends RelayLink {
     private liveGrantRelayCache: Set<number> | undefined;
 
     /**
+     * Relays with a subscribe still unanswered, by count. A subscribe past its deadline may still store the grant, so an unsubscribe
+     * reaches these relays too: it arrives behind that subscribe and removes what it stored.
+     */
+    private readonly pendingSubscribeRelays = new Map<number, number>();
+
+    /**
      * The shape registry, hydrated once per wake from `__lunora_relay_shapes` —
      * see {@link OwnerRelay.relayShapes} for why it is read back from SQLite
      * rather than started empty. `cohort` holds the relay-uniform shapes keyed
@@ -579,7 +585,7 @@ class OwnerRelay extends RelayLink {
         // reaches the relay that will hold it.
         // ponytail: a publish that lands while a relay's first subscribe is still in flight misses
         // that relay, since it is recorded as a holder only once its answer returns.
-        const targets = control.action === "unsubscribe" ? this.liveGrantRelaySet() : this.ownerRelaySet();
+        const targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
 
         if (targets.size === 0) {
             return Promise.resolve(undefined);
@@ -1435,13 +1441,33 @@ class OwnerRelay extends RelayLink {
     private async liveControlAnswer(index: number, control: LiveSocketControlCall): Promise<Response | undefined> {
         // The relay keeps working past the deadline and may store the grant after it. Recording on the request itself, not on the
         // race below, means that late OK still makes the relay a holder, so later publishes and unsubscribes reach it.
-        const answer = this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" }).then((response) => {
-            if (response?.ok === true) {
-                this.recordLiveGrantRelay(index);
-            }
+        const subscribing = control.action === "subscribe";
 
-            return response;
-        });
+        if (subscribing) {
+            this.pendingSubscribeRelays.set(index, (this.pendingSubscribeRelays.get(index) ?? 0) + 1);
+        }
+
+        const answer = this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" })
+            .then((response) => {
+                if (response?.ok === true) {
+                    this.recordLiveGrantRelay(index);
+                }
+
+                return response;
+            })
+            .finally(() => {
+                if (!subscribing) {
+                    return;
+                }
+
+                const left = (this.pendingSubscribeRelays.get(index) ?? 1) - 1;
+
+                if (left === 0) {
+                    this.pendingSubscribeRelays.delete(index);
+                } else {
+                    this.pendingSubscribeRelays.set(index, left);
+                }
+            });
 
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<undefined>((resolve) => {
@@ -1741,8 +1767,10 @@ class RelayMember extends RelayLink {
 
         // The detach goes out only after that attach has been answered, so it can never reach the owner first and leave a relay
         // with no sockets registered as active. It is tracked from the start, so an attach begun meanwhile waits behind it.
-        const detach = (inflightAttach ?? Promise.resolve(true))
-            .catch(() => false)
+        // Behind any earlier detach too: two overlapping drains must reach the owner in order, or the older one could land after an
+        // attach that followed the newer one.
+        const priorDetach = this.pendingDetach;
+        const detach = Promise.all([inflightAttach?.catch(() => false), priorDetach])
             .then(async () => this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" }))
             .catch(() => undefined)
             .finally(() => {

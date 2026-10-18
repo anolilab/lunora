@@ -1088,6 +1088,54 @@ describe("relay hub", () => {
             }
         });
 
+        it("sends an unsubscribe to a relay whose subscribe is still unanswered past the deadline", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([
+                [
+                    0,
+                    {
+                        down: false,
+                        gate: new Promise<void>(() => {
+                            // Never settles: the relay never answers.
+                        }),
+                        posts: [],
+                    },
+                ],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const subscribed = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await subscribed;
+
+                // The relay has not answered, so it is no grant holder yet, but it may still store the grant.
+                const unsubscribed = owner.forwardLiveControl({
+                    action: "unsubscribe",
+                    callerId: "u1",
+                    connectionId: "c-alice",
+                    key: "k1",
+                    subscriptionId: "s1",
+                });
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await unsubscribed;
+            } finally {
+                vi.useRealTimers();
+            }
+
+            const actions = relayAt(relays, 0)
+                .posts.filter((post) => post["type"] === "relay_live_control")
+                .map((post) => (post["control"] as { action: string }).action);
+
+            expect(actions).toStrictEqual(["subscribe", "unsubscribe"]);
+        });
+
         it("records a relay whose grant answer lands after the deadline, so its later publishes reach it", async () => {
             // `vi.waitFor` retries its assertion, so the count is not fixed.
             expect.hasAssertions();
@@ -1262,6 +1310,64 @@ describe("relay hub", () => {
 
             await expect(second).resolves.toBe(true);
             await expect(link.announce()).resolves.toBe(true);
+        });
+
+        it("orders a second drain's detach behind the first", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const detaches: ((response: Response) => void)[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>((resolve) => {
+                            detaches.push(resolve);
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            // Two close handlers both find no socket left.
+            const first = link.announceDrain({} as ShardSocketLike);
+            const second = link.announceDrain({} as ShardSocketLike);
+
+            await vi.waitFor(() => {
+                if (detaches.length === 0) {
+                    throw new Error("the first detach has not been sent yet");
+                }
+            });
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_detach"]);
+
+            detaches[0]?.(new Response());
+            await vi.waitFor(() => {
+                if (detaches.length < 2) {
+                    throw new Error("the second detach has not been sent yet");
+                }
+            });
+            detaches[1]?.(new Response());
+            await Promise.all([first, second]);
+
+            expect(sent).toStrictEqual(["relay_detach", "relay_detach"]);
         });
 
         it("gives up on an attach the owner never answers, so later sockets are not held behind it", async () => {
