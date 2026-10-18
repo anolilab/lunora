@@ -11,7 +11,11 @@ import type {
     AgentTokenDelta,
 } from "@lunora/agent";
 import { createAgentGenerate, createStreamGenerate, DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
+import type { SecretValueHost } from "@lunora/platform";
 import type { LanguageModel } from "ai";
+
+import { createFakeSecretValues } from "./fake-secret-values";
+import WaitRegistry from "./wait-registry";
 
 /** A thread message as the in-memory runtime stores it (superset of {@link AgentMessageRow}). */
 interface HarnessMessage extends AgentMessageRow {
@@ -72,6 +76,13 @@ interface AgentHarnessOptions {
      * or replace it per run with a streamed `model` via `run(..., { model })`.
      */
     script?: AgentGenerateResult[];
+
+    /**
+     * The secret store the agent's `requestSecretTool` values live in, shared by
+     * every run of this harness. Default: an in-memory store whose clock only moves
+     * through its `advanceClock`.
+     */
+    secrets?: SecretValueHost;
 }
 
 /** Per-run overrides for {@link AgentHarness.run}. */
@@ -99,12 +110,32 @@ interface AgentRunOverrides {
 
 interface AgentHarness {
     /**
+     * Resolve once a run has reached the wait named `name` (e.g. `secret:call_1`),
+     * so a test can act on the run at a known point instead of after a delay.
+     */
+    awaitWait: (name: string) => Promise<void>;
+
+    /** Deliver the event a run is waiting on. Delivered before the wait is reached, it is held for it. */
+    deliver: (name: string, payload: unknown) => void;
+
+    /**
      * Every function dispatch the loop has made through `ctx.run`, in order —
      * both the `agents:*` runtime calls and the tool/memory app dispatches. Use
      * it to assert a tool called the function you expected with the args you
      * expected.
      */
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
+
+    /** Fail a pending wait the way an elapsed host timeout does. */
+    expire: (name: string) => void;
+
+    /**
+     * Every journal entry the runs have written, in order: each memoized step
+     * output (`{ kind: "step", name, output }`) and each delivered wait payload
+     * (`{ kind: "wait", name, type, payload }`). A test asserts a secret is absent
+     * from this, as it must be from the durable journal.
+     */
+    journalEntries: () => unknown[];
 
     /** The persisted messages of a thread, ordered by `seq`. */
     messages: (threadKey: string) => AgentMessageRow[];
@@ -117,6 +148,9 @@ interface AgentHarness {
      * distinct workflow instance.
      */
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
+
+    /** The secret store the runs use (see {@link AgentHarnessOptions.secrets}). */
+    readonly secrets: SecretValueHost;
 
     /** The stored thread record (status, error, instanceId, usage, …), or `undefined` before its first run. */
     thread: (threadKey: string) => HarnessThread | undefined;
@@ -144,14 +178,15 @@ const scriptedGenerate = (script: ReadonlyArray<AgentGenerateResult>): AgentGene
  * Faithful in-memory model of Cloudflare Workflows' `step.do` memoization: a step
  * name with a recorded output returns it WITHOUT re-invoking the callback, so
  * reusing a journal across two `runAgentLoop` calls models a crash + resume of
- * the same instance. `waitForEvent` hibernates forever — the harness is for the
- * ordinary tool-loop, not human-in-the-loop approval pauses (those need a real
- * `sendEvent`, out of scope for a single synchronous drive).
+ * the same instance. A `waitForEvent` hibernates until the test delivers its
+ * event or expires it (see {@link AgentHarness.deliver}).
  */
 class DurableStepJournal implements AgentStepLike {
     public readonly invoked: string[] = [];
 
     private readonly entries = new Map<string, { output: unknown }>();
+
+    public constructor(private readonly waits: WaitRegistry) {}
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -169,9 +204,17 @@ class DurableStepJournal implements AgentStepLike {
         return output;
     }
 
-    // eslint-disable-next-line class-methods-use-this -- mirrors AgentStepLike.waitForEvent's host signature so the mock stays assignable
-    public async waitForEvent<T>(_name: string, _options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
-        return new Promise<{ payload: Readonly<T>; type: string }>(() => {});
+    public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
+        const payload = await this.waits.wait(name, options.type);
+
+        return { payload: payload as Readonly<T>, type: options.type };
+    }
+
+    /** The memoized step outputs, as the durable journal persists them. */
+    public steps(): { kind: "step"; name: string; output: unknown }[] {
+        return [...this.entries].map(([name, entry]) => {
+            return { kind: "step" as const, name, output: entry.output };
+        });
     }
 }
 
@@ -184,6 +227,7 @@ class DurableStepJournal implements AgentStepLike {
  */
 const createRuntime = (
     extra: Record<string, HarnessFunction>,
+    secrets: SecretValueHost,
 ): { dispatches: HarnessDispatch[]; messages: Map<string, HarnessMessage>; run: AgentRunFunction; threads: Map<string, HarnessThread> } => {
     const threads = new Map<string, HarnessThread>();
     const messages = new Map<string, HarnessMessage>();
@@ -216,6 +260,13 @@ const createRuntime = (
         });
 
         return { outcome: "created" };
+    };
+
+    // The loop retires an approval or secret marker by key once its wait has resolved.
+    const deleteMessage = (args?: Record<string, unknown>): unknown => {
+        messages.delete(`${args?.["threadKey"] as string}:${args?.["messageKey"] as string}`);
+
+        return undefined;
     };
 
     const appendMessage = (args?: Record<string, unknown>): unknown => {
@@ -287,15 +338,24 @@ const createRuntime = (
         return {};
     };
 
+    // The secret mutations, as the shard runs them: a take is scoped to the thread
+    // and bound to its claimant, and a discard needs only the ref.
+    const takeSecret = (args?: Record<string, unknown>): Promise<unknown> =>
+        secrets.take(args?.["ref"] as string, { claimant: args?.["claimant"] as string, scope: args?.["threadKey"] as string });
+    const discardSecret = (args?: Record<string, unknown>): Promise<unknown> => secrets.discard(args?.["ref"] as string);
+
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
         // No approval grants are recorded by this harness: a gated tool always
         // pauses, exactly as an ungranted one does against the real component.
         [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, () => false],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
+        [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.discardSecret, discardSecret],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
+        [DEFAULT_AGENT_FUNCTION_PATHS.takeSecret, takeSecret],
         ...Object.entries(extra),
     ]);
 
@@ -335,15 +395,28 @@ const createRuntime = (
  * expect(harness.messages("t1").at(-1)?.content).toBe("It shipped.");
  * ```
  *
- * The harness deliberately does NOT model the concurrency guard or a
- * human-in-the-loop approval pause — it is for exercising an agent's tools and
- * turn logic, not the durable orchestration itself (that is covered inside
- * `@lunora/agent`).
+ * The harness deliberately does NOT model the concurrency guard. A
+ * human-in-the-loop pause (an approval, or a `requestSecretTool` request) stops
+ * the run at its wait; the test resolves it with `deliver` or `expire`, and the
+ * harness does not route a decision through the owner-gated mutations. The
+ * harness is for exercising an agent's tools and turn logic, not the durable
+ * orchestration itself (that is covered inside `@lunora/agent`).
  */
 const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): AgentHarness => {
     const exportName = options.exportName ?? "agent";
     const env = options.env ?? { LUNORA_TEST: true };
-    const runtime = createRuntime(options.functions ?? {});
+    const secrets = options.secrets ?? createFakeSecretValues();
+    const runtime = createRuntime(options.functions ?? {}, secrets);
+    const waits = new WaitRegistry();
+    const journals: DurableStepJournal[] = [];
+
+    const newJournal = (): DurableStepJournal => {
+        const journal = new DurableStepJournal(waits);
+
+        journals.push(journal);
+
+        return journal;
+    };
 
     let runCount = 0;
 
@@ -373,7 +446,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
                 params,
                 paths: DEFAULT_AGENT_FUNCTION_PATHS,
                 run: runtime.run,
-                step: new DurableStepJournal(),
+                step: newJournal(),
                 streamGenerate: createStreamGenerate(modelAgent, env),
             });
         }
@@ -389,18 +462,32 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             params,
             paths: DEFAULT_AGENT_FUNCTION_PATHS,
             run: runtime.run,
-            step: new DurableStepJournal(),
+            step: newJournal(),
         });
     };
 
     return {
+        awaitWait: (name: string) => waits.awaitWait(name),
+        deliver: (name: string, payload: unknown) => {
+            waits.deliver(name, payload);
+        },
         dispatches: runtime.dispatches,
+        expire: (name: string) => {
+            waits.expire(name);
+        },
+        journalEntries: (): unknown[] => [
+            ...journals.flatMap((journal) => journal.steps()),
+            ...waits.records.map((record) => {
+                return { kind: "wait", ...record };
+            }),
+        ],
         messages: (threadKey: string): AgentMessageRow[] =>
             [...runtime.messages.values()]
                 .filter((message) => message.threadKey === threadKey)
                 .toSorted((a, b) => a.seq - b.seq)
                 .map(({ messageKey: _messageKey, threadKey: _threadKey, ...row }) => row),
         run,
+        secrets,
         thread: (threadKey: string): HarnessThread | undefined => runtime.threads.get(threadKey),
     };
 };
