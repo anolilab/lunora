@@ -305,7 +305,7 @@ describe("local hyperdrive", () => {
             const { runtime } = fakeRuntime();
             const local = await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
 
-            expect(readFileSync(lock, "utf8")).toBe(String(process.pid));
+            expect(readFileSync(lock, "utf8").split("\n")[0]).toBe(String(process.pid));
 
             await local?.stop();
 
@@ -336,6 +336,33 @@ describe("local hyperdrive", () => {
             await firstLocal?.stop();
 
             expect(existsSync(lock)).toBe(false);
+        });
+
+        it("writes each lock with a token of its own beside the pid, so a reused pid is told apart from the lock it replaced", async () => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const state = join(root, ".wrangler", "state", "lunora-pglite");
+            const lock = join(state, "DB.lock");
+
+            mkdirSync(state, { recursive: true });
+            // A lock whose process is gone (a pid nothing has): this is what the contender inspects as stale.
+            writeFileSync(lock, "2147483646\nstale-token", "utf8");
+
+            const { directories, runtime } = fakeRuntime();
+            const local = await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
+
+            // Taken over: the stale lock is replaced by this process's own, with a token of its own. (The put-back
+            // of a live replacement taken by mistake is a race between processes and is not exercised here.)
+            const [pid, token] = readFileSync(lock, "utf8").split("\n");
+
+            expect(pid).toBe(String(process.pid));
+            expect(token).not.toBe("stale-token");
+
+            await local?.stop();
+
+            expect(directories).toHaveLength(1);
         });
 
         it("respects a lock it cannot read, since its owner was never checked", async () => {

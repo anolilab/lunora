@@ -730,7 +730,7 @@ describe("lunora deploy", () => {
                 expect(result.error).toContain("does not exist");
             });
 
-            it("creates nothing on a dry run, and reports the namespace as missing instead", async () => {
+            it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {
                 expect.assertions(2);
 
                 seedPinnedArtifacts();
@@ -750,7 +750,7 @@ describe("lunora deploy", () => {
                 });
 
                 expect(posts).toStrictEqual([]);
-                expect(result.error).toContain("does not exist");
+                expect(result.error).toBeUndefined();
             });
 
             it("warns and deploys when there is no API token to check with", async () => {

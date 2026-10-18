@@ -755,9 +755,12 @@ const warnDurableObjectBudget = async (wranglerPath: string | undefined, target:
 /** Only a real, non-temporary deploy may create account resources: a dry run must leave the account alone, and a temporary deploy's Worker goes to an account that would never see them. */
 const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): boolean => options.dryRun !== true && options.temporary !== true;
 
-/** The first Artifacts check of a real deploy lets a missing namespace pass, because the last step creates it; any other run reports it. */
-const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): ArtifactsCheckMode =>
-    createsAccountResources(options) ? "defer" : "report";
+/**
+ * The first Artifacts check lets a missing namespace pass when a real deploy will create it, and a dry run or
+ * build (which has the same outcome) reports that and goes on. Only a temporary deploy, which never creates
+ * one, reports it as missing.
+ */
+const artifactsModeFor = (options: Pick<DeployCommandOptions, "temporary">): ArtifactsCheckMode => (options.temporary === true ? "report" : "defer");
 
 /**
  * How the Artifacts namespace check treats a namespace that does not exist yet: `report` refuses (a

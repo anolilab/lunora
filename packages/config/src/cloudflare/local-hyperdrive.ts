@@ -202,20 +202,22 @@ const installExitHook = (): void => {
     }
 };
 
-/** What a lock file names. `pid` is -1 unless `kind` is `"pid"`. */
+/** What a lock file names. `pid` is -1 unless `kind` is `"pid"`; `token` identifies the acquisition, not just the process. */
 interface LockHolder {
     kind: "garbage" | "gone" | "pid" | "unreadable";
     pid: number;
+    token: string;
 }
 
 const readHolder = (lockPath: string): LockHolder => {
     try {
-        const pid = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+        const [first = "", token = ""] = readFileSync(lockPath, "utf8").split("\n");
+        const pid = Number.parseInt(first, 10);
 
-        return Number.isInteger(pid) ? { kind: "pid", pid } : { kind: "garbage", pid: -1 };
+        return Number.isInteger(pid) ? { kind: "pid", pid, token } : { kind: "garbage", pid: -1, token: "" };
     } catch (error) {
         // Only a missing file is "gone"; any other failure leaves the owner unchecked, so the lock stays respected.
-        return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unreadable", pid: -1 };
+        return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unreadable", pid: -1, token: "" };
     }
 };
 
@@ -264,7 +266,7 @@ const takeOverStale = (lockPath: string, stale: LockHolder): DirectoryLock | und
     const moved = readHolder(aside);
 
     try {
-        if (moved.pid !== stale.pid && isOtherLiveProcess(moved)) {
+        if (moved.token !== stale.token && isOtherLiveProcess(moved)) {
             try {
                 linkSync(aside, lockPath);
             } catch {
@@ -291,7 +293,8 @@ const takeOverStale = (lockPath: string, stale: LockHolder): DirectoryLock | und
 const lockDirectory = (lockPath: string): DirectoryLock => {
     const mine = `${lockPath}.${String(process.pid)}.${randomUUID()}`;
 
-    writeFileSync(mine, String(process.pid), "utf8");
+    // The pid names the process; the token names this acquisition, so a reused pid is not mistaken for the lock it replaced.
+    writeFileSync(mine, `${String(process.pid)}\n${randomUUID()}`, "utf8");
 
     try {
         for (let attempt = 0; attempt < 3; attempt += 1) {
