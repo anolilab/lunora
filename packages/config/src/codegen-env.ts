@@ -42,4 +42,7 @@ const isLazyFunctionsEnabled = (value: string | undefined): boolean => {
     return normalized === "1" || normalized === "true";
 };
 
-export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV };
+/** Either opt-in enables lazy function imports: the explicit option or {@link LAZY_FUNCTIONS_ENV}. `false` does not veto the environment. */
+const resolveLazyFunctions = (flag?: boolean): boolean => flag === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]);
+
+export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions };

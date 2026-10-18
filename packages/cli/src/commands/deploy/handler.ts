@@ -10,6 +10,7 @@ import {
     inferLunoraBindings,
     planToolchainInvocation,
     resolveDeployDriver,
+    resolveLazyFunctions,
     resolveSchemaDirectory,
 } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
@@ -39,7 +40,6 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";

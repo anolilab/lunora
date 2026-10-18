@@ -1738,11 +1738,11 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
 
             const result = runCodegen({ lazyFunctions: true, projectRoot: workdir, wranglerQueueProducers: [] });
             const generatedDirectory = join(workdir, "lunora", "_generated");
-            const modulePath = "fn/lunora_messages_0.ts";
+            const modulePath = "lunora_messages_0.ts";
 
-            expect(existsSync(join(generatedDirectory, modulePath))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "fn", modulePath))).toBe(true);
             expect(result.generated.functionModules[modulePath]).toContain('export * from "../../messages.js";');
-            expect(result.writtenFiles).toContain(modulePath);
+            expect(result.writtenFiles).toContain(`fn/${modulePath}`);
             expect(result.generated.functions).not.toContain('import * as lunora_messages_0 from "../messages.js";');
             expect(result.generated.functions).toContain("export const LUNORA_FUNCTION_MANIFEST");
             expect(result.generated.functions).toContain('"argumentDescriptors"');

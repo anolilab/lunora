@@ -46,6 +46,10 @@ class TestShardDO extends ShardDO {
         return this.runInTransaction(handler);
     }
 
+    public callIndependentTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
+        return this.runInTransaction(handler, { independent: true });
+    }
+
     public async errorResponse(error: unknown): Promise<Response> {
         try {
             throw error;
@@ -140,6 +144,23 @@ describe("shardDO.runInTransaction", () => {
                 await shard.callRunInTransaction(() => 1);
             }),
         ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", name: "LunoraError", status: 500 });
+    });
+
+    it("refuses an independent call that re-enters from inside an open transaction", async () => {
+        expect.assertions(3);
+
+        let inner: unknown;
+        let outerDepthAfterInner: unknown;
+
+        await shard.callRunInTransaction(async () => {
+            inner = await shard.callIndependentTransaction(() => 1).catch((error: unknown) => error);
+            // The refused call must not have cleared the still-open outer transaction's bookkeeping.
+            outerDepthAfterInner = await shard.callRunInTransaction(() => 2).catch((error: unknown) => error);
+        });
+
+        expect(inner).toMatchObject({ code: "NESTED_TRANSACTION", name: "LunoraError", status: 500 });
+        expect(outerDepthAfterInner).toMatchObject({ code: "NESTED_TRANSACTION" });
+        await expect(shard.callRunInTransaction(() => 3)).resolves.toBe(3);
     });
 
     it("clears transactionDepth in the finally branch so a second tx can run", async () => {

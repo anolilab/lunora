@@ -3786,6 +3786,16 @@ abstract class ShardDO {
 
         const result = await this.runner.runInTransaction(
             async () => {
+                // Reached only once the gate admits this call, so a queued independent caller sees
+                // 0 here. A call that re-entered the gate from inside an open transaction sees 1
+                // and must fail before touching the outer transaction's bookkeeping, which its
+                // `finally` below would otherwise clear while that transaction is still running.
+                // The Node host never reaches this for a re-entrant call: its lock is re-entrant, so the
+                // nested `BEGIN` fails in SQLite first, which is just as loud.
+                if (this.transactionDepth > 0) {
+                    throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
+                }
+
                 // Another dispatch may have run while this caller waited on the gate, leaving its
                 // identity in the shared per-request fields; pin this caller's back before its handler.
                 this.restoreRequestScope(requestScope);

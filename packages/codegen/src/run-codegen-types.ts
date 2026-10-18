@@ -169,7 +169,7 @@ export interface CodegenResult {
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
-        /** Per-module `_generated/fn/*.ts` lazy import shims; empty when the eager registry is selected. */
+        /** Per-module lazy import shims, keyed by file name under `_generated/fn/`; empty when the eager registry is selected. */
         functionModules: Record<string, string>;
         functions: string;
         /** `internal.*` references to the internal functions (`_generated/internal.ts`), kept out of `api.ts` so a client bundle never carries them. */

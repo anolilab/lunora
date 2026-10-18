@@ -45,7 +45,7 @@ const makeGeneratedShard = async (
     writeFileSync(join(generated, "functions.ts"), emitFunctions(options));
     writeFileSync(join(generated, "shard.ts"), emitShard({ capabilities, lazyFunctions, schema: shardSchema }));
     for (const [name, source] of Object.entries(emitLazyFunctionModules(options))) {
-        writeFileSync(join(generated, name), source);
+        writeFileSync(join(generated, "fn", name), source);
     }
     const output = join(root, "shard.mjs");
     await build({

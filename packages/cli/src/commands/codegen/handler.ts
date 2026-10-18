@@ -1,6 +1,6 @@
 import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveSchemaDirectory } from "@lunora/config";
+import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveLazyFunctions, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectExportGaps, warnCloudflareCliConfigOnce, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
@@ -11,7 +11,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
