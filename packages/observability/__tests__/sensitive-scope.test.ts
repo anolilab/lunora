@@ -460,6 +460,17 @@ describe("ctx.trace under a sensitive scope", () => {
         expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 
+    it("leaves a boolean out of the free-text secrets, so a marked flag does not rewrite every `true` in the logs", () => {
+        expect.assertions(3);
+
+        const scope = createSensitiveScope(sensitiveValues({ flag: true, other: "visible", token: SECRET }, new Set(["flag", "token"])));
+
+        expect(scope.text('{"ok":true,"retry":false} will construe it')).toBe('{"ok":true,"retry":false} will construe it');
+        // A marked string beside it is still masked, so the scope is not simply empty.
+        expect(scope.text(`charged with ${SECRET}`)).toBe(`charged with ${SENSITIVE_ARG_MASK}`);
+        expect(sensitiveValues({ flag: true }, new Set(["flag"]))).toStrictEqual([]);
+    });
+
     it("scrubs a span that is still open when the invocation settles, and releases the values once it is recorded", async () => {
         expect.assertions(5);
 
