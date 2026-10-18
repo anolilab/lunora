@@ -49,13 +49,17 @@ export interface LiveTopicOptions {
  *
  * ```ts
  * export class PostComponent {
- *     readonly comments = liveTopic({ url: "/live/posts/connect", topic: `comments:${this.postId}` });
+ *     readonly postId = input.required<string>();
+ *
+ *     readonly comments = liveTopic(() => ({ url: "/live/posts/connect", topic: `comments:${this.postId()}` }));
  * }
  * ```
  *
- * Pass a function to make it reactive: an options change (a new topic, say)
- * resubscribes, while a new `onEvent` / `onError` identity is read at call time and
- * does not reopen the subscription.
+ * Pass a function when the options read a signal, as above: an input is not bound
+ * while a field initializer runs, so the plain-object form would read `this.postId`
+ * too early. An options change (a new topic, say) resubscribes, while a new
+ * `onEvent` / `onError` identity is read at call time and does not reopen the
+ * subscription.
  * @experimental
  */
 export const liveTopic = (
