@@ -1383,9 +1383,36 @@ describe("relay hub", () => {
                 vi.useRealTimers();
             }
 
-            const records = (member as unknown as { liveControlSeqs: Map<string, Map<string, unknown>> }).liveControlSeqs.get("c1");
+            const records = (member as unknown as { liveControlSeqs: Map<string, unknown> }).liveControlSeqs;
 
-            expect(records?.size).toBe(1);
+            expect(records.size).toBe(1);
+        });
+
+        it("expires an idle socket's records when another connection's call arrives", async () => {
+            expect.assertions(1);
+
+            const member = memberWithLiveControl();
+            const otherConnection = JSON.stringify({
+                control: { action: "subscribe", callerId: "u2", connectionId: "c2", key: "k1", seq: 5000, subscriptionId: "x" },
+                type: "relay_live_control",
+            });
+
+            vi.useFakeTimers();
+
+            try {
+                for (let index = 0; index < 50; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- applied in order, as the owner sends them
+                    await deliver(member, control("unsubscribe", `s${String(index)}`, index + 1));
+                }
+
+                // c1 goes quiet; only c2 sends anything after the window.
+                vi.advanceTimersByTime(31_000);
+                await deliver(member, otherConnection);
+            } finally {
+                vi.useRealTimers();
+            }
+
+            expect((member as unknown as { liveControlSeqs: Map<string, unknown> }).liveControlSeqs.size).toBe(1);
         });
 
         it("refuses a late call within the window even after many other subscriptions' calls, and admits a delayed first call", async () => {

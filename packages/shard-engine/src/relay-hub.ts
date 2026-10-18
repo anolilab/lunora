@@ -1656,8 +1656,11 @@ class RelayMember extends RelayLink {
     /** `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-attach on every subscribe. */
     private relayAnnounced = false;
 
-    /** The newest live control sequence applied per connection and subscription; see {@link RelayMember.onLiveControl}. */
-    private readonly liveControlSeqs = new Map<string, Map<string, { appliedAt: number; seq: number }>>();
+    /**
+     * The newest live control sequence applied per connection and subscription, keyed by both and kept oldest first, so expired records
+     * are pruned from the front; see {@link RelayMember.onLiveControl}.
+     */
+    private readonly liveControlSeqs = new Map<string, { appliedAt: number; seq: number }>();
 
     /** The attach to the owner while one is in flight, so concurrent announces share it. */
     private pendingAnnounce: Promise<boolean> | undefined;
@@ -1974,11 +1977,6 @@ class RelayMember extends RelayLink {
         // connection id can't be admitted by a memo whose row is gone.
         if (connectionId !== undefined) {
             this.forgetRelayShapeMemos(connectionId, subId);
-
-            // A closed socket takes its live control sequences with it: no later control call can name it on this relay.
-            if (subId === undefined) {
-                this.liveControlSeqs.delete(connectionId);
-            }
         }
 
         // No connection id means nothing was ever registered: the owner refuses
@@ -2057,22 +2055,20 @@ class RelayMember extends RelayLink {
             return this.host.liveControl(control);
         }
 
-        let subscriptions = this.liveControlSeqs.get(connectionId);
-
-        if (subscriptions === undefined) {
-            subscriptions = new Map();
-            this.liveControlSeqs.set(connectionId, subscriptions);
-        }
-
         const now = Date.now();
 
-        for (const [id, record] of subscriptions) {
-            if (now - record.appliedAt > LIVE_CONTROL_SEQ_TTL_MS) {
-                subscriptions.delete(id);
+        // Oldest first, since every record is (re)inserted when applied: prune from the front and stop at the first one still inside
+        // the window, so this costs amortized constant work and every socket's records expire, busy or idle.
+        for (const [recordKey, record] of this.liveControlSeqs) {
+            if (now - record.appliedAt <= LIVE_CONTROL_SEQ_TTL_MS) {
+                break;
             }
+
+            this.liveControlSeqs.delete(recordKey);
         }
 
-        const last = subscriptions.get(subscriptionId);
+        const key = `${connectionId}\u0000${subscriptionId}`;
+        const last = this.liveControlSeqs.get(key);
 
         if (last !== undefined && seq < last.seq) {
             return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
@@ -2080,16 +2076,13 @@ class RelayMember extends RelayLink {
 
         const applied = { appliedAt: now, seq };
 
-        subscriptions.set(subscriptionId, applied);
+        this.liveControlSeqs.delete(key);
+        this.liveControlSeqs.set(key, applied);
 
         const response = await this.host.liveControl(control);
 
-        if (response.status === 404 && subscriptions.get(subscriptionId) === applied) {
-            subscriptions.delete(subscriptionId);
-
-            if (subscriptions.size === 0) {
-                this.liveControlSeqs.delete(connectionId);
-            }
+        if (response.status === 404 && this.liveControlSeqs.get(key) === applied) {
+            this.liveControlSeqs.delete(key);
         }
 
         return response;
