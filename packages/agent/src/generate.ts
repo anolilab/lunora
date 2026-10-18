@@ -184,6 +184,95 @@ const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeToo
 };
 
 /**
+ * The error an in-band `error` stream part fails the turn with. An `Error` is
+ * rethrown as-is, exactly as a rejected stream would be; any other carried value
+ * is wrapped so the durable step still fails with an `Error` that keeps the
+ * original as its `cause`.
+ */
+const toStreamError = (error: unknown): Error => {
+    if (error instanceof Error) {
+        return error;
+    }
+
+    return new Error(`model stream failed: ${String(error)}`, { cause: error });
+};
+
+/**
+ * The error a provider's `error` finish reason fails the turn with. The provider's
+ * raw reason rides in the message when it has one, and the whole finish reason is
+ * kept as `cause` so a log reader sees exactly what the provider reported.
+ */
+const finishErrorOf = (finishReason: { raw: string | undefined; unified: string }): Error =>
+    new Error(
+        finishReason.raw === undefined ? "model finished with an error reason" : `model finished with an error reason (provider reason: ${finishReason.raw})`,
+        { cause: finishReason },
+    );
+
+/**
+ * Wrap the turn's model so a provider turn that did not complete fails in-band.
+ * Two shapes qualify. A stream that closes without its `finish` part is kept by
+ * the AI SDK as a finished turn (`finishReason: "other"`), indistinguishable from
+ * a provider that legitimately ends with `other`, so only the provider stream
+ * tells them apart. A `finish` whose unified reason is `error` is the provider's
+ * own report that it cut the generation short or failed it, so the partial text
+ * must not be persisted as an answer. Any other reason, including `other`, is a
+ * healthy finish.
+ */
+const failIncompleteTurn = (ai: AiModule, model: Exclude<LanguageModel, string>) =>
+    ai.wrapLanguageModel({
+        middleware: {
+            wrapGenerate: async ({ doGenerate }) => {
+                const result = await doGenerate();
+
+                if (result.finishReason.unified === "error") {
+                    throw finishErrorOf(result.finishReason);
+                }
+
+                return result;
+            },
+            wrapStream: async ({ doStream }) => {
+                const { stream, ...rest } = await doStream();
+                let finished = false;
+
+                return {
+                    ...rest,
+                    stream: stream.pipeThrough(
+                        new TransformStream({
+                            flush: (controller) => {
+                                if (!finished) {
+                                    controller.enqueue({ error: new Error("model stream ended without a finish part"), type: "error" });
+                                }
+                            },
+                            transform: (part, controller) => {
+                                if (part.type === "finish") {
+                                    finished = true;
+
+                                    // Swap the finish for an in-band error so the consumer fails the turn
+                                    // through the same path as any other error part.
+                                    if (part.finishReason.unified === "error") {
+                                        controller.enqueue({ error: finishErrorOf(part.finishReason), type: "error" });
+
+                                        return;
+                                    }
+                                }
+
+                                controller.enqueue(part);
+                            },
+                        }),
+                    ),
+                };
+            },
+        },
+        model,
+    });
+
+/**
+ * The turn's model with {@link failIncompleteTurn} applied. `resolveAgentModel`
+ * always yields a model object; the string arm only narrows the AI SDK union.
+ */
+const guardTurnModel = (ai: AiModule, model: LanguageModel): LanguageModel => (typeof model === "string" ? model : failIncompleteTurn(ai, model));
+
+/**
  * Build the production LLM-turn seam over AI SDK `generateText`. The agent's
  * tools are exposed to the model schema-only (NO `execute`) — the model can
  * decide to call them, but execution happens back in the loop as named
@@ -201,7 +290,8 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
 
     return async (options) => {
         const { ai, base } = await getBase();
-        const result = await ai.generateText(buildTurnRequest(base, options));
+        const request = buildTurnRequest(base, options);
+        const result = await ai.generateText({ ...request, model: guardTurnModel(ai, request.model) });
 
         const usage = toAgentUsage(result.usage);
 
@@ -213,58 +303,6 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
         };
     };
 };
-
-/**
- * The error an in-band `error` stream part fails the turn with. An `Error` is
- * rethrown as-is, exactly as a rejected stream would be; any other carried value
- * is wrapped so the durable step still fails with an `Error` that keeps the
- * original as its `cause`.
- */
-const toStreamError = (error: unknown): Error => {
-    if (error instanceof Error) {
-        return error;
-    }
-
-    return new Error(`model stream failed: ${String(error)}`, { cause: error });
-};
-
-/**
- * Wrap the turn's model so a provider stream that closes without its `finish`
- * part fails in-band. The AI SDK keeps the partial output of such a stream and
- * reports it as a finished turn (`finishReason: "other"`) — the same shape a
- * provider that legitimately ends with `other` produces, so only the provider
- * stream itself tells the two apart.
- */
-const failUnfinishedStream = (ai: AiModule, model: Exclude<LanguageModel, string>) =>
-    ai.wrapLanguageModel({
-        middleware: {
-            wrapStream: async ({ doStream }) => {
-                const { stream, ...rest } = await doStream();
-                let finished = false;
-
-                return {
-                    ...rest,
-                    stream: stream.pipeThrough(
-                        new TransformStream({
-                            flush: (controller) => {
-                                if (!finished) {
-                                    controller.enqueue({ error: new Error("model stream ended without a finish part"), type: "error" });
-                                }
-                            },
-                            transform: (part, controller) => {
-                                if (part.type === "finish") {
-                                    finished = true;
-                                }
-
-                                controller.enqueue(part);
-                            },
-                        }),
-                    ),
-                };
-            },
-        },
-        model,
-    });
 
 /**
  * The streaming counterpart of {@link createAgentGenerate} over AI SDK
@@ -286,9 +324,7 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
     return async (options, onDelta) => {
         const { ai, base } = await getBase();
         const request = buildTurnRequest(base, options);
-        // `resolveAgentModel` always yields a model object; the string arm only narrows the AI SDK union.
-        const model = typeof request.model === "string" ? request.model : failUnfinishedStream(ai, request.model);
-        const result = ai.streamText({ ...request, model });
+        const result = ai.streamText({ ...request, model: guardTurnModel(ai, request.model) });
 
         // Drain the full part stream, teeing each text delta to the live sink. This
         // both feeds the live channel and drives the call to completion, so the
