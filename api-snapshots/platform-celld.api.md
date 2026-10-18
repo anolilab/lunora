@@ -13,7 +13,9 @@ SemVer promise until the package graduates.
 
 ### `createCelldShardPlatform` (const)
 
-Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
+```ts
+const createCelldShardPlatform: (state: unknown, env?: unknown) => ShardPlatform;
+```
 
 ### `createCelldWorkerPlatform` (const)
 
