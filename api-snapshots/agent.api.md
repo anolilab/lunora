@@ -552,6 +552,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `wrapUntrusted` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ## `@lunora/agent/channels`
 
 ### `AgentChannelTarget` (interface)
