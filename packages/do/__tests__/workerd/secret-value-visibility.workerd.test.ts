@@ -10,6 +10,7 @@
  * (`storage.sql.exec`), the data browser's table listing and page read, and the
  * KV surface.
  */
+import { SecretValueKeyError } from "@lunora/platform";
 import { createSecretValueHost, createShardPlatform } from "@lunora/platform-cloudflare";
 import type { SqlExec } from "@lunora/shard-engine";
 import { isInternalTableName, readTablePage } from "@lunora/shard-engine";
@@ -32,7 +33,7 @@ describe("secret values on workerd", () => {
         const stub = env.SHARD.get(env.SHARD.idFromName("secret-value-kv"));
 
         await runInDurableObject(stub, async (_instance, state) => {
-            const platform = createShardPlatform(state);
+            const platform = createShardPlatform(state, env);
 
             await platform.kv.put("s:visible", { ok: true });
 
@@ -54,7 +55,7 @@ describe("secret values on workerd", () => {
 
         await runInDurableObject(stub, async (_instance, state) => {
             const sql = state.storage.sql as unknown as SqlExec;
-            const hostWithClock = createSecretValueHost(state.storage);
+            const hostWithClock = createSecretValueHost(state.storage, env);
 
             await hostWithClock.put(SENTINEL, { scope: "run-1", ttlMs: 60_000 });
 
@@ -69,6 +70,26 @@ describe("secret values on workerd", () => {
             expect(() => sql.exec("SELECT * FROM _cf_KV").toArray()).toThrow(/SQLITE_AUTH|prohibited/u);
             expect(() => sql.exec("SELECT COUNT(*) AS c FROM _cf_KV").toArray()).toThrow(/SQLITE_AUTH|not authorized/u);
             expect(() => sql.exec("SELECT value FROM _cf_KV").toArray()).toThrow(/SQLITE_AUTH|prohibited/u);
+        });
+    });
+
+    it("holds only ciphertext in the real storage, reads back through the key, and refuses without one", async () => {
+        expect.assertions(4);
+
+        const stub = env.SHARD.get(env.SHARD.idFromName("secret-value-cipher"));
+
+        await runInDurableObject(stub, async (_instance, state) => {
+            const platform = createShardPlatform(state, env);
+            const ref = await platform.secretValues.put(SENTINEL, { scope: "run-1", ttlMs: 60_000 });
+            const everything = JSON.stringify([...(await state.storage.list())]);
+
+            expect(everything).toContain(ref);
+            expect(everything).not.toContain(SENTINEL);
+            await expect(platform.secretValues.take(ref, { claimant: "step-a", scope: "run-1" })).resolves.toBe(SENTINEL);
+
+            const keyless = createSecretValueHost(state.storage, {});
+
+            await expect(keyless.take(ref, { claimant: "step-a", scope: "run-1" })).rejects.toBeInstanceOf(SecretValueKeyError);
         });
     });
 });
