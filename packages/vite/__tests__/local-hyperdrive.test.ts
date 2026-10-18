@@ -200,6 +200,97 @@ describe(localHyperdrive, () => {
         expect(stopped).toStrictEqual([]);
     });
 
+    it("stops a database whose startup was still running when the last server's countdown ended", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        let finishSecond: () => void = () => {};
+        let calls = 0;
+        const stopped: string[] = [];
+        const start = vi.fn<Start>(async () => {
+            calls += 1;
+
+            if (calls === 1) {
+                return {
+                    bindings: ["HYPERDRIVE"],
+                    stop: async () => {
+                        stopped.push("HYPERDRIVE");
+                    },
+                };
+            }
+
+            await new Promise<void>((resolve) => {
+                finishSecond = resolve;
+            });
+
+            return {
+                bindings: ["ANALYTICS"],
+                stop: async () => {
+                    stopped.push("ANALYTICS");
+                },
+            };
+        });
+        const plugin = localHyperdrive({ projectRoot: "/project/slow-restart", start });
+
+        await runConfigHook(plugin, "serve");
+        attachServer(plugin)();
+
+        // A replacement config starts a second database, slowly, after the last server has closed.
+        const second = runConfigHook(plugin, "serve");
+
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        finishSecond();
+        await second;
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(stopped.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["ANALYTICS", "HYPERDRIVE"]);
+    });
+
+    it("keeps the databases when a server has come back by the time a slow startup finishes", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        let finishSecond: () => void = () => {};
+        let calls = 0;
+        const stopped: string[] = [];
+        const start = vi.fn<Start>(async () => {
+            calls += 1;
+
+            if (calls > 1) {
+                await new Promise<void>((resolve) => {
+                    finishSecond = resolve;
+                });
+            }
+
+            return {
+                bindings: [`DB${String(calls)}`],
+                stop: async () => {
+                    stopped.push(`DB${String(calls)}`);
+                },
+            };
+        });
+        const plugin = localHyperdrive({ projectRoot: "/project/slow-return", start });
+
+        await runConfigHook(plugin, "serve");
+        attachServer(plugin)();
+
+        const second = runConfigHook(plugin, "serve");
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        // The replacement server arrives while its database is still starting.
+        attachServer(plugin);
+        finishSecond();
+        await second;
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(stopped).toStrictEqual([]);
+    });
+
     it("starts a fresh database for a later session once the first one's were stopped", async () => {
         expect.assertions(1);
 

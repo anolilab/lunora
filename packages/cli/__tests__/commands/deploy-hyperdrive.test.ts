@@ -457,6 +457,28 @@ describe("hyperdrive on deploy", () => {
             expect(names.every((name) => /^[a-z0-9-]+$/u.test(name))).toBe(true);
         });
 
+        it("blocks two bindings that differ only in punctuation, since they would read one variable and share one config", async () => {
+            expect.assertions(2);
+
+            writeWrangler({
+                hyperdrive: [
+                    { binding: "MY-DB", id: HYPERDRIVE_PLACEHOLDER_ID },
+                    { binding: "MY_DB", id: HYPERDRIVE_PLACEHOLDER_ID },
+                ],
+            });
+
+            const api = hyperdriveApi([]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, LUNORA_MY_DB_URL: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("both read LUNORA_MY_DB_URL");
+            expect(api).not.toHaveBeenCalled();
+        });
+
         it("checks every binding before creating any, so a later gap leaves no config behind", async () => {
             expect.assertions(2);
 

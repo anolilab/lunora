@@ -84,13 +84,36 @@ const jurisdictionOf = async (options: ArtifactsJurisdictionOptions, accountId: 
     return typeof result === "object" && result !== null && "jurisdiction" in result ? result.jurisdiction : undefined;
 };
 
+/** The namespace exists, but in another jurisdiction than the schema pins. */
+const mismatch = (accountId: string, subject: string, jurisdiction: string, actual: string): ArtifactsJurisdictionCheck => {
+    return {
+        fix:
+            `A namespace's jurisdiction cannot change: create one with ${createCall(accountId, "<name>", jurisdiction)}, ` +
+            `point the binding's "namespace" at it, and move the repos over.`,
+        message: `${subject} is in the "${actual}" jurisdiction, but the schema pins data to "${jurisdiction}".`,
+        verdict: "mismatch",
+    };
+};
+
 /** The namespace is absent: create it in the schema's jurisdiction when asked to, or say how to. */
 const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: string, token: string, subject: string): Promise<ArtifactsJurisdictionCheck> => {
     const { jurisdiction, namespace } = options;
 
-    // A POST that errors or times out may still have created it, so a failed one is followed by a look.
-    if (options.create === true && ((await createNamespace(options, accountId, token)) || (await jurisdictionOf(options, accountId, token)) === jurisdiction)) {
-        return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
+    if (options.create === true) {
+        // A POST that errors or times out may still have created it (or another deploy may have), so a failed one is followed by a look.
+        if (await createNamespace(options, accountId, token)) {
+            return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
+        }
+
+        const now = await jurisdictionOf(options, accountId, token);
+
+        if (now === jurisdiction) {
+            return { message: `${subject} is in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
+        }
+
+        if (typeof now === "string") {
+            return mismatch(accountId, subject, jurisdiction, now);
+        }
     }
 
     return {
@@ -156,13 +179,7 @@ const checkArtifactsJurisdiction = async (options: ArtifactsJurisdictionOptions)
         return { message: `${subject} is in the "${actual}" jurisdiction, as the schema pins.`, verdict: "ok" };
     }
 
-    return {
-        fix:
-            `A namespace's jurisdiction cannot change: create one with ${createCall(accountId, "<name>", jurisdiction)}, ` +
-            `point the binding's "namespace" at it, and move the repos over.`,
-        message: `${subject} is in the "${actual}" jurisdiction, but the schema pins data to "${jurisdiction}".`,
-        verdict: "mismatch",
-    };
+    return mismatch(accountId, subject, jurisdiction, actual);
 };
 
 export type { ArtifactsJurisdictionCheck, ArtifactsJurisdictionOptions };

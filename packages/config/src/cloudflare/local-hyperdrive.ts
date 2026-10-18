@@ -17,7 +17,7 @@
  * `@electric-sql/pglite` and `@electric-sql/pglite-socket` are optional peers,
  * loaded on demand: an app without Hyperdrive never pays for them.
  */
-import { mkdirSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 
 import join from "../path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -113,6 +113,57 @@ const serveDatabase = async (
     };
 };
 
+/** Whether a process id is running. `EPERM` means it exists but belongs to someone else. */
+const isProcessAlive = (pid: number): boolean => {
+    try {
+        process.kill(pid, 0);
+
+        return true;
+    } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+};
+
+/** What taking a data directory's lock came to: the release to call on stop, or the process that holds it. */
+type DirectoryLock = { holder: number } | { release: () => void };
+
+/**
+ * Take the lock beside a data directory. Two engines on one PGlite directory would corrupt it, and
+ * `vite dev` has no `.lunora/dev.json` claim to prevent that the way `lunora dev` does. A lock left by
+ * a process that has gone is taken over.
+ */
+const lockDirectory = (lockPath: string): DirectoryLock => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const descriptor = openSync(lockPath, "wx");
+
+            writeSync(descriptor, String(process.pid));
+            closeSync(descriptor);
+
+            return {
+                release: () => {
+                    rmSync(lockPath, { force: true });
+                },
+            };
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+                throw error;
+            }
+
+            const holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+
+            // Our own pid is a lock this process never released (a restart); a dead one is stale.
+            if (Number.isInteger(holder) && holder !== process.pid && isProcessAlive(holder)) {
+                return { holder };
+            }
+
+            rmSync(lockPath, { force: true });
+        }
+    }
+
+    return { holder: -1 };
+};
+
 /** The real PGlite, or `undefined` when either package is not installed. */
 const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
     try {
@@ -162,12 +213,37 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 
             mkdirSync(directory, { recursive: true });
 
-            // Sequential: two engines booting at once contend for the same WASM instantiation.
-            // eslint-disable-next-line no-await-in-loop
-            const server = await runtime.createServer(directory);
+            const lock = lockDirectory(`${directory}.lock`);
 
-            started.push({ binding, stop: server.stop });
-            env[variableFor(binding)] = server.connectionString;
+            if ("holder" in lock) {
+                options.onWarning?.(
+                    `Hyperdrive binding "${binding}": another process (pid ${String(lock.holder)}) has its embedded Postgres open. Stop it, or set ${variableFor(binding)} to use a database of your own.`,
+                );
+
+                continue;
+            }
+
+            try {
+                // Sequential: two engines booting at once contend for the same WASM instantiation.
+                // eslint-disable-next-line no-await-in-loop
+                const server = await runtime.createServer(directory);
+
+                started.push({
+                    binding,
+                    stop: async () => {
+                        try {
+                            await server.stop();
+                        } finally {
+                            lock.release();
+                        }
+                    },
+                });
+                env[variableFor(binding)] = server.connectionString;
+            } catch (error) {
+                lock.release();
+
+                throw error;
+            }
         }
     } catch (error) {
         options.onWarning?.(`Could not start the embedded Postgres for Hyperdrive: ${error instanceof Error ? error.message : String(error)}`);
@@ -178,6 +254,10 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
             Reflect.deleteProperty(env, variableFor(binding));
         }
 
+        return undefined;
+    }
+
+    if (started.length === 0) {
         return undefined;
     }
 

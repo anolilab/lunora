@@ -95,8 +95,8 @@ describe(checkArtifactsJurisdiction, () => {
         expect(api).toHaveBeenCalledTimes(3);
     });
 
-    it("still stops when the second look shows another jurisdiction after a failed creation", async () => {
-        expect.assertions(1);
+    it("reports a mismatch, not a missing namespace, when the second look finds one in another jurisdiction", async () => {
+        expect.assertions(2);
 
         let reads = 0;
         const api = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
@@ -110,6 +110,20 @@ describe(checkArtifactsJurisdiction, () => {
                 ? Response.json({ result: { jurisdiction: "unrestricted", namespace: "repos" }, success: true })
                 : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
         });
+        const result = await check(api, "eu", credentials, true);
+
+        expect(result.verdict).toBe("mismatch");
+        expect(result.message).toContain('is in the "unrestricted" jurisdiction');
+    });
+
+    it("still reports a missing namespace when the second look cannot find it either", async () => {
+        expect.assertions(1);
+
+        const api = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+            init?.method === "POST"
+                ? Response.json({ errors: [{ code: 1, message: "denied" }], success: false }, { status: 403 })
+                : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 }),
+        );
 
         await expect(check(api, "eu", credentials, true)).resolves.toMatchObject({ verdict: "missing" });
     });

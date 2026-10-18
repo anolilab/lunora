@@ -57,6 +57,24 @@ const TRAILING_DASH = /-$/u;
 /** The environment variable a binding's connection string is read from. */
 const connectionStringVariable = (binding: string): string => `LUNORA_${binding.replaceAll(NON_VARIABLE_CHARACTER, "_").toUpperCase()}_URL`;
 
+/** Two bindings whose names differ only in punctuation read one variable and map to one config name. */
+const sharedVariable = (bindings: ReadonlyArray<string>): { bindings: string[]; variable: string } | undefined => {
+    const seen = new Map<string, string>();
+
+    for (const binding of bindings) {
+        const variable = connectionStringVariable(binding);
+        const other = seen.get(variable);
+
+        if (other !== undefined) {
+            return { bindings: [other, binding], variable };
+        }
+
+        seen.set(variable, binding);
+    }
+
+    return undefined;
+};
+
 /** Characters of the hash that closes a shortened name, with its dash. */
 const HASH_SUFFIX = 7;
 
@@ -337,6 +355,15 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     const origins = entries.map(({ binding }) => {
         return { binding, origin: parseOrigin(environment[connectionStringVariable(binding)] ?? "") };
     });
+    const collision = sharedVariable(entries.map(({ binding }) => binding));
+
+    if (collision !== undefined) {
+        const message = `deploy blocked: the Hyperdrive bindings ${collision.bindings.map((name) => `"${name}"`).join(" and ")} both read ${collision.variable} and would share one config. Rename one so their names differ in letters or digits, not only in punctuation.`;
+
+        options.logger.error(message);
+
+        return message;
+    }
 
     // Everything a binding needs is checked before the first API call, so a later binding's missing
     // connection string cannot leave an earlier one's config created and its id unrecorded.

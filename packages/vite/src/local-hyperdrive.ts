@@ -66,7 +66,8 @@ const stopAll = async (session: Session): Promise<void> => {
 /** Stop the databases after the grace period. Unref'd: the countdown must not keep a finished process alive. */
 const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
     const timer = setTimeout(() => {
-        stopAll(session).catch((): undefined => undefined);
+        // A startup still in flight adds its database after the timer fires: wait for it, then stop only if no server has come back.
+        session.pending.then(async () => (session.servers === 0 ? stopAll(session) : undefined)).catch((): undefined => undefined);
     }, STOP_GRACE_MS);
 
     timer.unref();

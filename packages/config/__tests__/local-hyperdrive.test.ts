@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -191,6 +191,67 @@ describe("local hyperdrive", () => {
 
             expect(stops).toStrictEqual(["DB_A"]);
             expect({ env, warnings: warnings.join(" ").includes("boom") }).toStrictEqual({ env: {}, warnings: true });
+        });
+
+        it("leaves a data directory alone while another live process has it open, and says which", async () => {
+            expect.assertions(4);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const lock = join(root, ".wrangler", "state", "lunora-pglite", "DB.lock");
+
+            mkdirSync(join(root, ".wrangler", "state", "lunora-pglite"), { recursive: true });
+            // The parent of this test process is alive, and not us.
+            writeFileSync(lock, String(process.ppid), "utf8");
+
+            const { directories, runtime } = fakeRuntime();
+            const env: NodeJS.ProcessEnv = {};
+            const warnings: string[] = [];
+
+            await expect(
+                startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root }),
+            ).resolves.toBeUndefined();
+
+            expect(directories).toStrictEqual([]);
+            expect(env).toStrictEqual({});
+            expect(warnings.join(" ")).toContain(`pid ${String(process.ppid)}`);
+        });
+
+        it("takes over a lock left by a process that has gone, and releases it on stop", async () => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const lock = join(root, ".wrangler", "state", "lunora-pglite", "DB.lock");
+
+            mkdirSync(join(root, ".wrangler", "state", "lunora-pglite"), { recursive: true });
+            writeFileSync(lock, "2147483646", "utf8");
+
+            const { runtime } = fakeRuntime();
+            const local = await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
+
+            expect(readFileSync(lock, "utf8")).toBe(String(process.pid));
+
+            await local?.stop();
+
+            expect(local?.bindings).toStrictEqual(["DB"]);
+            expect(existsSync(lock)).toBe(false);
+        });
+
+        it("releases the lock when the server fails to start", async () => {
+            expect.assertions(1);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const runtime: PgliteRuntime = {
+                createServer: async () => {
+                    throw new Error("boom");
+                },
+            };
+
+            await startLocalHyperdrive({ env: {}, load: async () => runtime, onWarning: () => {}, projectRoot: root });
+
+            expect(existsSync(join(root, ".wrangler", "state", "lunora-pglite", "DB.lock"))).toBe(false);
         });
 
         it("boots the real embedded Postgres and serves a loopback connection string", async () => {
