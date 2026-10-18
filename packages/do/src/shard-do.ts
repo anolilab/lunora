@@ -1724,6 +1724,11 @@ const takeToken = (ws: ShardSocketLike, buckets: WeakMap<ShardSocketLike, { last
  * subscription id to its topic, so a re-subscribe is idempotent and two
  * subscriptions can share a topic without one unsubscribe evicting the other.
  */
+/** What the shard needs of a declared live stream: the publish check `defineLiveStream` exposes. */
+interface LiveStreamDeclaration {
+    validatePublish: (topic: string, payload: unknown) => void;
+}
+
 interface LiveSubscriber {
     /** Ends the SSE response; used when the identity behind the connection expires. */
     close: () => void;
@@ -6412,6 +6417,8 @@ abstract class ShardDO {
             throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
         }
 
+        this.assertDeclaredLivePublish(stream, topic, wireData);
+
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
         const dataJson = JSON.stringify(wireData ?? null);
 
@@ -6424,6 +6431,48 @@ abstract class ShardDO {
         }
 
         return this.broadcastLiveTopic(stream, topic, dataJson);
+    }
+
+    /**
+     * The live streams the app declares, by stream id, or `undefined` when this shard does not
+     * know them (a shard built without codegen). The generated subclass returns its declared
+     * `defineLiveStream` values, which is what lets a publish be checked against the topics and
+     * payload validators the app wrote.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the declared streams
+    protected liveStreams(): Readonly<Record<string, LiveStreamDeclaration>> | undefined {
+        return undefined;
+    }
+
+    /**
+     * Refuse a publish the app never declared: an unknown stream, an undeclared or non-canonical
+     * topic, or a payload its validator rejects. Skipped when the shard knows no declarations.
+     * @throws LunoraError `BAD_REQUEST` (400)
+     */
+    protected assertDeclaredLivePublish(stream: string, topic: string, wireData: unknown): void {
+        const declared = this.liveStreams();
+
+        if (declared === undefined) {
+            return;
+        }
+
+        const declaration = Object.hasOwn(declared, stream) ? declared[stream] : undefined;
+
+        if (declaration === undefined) {
+            throw new LunoraError("BAD_REQUEST", `"${stream}" is not a declared live stream`, { status: 400 });
+        }
+
+        try {
+            declaration.validatePublish(topic, decodeWire(wireData));
+        } catch (error) {
+            if (isLunoraError(error)) {
+                throw error;
+            }
+
+            throw new LunoraError("BAD_REQUEST", `publish to "${topic}" was refused: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 400,
+            });
+        }
     }
 
     /**
@@ -17515,4 +17564,14 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { DispatchBookmark, HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };
+export type {
+    DispatchBookmark,
+    HibernatableWebSocket,
+    LiveStreamDeclaration,
+    QueryReadScope,
+    ShardDOOptions,
+    ShardDOState,
+    SubscriptionOutcome,
+    TelemetrySink,
+    TraceRefLike,
+};

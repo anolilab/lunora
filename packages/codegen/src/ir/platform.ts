@@ -576,3 +576,25 @@ export interface ProjectIR {
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
 }
+
+/**
+ * A `defineLiveStream` export, read from its literals. Codegen needs only the names: the
+ * payload and key TYPES come from inference over the declaration, so no validator is lowered.
+ */
+export interface LiveStreamIR {
+    /** The export name, which is also the key under `live` in `_generated/live.ts`. */
+    exportName: string;
+    /** The declaring file, lunora-relative without `.ts`. */
+    filePath: string;
+    /** The literal `id`, which names the stream's routes and scopes its subscriptions. */
+    id: string;
+    /** The declared topics in declaration order. */
+    topics: ReadonlyArray<LiveTopicIR>;
+}
+
+/** One topic of a {@link LiveStreamIR}. */
+export interface LiveTopicIR {
+    /** The key fields in DECLARED order: the generated encoder lays segments out in this order, never the caller's. Empty for a keyless topic. */
+    fields: ReadonlyArray<string>;
+    name: string;
+}

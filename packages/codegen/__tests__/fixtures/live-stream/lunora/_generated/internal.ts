@@ -7,11 +7,13 @@ import type { FunctionReference } from "@lunora/client";
 export interface InternalApiTypes {
     live: {
         announce: FunctionReference<"action", { text: string }, void>;
+        announceBroken: FunctionReference<"action", {}, void>;
     };
 }
 
 export const internal: InternalApiTypes = {
     live: {
         announce: { __lunoraRef: "live:announce" },
+        announceBroken: { __lunoraRef: "live:announceBroken" },
     },
 };

@@ -20,7 +20,7 @@ describe("emitShard — ctx.live.publish on the action ctx", () => {
         const emitted = shard(true);
 
         expect(emitted).toContain("const live = {");
-        expect(emitted).toContain("await this.publishLiveFromAction(topic, payload, publishOptions);");
+        expect(emitted).toContain("await this.publishLiveFromAction(ref.topic, payload, { ...publishOptions, stream: ref.__lunoraLive });");
         // Attached only inside the `isAction` block, so a query/mutation ctx never carries it.
         expect(emitted).toContain("ctx.live = live;");
     });
@@ -30,7 +30,7 @@ describe("emitShard — ctx.live.publish on the action ctx", () => {
 
         const emitted = shard(false);
 
-        expect(emitted).not.toContain("publishLiveFromAction(topic");
+        expect(emitted).not.toContain("publishLiveFromAction(ref.topic");
         expect(emitted).not.toContain("ctx.live = live;");
     });
 

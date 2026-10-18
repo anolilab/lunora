@@ -104,9 +104,8 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly live?: {
-        publish: (topic: string, payload: unknown, options: {
+        publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
             shardKey?: string;
-            stream: string;
         }) => Promise<void>;
     };
     readonly log: LunoraLogger;
@@ -1121,7 +1120,6 @@ type ListWhere<F> = {
 ```ts
 interface LivePublishOptions {
     shardKey?: string;
-    stream: string;
 }
 ```
 
@@ -1129,7 +1127,7 @@ interface LivePublishOptions {
 
 ```ts
 interface LivePublisher {
-    publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
 }
 ```
 
@@ -1198,6 +1196,16 @@ type LiveTopicKey<Topic extends LiveTopicDeclaration> = Topic["key"] extends Rea
 
 ```ts
 type LiveTopicPayload<Topic extends LiveTopicDeclaration> = Infer<Topic["payload"]>;
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
 ```
 
 ### `LiveTopics` (type)

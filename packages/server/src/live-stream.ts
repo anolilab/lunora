@@ -299,7 +299,7 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
         const { declaration } = parsed;
 
         try {
-            parseValidatorMap({ payload: declaration.payload }, { payload }, "payload");
+            parseValidatorMap({ payload: declaration.payload }, { payload }, "topic");
         } catch (error) {
             throw badPayload(topic, error);
         }
@@ -405,3 +405,5 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
 
 export { defineLiveStream };
 export type { LiveStream, LiveStreamConfig, LiveSubscribeHandler, LiveSubscribeOptions, LiveTopicDeclaration, LiveTopicKey, LiveTopicPayload, LiveTopics };
+
+export { type LiveTopicRef } from "../../../shared/live-stream";

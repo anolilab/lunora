@@ -429,6 +429,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LiveTopics` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1783,6 +1787,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2140,6 +2148,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createStream` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `encodeLiveTopic` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5600,6 +5612,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LiveTopicPayload` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

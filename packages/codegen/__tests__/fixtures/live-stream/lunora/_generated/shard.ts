@@ -7,6 +7,7 @@ import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSe
 import { bindOrm, bindTableFacade } from "@lunora/server";
 
 import schema from "../schema.js";
+import { feed as liveStream_feed } from "../live.js";
 import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
 
 type FunctionKind = "action" | "mutation" | "query";
@@ -522,6 +523,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
+        }
+        protected override liveStreams() {
+            return { "feed": liveStream_feed };
         }
 
         protected override async runShardInit(): Promise<void> {
@@ -1134,8 +1138,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             if (isAction) {
 
                 const live = {
-                    publish: async (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }): Promise<void> => {
-                        await this.publishLiveFromAction(topic, payload, publishOptions);
+                    publish: async (ref: { __lunoraLive: string; topic: string }, payload: unknown, publishOptions?: { shardKey?: string }): Promise<void> => {
+                        await this.publishLiveFromAction(ref.topic, payload, { ...publishOptions, stream: ref.__lunoraLive });
                     },
                 };
                 ctx.live = live;

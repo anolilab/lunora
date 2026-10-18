@@ -130,6 +130,15 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * The emitted `liveStreams()` override (declared streams only) returns the `defineLiveStream`
+     * values keyed by id; the base checks each publish against them.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the emitted override, which returns module constants
+    protected override liveStreams(): Readonly<Record<string, { validatePublish: (topic: string, payload: unknown) => void }>> {
+        return { s: { validatePublish: () => undefined } };
+    }
+
+    /**
      * Mirrors the generated `runMutationTransaction` — the single helper the
      * top-level RPC, `ctx.runMutation` and `runReactor` all dispatch a mutation
      * handler through. Nested ownership belongs to a ctx admitted by this helper,

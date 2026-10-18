@@ -59,6 +59,7 @@ export interface RegisteredLunoraFunction {
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "live:announce": lunora_live_0.announce as unknown as RegisteredLunoraFunction,
+    "live:announceBroken": lunora_live_0.announceBroken as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -128,6 +129,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     live: {
         announce: (args: { text: string }) => Promise<void>;
+        announceBroken: (args?: {}) => Promise<void>;
     };
 }
 
@@ -170,6 +172,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 export const createCaller = (context: CallerCtx): Caller => ({
     live: {
         announce: (args) => callRegistered(context, "live:announce", args),
+        announceBroken: (args) => callRegistered(context, "live:announceBroken", args),
     },
 });
 

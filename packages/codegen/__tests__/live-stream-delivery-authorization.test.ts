@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCodegen } from "../src/run-codegen";
 
-const LIVE_STREAM = `import { defineLiveStream } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts" });\n`;
+const LIVE_STREAM = `import { defineLiveStream, v } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts", topics: { post: { payload: v.null() } } });\n`;
 
 const DELIVERY_AUTHORIZATION = `import { defineApp } from "./_generated/app";\n\nexport const app = defineApp().deliveryAuthorization(() => async () => undefined).build();\n`;
 

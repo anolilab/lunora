@@ -99,3 +99,5 @@ const subscribeLiveTopic = (options: SubscribeLiveTopicOptions): (() => void) =>
 
 export { subscribeLiveTopic };
 export type { SubscribeLiveTopicOptions };
+
+export { encodeLiveTopic, type LiveTopicRef } from "../../../shared/live-stream";

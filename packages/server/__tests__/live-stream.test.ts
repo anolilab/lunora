@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import type { HttpActionCtx as HttpActionContext, LiveTopicPayload, LunoraRouteHandler, ShardFetch } from "../src/index";
+import type { HttpActionCtx as HttpActionContext, LiveTopicPayload, LiveTopicRef, LunoraRouteHandler, ShardFetch } from "../src/index";
 import { defineLiveStream, httpRouter, v } from "../src/index";
 
 interface ShardCall {
@@ -504,6 +504,24 @@ describe("defineLiveStream types", () => {
         expectTypeOf<{ text: string }>().toExtend<LiveTopicPayload<(typeof stream.topics)["post"]>>();
 
         expect(stream.id).toBe("posts");
+    });
+});
+
+describe("ctx.live.publish types", () => {
+    it("types the payload from the ref, so a wrong payload does not compile", async () => {
+        expect.assertions(1);
+
+        const ref = { __lunoraLive: "posts", topic: "post:1" } as LiveTopicRef<{ text: string }>;
+        const publish = vi.fn<HttpActionContext["live"]["publish"]>(() => Promise.resolve());
+        const live: HttpActionContext["live"] = { publish };
+
+        await live.publish(ref, { text: "hi" });
+        // @ts-expect-error -- `text` is declared a string
+        await live.publish(ref, { text: 1 });
+        // @ts-expect-error -- `stream` is gone: the ref names its stream
+        await live.publish(ref, { text: "hi" }, { stream: "posts" });
+
+        expect(publish).toHaveBeenCalledTimes(3);
     });
 });
 

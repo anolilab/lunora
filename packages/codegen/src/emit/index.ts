@@ -2,6 +2,7 @@ export { emitApi, emitCollections, emitInternalApi, emitSeed } from "./api";
 export { emitDataModel } from "./data-model";
 export { default as emitDrizzleSchema } from "./drizzle";
 export { emitFunctions, emitLazyFunctionModules, LAZY_FUNCTION_DIRECTORY } from "./functions";
+export { default as emitLive } from "./live";
 export { UMBRELLA_BASE_PACKAGES } from "./qualifiers";
 export { emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers } from "./runtime-modules";
 export { default as emitServer } from "./server";

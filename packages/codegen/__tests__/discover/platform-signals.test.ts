@@ -319,6 +319,17 @@ describe("discoverPlatformSignals", () => {
         expect(signals().liveStreams).toBe(true);
     });
 
+    it("detects a ctx.live read whose publish takes a generated topic ref, not a topic string", () => {
+        expect.assertions(1);
+
+        write(
+            "announce.ts",
+            `import { action } from "@lunora/server";\nimport { live } from "./_generated/live";\n\nexport const announce = action({ args: {}, handler: async (ctx) => {\n    await ctx.live.publish(live.posts.post({ postId: "1" }), { id: 1 });\n\n    return null;\n} });\n`,
+        );
+
+        expect(signals().liveContext).toBe(true);
+    });
+
     // A host without step rollback fails the step rather than run it without
     // the compensation, so a declared rollback must reach the platform gate.
     it("detects a workflow step that declares a rollback, inline or hoisted", () => {

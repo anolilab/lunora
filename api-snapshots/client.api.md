@@ -442,6 +442,16 @@ interface LiveStreamSubscribeOptions {
 }
 ```
 
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LunoraClient` (class)
 
 ```ts
@@ -1745,6 +1755,12 @@ const createStream: <T>(options: {
     handle: StreamHandle<T>;
     iterable: StreamIterable<T>;
 };
+```
+
+### `encodeLiveTopic` (const)
+
+```ts
+const encodeLiveTopic: (name: string, fields: readonly string[], key: Readonly<Record<string, string>>) => string;
 ```
 
 ### `getErrorCode` (const)

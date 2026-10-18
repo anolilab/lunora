@@ -59,7 +59,7 @@ const buildLiveApp = () => {
         httpAction(async (ctx, request) => {
             const body: { data: unknown; topic: string } = await request.json();
 
-            await ctx.live.publish(body.topic, body.data, { stream: feed.id });
+            await ctx.live.publish({ __lunoraLive: feed.id, topic: body.topic }, body.data);
 
             return Response.json({ published: true });
         }),

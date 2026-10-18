@@ -3,6 +3,7 @@
 // stream's authorization handler is never consulted here.
 import { defineLiveStream } from "@lunora/server";
 
+import { live } from "./_generated/live.js";
 import { internalAction, v } from "./_generated/server.js";
 
 export const feed = defineLiveStream({ id: "feed", onSubscribe: () => true, topics: { news: { payload: v.object({ text: v.string() }) } } });
@@ -15,5 +16,16 @@ export const announce = internalAction.input({ text: v.string() }).action(async 
         throw new Error("ctx.live is not wired on this shard");
     }
 
-    await ctx.live.publish("feed:news", { text: args.text }, { stream: "feed" });
+    await ctx.live.publish(live.feed.news(), { text: args.text });
+});
+
+// Publishes a payload the `news` topic never declared. The shard checks every publish against the
+// declaration, so this surfaces as a refused publish rather than a frame no subscriber can parse.
+export const announceBroken = internalAction.input({}).action(async ({ ctx }) => {
+    if (!ctx.live) {
+        throw new Error("ctx.live is not wired on this shard");
+    }
+
+    // @ts-expect-error -- the payload is deliberately wrong; the types would refuse it, the shard must too
+    await ctx.live.publish(live.feed.news(), { text: 1 });
 });

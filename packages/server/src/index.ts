@@ -66,6 +66,7 @@ export type {
     LiveTopicDeclaration,
     LiveTopicKey,
     LiveTopicPayload,
+    LiveTopicRef,
     LiveTopics,
 } from "./live-stream";
 export { defineLiveStream } from "./live-stream";
