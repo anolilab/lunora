@@ -33,22 +33,14 @@ When a plan ships: delete its file and remove its row here in the same change.
 | ------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | design only; waits on the live-topic hooks landing on `alpha`; open question: auto-mount |
 | [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change)   |
-| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                      |
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                    | replay engine, frame handlers, admin surface; decisions D1–D3                            |
 | [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot   | blocked: needs a read-only check of production pool rows for `inFlightIds`               |
 | [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`                                 |
 | [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                         | P2                                                                                       |
-| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts               | spike; deliverable is a decision                                                         |
 | [490](./490-lazy-function-registry.md)                 | Lazy function registry: Worker startup CPU scales with procedure count | design + measurements only; decisions in §7 open                                         |
 | [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                          | spike; decision first                                                                    |
 | [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                       | not shipped                                                                              |
-| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                            | draft, design-only                                                                       |
 | [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters              | deferred                                                                                 |
-| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                                | P3                                                                                       |
-| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                              | P3, deferred                                                                             |
-| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                   | P3, deferred                                                                             |
-| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                 | P3, demand-gated                                                                         |
-| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                        | demand-gated                                                                             |
 | [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target            | phase 1 shipped; rest demand-gated                                                       |
 
 ## Shipped
@@ -105,3 +97,10 @@ follow-on ships or is rejected.
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
 | [435](./435-platform-budget-tck-design.md)          | Portability-budget leg of the platform TCK                              |
 | [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |
+
+## Dropped 2026-10-18 — no demand
+
+Files deleted, nothing built. Recover a design from git history if demand appears.
+033 (Cloudflare Stream), 037 (Realtime/Calls), 089 (promise pipelining), 133 (live CDC and
+DO-consumes-DO), 169 (`@lunora/collab`), 332 (payment conformance spike), 364 (Studio
+assistant), 466 (replica client wiring), 529 (closed by its own gate, see above).

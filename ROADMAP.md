@@ -83,11 +83,8 @@ deliberate, and mostly a set of go/no-go decisions:
   published under [Experimental → stable](#experimental--stable-the-graduation-bar).
 - **Deferred capability plans** (designs already written in [`plans/`](./plans)):
     - Streaming: port the HTTP-SSE `useHttpStream` surface to Vue/Solid/Svelte,
-      plus reconnect / POST-body / OpenAPI follow-ups ([`052`](./plans/052-streaming-hook-design.md), [`033`](./plans/033-stream.md)).
-    - Real-time calls over WebRTC ([`037`](./plans/037-realtime-calls-webrtc.md)).
-    - Promise pipelining / batched round-trips ([`089`](./plans/089-promise-pipelining-batch.md)).
+      plus reconnect / POST-body / OpenAPI follow-ups ([`052`](./plans/052-streaming-hook-design.md)).
     - Custom scalar types ([`078`](./plans/078-custom-scalar-types.md)).
-    - Live CDC and DO-consumes-DO composition ([`133`](./plans/133-live-cdc-and-do-consumes-do.md)).
 - **Run beyond Cloudflare.** The platform-abstraction layer has shipped, with
   `celld` and Node hosts on the experimental tier. An in-process runtime for
   browser and device targets is demand-gated: its engine seam has shipped, the
