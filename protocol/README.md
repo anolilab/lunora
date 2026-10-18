@@ -405,8 +405,9 @@ Four rules a conforming client MUST follow, because each one is a durable write:
 - A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
   `RATE_LIMITED` or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
   entry — it could not reach the shard, a limiter refused to look, or its delivery authorization
-  changed before the reply could be released (the write may have committed; the same mutation id
-  replays its stored result) — so it is
+  changed before the reply could be released (the write may have committed; a retry under the same
+  mutation id replays its stored result, or fails with the terminal `DELIVERY_RECEIPT_FENCED` when
+  that result belongs to an older authority epoch) — so it is
   retried rather than reported failed. So is a refused CREDENTIAL —
   `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
   rather than settles: a write queued offline replays with the bearer it held

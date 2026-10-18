@@ -326,9 +326,11 @@ export interface PlatformCapabilities {
          * authority before an RPC result or subscription frame is delivered, and
          * fences replayed receipts behind a durable scope/epoch. Rides hibernated
          * socket attachments, signed sibling fetch and shard SQLite, so a host rates
-         * it no higher than its `websocketHibernation`. Advisory: an app opts in by
-         * declaring it, but the contracts it needs are all engine-internal, so
-         * there is nothing for codegen to gate on.
+         * it no higher than its `websocketHibernation`. Advisory for now, not by
+         * nature: an app opts in by declaring it, so a host rating it `unsupported`
+         * should get a `platform_unsupported_feature` diagnostic rather than the
+         * emitted builder method. No `PlatformSignals` entry exists yet, so until one
+         * does that host emits the surface silently.
          */
         deliveryAuthorization?: Capability;
 

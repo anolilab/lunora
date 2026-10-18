@@ -30,8 +30,8 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
         },
         deliveryAuthorization: {
-            level: "native",
-            note: "Permits ride DO WebSocket attachments, fences and receipts live in the shard's SQLite, and the fence-install fan-in is a signed sibling fetch; all of it runs against the real engine in the workerd suite, including hibernation",
+            level: "emulated",
+            note: "Lunora builds it: the platform has no such primitive. Permits ride DO WebSocket attachments, fences and receipts live in the shard's SQLite, and the fence install is a signed sibling fetch; all of it runs against the real engine in the workerd suite, including hibernation",
         },
         conditionalWrites: {
             level: "native",
