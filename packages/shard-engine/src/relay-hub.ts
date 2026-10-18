@@ -79,7 +79,11 @@ const RELAY_LIVE_CONTROL_TIMEOUT_MS = 2000;
  */
 const RELAY_ATTACH_TIMEOUT_MS = 2000;
 
-/** `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach. */
+/**
+ * `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach.
+ * ponytail: the deadline only stops the wait; the request still runs and can reach the owner after a later one (a late detach after
+ * the next attach, a late subscribe after its unsubscribe). Per-relay sequence numbers the receiver checks are the upgrade path.
+ */
 const withRelayDeadline = async <T>(request: Promise<T>): Promise<T | undefined> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<undefined>((resolve) => {
@@ -1463,7 +1467,8 @@ class OwnerRelay extends RelayLink {
 
         const answer = this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" })
             .then((response) => {
-                if (response?.ok === true) {
+                // Only a subscribe stores a grant: an OK unsubscribe is no proof the relay holds one.
+                if (subscribing && response?.ok === true) {
                     this.recordLiveGrantRelay(index);
                 }
 

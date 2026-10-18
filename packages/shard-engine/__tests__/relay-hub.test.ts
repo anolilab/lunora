@@ -1088,6 +1088,26 @@ describe("relay hub", () => {
             }
         });
 
+        it("does not record a relay as a grant holder for an OK unsubscribe", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await owner.forwardLiveControl({ action: "unsubscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+            // The unsubscribe reaches relay 0 only as a holder, so drive one past it as the pending-subscribe path would.
+            await (owner as unknown as { liveControlAnswer: (index: number, control: unknown) => Promise<unknown> }).liveControlAnswer(0, {
+                action: "unsubscribe",
+                callerId: "u1",
+                connectionId: "c-alice",
+                key: "k1",
+                subscriptionId: "s1",
+            });
+
+            expect(database.raw("SELECT idx FROM __lunora_relay_grants")).toHaveLength(0);
+        });
+
         it("sends an unsubscribe to a relay whose subscribe is still unanswered past the deadline", async () => {
             expect.assertions(1);
 
