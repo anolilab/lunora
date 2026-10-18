@@ -269,7 +269,8 @@ A tool that needs a credential the model does not have (an API key, a token)
 asks the person for it with `requestSecretTool`. The run pauses on
 `awaiting_secret` exactly as it does for an approval, and resumes once the owner
 calls `agents:agentSupplySecret` (the value) or `agents:agentDeclineSecret`.
-A consuming tool reads the value with `withSecret`:
+`consumer` names the one tool allowed to read the value. A consuming tool reads
+it with `withSecret`:
 
 ```ts
 import { defineAgent, defineAgentTool, requestSecretTool, withSecret } from "@lunora/agent";
@@ -278,7 +279,7 @@ import { jsonSchema } from "ai";
 export const billing = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     tools: {
-        requestKey: requestSecretTool({ description: "Ask the user for their payment API key." }),
+        requestKey: requestSecretTool({ consumer: "charge", description: "Ask the user for their payment API key." }),
         charge: defineAgentTool({
             description: "Charge the card with the stored key.",
             execute: (input, context) =>
@@ -302,22 +303,45 @@ and `lunora env doctor` reports it as an error: `missing` before `.dev.vars` has
 and what point-in-time recovery does to a discarded value, are in the
 platform's Secret values section.
 
-The model receives only `{ "secretRef": "…" }` from the request and passes that
-ref to the consuming tool. Nothing else it sees, and nothing in the thread, holds
-the value. `withSecret` takes the value inside its own durable step, returns only
-what the callback returns, and then discards the value as a second step. A
-callback result that carries the value (an echoed token, a header built from it)
-is refused: the call fails with a `LunoraError` and the result is not journalled.
+The model receives `{ "secretRef": "…" }` from the request. That ref is the
+request's tool-call id, not the stored value and not the store's reference, and
+the model passes it to the consuming tool. `withSecret` takes the value inside its
+own durable step, returns only what the callback returns, and discards the value
+as a second step, but only after a take that succeeded. A callback result that
+carries the value (an echoed token, a header built from it) is refused: the call
+fails with a `LunoraError` and the result is not journalled.
+
+Each pause writes a request row, which is the authority for the request: pending,
+supplied, declined, expired or consumed. Supply, decline, expiry and consumption
+are each a compare-and-set on that row, so the owner's answer and the loop's
+timeout cannot both win. The wait is armed for `approvalTimeout` plus a 60-second
+grace, and a supply is refused once the request's deadline has passed, even if the
+loop has not yet settled it. When the wait ends, the loop reads the row once. A
+supply that landed before the timeout is honoured. A pending request becomes
+`expired`, and a later supply is refused.
 
 **Guarantees.** The value is absent from the message rows, the workflow journal,
-the wake-up event, the supply mutation's return and the request log's redacted
-arguments. A consuming call claims the value under its own step name: a retry of
-that step re-reads it, and any other call gets "no longer available". The
-consuming tool fails once, deterministically, with no retry, if the value has
-expired. Supplying is owner-only and fails closed: an anonymous caller, and any
-caller on an ownerless thread, is refused, because an ownerless thread is readable
-by anyone who knows its key. A second supply, or a supply after the wait has timed
-out, is a `CONFLICT` and stores nothing.
+the wake-up event, the supply mutation's return, the request log's redacted
+arguments and the request table. The host ref is absent from all of those too:
+it lives only in the request row and is never listed. The wake-up carries no
+payload. A consuming call claims the value under its own step name: a retry of
+that step re-reads it, and any other call gets "no longer available". Only the
+tool named by `consumer` can read the value, and only in the thread that asked for
+it. A call from any other tool, or in another thread, is refused without binding
+the value, and the declared consumer can still use it afterwards. The consuming
+tool fails once, deterministically, with no retry, if the value has expired.
+Provider-issued tool-call ids can repeat across runs, so a later run that reuses a
+finished run's id starts a new request and discards the old value.
+Supplying is owner-only and fails closed: an anonymous caller, and any caller on
+an ownerless thread, is refused, because an ownerless thread is readable by anyone
+who knows its key. A second supply, a supply after a decline or after a timeout,
+or a supply on a thread paused before the request table existed, is a `CONFLICT`
+and stores nothing.
+
+`agents:agentSecretRequests({ threadKey })` lists a thread's requests for the
+owner, with status, tool name and deadline. It never returns the ref or the value.
+The framework chat hooks still derive the pending request from the
+`awaiting_secret` message, and they do not read this list.
 
 **From a client.** The framework chat hooks answer the request with
 `supplySecret(toolCallId, value)` or `declineSecret(toolCallId)`. The pending
@@ -336,9 +360,10 @@ if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallI
 **Limits you must design for.**
 
 - **The plaintext transits the supply mutation's arguments.** The `secret`
-  argument is marked `v.sensitive`, so the request log masks it, a rejected value
-  is not echoed, and the generated reference is typed as sensitive. Anything else
-  that records mutation arguments in transit would see it too.
+  argument is marked `v.sensitive`: the request log masks it, a rejected value is
+  not echoed, and the generated reference is typed as sensitive. Span exporters
+  are not covered by that masking, so do not let one record this mutation's
+  arguments.
 - **Offline queueing would persist the value.** The `secret` argument is
   `v.sensitive`, so the generated reference is always online-only: a direct
   `client.mutation(agentSupplySecret, …)` call is refused (`OFFLINE_NOT_QUEUED`)
@@ -348,11 +373,26 @@ if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallI
   recovery window (30 days). Discard removes the value from the store, not from
   backups.
 - **"One use" means one claimant, not one read.** The value stays readable by the
-  call that first took it until it is discarded or expires. A tool that hands the
-  ref to another call is handing over the credential. Within one call, read each
-  ref once: `withSecret` names its durable steps by call and ref, so a second read
-  of the same ref returns the first read's result. A call that needs two secrets
-  passes two refs.
+  call that first took it until it is discarded or expires, so the consumer holds
+  the credential for that long. Within one call, read each request once: `withSecret`
+  names its durable steps by call and request, so a second read returns the first
+  read's result. A call that needs two secrets has two requests.
+- **The value and the request row are not one commit.** The host writes the value
+  through its own storage handle, outside the mutation's transaction. The supply
+  therefore stores the value first and then moves the row, and it discards the value
+  if the row write fails or the deadline has passed. A process that dies between the
+  two leaves an unreadable value that expires with its TTL.
+- **Threads paused before the request table existed have no request row.** They fail
+  closed: a supply is refused with `CONFLICT`, and the wait settles as expired.
+- **The consumer must be called by the model directly.** A tool reached through a
+  `codeTool` script or an `asTool` sub-agent runs under another step name or
+  thread, so its `withSecret` is refused. The call fails closed with "no longer
+  available".
+- **Rotating the key.** Set `LUNORA_SECRET_VALUE_KEY_PREVIOUS` to the current key and
+  `LUNORA_SECRET_VALUE_KEY` to a new one, then deploy. Wait until every value sealed
+  under the old key has expired (a lifetime is at most 24 hours), then unset
+  `LUNORA_SECRET_VALUE_KEY_PREVIOUS` and deploy. The platform's Secret values section
+  has the full sequence.
 - **Never return, log or throw the value from `use`.** `traceToolExecution`
   records a tool's input and output, and a thrown error reaches the tool row.
 - **Only shards on a target that rates `secretValues` native can hold a value**
@@ -1258,7 +1298,8 @@ runtime stubs to back the functions your tools dispatch to.
 
 A run that pauses for a human (an approval or a `requestSecretTool` request) stops
 at its wait. Resolve it with `harness.awaitWait("secret:call_1")` to reach the
-pause, then `harness.deliver(name, payload)` or `harness.expire(name)`. The secret
+pause, then `harness.supply(threadKey, toolCallId, value)`, `harness.decline(threadKey, toolCallId)`,
+`harness.deliver(name, payload)` or `harness.expire(name)`. The secret
 store is `harness.secrets`, and `harness.journalEntries()` is what to assert a
 supplied value never reached.
 
