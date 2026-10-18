@@ -431,7 +431,7 @@ abstract class RelayLink {
 
     /**
      * A relay announces itself to its owner on its first subscriber (so the owner forwards to it); a no-op on an owner.
-     * @returns `false` only when the attach to the owner failed, so the caller must not advertise this relay as ready for grants yet
+     * @returns `false` only when the attach to the owner failed; the relay then stays unannounced, and the next call attaches again
      */
     public abstract announce(): Promise<boolean>;
 
@@ -1645,7 +1645,7 @@ class RelayMember extends RelayLink {
     /**
      * A relay announces itself to its owner (once per wake) on its first subscriber, retrying on a failed attach so a dropped frame can't strand its sockets (LOW-4).
      * A burst of callers shares the one attach in flight, so none of them is told the relay is registered before the owner has answered.
-     * @returns `false` when the attach failed, so the caller does not yet advertise this relay as ready for grants
+     * @returns `false` when the attach failed; the relay then stays unannounced, and the next call attaches again
      */
     public override announce(): Promise<boolean> {
         if (this.relayAnnounced || !this.canAddressSiblings()) {

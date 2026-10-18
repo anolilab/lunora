@@ -40,8 +40,8 @@ const REFUSED_BODY_DRAIN_MS = 5000;
 
 /**
  * The request body as a web stream, pulled chunk by chunk. Not `Readable.toWeb`, which the supported Node range does not yet ship.
- * Cancelling the stream discards the rest of the body rather than destroying the socket: the worker answers a cancelled over-cap body
- * with a 413, and that response must still reach a client that is still uploading.
+ * Cancelling the stream discards the rest of the body, up to a byte and a time ceiling, rather than destroying the socket at once: the
+ * worker answers a cancelled over-cap body with a 413, and that response must still reach a client that is still uploading.
  */
 const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): ReadableStream<Uint8Array> => {
     const chunks = (incoming as AsyncIterable<Buffer>)[Symbol.asyncIterator]();
