@@ -1,7 +1,8 @@
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
+import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
+import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -16,7 +17,7 @@ import { contextPropertiesRead } from "./feature-usage";
 interface PlatformCodeSignals {
     /** A `defineContainer` call carrying an egress policy (`allowedHosts` / `deniedHosts` / `interceptHttps`). */
     containerEgressPolicy: boolean;
-    /** A `.deliveryAuthorization(...)` call on the app builder. Judged with `liveStreams`: the shard answers every live route 501 when both are present. */
+    /** A `.deliveryAuthorization(...)` call on the app builder, matched by receiver. The shard answers its authority-fenced routes under it, and with `liveStreams` it answers every live route 501. */
     deliveryAuthorization: boolean;
     /** A `.stream(handler, { durable: … })` registration — a persisted, socket-outliving stream run. */
     durableStreams: boolean;
@@ -32,11 +33,11 @@ interface PlatformCodeSignals {
     workflowRollback: boolean;
 }
 
-/** The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry. */
-const DECLARATION_SIGNALS: Readonly<Record<string, "deliveryAuthorization" | "liveStreams" | "typedWebSockets">> = {
-    // The app builder's method, not a declaration: it turns on the delivery
-    // authorization the shard answers live routes 501 under.
-    deliveryAuthorization: "deliveryAuthorization",
+/**
+ * The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry.
+ * `.deliveryAuthorization(...)` is not here: it is a method on the app builder, so it is matched by receiver in {@link isAppBuilderReceiver}.
+ */
+const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
     defineLiveStream: "liveStreams",
     defineRoom: "typedWebSockets",
     defineWebSocket: "typedWebSockets",
@@ -113,6 +114,147 @@ const calleeName = (call: CallExpression): string => {
     return Node.isPropertyAccessExpression(callee) ? callee.getName() : callee.getText();
 };
 
+/** The app builder's factory: `defineApp().ai(…).deliveryAuthorization(…)` is a builder chain rooted here. */
+const APP_FACTORY = "defineApp";
+
+/** The `lunora.config` hook whose function receives the generated `defineApp()` builder. */
+const APP_HOOK_KEY = "app";
+
+/** True when the config hands the binding `name` to its `app` key: `app: name`, or the shorthand `{ app }`. */
+const isNamedAppHook = (configFile: SourceFile, name: string): boolean =>
+    configFile
+        .getDescendantsOfKind(SyntaxKind.PropertyAssignment)
+        .some((property) => propertyKeyName(property) === APP_HOOK_KEY && property.getInitializer()?.getText() === name) ||
+    (name === APP_HOOK_KEY &&
+        configFile.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment).some((property) => propertyKeyName(property) === APP_HOOK_KEY));
+
+/**
+ * True when `node` is a `lunora.config` `app` hook function, `app: (app) => …`.
+ * Only the project's config file carries the hook: an `app` key on any object
+ * under `lunora/` is not the generated builder's hook.
+ */
+const isAppHookFunction = (node: Node | undefined): boolean => {
+    if (node === undefined || !PROJECT_CONFIG_FILENAMES.includes(node.getSourceFile().getBaseName())) {
+        return false;
+    }
+
+    // Method shorthand: `app(builder) { … }`.
+    if (Node.isMethodDeclaration(node)) {
+        return Node.isObjectLiteralExpression(node.getParent()) && propertyKeyName(node) === APP_HOOK_KEY;
+    }
+
+    if (!(Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node))) {
+        return false;
+    }
+
+    const owner = node.getParent();
+
+    if (Node.isPropertyAssignment(owner)) {
+        return propertyKeyName(owner) === APP_HOOK_KEY;
+    }
+
+    // Extracted: `const configure = (app) => …` or `function configure(app) {…}`,
+    // handed to the key as `app: configure` or `{ app }`.
+    if (Node.isVariableDeclaration(owner)) {
+        return isNamedAppHook(node.getSourceFile(), owner.getName());
+    }
+
+    const declared = Node.isFunctionDeclaration(node) ? node.getName() : undefined;
+
+    return declared !== undefined && isNamedAppHook(node.getSourceFile(), declared);
+};
+
+/** The generated builder class (`emit-app.ts`). */
+const APP_BUILDER_CLASS = "AppBuilder";
+
+/** True when `declaration` lives in the generated `_generated/app.ts`. */
+const isGeneratedAppDeclaration = (declaration: Node): boolean => {
+    const file = declaration.getSourceFile();
+
+    return file.getBaseNameWithoutExtension() === "app" && file.getDirectory().getBaseName() === "_generated";
+};
+
+/**
+ * True when `node` is typed as the generated `AppBuilder`, whatever its form:
+ * an import, a parameter, a `new`, a call result, or a type parameter
+ * constrained to it. A user type that only shares the name is not the builder.
+ * Untyped values stay unmatched.
+ */
+const isAppBuilderType = (node: Node): boolean => {
+    const type = node.getType();
+    const symbol = (type.getConstraint() ?? type).getSymbol();
+
+    return symbol?.getName() === APP_BUILDER_CLASS && symbol.getDeclarations().some((declaration) => isGeneratedAppDeclaration(declaration));
+};
+
+/**
+ * True when the identifier `root` names the app factory: it is spelled
+ * `defineApp` and is not a local binding of that name. An import, or a name
+ * the file never declares, still counts.
+ */
+const isAppFactory = (root: Node): boolean =>
+    root.getText() === APP_FACTORY &&
+    (root.getSymbol()?.getDeclarations() ?? []).every(
+        (declaration) => Node.isImportSpecifier(declaration) || Node.isImportClause(declaration) || isGeneratedAppDeclaration(declaration),
+    );
+
+/**
+ * True when `receiver` denotes the app builder by name: a chain rooted at
+ * `defineApp()`, a local variable initialised from one, or the parameter of an
+ * `app` hook. Typed builders are matched at the call by {@link isAppBuilderType}.
+ *
+ * The root identifier is resolved the way the language resolves it: the
+ * innermost enclosing scope that binds its name decides. A same-named object in
+ * a sibling or nested scope is therefore never the builder, which the earlier
+ * whole-file name lookup got wrong. A name bound nowhere in the file is not
+ * matched here.
+ */
+const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined, seen: Set<string> = new Set()): boolean => {
+    const root = chainRootOf(receiver);
+
+    if (root === undefined || !Node.isIdentifier(root)) {
+        return false;
+    }
+
+    if (isAppFactory(root)) {
+        return true;
+    }
+
+    const name = root.getText();
+
+    if (seen.has(name)) {
+        return false;
+    }
+
+    seen.add(name);
+
+    for (const scope of root.getAncestors()) {
+        if (Node.isParametered(scope) && scope.getParameters().some((parameter) => parameter.getName() === name)) {
+            return isAppHookFunction(scope);
+        }
+
+        if (Node.isBlock(scope) || Node.isSourceFile(scope)) {
+            const declaration = scope
+                .getVariableStatements()
+                .flatMap((statement) => statement.getDeclarations())
+                .find((candidate) => candidate.getName() === name);
+
+            if (declaration !== undefined) {
+                return isAppBuilderReceiver(sourceFile, declaration.getInitializer(), seen);
+            }
+        }
+    }
+
+    return false;
+};
+
+/** True when `call` is `<app builder>.deliveryAuthorization(…)`. A bare call of that name, or a method on any other object, is not. */
+const isDeliveryAuthorizationCall = (sourceFile: SourceFile, call: CallExpression): boolean => {
+    const access = memberAccessOf(call.getExpression());
+
+    return access?.member === "deliveryAuthorization" && (isAppBuilderReceiver(sourceFile, access.object) || isAppBuilderType(access.object));
+};
+
 /** The option keys that make each signal call a declaration. */
 const SIGNAL_CALLS: ReadonlyMap<string, { keys: ReadonlySet<string>; signal: Exclude<keyof PlatformCodeSignals, "secrets"> }> = new Map([
     ["defineContainer", { keys: EGRESS_POLICY_KEYS, signal: "containerEgressPolicy" }],
@@ -137,9 +279,13 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
     return call.getArguments().some((argument) => declaresKey(resolveObjectLiteral(sourceFile, argument), match.keys)) ? match.signal : undefined;
 };
 
+/** The signal a call declares by name, or by receiver for the app builder's `.deliveryAuthorization(...)`. */
+const declarationSignal = (sourceFile: SourceFile, call: CallExpression): keyof PlatformCodeSignals | undefined =>
+    DECLARATION_SIGNALS[calleeName(call)] ?? (isDeliveryAuthorizationCall(sourceFile, call) ? "deliveryAuthorization" : undefined);
+
 /**
  * Discover the AST-only platform signals in one pass over the `lunora/`
- * source set.
+ * source set, plus the project's `lunora.config.*` for the app hook.
  *
  * `durableStreams` matches any `stream(...)` call — the bare `stream({ … })`
  * form and the builder terminal `.stream(handler, { durable: true })` alike —
@@ -156,7 +302,7 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
  * feature does not run the declaration without it — it fails — so a missed
  * declaration is worse than an over-reported one.
  */
-const discoverPlatformSignals = (project: Project, lunoraDirectory: string): PlatformCodeSignals => {
+const discoverPlatformSignals = (project: Project, lunoraDirectory: string, projectConfigFile?: string): PlatformCodeSignals => {
     const signals: PlatformCodeSignals = {
         containerEgressPolicy: false,
         deliveryAuthorization: false,
@@ -185,22 +331,27 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
         }
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const signal = callSignal(sourceFile, call);
+            const signal = callSignal(sourceFile, call) ?? declarationSignal(sourceFile, call);
 
             if (signal !== undefined) {
                 signals[signal] = true;
-            }
-
-            const declared = DECLARATION_SIGNALS[calleeName(call)];
-
-            if (declared !== undefined) {
-                signals[declared] = true;
             }
         }
 
         if (Object.values(signals).every(Boolean)) {
             break;
         }
+    }
+
+    // The `app` hook lives in `lunora.config.*` at the project root, outside
+    // `lunora/`, so the walk above never reaches it. Only the builder call is
+    // read here: the name-only declarations are a `lunora/` concern.
+    if (!signals.deliveryAuthorization && projectConfigFile !== undefined) {
+        const configFile = project.getSourceFile(projectConfigFile) ?? project.addSourceFileAtPath(projectConfigFile);
+
+        signals.deliveryAuthorization = configFile
+            .getDescendantsOfKind(SyntaxKind.CallExpression)
+            .some((call) => isDeliveryAuthorizationCall(configFile, call));
     }
 
     return signals;

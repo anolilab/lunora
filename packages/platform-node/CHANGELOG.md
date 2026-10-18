@@ -1,3 +1,31 @@
+## @lunora/platform-node [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.155...@lunora/platform-node@1.0.0-alpha.156) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.187
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/queue:** upgraded to 1.0.0-alpha.113
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.215
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.188
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.82
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.95
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/storage:** upgraded to 1.0.0-alpha.140
+
 ## @lunora/platform-node [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.154...@lunora/platform-node@1.0.0-alpha.155) (2026-10-18)
 
 ### Bug Fixes

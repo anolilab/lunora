@@ -68,7 +68,7 @@ import { emitApp } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import { resolveCodegenTarget } from "./platform-target";
+import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
@@ -628,6 +628,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // that three-state comparison out per call site is what let one of them —
     // the studio nav — keep advertising the feature the other two withheld.
     const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+    // Judged on the matrix, not the usage: the builder method is emitted whether
+    // or not the app calls it, so a host that cannot back it withholds it anyway.
+    const deliveryAuthorizationSupported = platformFeatureAvailable(resolveCodegenTarget(options.projectRoot, options.target), "deliveryAuthorization");
 
     // Which optional features the studio should show a nav page for.
     // `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -812,6 +815,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // take it: the emitter AND's it with the declaration itself. This call
         // site used to pass the CONJUNCTION under the same prop name, so the one
         // flag meant two different things depending on which emitter read it.
+        hasDeliveryAuthorization: deliveryAuthorizationSupported,
         hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
         // The single `defineIdentity(...)` contract (Plan 080). Wires

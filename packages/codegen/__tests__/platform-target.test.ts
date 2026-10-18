@@ -607,6 +607,44 @@ describe("app-declarable signals with no capability row", () => {
         expect(gateAgainstMatrix(ALL_OFF, supported, "live", { liveStreams: true }).diagnostics).toStrictEqual([]);
     });
 
+    it("diagnoses a declared `.deliveryAuthorization(...)` on a host that rates it unsupported, and not on one that supports it", async () => {
+        expect.assertions(4);
+
+        // The builder method is a signal, not a `ctx.*` row: without the signal the
+        // gate had no way to refuse it, and the emitted app builder carried the
+        // method onto a host whose shard answers its authority-fenced routes 501.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const unsupported: PlatformCapabilities = {
+            features: { deliveryAuthorization: { level: "unsupported" } },
+            id: "no-auth",
+            name: "No Auth",
+        };
+        const supported: PlatformCapabilities = {
+            features: { deliveryAuthorization: { level: "native" } },
+            id: "auth",
+            name: "Auth",
+        };
+
+        const refused = gateAgainstMatrix(ALL_OFF, unsupported, "no-auth", { deliveryAuthorization: true });
+
+        expect(refused.diagnostics).toHaveLength(1);
+        expect(refused.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(refused.diagnostics[0]?.message).toContain("delivery authorization");
+        expect(gateAgainstMatrix(ALL_OFF, supported, "auth", { deliveryAuthorization: true }).diagnostics).toStrictEqual([]);
+    });
+
+    it("rates the builder method available only where the matrix supports it, failing closed on an unrated key", async () => {
+        expect.assertions(4);
+
+        const { platformFeatureAvailable } = await import("../src/platform-target");
+
+        expect(platformFeatureAvailable("cloudflare", "deliveryAuthorization")).toBe(true);
+        expect(platformFeatureAvailable("node", "deliveryAuthorization")).toBe(false);
+        expect(platformFeatureAvailable("celld", "deliveryAuthorization")).toBe(false);
+        // An unregistered target has no matrix to gate against, so nothing is withheld.
+        expect(platformFeatureAvailable("unregistered-host", "deliveryAuthorization")).toBe(true);
+    });
+
     it("diagnoses a `.commitOrdered()` table the target cannot order", async () => {
         expect.assertions(3);
 
@@ -771,6 +809,74 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(messages.some((message) => message.includes("workflow step rollback"))).toBe(true);
         expect(messages.some((message) => message.includes("container egress policies"))).toBe(true);
+    });
+
+    it("withholds the .deliveryAuthorization() builder on node and celld, and keeps it on cloudflare", () => {
+        expect.assertions(9);
+
+        // The real shape: the hook sits in `lunora.config.*` at the project root,
+        // outside `lunora/`. The builder method is emitted whether or not the app
+        // calls it, so node and celld withhold it even when no diagnostic is raised
+        // for an app that never uses it (checked below).
+        const configWith = (target: string): void => {
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default {\n    target: "${target}",\n    app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined),\n};\n`,
+                "utf8",
+            );
+        };
+
+        configWith("node");
+        const node = codegen();
+
+        expect(node.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(node.platformDiagnostics[0]?.message).toContain("delivery authorization");
+        expect(node.platformDiagnostics[0]?.target).toBe("node");
+        expect(node.generated.app).not.toContain("public deliveryAuthorization(");
+        expect(node.generated.app).not.toContain("deliveryAuthorization: this.deliveryAuthorizationSelector");
+
+        configWith("celld");
+        const celld = codegen();
+
+        expect(celld.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(celld.generated.app).not.toContain("public deliveryAuthorization(");
+
+        configWith("cloudflare");
+        const cloudflare = codegen();
+
+        expect(cloudflare.platformDiagnostics).toStrictEqual([]);
+        expect(cloudflare.generated.app).toContain("public deliveryAuthorization(");
+    });
+
+    it("ignores a deliveryAuthorization method on an unrelated object or a bare call, on node", () => {
+        expect.assertions(2);
+
+        // Only a call on the app builder declares the feature; a same-named
+        // method or helper elsewhere under lunora/ must not gate the build.
+        write(
+            "auth.ts",
+            `const myObject = { deliveryAuthorization: (value: unknown) => value };\n\nexport const verdict = myObject.deliveryAuthorization(1);\n\nfunction deliveryAuthorization(value: unknown) {\n    return value;\n}\n\nexport const other = deliveryAuthorization(2);\n`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics).toStrictEqual([]);
+        expect(result.generated.app).not.toContain("public deliveryAuthorization(");
+    });
+
+    it("omits the node builder method for an app that never calls it, without a diagnostic", () => {
+        expect.assertions(2);
+
+        // The method is target-keyed, so the surface is withheld for every app on
+        // a host that cannot back it. But an app that never calls it has nothing to
+        // be told: silence there matches every other unused capability. The config
+        // carries an `app` hook that makes no such call, so the config-file scan is
+        // exercised and still finds nothing.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default {\n    target: "node",\n    app: (app: unknown) => app,\n};\n`, "utf8");
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).not.toContain("platform_unsupported_feature");
+        expect(result.generated.app).not.toContain("public deliveryAuthorization(");
     });
 
     it("wires ctx.live onto the shard action and the queue consumer only where the target serves live streams", () => {
