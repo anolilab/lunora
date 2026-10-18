@@ -1902,6 +1902,7 @@ class LunoraClient {
                 sendOn(conn, { topic, type: "whisper_unsubscribe" });
             }
 
+            this.releaseWhisperJoin(key, topic);
             this.releaseIdleShard(options.shardKey);
         };
     }
@@ -7126,6 +7127,36 @@ class LunoraClient {
         for (const waiter of join.waiters.splice(0)) {
             clearTimeout(waiter.timer);
             waiter.run();
+        }
+
+        this.releaseWhisperJoin(key, topic);
+    }
+
+    /**
+     * Forget a topic's join state once no handler holds the topic and no join is still unacknowledged.
+     * A join still in flight keeps its entry, and {@link acknowledgeWhisperJoin} drops it when the ack
+     * lands: dropping it early would let that stale ack count toward a rejoin of the same topic.
+     */
+    private releaseWhisperJoin(key: string, topic: string): void {
+        if (this.whisperHandlers.get(key)?.has(topic) === true) {
+            return;
+        }
+
+        const byTopic = this.whisperJoins.get(key);
+        const join = byTopic?.get(topic);
+
+        if (byTopic === undefined || join === undefined || join.pending > 0) {
+            return;
+        }
+
+        for (const waiter of join.waiters.splice(0)) {
+            clearTimeout(waiter.timer);
+        }
+
+        byTopic.delete(topic);
+
+        if (byTopic.size === 0) {
+            this.whisperJoins.delete(key);
         }
     }
 
