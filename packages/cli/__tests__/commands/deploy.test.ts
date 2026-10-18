@@ -564,6 +564,29 @@ describe("lunora deploy", () => {
                 );
             });
 
+            it("stops a real deploy at the pre-deploy checks, before anything is built or shipped, when the connection string is missing", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.error).toContain("deploy blocked");
+                expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+                expect(recording.calls).toHaveLength(0);
+                // Stopped by the early check itself, not left to the last step after a "dry run" warning.
+                expect(warns.join(" ")).not.toContain("dry run");
+            });
+
             it("creates nothing when a later precheck refuses the deploy", async () => {
                 expect.assertions(3);
 

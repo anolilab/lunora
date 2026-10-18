@@ -622,7 +622,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
 
     // Checks only, here: the Hyperdrive config is created just before wrangler runs (in `executeDeploy`),
     // so a later precheck or validation failure cannot leave an account resource behind.
-    const hyperdriveError = await provisionDeployHyperdrive(cwd, { ...options, dryRun: true }, command, target);
+    const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target, "check");
 
     if (hyperdriveError !== undefined) {
         return { error: hyperdriveError, target, validation: empty };
@@ -823,9 +823,9 @@ const checkArtifactsNamespaces = async (
 };
 
 /**
- * The steps that change the account or the sibling Workers, run last so that nothing which could
- * still refuse the deploy comes after them: the service Workers, then the Artifacts namespace, then
- * the Hyperdrive config.
+ * The steps that change the account or the sibling Workers, run last, in the order of how little a
+ * failure leaves behind: the Artifacts namespaces, then the Hyperdrive config (both are reused on a
+ * retry and change nothing a running Worker sees), and only then the service Workers, which go live.
  */
 const runBeforeSpawnSteps = async (
     cwd: string,
@@ -835,11 +835,11 @@ const runBeforeSpawnSteps = async (
     target: string,
     wranglerPath: string | undefined,
 ): Promise<string | undefined> =>
-    (await deployServices(cwd, options, driver, spawner)) ??
     (createsAccountResources(options)
         ? await checkArtifactsNamespaces(cwd, wranglerPath, target, options.env, options.logger, options.discoveryCache, "create")
         : undefined) ??
-    (await provisionDeployHyperdrive(cwd, options, "deploy", target));
+    (await provisionDeployHyperdrive(cwd, options, "deploy", target)) ??
+    (await deployServices(cwd, options, driver, spawner));
 
 const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommandResult> => {
     const options: DeployCommandOptions = { ...input, discoveryCache: input.discoveryCache ?? createDiscoveryCache() };

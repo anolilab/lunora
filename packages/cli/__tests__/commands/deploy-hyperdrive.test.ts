@@ -601,6 +601,49 @@ describe("hyperdrive on deploy", () => {
             await expect(provisionDeployHyperdrive(root, { logger: recordingLogger().logger }, "deploy", "celld")).resolves.toBeUndefined();
         });
 
+        it("has the check phase of a real deploy stop on a missing connection string, not just warn, without any API call", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+            vi.stubEnv(URL_VARIABLE, "");
+
+            const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+            vi.stubGlobal("fetch", fetchStub);
+
+            const { errors, logger } = recordingLogger();
+            const result = await provisionDeployHyperdrive(root, { logger }, "deploy", "cloudflare", "check");
+
+            expect(result).toContain("deploy blocked");
+            expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+            expect(fetchStub).not.toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+        });
+
+        it("creates nothing in the check phase even when everything is in place", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+            vi.stubEnv(URL_VARIABLE, "postgres://u:p@h/db");
+            vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+            vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+            const fetchStub = hyperdriveApi([]);
+
+            vi.stubGlobal("fetch", fetchStub);
+
+            const result = await provisionDeployHyperdrive(root, { logger: recordingLogger().logger }, "deploy", "cloudflare", "check");
+
+            expect(result).toBeUndefined();
+            expect(fetchStub).not.toHaveBeenCalled();
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+        });
+
         it("has a dry run warn about a missing connection string, so a build needs no production secrets, without any API call", async () => {
             expect.assertions(4);
 

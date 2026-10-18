@@ -39,8 +39,10 @@ interface HyperdriveWrangler {
 }
 
 interface ProvisionHyperdriveOptions {
-    cwd: string;
     /** Check everything a real deploy would, and make no API call or file change. */
+    /** Check everything a real deploy would, make no API call or file change, and still stop on what it would stop on. */
+    checkOnly?: boolean;
+    cwd: string;
     dryRun?: boolean;
     /** Defaults to `process.env`. */
     environment?: CloudflareEnvironment & Record<string, string | undefined>;
@@ -408,7 +410,7 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         return refused;
     }
 
-    if (options.dryRun === true) {
+    if (options.dryRun === true || options.checkOnly === true) {
         return undefined;
     }
 
@@ -480,6 +482,7 @@ const provisionDeployHyperdrive = async (
     options: Pick<DeployCommandOptions, "dryRun" | "env" | "logger" | "temporary">,
     command: PreDeployCommand,
     target: string,
+    phase: "check" | "create" = "create",
 ): Promise<string | undefined> => {
     if (target !== "cloudflare") {
         return undefined;
@@ -493,8 +496,9 @@ const provisionDeployHyperdrive = async (
         return blockTemporary(cwd, options);
     }
 
-    // A dry run checks what a real deploy needs, so it reports a missing connection string or token, but creates nothing.
-    return provisionHyperdrive({ cwd, dryRun: options.dryRun, logger: options.logger, wranglerEnvironment: options.env });
+    // A dry run reports a missing connection string or token as a warning and creates nothing. The "check" phase of a real
+    // deploy stops on them too, but defers the creation to the "create" phase, the last step before wrangler runs.
+    return provisionHyperdrive({ checkOnly: phase === "check", cwd, dryRun: options.dryRun, logger: options.logger, wranglerEnvironment: options.env });
 };
 
 export type { ProvisionHyperdriveOptions };
