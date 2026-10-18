@@ -255,6 +255,10 @@ const agentExtension: SchemaExtension<
             // Targets a thread by the workflow instance that owns it — the
             // lookup `cancel` uses to mark the right thread cancelled.
             .index("byInstance", ["instanceId"])
+            // Drives the approvals inbox (`agentPendingApprovals`): the owner
+            // leads so the owner gate applies BEFORE the limit cap, and
+            // `updatedAt` gives newest-first order without a sort.
+            .index("byOwnerStatus", ["owner", "status", "updatedAt"])
             // RLS-exempt on purpose: under `.rls("required")` these tables are
             // written by the workflow's dispatched internal mutations and read
             // by the public queries, none of which can engage app RLS policies
@@ -751,6 +755,7 @@ export interface AgentComponent {
         agentMessages: AgentRegisteredFunction;
         agentOpenSecretRequest: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
+        agentPendingApprovals: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
         agentRevokeApprovalGrant: AgentRegisteredFunction;
         agentRun: AgentRegisteredFunction;
@@ -1266,11 +1271,12 @@ export const agentComponent = (): AgentComponent => {
         return thread;
     };
 
-    // KEEP IN SYNC: the arg/return TYPES of the two public queries below are
-    // mirrored by hand into codegen's `syntheticAgentApiFunctions` (emit/api.ts) —
-    // codegen cannot statically read this package's types, and only the arg
-    // key sets are drift-tested. Changing an input or return shape here means
-    // updating the emitted `api.agents.*` reference types there too.
+    // KEEP IN SYNC: the arg/return TYPES of the public queries (here and
+    // `agentPendingApprovals` above) are mirrored by hand into codegen's
+    // `syntheticAgentApiFunctions` (emit/api.ts) — codegen cannot statically
+    // read this package's types, and only the arg key sets are drift-tested.
+    // Changing an input or return shape here means updating the emitted
+    // `api.agents.*` reference types there too.
     const agentThread = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<Record<string, unknown> | undefined> => {
         const thread = await context.db
             .query(THREADS_TABLE)
@@ -1336,6 +1342,71 @@ export const agentComponent = (): AgentComponent => {
                 .withIndex("byThread", (q) => q.eq("threadKey", args.key))
                 .collect();
         });
+
+    /**
+     * The approvals inbox: every human-in-the-loop approval the caller's OWN
+     * paused threads are waiting on, newest thread first. PUBLIC and OWNER-SCOPED
+     * to the verified identity — an anonymous caller gets `[]`, and ownerless
+     * threads are never listed (their only protection is key secrecy, which a
+     * cross-thread listing would turn into enumeration). Each item carries the
+     * triple `agentResolveApproval` takes.
+     *
+     * Only a marker minted by the thread's CURRENT instance is returned: an older
+     * instance's marker is unresolvable (`agentResolveApproval` rejects any
+     * instance that does not own the thread), so surfacing it would hand the
+     * client a triple that can only fail.
+     *
+     * ponytail: per-thread `byThread` collect is O(messageCount) of each paused
+     * thread; fine while paused threads are few. A `byThreadStatus` messages
+     * index is the upgrade if a thread accumulates long pauses.
+     */
+    const agentPendingApprovals = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx: context }): Promise<Record<string, unknown>[]> => {
+        const { userId } = context.auth;
+
+        if (!userId) {
+            return [];
+        }
+
+        const threads = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byOwnerStatus", (q) => q.eq("owner", userId).eq("status", "awaiting_input"))
+            .order("desc")
+            .take(args.limit ?? 50);
+        // At most `limit` threads, each read independently: fan out, then flatten in thread order.
+        const perThread = await Promise.all(
+            threads.map(async (thread) => {
+                const instanceId = thread["instanceId"] as string | undefined;
+
+                if (instanceId === undefined) {
+                    return [];
+                }
+
+                const markerPrefix = `${instanceId}:approval:`;
+                const rows = await context.db
+                    .query(MESSAGES_TABLE)
+                    .withIndex("byThread", (q) => q.eq("threadKey", thread["key"]))
+                    .collect();
+
+                return rows
+                    .filter((row) => row["status"] === "awaiting_approval" && String(row["messageKey"]).startsWith(markerPrefix))
+                    .map((row) =>
+                        definedColumns({
+                            agent: thread["agent"],
+                            content: row["content"],
+                            instanceId,
+                            requestedAt: row["createdAt"],
+                            threadKey: thread["key"],
+                            threadTitle: thread["title"],
+                            threadUpdatedAt: thread["updatedAt"],
+                            toolCallId: row["toolCallId"],
+                            toolName: row["toolName"],
+                        }),
+                    );
+            }),
+        );
+
+        return perThread.flat();
+    });
 
     /**
      * Resolve a human-in-the-loop tool approval: deliver the client's
@@ -1985,6 +2056,7 @@ export const agentComponent = (): AgentComponent => {
             agentMessages,
             agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
+            agentPendingApprovals,
             agentResolveApproval,
             agentRevokeApprovalGrant,
             agentRun,
