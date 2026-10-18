@@ -137,6 +137,7 @@ import {
     replaySlotVerdict,
     undecodableResultError,
     unparseableResponseError,
+    unreadableSlotError,
     utf8ByteLength,
 } from "./replay";
 import withinRpcDeadline from "./rpc-deadline";
@@ -8595,9 +8596,11 @@ class LunoraClient {
 
             toRequeue.push(...outcome.requeue);
 
-            if (outcome.stop) {
-                // A whole-batch transport failure — leave every not-yet-sent write
-                // queued (in order) for the next reconnect rather than sending on.
+            if (outcome.stop || outcome.requeue.length > 0) {
+                // A whole-batch transport failure, or a write of this chunk the
+                // server asked to retry — leave every not-yet-sent write queued (in
+                // order) rather than sending on: a later chunk committing first
+                // would put the retried write after writes issued behind it.
                 toRequeue.push(...encodable.slice(start + MAX_BATCH_ENTRIES));
 
                 break;
@@ -9391,7 +9394,9 @@ class LunoraClient {
                 }
                 case "unanswered": {
                     // The server never returned this slot. It may or may not have committed,
-                    // so retry under the same `mutationId` (idempotent).
+                    // so retry under the same `mutationId` (idempotent). Over a socket that
+                    // stays open no reconnect will flush it, so schedule the retry here.
+                    this.noteReplayRetryDelay(shardKey, unreadableSlotError(), authToken);
                     requeue.push(item);
 
                     break;
