@@ -102,6 +102,7 @@ render(
 | `createQuery`                                       | `useQuery`            | Live query signal — returns `() => T \| undefined`, re-subscribes on arg change.  |
 | `createMutation`                                    | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).       |
 | `createSubscription`                                | `useSubscription`     | Raw subscription signal — unbounded live stream.                                  |
+| `createLiveTopic`                                   | `useLiveTopic`        | One live topic on the shared stream — `lastEvent` and `error` accessors.          |
 | `createPaginatedQuery`                              | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` signals. |
 | `createInfiniteQuery`                               | `useInfiniteQuery`    | Infinite-scroll variant of `createPaginatedQuery`.                                |
 | `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user`, `status` signals + `setToken`).             |

@@ -44,6 +44,8 @@ export type { HydratePreloadedOptions, HydratePreloadedResult } from "./hydrate-
 export { hydratePreloaded } from "./hydrate-preloaded";
 export type { LiveQueryOptions } from "./live-query";
 export { liveQuery } from "./live-query";
+export type { LiveTopicOptions } from "./live-topic";
+export { liveTopic } from "./live-topic";
 export type { MutateOptions } from "./mutate";
 export { mutate } from "./mutate";
 export type { MutatorResult } from "./mutator";

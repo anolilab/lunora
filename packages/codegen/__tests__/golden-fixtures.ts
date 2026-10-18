@@ -102,6 +102,7 @@ const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<str
     ["artifacts", "expected/_generated", ["app.ts", "server.ts", "shard.ts"]],
     ["ai-search", "lunora/_generated"],
     ["analytics-sql", "lunora/_generated"],
+    ["live-stream", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */

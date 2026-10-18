@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.219...@lunora/server@1.0.0-alpha.220) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
 ## @lunora/server [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.218...@lunora/server@1.0.0-alpha.219) (2026-10-18)
 
 ### Features

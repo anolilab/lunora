@@ -224,6 +224,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
         svelte: { name: "getLunoraClient" },
         vue: { name: "useLunora" },
     },
+    liveTopic: {
+        angular: { name: "liveTopic" },
+        react: { name: "useLiveTopic" },
+        solid: { name: "createLiveTopic" },
+        svelte: { name: "liveTopic" },
+        vue: { name: "useLiveTopic" },
+    },
     mutation: {
         angular: { name: "mutate" },
         react: { name: "useMutation" },

@@ -52,25 +52,26 @@ render(
 
 ## Exports
 
-| Symbol                                              | Kind      | Role                                                                                             |
-| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
-| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                |
-| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.          |
-| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                  |
-| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.          |
-| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                 |
-| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                        |
-| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.         |
-| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                         |
-| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
-| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                            |
-| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
-| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.             |
-| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                       |
-| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                 |
-| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.            |
-| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                         |
-| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription. |
+| Symbol                                              | Kind      | Role                                                                                              |
+| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------- |
+| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                 |
+| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.           |
+| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                   |
+| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.           |
+| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                  |
+| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                         |
+| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.          |
+| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                          |
+| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                              |
+| `createLiveTopic`                                   | primitive | One topic on the shared SSE connection: `{ lastEvent, error }` accessors. Resubscribes on change. |
+| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                             |
+| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                    |
+| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.              |
+| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                        |
+| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                  |
+| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.             |
+| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                          |
+| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.  |
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 `Preloaded`, `ReturnOf`, `Unsubscribe`, plus `LunoraProviderProps`,

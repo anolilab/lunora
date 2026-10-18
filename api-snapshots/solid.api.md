@@ -328,6 +328,15 @@ interface CreateInfiniteQueryResult<T> {
 }
 ```
 
+### `CreateLiveTopicResult` (interface)
+
+```ts
+interface CreateLiveTopicResult {
+    error: Accessor<LiveStreamSubscribeError | undefined>;
+    lastEvent: Accessor<unknown>;
+}
+```
+
 ### `CreatePaginatedQueryOptions` (interface)
 
 ```ts
@@ -716,6 +725,12 @@ const createFlags: <T extends Record<string, FlagValue>>(flags: T) => Accessor<T
 
 ```ts
 const createInfiniteQuery: <F extends FunctionReference>(function_: F, args: "skip" | Accessor<"skip" | PaginatedArgs<F>> | PaginatedArgs<F>, options: CreateInfiniteQueryOptions) => CreateInfiniteQueryResult<PageItemOf<F>>;
+```
+
+### `createLiveTopic` (const)
+
+```ts
+const createLiveTopic: (options: SubscribeLiveTopicOptions | Accessor<SubscribeLiveTopicOptions>) => CreateLiveTopicResult;
 ```
 
 ### `createMutation` (const)

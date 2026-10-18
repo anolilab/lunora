@@ -422,6 +422,16 @@ interface LiveStreamEvent {
 }
 ```
 
+### `LiveStreamSubscribeError` (interface)
+
+```ts
+interface LiveStreamSubscribeError {
+    status: number;
+    subscriptionId: string;
+    topic: string;
+}
+```
+
 ### `LiveStreamSubscribeOptions` (interface)
 
 ```ts
@@ -1432,6 +1442,18 @@ interface StreamIterable<T> extends AsyncIterable<T> {
 }
 ```
 
+### `SubscribeLiveTopicOptions` (interface)
+
+```ts
+interface SubscribeLiveTopicOptions extends Omit<ConnectLiveStreamOptions, "fetch"> {
+    onError?: (error: LiveStreamSubscribeError) => void;
+    onEvent?: (payload: unknown) => void;
+    sessionKey?: string;
+    topic: string;
+    url: string;
+}
+```
+
 ### `SubscriptionCallback` (type)
 
 ```ts
@@ -1831,6 +1853,12 @@ const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) 
 
 ```ts
 const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
+```
+
+### `subscribeLiveTopic` (const)
+
+```ts
+const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
 ```
 
 ## `@lunora/client/auth`
@@ -2404,16 +2432,6 @@ type EvictHandler = (entry: QueuedMutation, error: Error & {
 
 ```ts
 type FunctionKind = "action" | "mutation" | "query" | "stream";
-```
-
-### `LiveStreamSubscribeError` (interface)
-
-```ts
-interface LiveStreamSubscribeError {
-    status: number;
-    subscriptionId: string;
-    topic: string;
-}
 ```
 
 ### `NullableTimestamp` (type)

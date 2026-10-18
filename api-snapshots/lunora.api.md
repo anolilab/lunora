@@ -1755,6 +1755,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `LiveStreamSubscribeError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LiveStreamSubscribeOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1979,6 +1983,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SubscribeLiveTopicOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `SubscriptionCallback` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2172,6 +2180,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `reconcileOptimistic` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `subscribeLiveTopic` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

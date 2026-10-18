@@ -26,7 +26,7 @@ query is a `signal` the WebSocket writes to.
 The API is signal-first and at parity with the other adapters: a DI token
 carrying one shared client, `liveQuery`, `subscription`, `mutate`/`mutator`,
 `runAction`, `stream`, `paginatedQuery`/`infiniteQuery`, `presence`,
-`rateLimit`, `flag`/`flags`, `auth`/`authGate`, the agent and voice primitives,
+`rateLimit`, `flag`/`flags`, `auth`/`authGate`, `liveTopic`, the agent and voice primitives,
 `connectionStatus`, and `hydratePreloaded` alongside the `@lunora/angular/server`
 subpath for the SSR handoff.
 
@@ -152,6 +152,21 @@ post-attach subscription failure (without it, a failure after the initial
 attach is dropped silently and the signal just stops updating). To call
 outside an injection context (e.g. lazily in `ngOnInit`), supply `client` and
 `destroyRef` explicitly via the options object.
+
+## `liveTopic(source, options?)`
+
+Follows one topic on the connection shared by its URL, and mirrors the last
+payload and any refusal into `lastEvent` and `error` signals. It subscribes when
+the owning `DestroyRef` is created and unsubscribes when it is destroyed.
+
+`source` is a plain `SubscribeLiveTopicOptions` object or a function returning
+one. A new topic or connection option resubscribes; a new `onEvent` or `onError`
+is read at call time and does not. `options` takes `destroyRef` and `injector`,
+which the reactive form needs when called outside an injection context.
+
+```ts
+readonly comments = liveTopic(() => ({ url: "/live/posts/connect", topic: `comments:${this.postId()}` }));
+```
 
 ## `mutate(fn, args, options?)`
 

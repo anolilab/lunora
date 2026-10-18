@@ -117,6 +117,8 @@ export { useFlag, useFlags } from "./use-flag";
 export type { UseHttpStreamOptions, UseHttpStreamResult } from "./use-http-stream";
 export { useHttpStream } from "./use-http-stream";
 export { default as useInfiniteQuery } from "./use-infinite-query";
+export type { UseLiveTopicOptions, UseLiveTopicResult } from "./use-live-topic";
+export { useLiveTopic } from "./use-live-topic";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutator";

@@ -61,6 +61,8 @@ export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
+export type { UseLiveTopicOptions, UseLiveTopicResult } from "./use-live-topic";
+export { useLiveTopic } from "./use-live-topic";
 export type { MutationHandle } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutator";

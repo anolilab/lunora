@@ -25,6 +25,7 @@
  * ```ts
  * // lunora/live.ts
  * import { defineLiveStream } from "@lunora/server";
+ * import { api } from "./_generated/api";
  *
  * export const posts = defineLiveStream({
  *     id: "posts",

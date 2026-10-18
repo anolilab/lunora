@@ -463,6 +463,23 @@ interface UseInfiniteQueryResult<T> {
 }
 ```
 
+### `UseLiveTopicOptions` (type)
+
+```ts
+type UseLiveTopicOptions = Pick<SubscribeLiveTopicOptions, "onError" | "onEvent"> & {
+    [K in keyof ConnectionFields]: MaybeRefOrGetter<ConnectionFields[K]>;
+};
+```
+
+### `UseLiveTopicResult` (interface)
+
+```ts
+interface UseLiveTopicResult {
+    error: ShallowRef<LiveStreamSubscribeError | undefined>;
+    lastEvent: ShallowRef<unknown>;
+}
+```
+
 ### `UsePaginatedQueryOptions` (interface)
 
 ```ts
@@ -725,6 +742,12 @@ const useFlags: <T extends Record<string, FlagValue>>(flags: T) => Readonly<Ref<
 
 ```ts
 const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: MaybeRefOrGetter<"skip" | PaginatedArgs<F>>, options: UseInfiniteQueryOptions) => UseInfiniteQueryResult<PageItemOf<F>>;
+```
+
+### `useLiveTopic` (const)
+
+```ts
+const useLiveTopic: (options: UseLiveTopicOptions) => UseLiveTopicResult;
 ```
 
 ### `useLunora` (const)
@@ -1045,6 +1068,12 @@ type AgentThreadReference = FunctionReference<"query", {
 type AgentTokenStreamReference = FunctionReference<"stream", {
     key: string;
 }, AgentLiveEvent>;
+```
+
+### `ConnectionFields` (type)
+
+```ts
+type ConnectionFields = Omit<SubscribeLiveTopicOptions, "onError" | "onEvent">;
 ```
 
 ### `CreateMicrophone` (type)
