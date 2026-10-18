@@ -916,3 +916,66 @@ class TestFlushIntegration < Minitest::Test
     assert_equal queue_case("batchReplay")["maxEntries"], Lunora::MAX_BATCH_ENTRIES
   end
 end
+
+# An online-only write is never queued, persisted or replayed. The secret stands
+# in for a credential: nothing that reaches the persistence adapter may hold it.
+class TestOnlineOnlyWrites < Minitest::Test
+  SECRET = "sentinel-secret-7731"
+
+  def disconnected(store)
+    posts = []
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, _headers, body|
+        posts << body
+        [200, { "commitCursor" => 3, "result" => { "ok" => true } }]
+      },
+      offline_queue: Lunora::OfflineQueue.new(persistence: store, queue_before_first_connect: true)
+    )
+
+    [client, posts]
+  end
+
+  def test_an_online_only_write_is_refused_when_disconnected_and_never_persisted
+    ConformanceManifest.covers("offline_online_only_refused_when_disconnected")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true)
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_equal 0, client.pending_mutation_count
+    assert_empty store.appended
+    refute_includes JSON.generate(store.records), SECRET
+    assert_empty posts
+  end
+
+  def test_an_online_only_write_is_sent_when_connected
+    ConformanceManifest.covers("offline_online_only_sends_when_connected")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+    client.attach_socket(->(_frame) {})
+
+    outcome = client.submit("auth:setPassword", { "token" => SECRET }, online_only: true)
+
+    assert_equal :committed, outcome.status
+    assert_equal 1, posts.length
+    assert_includes posts.first, SECRET
+    assert_empty store.appended
+  end
+
+  def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one
+    ConformanceManifest.covers("offline_online_only_leaves_normal_writes_queued")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+
+    outcome = client.submit("messages:send", { "text" => "hi" })
+
+    assert_equal :queued, outcome.status
+    assert_equal 1, client.pending_mutation_count
+    assert_equal 1, store.appended.length
+    assert_empty posts
+  end
+end
