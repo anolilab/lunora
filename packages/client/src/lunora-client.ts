@@ -124,8 +124,10 @@ import { resolvePersistenceAdapter } from "./persistence";
 import { createPollingFallback, withinPollTimeout } from "./polling-fallback";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
-import type { RpcEnvelopeBody } from "./replay";
+import type { ReplayBackoff, RpcEnvelopeBody } from "./replay";
 import {
+    DEFAULT_MAX_SHARD_ERROR_ATTEMPTS,
+    DEFAULT_REPLAY_BACKOFF,
     defaultReplayRetryDelayMs,
     indexReplaySlots,
     isTransientReplayFailure,
@@ -1018,6 +1020,15 @@ class LunoraClient {
      */
     private readonly replayRetryState = new Map<string, { attempts: number; delayMs: number | undefined }>();
 
+    /** Retry pacing of a replay; see `offlineQueue.replayRetry`. */
+    private readonly replayBackoff: ReplayBackoff;
+
+    /** How many `SHARD_ERROR` answers one queued write may collect before the replay settles it; see `offlineQueue.replayRetry`. */
+    private readonly maxShardErrorAttempts: number;
+
+    /** `SHARD_ERROR` answers collected so far, per queued write id (cleared when the write settles). */
+    private readonly shardErrorAttempts = new Map<string, number>();
+
     /** Pending rate-limit retry flushes, keyed by {@link connectionKey}, so `close()` can cancel them. */
     private readonly replayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -1042,6 +1053,11 @@ class LunoraClient {
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+        this.replayBackoff = {
+            baseDelayMs: options.offlineQueue?.replayRetry?.baseDelayMs ?? DEFAULT_REPLAY_BACKOFF.baseDelayMs,
+            maxDelayMs: options.offlineQueue?.replayRetry?.maxDelayMs ?? DEFAULT_REPLAY_BACKOFF.maxDelayMs,
+        };
+        this.maxShardErrorAttempts = options.offlineQueue?.replayRetry?.maxShardErrorAttempts ?? DEFAULT_MAX_SHARD_ERROR_ATTEMPTS;
         this.managedSocketOptions = {
             connectTimeoutMs: this.connectTimeoutMs,
             heartbeatIntervalMs: this.heartbeatIntervalMs,
@@ -7653,6 +7669,7 @@ class LunoraClient {
 
     private unpersist(id: string | undefined): void {
         if (id) {
+            this.shardErrorAttempts.delete(id);
             this.persistence?.remove(id).catch((error: unknown) => {
                 reportPersistenceError(this.onPersistenceError, "remove", error, id);
             });
@@ -8624,7 +8641,7 @@ class LunoraClient {
 
         this.replayRetryState.set(key, {
             attempts,
-            delayMs: Math.max(previous?.delayMs ?? 0, defaultReplayRetryDelayMs(attempts)),
+            delayMs: Math.max(previous?.delayMs ?? 0, defaultReplayRetryDelayMs(attempts, undefined, this.replayBackoff)),
         });
     }
 
@@ -8644,7 +8661,8 @@ class LunoraClient {
         const previous = this.replayRetryState.get(key);
         const attempts = (previous?.attempts ?? 0) + 1;
         const delay =
-            replayRetryDelayMs(error, attempts) ?? (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts) : undefined);
+            replayRetryDelayMs(error, attempts, undefined, this.replayBackoff) ??
+            (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts, undefined, this.replayBackoff) : undefined);
 
         this.replayRetryState.set(key, {
             attempts,
@@ -9021,6 +9039,26 @@ class LunoraClient {
         this.emitItemSettled(item, "committed", error);
     }
 
+    /**
+     * Count a `SHARD_ERROR` answer against `item` and report whether it was the
+     * last attempt the write gets (`offlineQueue.replayRetry`). Any
+     * other failure is not counted: only a coded answer from the shard says the
+     * write itself may be what fails, where a transport error, a timeout, a rate
+     * limit or a refused credential says nothing about it. A whole-batch
+     * `SHARD_ERROR` is not attributable to one write and is not counted either.
+     */
+    private spendsLastShardErrorAttempt(item: QueuedMutation, error: unknown): boolean {
+        if ((error as { code?: string } | null | undefined)?.code !== "SHARD_ERROR" || item.id === undefined) {
+            return false;
+        }
+
+        const attempts = (this.shardErrorAttempts.get(item.id) ?? 0) + 1;
+
+        this.shardErrorAttempts.set(item.id, attempts);
+
+        return attempts >= this.maxShardErrorAttempts;
+    }
+
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
     private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
         this.unpersist(item.id);
@@ -9080,7 +9118,7 @@ class LunoraClient {
                     continue;
                 }
 
-                if (!this.shouldRequeueReplayFailure(error, authToken)) {
+                if (!this.shouldRequeueReplayFailure(error, authToken) || this.spendsLastShardErrorAttempt(item, error)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
@@ -9342,7 +9380,7 @@ class LunoraClient {
                 case "errored": {
                     refused ||= isAuthReplayFailure(verdict.error);
 
-                    if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
+                    if (this.shouldRequeueReplayFailure(verdict.error, authToken) && !this.spendsLastShardErrorAttempt(item, verdict.error)) {
                         this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
                         requeue.push(item);
                     } else {

@@ -63,11 +63,26 @@ const isTransientReplayFailure = (error: unknown): boolean => {
     return code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code) || AUTH_REPLAY_ERROR_CODES.has(code);
 };
 
-/** Longest delay a `Retry-After` hint can push the next outbox flush out by — a server (or a proxy) asking for an hour must not strand the queue for one. */
-const MAX_REPLAY_RETRY_DELAY_MS = 60_000;
+/** The retry pacing of a replay: how long a hintless retryable failure waits, and how far a `Retry-After` hint (or the doubling) may push the next flush out. */
+interface ReplayBackoff {
+    /** Shortest wait of a hintless retryable failure, doubled per consecutive failure up to {@link ReplayBackoff.maxDelayMs}. */
+    baseDelayMs: number;
+    /** Longest delay of any retry — a server (or a proxy) asking for an hour must not strand the queue for one. */
+    maxDelayMs: number;
+}
 
-/** Shortest wait a hintless retryable failure backs off by, doubled per consecutive failure up to {@link MAX_REPLAY_RETRY_DELAY_MS}. */
-const BASE_REPLAY_RETRY_DELAY_MS = 1000;
+const DEFAULT_REPLAY_BACKOFF: ReplayBackoff = { baseDelayMs: 1000, maxDelayMs: 60_000 };
+
+/**
+ * How many times one durable write may be answered with `SHARD_ERROR` before the
+ * replay gives up on it. That code is classified transient because the worker
+ * cannot tell a flaky shard from a write that makes the shard fail every time;
+ * with no cap the second kind sits at the head of the shard's queue forever and
+ * every write behind it waits. Only a coded answer counts — a transport failure,
+ * a timeout, a rate limit or a refused credential says nothing about the write
+ * and never spends an attempt.
+ */
+const DEFAULT_MAX_SHARD_ERROR_ATTEMPTS = 10;
 
 /**
  * Coded error a response the client could NOT read a `{ error }` envelope out of
@@ -118,8 +133,8 @@ const unparseableResponseError = (status: number, statusText: string, retryAfter
 
 /**
  * Backoff for a retryable failure that named no time to come back: exponential
- * in `attempt` from {@link BASE_REPLAY_RETRY_DELAY_MS}, capped at
- * {@link MAX_REPLAY_RETRY_DELAY_MS}, then jittered across the top half of that
+ * in `attempt` from {@link ReplayBackoff.baseDelayMs}, capped at
+ * {@link ReplayBackoff.maxDelayMs}, then jittered across the top half of that
  * ceiling so a fleet of clients refused by ONE limiter does not re-converge on
  * the same instant and refuse itself again.
  *
@@ -127,8 +142,8 @@ const unparseableResponseError = (status: number, statusText: string, retryAfter
  * the two are the same equal-jitter calculation, and a test that has to stub a
  * global to pin a delay pins it for everything else in the file too.
  */
-const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.random): number => {
-    const ceiling = Math.min(BASE_REPLAY_RETRY_DELAY_MS * 2 ** Math.max(attempt - 1, 0), MAX_REPLAY_RETRY_DELAY_MS);
+const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.random, backoff: ReplayBackoff = DEFAULT_REPLAY_BACKOFF): number => {
+    const ceiling = Math.min(backoff.baseDelayMs * 2 ** Math.max(attempt - 1, 0), backoff.maxDelayMs);
 
     return Math.round(ceiling * (0.5 + random() * 0.5));
 };
@@ -152,7 +167,7 @@ const isAnsweredReplayFailure = (error: unknown): boolean =>
  *
  * A hint the server sent wins: the `data.retryAfterMs` the error carries — its
  * own, or a `Retry-After` header folded on via `retryAfterData` — clamped
- * to {@link MAX_REPLAY_RETRY_DELAY_MS}. Without one, a failure that was still
+ * to {@link ReplayBackoff.maxDelayMs}. Without one, a failure that was still
  * ANSWERED gets {@link defaultReplayRetryDelayMs}, because a hintless 429 or 503
  * arrives over a socket that stays open: with nothing scheduled the queued write
  * waits for a reconnect that a healthy connection never makes.
@@ -160,14 +175,14 @@ const isAnsweredReplayFailure = (error: unknown): boolean =>
  * `undefined` for a failure that never reached a server, which is the one case
  * the reconnect already covers.
  */
-const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => number): number | undefined => {
+const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => number, backoff: ReplayBackoff = DEFAULT_REPLAY_BACKOFF): number | undefined => {
     const hint = getRetryAfterMs(error);
 
     if (hint !== undefined && hint > 0) {
-        return Math.min(hint, MAX_REPLAY_RETRY_DELAY_MS);
+        return Math.min(hint, backoff.maxDelayMs);
     }
 
-    return isAnsweredReplayFailure(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
+    return isAnsweredReplayFailure(error) ? defaultReplayRetryDelayMs(attempt, random, backoff) : undefined;
 };
 
 /**
@@ -257,7 +272,11 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlo
     }
 };
 
+export type { ReplayBackoff };
+
 export {
+    DEFAULT_MAX_SHARD_ERROR_ATTEMPTS,
+    DEFAULT_REPLAY_BACKOFF,
     defaultReplayRetryDelayMs,
     isTransientReplayFailure,
     isUndecodableResult,
