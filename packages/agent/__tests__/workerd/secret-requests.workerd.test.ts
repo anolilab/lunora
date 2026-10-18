@@ -43,7 +43,7 @@ const pausedStore = async (name: string) => {
     return {
         list: (auth?: { userId?: string }) => call("agentSecretRequests", { threadKey: THREAD }, auth ?? { userId: OWNER }) as Promise<SecretRequest[]>,
         open,
-        settle: () => call("agentSettleSecretRequest", { threadKey: THREAD, toolCallId: "call_1" }),
+        settle: () => call("agentSettleSecretRequest", { instanceId: "wf-1", threadKey: THREAD, toolCallId: "call_1" }),
     };
 };
 
