@@ -435,7 +435,7 @@ if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallI
 paused approvals (newest thread first, default 50), each carrying the
 `threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes.
 It is owner-scoped: an anonymous caller gets `[]`, and ownerless threads are
-never listed. The `useAgentApprovals` hook subscribes to it.
+never listed. The React `useAgentApprovals` hook subscribes to it.
 
 ## Client hooks
 
