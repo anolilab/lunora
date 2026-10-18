@@ -1681,11 +1681,38 @@ func TestOnlineOnlyWriteIsRefusedWhenDisconnectedAndNeverPersisted(t *testing.T)
 
 	client := onlineOnlyClient(store, &bodies)
 
-	_, err := client.Submit(SubmitOptions{Args: map[string]any{"token": onlineOnlySecret}, FunctionPath: "auth:setPassword", OnlineOnly: true})
+	// A subscription on the write's own path and args, primed with a server value,
+	// so an overlay the write applied would be displayed.
+	args := map[string]any{"token": onlineOnlySecret}
+
+	var seen []any
+
+	client.AttachSocket(func(map[string]any) error { return nil })
+	client.Subscribe("auth:setPassword", args, func(value any) { seen = append(seen, value) }, nil, "")
+
+	if _, err := client.HandleFrame([]byte(`{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}`)); err != nil {
+		t.Fatalf("prime: %v", err)
+	}
+
+	client.DetachSocket()
+
+	_, err := client.Submit(SubmitOptions{
+		Args:         args,
+		FunctionPath: "auth:setPassword",
+		OnlineOnly:   true,
+		Optimistic:   appender("c"),
+	})
 
 	var refused OfflineError
 	if !errors.As(err, &refused) || refused.Code != CodeOfflineNotQueued {
 		t.Fatalf("err: got %v, want code %s", err, CodeOfflineNotQueued)
+	}
+
+	// The refused write's overlay is never applied, so nothing predicted is shown.
+	for _, value := range seen {
+		if reflect.DeepEqual(value, []any{"a", "c"}) {
+			t.Fatalf("a refused write's overlay was displayed: %v", seen)
+		}
 	}
 
 	if client.PendingMutationCount() != 0 || len(store.appended) != 0 {
