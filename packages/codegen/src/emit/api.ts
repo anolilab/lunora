@@ -310,6 +310,7 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
                     kind: "union",
                     members: [
                         { kind: "literal", literalValue: '"approve"' },
+                        { kind: "literal", literalValue: '"approve_for_thread"' },
                         { kind: "literal", literalValue: '"reject"' },
                     ],
                 },
@@ -322,6 +323,20 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "mutation",
             returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { key: { kind: "string" } },
+            exportName: "agentApprovalGrants",
+            filePath: "agents",
+            kind: "query",
+            returnType: "{ createdAt: number; toolName: string }[]",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolName: { kind: "string" } },
+            exportName: "agentRevokeApprovalGrant",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ revoked: boolean }",
         },
         {
             args: {
