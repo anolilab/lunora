@@ -325,6 +325,12 @@ interface PlatformSignals {
     relationGraph?: boolean;
     /** A `ctx.secrets` read. */
     secrets?: boolean;
+
+    /**
+     * A `requestSecretTool` import from `@lunora/agent` in `lunora/` — the agent
+     * tool that asks a human for a secret value and holds it for one step.
+     */
+    secretValues?: boolean;
     /** A `lunora.config.*` `services` declaration (service bindings to sibling Workers). */
     services?: boolean;
     /** A `defineTopic` declaration. */
@@ -356,6 +362,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "queues",
     "relationGraph",
     "secrets",
+    "secretValues",
     "services",
     "topics",
     "typedWebSockets",
@@ -380,6 +387,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
+    secretValues: "human-supplied secret values (`requestSecretTool`, held for one agent step)",
     services: "service bindings to sibling Workers (`lunora.config` `services`)",
     topics: "pub/sub topics (`defineTopic` / `defineSubscription`)",
     typedWebSockets: "typed WebSocket routes and rooms (`defineWebSocket` / `defineRoom`)",

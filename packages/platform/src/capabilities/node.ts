@@ -231,6 +231,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
         },
+        secretValues: {
+            level: "unsupported",
+            note: "No store for human-supplied values. Agents are unsupported on this target (see `agents`), so nothing requests one, and no plaintext node store is built: a value written to local disk would be unencrypted",
+        },
         services: {
             level: "unsupported",
             note: "No sibling-Worker host: a Node process runs one app, with nothing a service binding could point at. Gate-bearing, so codegen omits ctx.services instead of emitting bindings that resolve to nothing",
