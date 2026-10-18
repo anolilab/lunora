@@ -1,8 +1,8 @@
-import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
+import type { LiveStreamSubscribeError, LiveTopicRef, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type { CreateLiveTopicResult } from "../src/create-live-topic";
 import { createLiveTopic } from "../src/create-live-topic";
@@ -13,7 +13,21 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
     return { ...actual, subscribeLiveTopic: vi.fn<typeof subscribeLiveTopic>() };
 });
 
+// The primitive reads its base URL from the context's client; the client itself is not under test here.
+vi.mock(import("../src/context"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, useLunora: () => ({ url: "https://api.test" }) as never };
+});
+
 const subscribeMock = vi.mocked(subscribeLiveTopic);
+
+const URL = "https://api.test/live/posts/connect";
+
+/** A reference as `_generated/live.ts` hands one out, for the `posts` stream. */
+const ref = <Payload = unknown,>(topic: string): LiveTopicRef<Payload> => {
+    return { __lunoraLive: "posts", topic };
+};
 
 /** The options the adapter handed to the most recent `subscribeLiveTopic` call. */
 const lastOptions = (): SubscribeLiveTopicOptions => {
@@ -36,15 +50,13 @@ describe(createLiveTopic, () => {
 
     it("subscribes with the topic and connection options on mount", () => {
         render(() => {
-            createLiveTopic({ headers: { "x-tenant": "a" }, topic: "post:1", url: "/live/posts/connect", withCredentials: true });
+            createLiveTopic(ref("post:1"), { headers: { "x-tenant": "a" }, withCredentials: true });
 
             return <div />;
         });
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
-        expect(subscribeMock).toHaveBeenCalledWith(
-            expect.objectContaining({ headers: { "x-tenant": "a" }, topic: "post:1", url: "/live/posts/connect", withCredentials: true }),
-        );
+        expect(subscribeMock).toHaveBeenCalledWith(expect.objectContaining({ headers: { "x-tenant": "a" }, topic: "post:1", url: URL, withCredentials: true }));
     });
 
     it("unsubscribes when the owner is torn down", () => {
@@ -53,7 +65,7 @@ describe(createLiveTopic, () => {
         subscribeMock.mockImplementation(() => unsubscribe);
 
         const { unmount } = render(() => {
-            createLiveTopic({ topic: "post:1", url: "/live/posts/connect" });
+            createLiveTopic(ref("post:1"));
 
             return <div />;
         });
@@ -73,9 +85,7 @@ describe(createLiveTopic, () => {
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => secondUnsubscribe);
 
         render(() => {
-            createLiveTopic(() => {
-                return { topic: topic(), url: "/live/posts/connect" };
-            });
+            createLiveTopic(() => ref(topic()));
 
             return <div />;
         });
@@ -98,8 +108,8 @@ describe(createLiveTopic, () => {
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
 
         render(() => {
-            createLiveTopic(() => {
-                return { sessionKey: sessionKey(), topic: "post:1", url: "/live/posts/connect" };
+            createLiveTopic(ref("post:1"), () => {
+                return { sessionKey: sessionKey() };
             });
 
             return <div />;
@@ -120,8 +130,8 @@ describe(createLiveTopic, () => {
         setHandler(() => firstHandler);
 
         render(() => {
-            createLiveTopic(() => {
-                return { onEvent: handler(), topic: "post:1", url: "/live/posts/connect" };
+            createLiveTopic(ref("post:1"), () => {
+                return { onEvent: handler() };
             });
 
             return <div />;
@@ -141,7 +151,7 @@ describe(createLiveTopic, () => {
         let result: CreateLiveTopicResult | undefined;
 
         render(() => {
-            result = createLiveTopic({ topic: "post:1", url: "/live/posts/connect" });
+            result = createLiveTopic(ref("post:1"));
 
             return <div />;
         });
@@ -162,7 +172,7 @@ describe(createLiveTopic, () => {
         let result: CreateLiveTopicResult | undefined;
 
         render(() => {
-            result = createLiveTopic({ onError, topic: "post:1", url: "/live/posts/connect" });
+            result = createLiveTopic(ref("post:1"), { onError });
 
             return <div />;
         });
@@ -173,5 +183,30 @@ describe(createLiveTopic, () => {
 
         expect(result?.error()).toStrictEqual(refusal);
         expect(onError).toHaveBeenCalledWith(refusal);
+    });
+
+    it("resolves the stream's route against the client's URL, on the shard asked for", () => {
+        render(() => {
+            createLiveTopic(ref("post:1"), { shardKey: "tenant-1" });
+
+            return <div />;
+        });
+
+        expect(lastOptions()).toMatchObject({ topic: "post:1", url: `${URL}?shard=tenant-1` });
+    });
+
+    it("types lastEvent and onEvent by the payload the topic declares", () => {
+        render(() => {
+            const result = createLiveTopic(ref<{ text: string }>("a"), { onEvent: (payload) => expectTypeOf(payload).toEqualTypeOf<{ text: string }>() });
+
+            expectTypeOf(result.lastEvent()).toEqualTypeOf<{ text: string } | undefined>();
+
+            // @ts-expect-error -- the topic carries `{ text: string }`, not a number
+            createLiveTopic(ref<{ text: string }>("a"), { onEvent: (payload: number) => payload });
+
+            return <div />;
+        });
+
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
     });
 });

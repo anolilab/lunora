@@ -464,4 +464,27 @@ describe("adapter export-surface parity (react, vue, solid, svelte, angular)", (
             ).toBe(true);
         });
     });
+
+    // The exported names above do not change when the live-topic hooks take a ref, so a name check alone cannot catch
+    // an adapter that quietly keeps its own `{ url, topic }` form. Every adapter must build its subscription through
+    // the one shared ref -> options helper (which is what puts the stream's route under the client's base URL), and
+    // none re-implements the URL join.
+    describe("live topic hooks share one ref -> subscription path", () => {
+        const LIVE_TOPIC_MODULES: Record<AdapterName, string> = {
+            angular: "live-topic.ts",
+            react: "use-live-topic.ts",
+            solid: "create-live-topic.ts",
+            svelte: "live-topic.ts",
+            vue: "use-live-topic.ts",
+        };
+
+        it.each(ADAPTER_NAMES)("%s resolves its subscription through liveTopicSubscription", (adapter) => {
+            expect.assertions(2);
+
+            const source = readFileSync(join(ADAPTER_SRC[adapter], LIVE_TOPIC_MODULES[adapter]), "utf8");
+
+            expect(source).toMatch(/\bliveTopicSubscription\(/u);
+            expect(source).toMatch(/import \{[^}]*\bliveTopicSubscription\b[^}]*\} from "@lunora\/client"/u);
+        });
+    });
 });

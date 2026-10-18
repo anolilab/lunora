@@ -1,9 +1,10 @@
 import { Injector, provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import type { SubscribeLiveTopicOptions } from "@lunora/client";
+import type { LiveTopicRef, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { LiveTopicOptions } from "../src/live-topic";
 import { liveTopic } from "../src/live-topic";
 import { createFakeDestroyRef } from "./fake-client";
 
@@ -14,6 +15,14 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
 });
 
 const subscribeMock = vi.mocked(subscribeLiveTopic);
+
+/** The client the stream's route is resolved against; only its URL is read. */
+const client = { url: "https://api.test" } as never;
+
+/** A reference as `_generated/live.ts` hands one out, for the `posts` stream. */
+const ref = (topic: string): LiveTopicRef => {
+    return { __lunoraLive: "posts", topic };
+};
 
 /** The options the adapter handed to the most recent `subscribeLiveTopic` call. */
 const lastOptions = (): SubscribeLiveTopicOptions => {
@@ -48,12 +57,7 @@ describe("liveTopic — reactive options", () => {
 
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => secondUnsubscribe);
 
-        liveTopic(
-            () => {
-                return { topic: topic(), url: "/live/posts/connect" };
-            },
-            { destroyRef: destroy.asDestroyRef, injector },
-        );
+        liveTopic(() => ref(topic()), { client, destroyRef: destroy.asDestroyRef, injector });
 
         TestBed.tick();
 
@@ -77,12 +81,7 @@ describe("liveTopic — reactive options", () => {
 
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
 
-        liveTopic(
-            () => {
-                return { sessionKey: sessionKey(), topic: "post:1", url: "/live/posts/connect" };
-            },
-            { destroyRef: destroy.asDestroyRef, injector },
-        );
+        liveTopic(ref("post:1"), { client, destroyRef: destroy.asDestroyRef, injector, sessionKey });
 
         TestBed.tick();
         sessionKey.set("user-2");
@@ -96,22 +95,16 @@ describe("liveTopic — reactive options", () => {
     it("does not resubscribe when only the callback identities change, and calls the latest", () => {
         const destroy = createFakeDestroyRef();
         const injector = TestBed.inject(Injector);
-        const handler = signal<(payload: unknown) => void>(() => undefined);
         const firstHandler = vi.fn<() => void>();
         const latestHandler = vi.fn<() => void>();
+        const options: LiveTopicOptions = { client, destroyRef: destroy.asDestroyRef, injector, onEvent: firstHandler };
 
-        handler.set(firstHandler);
-
-        liveTopic(
-            () => {
-                return { onEvent: handler(), topic: "post:1", url: "/live/posts/connect" };
-            },
-            { destroyRef: destroy.asDestroyRef, injector },
-        );
+        liveTopic(() => ref("post:1"), options);
 
         TestBed.tick();
 
-        handler.set(latestHandler);
+        // The callback is read from the options object at call time, so swapping it never reopens the subscription.
+        options.onEvent = latestHandler;
         TestBed.tick();
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
@@ -129,12 +122,7 @@ describe("liveTopic — reactive options", () => {
 
         subscribeMock.mockImplementation(() => unsubscribe);
 
-        liveTopic(
-            () => {
-                return { topic: "post:1", url: "/live/posts/connect" };
-            },
-            { destroyRef: destroy.asDestroyRef, injector },
-        );
+        liveTopic(() => ref("post:1"), { client, destroyRef: destroy.asDestroyRef, injector });
 
         TestBed.tick();
 

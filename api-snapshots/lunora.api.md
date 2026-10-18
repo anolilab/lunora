@@ -1787,6 +1787,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `LiveTopicOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LiveTopicRef` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2188,6 +2192,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isUnauthorizedError` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `liveTopicSubscription` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

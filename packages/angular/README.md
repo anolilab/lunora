@@ -84,24 +84,32 @@ liveQuery(api.messages.list, () => ({ channelId: this.channelId() }), {
 
 ## Live topics
 
-`liveTopic` follows one topic on the connection shared by its URL, and mirrors
-the last payload and any refusal into two signals: `lastEvent` and `error`. It
-subscribes when the component is created and unsubscribes on `DestroyRef`.
+`liveTopic` follows one topic a `defineLiveStream` declares, and mirrors the last
+payload and any refusal into two signals: `lastEvent` and `error`. Pass the
+reference `_generated/live.ts` hands out; the stream's route is resolved against
+the injected `LunoraClient`, and `lastEvent` and `onEvent` are typed by the payload
+the topic declares. It subscribes when the component is created and unsubscribes
+on `DestroyRef`.
 
 ```ts
 import { input } from "@angular/core";
 import { liveTopic } from "@lunora/angular";
 
+import { live } from "../lunora/_generated/live";
+
 export class PostComponent {
     readonly postId = input.required<string>();
 
-    readonly comments = liveTopic(() => ({ url: "/live/posts/connect", topic: `comments:${this.postId()}` }));
+    readonly comments = liveTopic(() => live.posts.comments({ postId: this.postId() }));
 }
 ```
 
-A new topic resubscribes; a new `onEvent` or `onError` callback is read at call
-time and does not. Pass `{ destroyRef, injector }` as the second argument when
-calling outside an injection context, as with `liveQuery`.
+A function makes the topic reactive: a new topic resubscribes, while a new
+`onEvent` or `onError` callback is read at call time and does not. A plain
+reference resolves once. Pass `{ client, destroyRef, injector }` as the second
+argument when calling outside an injection context, as with `liveQuery`; the
+options also take `shardKey`, `sessionKey` (a string or a signal, which resubscribes on change) and the transport tuning `headers`,
+`withCredentials`, `retryDelay` and `maxDelayMs`.
 
 ## Mutations
 
