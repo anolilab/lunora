@@ -17222,14 +17222,6 @@ abstract class ShardDO {
             }
         }
 
-        if (ws === undefined && this.relay instanceof OwnerRelay) {
-            const relayed = await this.relay.forwardLiveControl(call);
-
-            if (relayed !== undefined) {
-                return relayed;
-            }
-        }
-
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.
         if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);

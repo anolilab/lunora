@@ -1,3 +1,4 @@
+import { OwnerRelay } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
@@ -197,6 +198,29 @@ describe("shardDO socket routes", () => {
         await send(shard, verified, JSON.stringify(encodeWire({ text: "hi" })));
 
         expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["message"]);
+    });
+
+    it("asks the relays about a live control call once when no relay answers", async () => {
+        expect.assertions(2);
+
+        // The owner has relays but none holds the connection: the call is forwarded once, and the caller gets the
+        // ordinary not-found answer rather than a second round trip.
+        const shard = makeShard([], CHAT_ROUTE);
+        const relay = Object.create(OwnerRelay.prototype) as OwnerRelay;
+        let forwards = 0;
+
+        relay.forwardLiveControl = (): Promise<Response | undefined> => {
+            forwards += 1;
+
+            return Promise.resolve(undefined);
+        };
+        (shard as unknown as { relay: unknown }).relay = relay;
+
+        const control = { action: "subscribe", callerId: "u1", connectionId: "c-ghost", key: "k", subscriptionId: "s1" };
+        const response = await (shard as unknown as { handleLiveSocketControl: (call: unknown) => Promise<Response> }).handleLiveSocketControl(control);
+
+        expect(forwards).toBe(1);
+        expect(response.status).toBe(404);
     });
 
     it("refuses a route broadcast over the byte cap even when its UTF-16 length is under it", async () => {
