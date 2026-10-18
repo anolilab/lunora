@@ -506,6 +506,90 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("hyperdrive config", () => {
+            const withPlaceholder = (extra: Record<string, unknown> = {}): void => {
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        hyperdrive: [{ binding: "HYPERDRIVE", id: "<replace-with-hyperdrive-create-id>" }],
+                        ...extra,
+                    }),
+                    "utf8",
+                );
+            };
+            const hyperdriveApi = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+                    }
+
+                    return Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+                vi.unstubAllGlobals();
+            });
+
+            it("creates the config only once nothing else can refuse the deploy, and before wrangler runs", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: recording.spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(recording.calls).toHaveLength(1);
+                expect((parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id).toBe(
+                    "created-id",
+                );
+            });
+
+            it("creates nothing when a later precheck refuses the deploy", async () => {
+                expect.assertions(3);
+
+                // A D1 binding still carrying its placeholder id stops the deploy in the pre-deploy checks.
+                withPlaceholder({ d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "x" }] });
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).not.toBe(0);
+                expect(posts).toStrictEqual([]);
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain("<replace-with-hyperdrive-create-id>");
+            });
+        });
+
         describe("artifacts namespace jurisdiction", () => {
             /** `VALID_WRANGLER` binding one Artifacts namespace, over the fixture schema pinned to `eu`. */
             const seedPinnedArtifacts = (): void => {

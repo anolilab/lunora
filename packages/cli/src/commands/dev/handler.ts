@@ -432,7 +432,7 @@ const startEmbeddedHyperdrive = async (options: DevCommandOptions, cwd: string, 
         projectRoot: cwd,
     });
 
-    if (hyperdrive !== undefined) {
+    if (hyperdrive !== undefined && hyperdrive.bindings.length > 0) {
         logger.info(
             // eslint-disable-next-line no-secrets/no-secrets -- an environment variable name with a placeholder, not a credential
             `Hyperdrive ${hyperdrive.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite. Set CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> to use your own.`,

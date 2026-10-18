@@ -38,6 +38,8 @@ interface Session {
     /** Startups run one after another, so two config resolutions never start the same binding twice. */
     pending: Promise<void>;
     servers: number;
+    /** A shutdown in flight, so a config resolved while it runs starts its databases after it, not into it. */
+    stopping: Promise<void>;
     stopTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -50,7 +52,7 @@ const sessionFor = (projectRoot: string): Session => {
         return existing;
     }
 
-    const created: Session = { databases: [], pending: Promise.resolve(), servers: 0 };
+    const created: Session = { databases: [], pending: Promise.resolve(), servers: 0, stopping: Promise.resolve() };
 
     sessions.set(projectRoot, created);
 
@@ -67,7 +69,17 @@ const stopAll = async (session: Session): Promise<void> => {
 const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
     const timer = setTimeout(() => {
         // A startup still in flight adds its database after the timer fires: wait for it, then stop only if no server has come back.
-        session.pending.then(async () => (session.servers === 0 ? stopAll(session) : undefined)).catch((): undefined => undefined);
+        session.pending
+            .then(async () => {
+                if (session.servers === 0) {
+                    // eslint-disable-next-line no-param-reassign -- the session is a plain state record, mutated by design
+                    session.stopping = stopAll(session);
+                    await session.stopping;
+                }
+
+                return undefined;
+            })
+            .catch((): undefined => undefined);
     }, STOP_GRACE_MS);
 
     timer.unref();
@@ -90,6 +102,8 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
             const previous = session.pending;
             const attempt = (async () => {
                 await previous;
+                // A shutdown already running would close what this start opens, so it finishes first.
+                await session.stopping;
 
                 const local = await start({
                     onWarning: (message) => {
@@ -101,6 +115,9 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
 
                 if (local !== undefined) {
                     session.databases.push(local);
+                }
+
+                if (local !== undefined && local.bindings.length > 0) {
                     // eslint-disable-next-line no-console -- see above.
                     console.info(lunoraLine(`Hyperdrive ${local.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite.`));
                 }

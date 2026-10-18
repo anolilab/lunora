@@ -620,7 +620,9 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     // nightly cron. See `snapshotWranglerConfig`.
     await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env, options.discoveryCache);
 
-    const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target);
+    // Checks only, here: the Hyperdrive config is created just before wrangler runs (in `executeDeploy`),
+    // so a later precheck or validation failure cannot leave an account resource behind.
+    const hyperdriveError = await provisionDeployHyperdrive(cwd, { ...options, dryRun: true }, command, target);
 
     if (hyperdriveError !== undefined) {
         return { error: hyperdriveError, target, validation: empty };
@@ -752,6 +754,18 @@ const warnDurableObjectBudget = async (wranglerPath: string | undefined, target:
 
 /** Only a real, non-temporary deploy may create account resources: a dry run must leave the account alone, and a temporary deploy's Worker goes to an account that would never see them. */
 const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): boolean => options.dryRun !== true && options.temporary !== true;
+
+/**
+ * The steps that change the account or the sibling Workers, run last so that nothing which could
+ * still refuse the deploy comes after them: the service Workers, then the Hyperdrive config.
+ */
+const runBeforeSpawnSteps = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+    spawner: Spawner,
+    target: string,
+): Promise<string | undefined> => (await deployServices(cwd, options, driver, spawner)) ?? (await provisionDeployHyperdrive(cwd, options, "deploy", target));
 
 /**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
@@ -893,10 +907,10 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     }
 
     const spawner = options.spawner ?? defaultSpawner;
-    const servicesError = await deployServices(cwd, options, driver, spawner);
+    const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target);
 
-    if (servicesError !== undefined) {
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: servicesError, mintedSecretsFile, validation };
+    if (beforeSpawnError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: beforeSpawnError, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, driver);

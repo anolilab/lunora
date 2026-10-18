@@ -17,7 +17,7 @@
  * `@electric-sql/pglite` and `@electric-sql/pglite-socket` are optional peers,
  * loaded on demand: an app without Hyperdrive never pays for them.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 import join from "../path";
@@ -114,6 +114,19 @@ const serveDatabase = async (
     };
 };
 
+const UNSAFE_PATH_CHARACTER = /[^\w-]/gu;
+
+/**
+ * A directory name for a binding that cannot leave the state directory. A name with anything but
+ * letters, digits, `_` and `-` (so no `..`, no separator) is cleaned and closed with a short hash of
+ * the original, which keeps two such names apart.
+ */
+const directoryNameFor = (binding: string): string => {
+    const safe = binding.replaceAll(UNSAFE_PATH_CHARACTER, "_");
+
+    return safe === binding ? binding : `${safe}-${createHash("sha256").update(binding).digest("hex").slice(0, 8)}`;
+};
+
 /** Whether a process id is running. `EPERM` means it exists but belongs to someone else. */
 const isProcessAlive = (pid: number): boolean => {
     try {
@@ -127,6 +140,9 @@ const isProcessAlive = (pid: number): boolean => {
 
 /** What taking a data directory's lock came to: the release to call on stop, or the process that holds it. */
 type DirectoryLock = { holder: number } | { release: () => void };
+
+/** An address nothing listens on: port 1 refuses the connection at once. */
+const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
 
 /** The pid a lock file names, or `undefined` when it is gone or not a pid. */
 const readHolder = (lockPath: string): number | undefined => {
@@ -218,22 +234,38 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
         return undefined;
     }
 
+    // Bindings that get no database still get an address that refuses connections, so wrangler starts the
+    // session and `ctx.sql` fails with a connection error, instead of the whole dev server refusing to boot.
+    const unavailable: string[] = [];
+    const makeUnavailable = (binding: string): void => {
+        env[variableFor(binding)] = UNAVAILABLE_CONNECTION_STRING;
+        unavailable.push(binding);
+    };
+    const started: { binding: string; stop: () => Promise<void> }[] = [];
+    const release = async (): Promise<void> => {
+        for (const binding of [...started.map((entry) => entry.binding), ...unavailable]) {
+            Reflect.deleteProperty(env, variableFor(binding));
+        }
+
+        await Promise.allSettled(started.map(async (server) => server.stop()));
+    };
     const runtime = await (options.load ?? loadPglite)();
 
     if (runtime === undefined) {
         options.onWarning?.(
-            `Hyperdrive binding ${bindings.map((binding) => `"${binding}"`).join(", ")} has no local database, so \`ctx.sql\` cannot connect in dev. ` +
+            `Hyperdrive binding ${bindings.map((binding) => `"${binding}"`).join(", ")} has no local database, so \`ctx.sql\` will fail to connect in dev. ` +
                 `Run \`${INSTALL_HINT}\` for an embedded Postgres, or set ${variableFor(bindings[0] ?? "<BINDING>")}.`,
         );
+        for (const binding of bindings) {
+            makeUnavailable(binding);
+        }
 
-        return undefined;
+        return { bindings: [], stop: release };
     }
-
-    const started: { binding: string; stop: () => Promise<void> }[] = [];
 
     try {
         for (const binding of bindings) {
-            const directory = join(options.projectRoot, ".wrangler", "state", "lunora-pglite", binding);
+            const directory = join(options.projectRoot, ".wrangler", "state", "lunora-pglite", directoryNameFor(binding));
 
             mkdirSync(directory, { recursive: true });
 
@@ -241,8 +273,9 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 
             if ("holder" in lock) {
                 options.onWarning?.(
-                    `Hyperdrive binding "${binding}": another process (pid ${String(lock.holder)}) has its embedded Postgres open. Stop it, or set ${variableFor(binding)} to use a database of your own.`,
+                    `Hyperdrive binding "${binding}": another process (pid ${String(lock.holder)}) has its embedded Postgres open, so \`ctx.sql\` will fail to connect here. Stop it, or set ${variableFor(binding)} to use a database of your own.`,
                 );
+                makeUnavailable(binding);
 
                 continue;
             }
@@ -272,29 +305,17 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
     } catch (error) {
         options.onWarning?.(`Could not start the embedded Postgres for Hyperdrive: ${error instanceof Error ? error.message : String(error)}`);
 
-        await Promise.allSettled(started.map(async (server) => server.stop()));
+        await release();
 
-        for (const { binding } of started) {
-            Reflect.deleteProperty(env, variableFor(binding));
+        // Every binding, including the ones that had started, still gets the refusing address.
+        for (const binding of bindings) {
+            makeUnavailable(binding);
         }
 
-        return undefined;
+        return { bindings: [], stop: release };
     }
 
-    if (started.length === 0) {
-        return undefined;
-    }
-
-    return {
-        bindings: started.map(({ binding }) => binding),
-        stop: async () => {
-            for (const { binding } of started) {
-                Reflect.deleteProperty(env, variableFor(binding));
-            }
-
-            await Promise.allSettled(started.map(async (server) => server.stop()));
-        },
-    };
+    return { bindings: started.map(({ binding }) => binding), stop: release };
 };
 
 export type { LocalHyperdrive, PgliteParts, PgliteRuntime, StartLocalHyperdriveOptions };

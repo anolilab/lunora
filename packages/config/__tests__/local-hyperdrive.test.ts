@@ -8,6 +8,7 @@ import type { PgliteParts, PgliteRuntime } from "../src/cloudflare/local-hyperdr
 import { bindingsNeedingDatabase, serveDatabase, startLocalHyperdrive } from "../src/cloudflare/local-hyperdrive";
 
 const VAR = "CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_";
+const UNAVAILABLE = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
 
 describe("local hyperdrive", () => {
     let root: string;
@@ -143,19 +144,22 @@ describe("local hyperdrive", () => {
             expect(stops.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["DB_A", "DB_B"]);
         });
 
-        it("says how to install PGlite, and starts nothing, when it is missing", async () => {
-            expect.assertions(3);
+        it("says how to install PGlite, and still lets dev start on an address that refuses connections, when it is missing", async () => {
+            expect.assertions(5);
 
             writeWrangler([{ binding: "DB", id: "a" }]);
 
             const env: NodeJS.ProcessEnv = {};
             const warnings: string[] = [];
-
-            await expect(
-                startLocalHyperdrive({ env, load: async () => undefined, onWarning: (line) => warnings.push(line), projectRoot: root }),
-            ).resolves.toBeUndefined();
+            const local = await startLocalHyperdrive({ env, load: async () => undefined, onWarning: (line) => warnings.push(line), projectRoot: root });
 
             expect(warnings.join(" ")).toContain("pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket");
+            expect(warnings.join(" ")).toContain("will fail to connect");
+            expect(env[`${VAR}DB`]).toBe(UNAVAILABLE);
+            expect(local?.bindings).toStrictEqual([]);
+
+            await local?.stop();
+
             expect(env).toStrictEqual({});
         });
 
@@ -185,12 +189,14 @@ describe("local hyperdrive", () => {
             const env: NodeJS.ProcessEnv = {};
             const warnings: string[] = [];
 
-            await expect(
-                startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root }),
-            ).resolves.toBeUndefined();
+            const local = await startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root });
 
+            expect(local?.bindings).toStrictEqual([]);
             expect(stops).toStrictEqual(["DB_A"]);
-            expect({ env, warnings: warnings.join(" ").includes("boom") }).toStrictEqual({ env: {}, warnings: true });
+            expect({ env, warnings: warnings.join(" ").includes("boom") }).toStrictEqual({
+                env: { [`${VAR}DB_A`]: UNAVAILABLE, [`${VAR}DB_B`]: UNAVAILABLE },
+                warnings: true,
+            });
         });
 
         it("leaves a data directory alone while another live process has it open, and says which", async () => {
@@ -208,12 +214,12 @@ describe("local hyperdrive", () => {
             const env: NodeJS.ProcessEnv = {};
             const warnings: string[] = [];
 
-            await expect(
-                startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root }),
-            ).resolves.toBeUndefined();
+            const local = await startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root });
 
+            expect(local?.bindings).toStrictEqual([]);
             expect(directories).toStrictEqual([]);
-            expect(env).toStrictEqual({});
+            // wrangler still starts: the binding gets an address that refuses connections.
+            expect(env[`${VAR}DB`]).toBe(UNAVAILABLE);
             expect(warnings.join(" ")).toContain(`pid ${String(process.ppid)}`);
         });
 
@@ -271,6 +277,22 @@ describe("local hyperdrive", () => {
             await startLocalHyperdrive({ env: {}, load: async () => runtime, onWarning: () => {}, projectRoot: root });
 
             expect(existsSync(join(root, ".wrangler", "state", "lunora-pglite", "DB.lock"))).toBe(false);
+        });
+
+        it("keeps a binding name from leaving the state directory", async () => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "../../../escaped", id: "a" }]);
+
+            const { directories, runtime } = fakeRuntime();
+            const local = await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
+            const state = join(root, ".wrangler", "state", "lunora-pglite");
+
+            expect(directories).toHaveLength(1);
+            expect(directories[0]?.startsWith(`${state}/`)).toBe(true);
+            expect(existsSync(join(root, "..", "escaped"))).toBe(false);
+
+            await local?.stop();
         });
 
         it("boots the real embedded Postgres and serves a loopback connection string", async () => {

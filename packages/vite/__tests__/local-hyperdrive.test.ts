@@ -312,6 +312,45 @@ describe(localHyperdrive, () => {
         expect(start).toHaveBeenCalledTimes(2);
     });
 
+    it("starts a config resolved during a shutdown only after the shutdown has finished", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        let finishStop: () => void = () => {};
+        let calls = 0;
+        const start = vi.fn<Start>(async () => {
+            calls += 1;
+
+            return {
+                bindings: [`DB${String(calls)}`],
+                stop: async () => {
+                    await new Promise<void>((resolve) => {
+                        finishStop = resolve;
+                    });
+                },
+            };
+        });
+        const plugin = localHyperdrive({ projectRoot: "/project/stopping", start });
+
+        await runConfigHook(plugin, "serve");
+        attachServer(plugin)();
+        // The countdown ends and the first database begins to stop, slowly.
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        const replacement = runConfigHook(plugin, "serve");
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(start).toHaveBeenCalledTimes(1);
+
+        finishStop();
+        await replacement;
+
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(console.info).toHaveBeenCalledWith(expect.stringContaining("DB2"));
+    });
+
     it("starts a fresh database for a later session once the first one's were stopped", async () => {
         expect.assertions(1);
 
