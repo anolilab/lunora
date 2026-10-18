@@ -86,6 +86,7 @@ export type {
     SkillConfig,
     SkillDefinition,
 } from "./types";
+export { default as wrapUntrusted } from "./untrusted";
 export { default as VoiceSessionDO } from "./voice-do";
 export type {
     RunVoiceTurnOptions,

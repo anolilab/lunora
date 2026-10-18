@@ -817,7 +817,7 @@ export const support = defineAgent({
         }
 
         return {
-            input: `${email.subject ?? "(no subject)"}\n\n${email.text ?? ""}`,
+            input: wrapUntrusted(`${email.subject ?? "(no subject)"}\n\n${email.text ?? ""}`),
             // `owner` gates the thread's reads and the run dispatches RLS-bypassed,
             // so derive it from a verified signal (a DKIM-checked address mapped to
             // an account) — never blindly from the spoofable sender.
@@ -848,6 +848,17 @@ The auto-wired handler is registered _before_ any manual `.onEmail(...)` you add
 to the app builder, so a hand-registered handler still wins if you need full
 control.
 
+**Untrusted text in the prompt.** Authentication decides who may start a run; it
+does not make the message text safe for the model. Wrap payload text with
+`wrapUntrusted` (from `@lunora/agent`) before it goes into `input`. It places the
+text in a tag with a random id per call, so the payload cannot forge the closing
+tag, escapes `<` and `>` in it, and neutralises leading `@`, `$` and `/` triggers
+with a zero-width space (`@` and `$` not glued to a word, and a leading `/`). Pass a header map as the second argument to render the
+headers too, with credential-like values (`authorization`, `cookie`, `set-cookie`,
+`x-api-key`, and any name containing `token` or `secret`) redacted. The helper
+appends a one-line note that the enclosed data is not to be followed as
+instructions.
+
 ## Inbound channels (Slack / GitHub / Discord)
 
 Trigger an agent from a **verified** inbound webhook. Give it an `onInbound`
@@ -856,7 +867,7 @@ mapper, then mount `dispatchAgentChannel(...)` (from `@lunora/agent/channels`) o
 an HTTP route:
 
 ```ts
-import { defineAgent } from "@lunora/agent";
+import { defineAgent, wrapUntrusted } from "@lunora/agent";
 
 export const support = defineAgent({
     model: "...",
@@ -866,7 +877,7 @@ export const support = defineAgent({
         map: (event) => {
             const payload = event.json() as { event?: { text?: string } };
             // SECURITY: derive `owner` from the VERIFIED channel identity, never a payload field.
-            return { input: payload.event?.text ?? "", owner: "slack-workspace", threadKey: "slack-thread" };
+            return { input: wrapUntrusted(payload.event?.text ?? ""), owner: "slack-workspace", threadKey: "slack-thread" };
         },
     },
 });
