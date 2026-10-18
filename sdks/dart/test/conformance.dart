@@ -139,6 +139,9 @@ Future<void> main() async {
   await run(caseBatchMissingSlotIsRetried);
   await run(caseWholeBatchRejectionIsTerminal);
   await run(casePreconditionFailureDiscardsBeforeReplay);
+  await run(caseOnlineOnlyRefusedWhenDisconnected);
+  await run(caseOnlineOnlySendsWhenConnected);
+  await run(caseOnlineOnlyLeavesNormalWritesQueued);
   await run(caseHydrateRestoresAheadOfThisSession);
   await run(caseIdentityChangeDiscardsQueuedWrites);
   await run(caseTokenDigestMatchesTheReferenceClient);

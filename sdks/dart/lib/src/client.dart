@@ -367,6 +367,13 @@ class LunoraClient {
   /// it replays — see [setConnected]. [precondition] is evaluated just before
   /// that replay: returning false discards the write rather than sending it
   /// against state it no longer suits.
+  ///
+  /// [onlineOnly] is never queued, persisted or replayed. Where this write would
+  /// be queued, the Future fails at once with `LunoraApiException` coded
+  /// [offlineNotQueued], before any optimistic layer is applied, so [args] never
+  /// reach the queue or the persistence adapter. It does not wait for a flush or
+  /// queue behind pending writes, so it may overtake them. For a credential or a
+  /// one-time token.
   Future<Object?> mutation(
     String functionPath, {
     Object? args,
@@ -375,6 +382,7 @@ class LunoraClient {
     LunoraOptimistic? optimistic,
     LunoraOptimisticUpdate? optimisticUpdate,
     bool Function()? precondition,
+    bool onlineOnly = false,
   }) async {
     _assertOpen();
 
@@ -382,12 +390,19 @@ class LunoraClient {
     // and any replay of it, so the server can deduplicate a write it already
     // committed rather than applying it twice.
     final id = mutationId ?? nextMutationId();
-    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
     // Per SHARD: a write for a shard whose socket is down queues even while
     // another shard is connected, because the connection that is up cannot
     // reach it.
-    if (!connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
+    final queues = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queues && onlineOnly) {
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
+
+    if (queues) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 
