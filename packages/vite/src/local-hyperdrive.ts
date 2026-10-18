@@ -1,5 +1,5 @@
 /**
- * Give `vite dev` a database for a Hyperdrive binding that has none.
+ * Give `vite dev` and `vite preview` a database for a Hyperdrive binding that has none.
  *
  * Wrangler refuses to resolve a Hyperdrive binding without a local connection
  * string, which takes the whole dev server down. `startLocalHyperdrive` serves an
@@ -96,9 +96,33 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
     // Close callbacks of middleware-mode servers, which have no httpServer to listen on.
     const pendingMiddlewareCloses: PendingCloseMap = new Map();
 
+    // A server (dev or preview) now depends on the databases: its close starts the countdown once no other server does.
+    const serverCame = (listen: (onClose: () => void) => void): void => {
+        const session = sessionFor(projectRoot);
+        let closed = false;
+
+        session.servers += 1;
+        clearTimeout(session.stopTimer);
+
+        listen(() => {
+            // Idempotent: some hosts deliver both close signals for one server.
+            if (closed) {
+                return;
+            }
+
+            closed = true;
+            session.servers -= 1;
+
+            if (session.servers === 0) {
+                session.stopTimer = scheduleStop(session, STOP_GRACE_MS);
+            }
+        });
+    };
+
     return {
         async config(_config, env) {
-            if (env.command !== "serve" || env.isPreview === true) {
+            // A build's output is the deploy config; a dev server and a preview both run the worker.
+            if (env.command !== "serve") {
                 return;
             }
 
@@ -151,24 +175,13 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
             runPendingClose(pendingMiddlewareCloses, this.environment);
         },
         configureServer(server) {
-            const session = sessionFor(projectRoot);
-            let closed = false;
-
-            session.servers += 1;
-            clearTimeout(session.stopTimer);
-
-            registerDevServerClose(server, pendingMiddlewareCloses, () => {
-                // Idempotent: some hosts deliver both close signals for one server.
-                if (closed) {
-                    return;
-                }
-
-                closed = true;
-                session.servers -= 1;
-
-                if (session.servers === 0) {
-                    session.stopTimer = scheduleStop(session, STOP_GRACE_MS);
-                }
+            serverCame((onClose) => {
+                registerDevServerClose(server, pendingMiddlewareCloses, onClose);
+            });
+        },
+        configurePreviewServer(server) {
+            serverCame((onClose) => {
+                server.httpServer.once("close", onClose);
             });
         },
         enforce: "pre",

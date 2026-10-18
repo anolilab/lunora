@@ -35,6 +35,28 @@ const attachServer = (plugin: Plugin): (() => void) => {
     };
 };
 
+/** A preview server, which always has an http server. Returns the function that closes it. */
+const attachPreviewServer = (plugin: Plugin): (() => void) => {
+    let close = (): void => {};
+    const httpServer = {
+        once: (_event: string, listener: () => void) => {
+            close = listener;
+        },
+    };
+    const hook = plugin.configurePreviewServer;
+    const run = typeof hook === "function" ? hook : hook?.handler;
+
+    const result: unknown = run?.call({} as never, { httpServer } as never);
+
+    if (result !== undefined) {
+        throw new Error("configurePreviewServer is expected to be synchronous");
+    }
+
+    return () => {
+        close();
+    };
+};
+
 /** A starter that serves the bindings in `queue`, one entry per call, and records what it stopped. */
 const starter = (...queue: string[][]) => {
     const stopped: string[] = [];
@@ -77,16 +99,39 @@ describe(localHyperdrive, () => {
         expect(localHyperdrive({ projectRoot: "/x", start }).enforce).toBe("pre");
     });
 
-    it("starts nothing for a production build or a preview, whose output is the deploy config", async () => {
+    it("starts nothing for a production build, whose output is the deploy config", async () => {
         expect.assertions(1);
 
         const { start } = starter(["HYPERDRIVE"]);
         const plugin = localHyperdrive({ projectRoot: "/project/build", start });
 
         await runConfigHook(plugin, "build");
-        await runConfigHook(plugin, "serve", true);
 
         expect(start).not.toHaveBeenCalled();
+    });
+
+    it("starts the embedded Postgres for `vite preview`, and stops it a little after the preview server closes", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const { start, stopped } = starter(["HYPERDRIVE"]);
+        const plugin = localHyperdrive({ projectRoot: "/project/preview", start });
+
+        await runConfigHook(plugin, "serve", true);
+
+        expect(start).toHaveBeenCalledTimes(1);
+
+        const closePreview = attachPreviewServer(plugin);
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        closePreview();
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(stopped).toStrictEqual(["HYPERDRIVE"]);
     });
 
     it("asks again on every config resolution, so a binding added after the first start gets a database on reload", async () => {

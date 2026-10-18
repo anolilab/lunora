@@ -69,13 +69,13 @@ pnpm add mysql2     # mysql2        → fromMysql2
 
 Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` and `lunora deploy` add a `HYPERDRIVE` binding to `wrangler.jsonc` for you, with a placeholder `id`.
 
-- **In dev**, `ctx.sql` runs against an embedded Postgres ([PGlite](https://pglite.dev)) with its data in `.wrangler/state/lunora-pglite`. It needs two optional packages (`lunora dev` says so when they are missing):
+- **In dev**, `ctx.sql` runs against an embedded Postgres ([PGlite](https://pglite.dev)) with its data in `.wrangler/state/lunora-pglite`, under `lunora dev`, `vite dev` and `vite preview`. It needs two optional packages (`lunora dev` says so when they are missing):
 
     ```sh
     pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
     ```
 
-    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets a warning and must set that variable to a local MySQL of its own.
+    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets a warning and must set that variable to a local MySQL of its own. A plain `wrangler dev` that Lunora does not start has no embedded database either: set the variable (or `localConnectionString`) there too.
 
 - **On deploy**, set the origin's connection string and a token that may edit Hyperdrive (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):
 
