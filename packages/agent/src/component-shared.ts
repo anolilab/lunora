@@ -64,10 +64,11 @@ const definedColumns = (columns: Record<string, unknown>): Record<string, unknow
 };
 
 /**
- * How long a supplied secret value stays takeable. Counted from the supply, so
- * it has to cover the gap until the model's next turn calls the consuming tool;
- * the consumer's `discard` removes it sooner on the success path, and this bound
- * is the backstop for a crash in between. Kept well under the host's ceiling.
+ * The shortest time a supplied secret value stays takeable. It covers the gap until
+ * the model's next turn calls the consuming tool, and the consumer's `discard`
+ * removes the value sooner on the success path; this bound is the backstop for a
+ * crash in between. A supply that may need to outlast its wake-up is given its
+ * deadline instead (see `secretValueTtlMs` in component.ts).
  */
 const AGENT_SECRET_TTL_MS: number = 15 * 60 * 1000;
 
