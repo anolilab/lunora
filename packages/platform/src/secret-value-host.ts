@@ -122,3 +122,25 @@ export interface SecretValueHost {
      */
     take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
 }
+
+/**
+ * The raw layer beneath an encrypting {@link SecretValueHost}. It mints the ref
+ * and the expiry itself, awaits `seal(ref)` for the bytes to store under that
+ * ref, then writes. The ref therefore exists before the bytes do, which is what
+ * lets the ciphertext bind the ref into its authenticated data. `seal` is not
+ * optional: a store has no way to write a value of its own.
+ *
+ * Deliberately not a {@link SecretValueHost}: its `put` takes a function where
+ * the host takes a value, so a plaintext path cannot be wired to it by accident.
+ * `take` returns exactly the bytes `seal` produced.
+ */
+export interface SecretValueStore {
+    /** Remove the record under `ref`. Resolves `true` when one was removed. */
+    discard: (ref: string) => Promise<boolean>;
+
+    /** Mint a ref, store `await seal(ref)` under it, and return the ref. */
+    put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
+
+    /** Apply the claimant, scope and expiry rules of {@link SecretValueHost.take} and return the stored bytes. */
+    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+}

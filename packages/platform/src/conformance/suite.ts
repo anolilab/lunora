@@ -1,6 +1,14 @@
-import { resolveShard, SECRET_VALUE_MAX_BYTES, SECRET_VALUE_MAX_TTL_MS, SecretValueTooLargeError } from "../index";
+import {
+    encryptingSecretValueHost,
+    resolveShard,
+    SECRET_VALUE_MAX_BYTES,
+    SECRET_VALUE_MAX_TTL_MS,
+    SecretValueKeyError,
+    SecretValueTooLargeError,
+} from "../index";
 import type { SocketHandle } from "../socket-host";
 import type { ConformanceHost, ConformanceHostFactory } from "./reference-host";
+import { createSecretValueTestKey } from "./reference-host";
 
 /**
  * Vitest API surface required by `defineHostContractSuite`. Passing the API in
@@ -942,6 +950,20 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
         });
 
+        // The sealed fields of one raw record, read through the host's own store.
+        const sealedFields = async (
+            store: NonNullable<ConformanceHost["secretValueStore"]>,
+            ref: string,
+        ): Promise<{ ciphertext: string; iv: string; keyId: string }> => {
+            const record = await store.peek(ref);
+
+            if (record === undefined) {
+                throw new Error(`no raw record under ${ref}`);
+            }
+
+            return JSON.parse(record.value) as { ciphertext: string; iv: string; keyId: string };
+        };
+
         // The secret-value contract. Its legs are skipped, not failed, when a host
         // does not offer it: a host with no agents has no secret store to test.
         describe("SecretValueHost", () => {
@@ -1107,6 +1129,161 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     expect(after).toStrictEqual(before);
                     expect(await host.kv.get(ref)).toBeUndefined();
                     expect(listed.size).toBe(before.length);
+                });
+            });
+        });
+
+        describe("SecretValueHost encryption", () => {
+            const SCOPE = "run-1";
+            const PLAINTEXT = "plaintext-sentinel-4c1d";
+            const TTL = { scope: SCOPE, ttlMs: 60_000 };
+
+            it("never holds the plaintext in the raw store", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    const ref = await secretValues.put(PLAINTEXT, TTL);
+                    const dumped = await secretValueStore.dump();
+
+                    expect(dumped).toContain(ref);
+                    expect(dumped).not.toContain(PLAINTEXT);
+                });
+            });
+
+            it("reads a tampered, moved or re-scoped record as undefined", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    const tampered = await secretValues.put("tamper-me", TTL);
+                    const { ciphertext } = await sealedFields(secretValueStore, tampered);
+                    const flipped = `${ciphertext.startsWith("A") ? "B" : "A"}${ciphertext.slice(1)}`;
+
+                    await secretValueStore.poke(tampered, {
+                        value: JSON.stringify({ ...(await sealedFields(secretValueStore, tampered)), ciphertext: flipped }),
+                    });
+                    expect(await secretValues.take(tampered, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const source = await secretValues.put("source", TTL);
+                    const moved = await secretValues.put("moved", TTL);
+
+                    const sourceRecord = await secretValueStore.peek(source);
+
+                    await secretValueStore.poke(moved, { value: sourceRecord?.value });
+                    expect(await secretValues.take(moved, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const rescoped = await secretValues.put("rescoped", TTL);
+
+                    await secretValueStore.poke(rescoped, { scope: "run-2" });
+                    expect(await secretValues.take(rescoped, { claimant: "step-a", scope: "run-2" })).toBeUndefined();
+                });
+            });
+
+            it("gives every put of the same value a fresh nonce", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    const first = await secretValues.put("same", TTL);
+                    const second = await secretValues.put("same", TTL);
+
+                    const firstSealed = await sealedFields(secretValueStore, first);
+                    const secondSealed = await sealedFields(secretValueStore, second);
+
+                    expect(firstSealed.iv).not.toBe(secondSealed.iv);
+                    expect(firstSealed.ciphertext).not.toBe(secondSealed.ciphertext);
+                });
+            });
+
+            it("opens a value sealed under the previous key until that key is dropped", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValueStore } = host;
+
+                    if (secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(4);
+
+                    const oldKey = createSecretValueTestKey();
+                    const newKey = createSecretValueTestKey();
+                    const before = encryptingSecretValueHost(secretValueStore.store, { key: oldKey });
+                    const sealedUnderOld = await before.put("rotate-me", TTL);
+
+                    const rotating = encryptingSecretValueHost(secretValueStore.store, { key: newKey, previousKey: oldKey });
+
+                    expect(await rotating.take(sealedUnderOld, { claimant: "step-a", scope: SCOPE })).toBe("rotate-me");
+
+                    const sealedUnderNew = await rotating.put("written-after-rotation", TTL);
+
+                    const newSealed = await sealedFields(secretValueStore, sealedUnderNew);
+                    const oldSealed = await sealedFields(secretValueStore, sealedUnderOld);
+
+                    expect(newSealed.keyId).not.toBe(oldSealed.keyId);
+
+                    const dropped = encryptingSecretValueHost(secretValueStore.store, { key: newKey });
+
+                    expect(await dropped.take(sealedUnderNew, { claimant: "step-a", scope: SCOPE })).toBe("written-after-rotation");
+                    expect(await dropped.take(sealedUnderOld, { claimant: "step-b", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("refuses put and take with SecretValueKeyError when the key is missing or malformed, and takes nothing", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    const cases: { key: string | undefined; previousKey?: string }[] = [
+                        { key: undefined },
+                        { key: "" },
+                        { key: "not-a-key" },
+                        { key: btoa("x".repeat(31)) },
+                        { key: createSecretValueTestKey(), previousKey: "not-a-key" },
+                    ];
+
+                    expect.assertions(cases.length * 2 + 1);
+
+                    const kept = await secretValues.put("kept", TTL);
+
+                    await Promise.all(
+                        cases.map(async (options) => {
+                            const broken = encryptingSecretValueHost(secretValueStore.store, options);
+
+                            await expect(broken.put("refused", TTL)).rejects.toBeInstanceOf(SecretValueKeyError);
+                            await expect(broken.take(kept, { claimant: "step-a", scope: SCOPE })).rejects.toBeInstanceOf(SecretValueKeyError);
+                        }),
+                    );
+
+                    expect(await secretValues.take(kept, { claimant: "step-a", scope: SCOPE })).toBe("kept");
                 });
             });
         });
