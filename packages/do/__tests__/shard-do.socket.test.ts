@@ -208,6 +208,37 @@ describe("shardDO socket routes", () => {
         expect(a.frames).toEqual([{ data: { count: 1 }, topic: CHAT_TOPIC, type: "message" }]);
     });
 
+    it("refuses a route payload the wire encoder cannot carry instead of flattening it", async () => {
+        expect.assertions(2);
+
+        class Point {
+            public constructor(public readonly x: number) {}
+        }
+
+        class ClassSendingShard extends SocketShard {
+            public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+                this.calls.push({ args, functionPath });
+
+                if (args["kind"] === "message") {
+                    (args["socket"] as { send: (message: unknown) => void }).send(new Point(1));
+                }
+
+                return Promise.resolve(undefined);
+            }
+        }
+
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const state = { acceptWebSocket: () => undefined, getWebSockets: () => [a], storage: { sql: {} } } as unknown as ShardDOState;
+        const shard = new ClassSendingShard(state, CHAT_ROUTE);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "hi" })));
+
+        const entries = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+
+        expect(a.frames).toEqual([]);
+        expect(entries.some((entry) => entry.functionPath === "sockets:chat" && /encode/iu.test(entry.message))).toBe(true);
+    });
+
     it("refuses a frame from an anonymous socket once its route requires auth", async () => {
         expect.assertions(3);
 

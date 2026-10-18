@@ -502,11 +502,6 @@ const socketFrame = (topic: string, data: unknown): string => {
     return `{"type":"message","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
 };
 
-/** Send one already-typed `data` payload to a single route socket. Module-level for the same no-state reason as {@link socketFrame}. */
-const sendSocketFrame = (ws: ShardSocketLike, topic: string, data: unknown): void => {
-    trySendFrame(ws, socketFrame(topic, data));
-};
-
 /**
  * Hard ceiling on a single inbound WS frame — 1Mi UTF-16 code units for a text
  * frame, 1 MiB for a binary one. Every subscription envelope the protocol defines
@@ -1885,19 +1880,6 @@ const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, gr
  * `broadcastDelta`. Subscriptions are stored on each WebSocket via
  * `serializeAttachment` so they survive hibernation.
  */
-
-/**
- * A route handler's `socket.send`/`broadcast` payload as it was at the call. The frame goes out only after the
- * handler commits, so a handler that mutates the object afterwards must not change what was sent. A value the
- * structured clone cannot copy is kept as is; the wire encoder reports it when the frame is built.
- */
-const snapshotPayload = (payload: unknown): unknown => {
-    try {
-        return structuredClone(payload);
-    } catch {
-        return payload;
-    }
-};
 
 abstract class ShardDO {
     /**
@@ -16528,19 +16510,21 @@ abstract class ShardDO {
         const pending: (() => void)[] = [];
         const socket = {
             broadcast: (payload: unknown): void => {
-                const sent = snapshotPayload(payload);
+                // Encoded at the call: the frame carries the payload as it was then, and a value the wire encoder
+                // refuses throws here, inside the handler, rather than after it commits.
+                const frame = socketFrame(topic, payload);
 
                 pending.push(() => {
-                    this.broadcastSocketMessage(topic, sent);
+                    this.broadcastSocketMessage(topic, frame);
                 });
             },
             connectionId: info.event.connectionId,
             path: route.path,
             send: (payload: unknown): void => {
-                const sent = snapshotPayload(payload);
+                const frame = socketFrame(topic, payload);
 
                 pending.push(() => {
-                    sendSocketFrame(ws, topic, sent);
+                    trySendFrame(ws, frame);
                 });
             },
             shardKey: info.event.shardKey,
@@ -16594,9 +16578,7 @@ abstract class ShardDO {
      * serving the shard exactly like a room broadcast. Fire-and-forget:
      * `broadcast` is a synchronous callback.
      */
-    private broadcastSocketMessage(topic: string, data: unknown): void {
-        const frame = socketFrame(topic, data);
-
+    private broadcastSocketMessage(topic: string, frame: string): void {
         // The same cap a room broadcast carries, measured in UTF-8 bytes (`.length` counts
         // UTF-16 units, so multibyte text would slip past it). Thrown so the dispatch logs
         // it against the route instead of fanning out an unbounded frame.
