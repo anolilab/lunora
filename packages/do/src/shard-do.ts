@@ -389,6 +389,7 @@ import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import SubscriptionFailureLatch from "./subscription-backoff";
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
 const loadSqlAssistant = () => import("./sql-assistant");
@@ -2633,6 +2634,13 @@ abstract class ShardDO {
     private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
 
     /**
+     * Subscriptions whose refresh keeps throwing, so a deterministic failure is
+     * not re-run (and re-announced) on every write flush. In memory only, like
+     * {@link ShardDO.subMemos}: a cold DO forgets and simply retries.
+     */
+    private readonly subscriptionFailures = new SubscriptionFailureLatch();
+
+    /**
      * Count of committed write batches handed to {@link ShardDO.flushChangedTables}.
      * A subscription run captures it BEFORE it reads, and the value lands on the
      * memo it produces ({@link SubscriptionMemo.generation}), so a run that parked
@@ -3421,6 +3429,7 @@ abstract class ShardDO {
             // stale memo set around if the same socket id is reused after a
             // bounce. Cheap to recompute on the next subscribe.
             this.subMemos.delete(ws);
+            this.subscriptionFailures.clearSocket(ws);
             this.shapeMemos.delete(ws);
             this.globalShapeSnapshots.delete(ws);
             this.liveGrantSockets.delete(ws);
@@ -5838,6 +5847,8 @@ abstract class ShardDO {
         // is answered `settled` (or a delta against a value the client just
         // discarded) and the client never gets the snapshot it asked for.
         this.subMemos.get(ws)?.delete(subId);
+        // New args or a re-snapshot request: a subscription that was failing is retried at once.
+        this.subscriptionFailures.clear(ws, subId);
 
         return "ok";
     }
@@ -5873,6 +5884,7 @@ abstract class ShardDO {
         }
 
         this.subMemos.get(ws)?.delete(subId);
+        this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
 
@@ -13051,6 +13063,32 @@ abstract class ShardDO {
         }
     }
 
+    /** The caller identity a failing subscription is latched under; `""` (matching nothing) when the socket has no failure streak to look up. */
+    private failureIdentityKey(ws: ShardSocketLike, attachment: SocketAttachment): string {
+        return this.subscriptionFailures.hasFailures(ws) ? subscriptionIdentityKey(socketIdentity(attachment)) : "";
+    }
+
+    /**
+     * A subscription's refresh threw: count and log it, latch it for backoff, and
+     * tell the client the first time of a streak. The subscription stays
+     * registered, so it recovers by itself once a retry succeeds.
+     */
+    private noteFailingSubscription(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown, attachment: SocketAttachment): void {
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+
+        const startsStreak = this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(attachment)), Date.now());
+
+        // A guarded socket is told nothing: its delivered view stays until the authority answers again, and a
+        // refresh failure's message is not something that mode surfaces to the client.
+        if (!startsStreak || this.deliveryAuthorization) {
+            return;
+        }
+
+        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+        this.sendSubscriptionError(ws, subId, body.code, body.message);
+    }
+
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
         const sockets = [...this.runner.sockets()];
 
@@ -13090,6 +13128,10 @@ abstract class ShardDO {
             // subscription's authorization is REVOCABLE, and the loop below
             // re-derives `isAdmin` from the function path alone.
             const adminAuthorized = await this.attachmentAdminAuthorized(attachment);
+
+            // Only derived for a socket with a subscription in a failure streak: the
+            // identity decides whether a backed-off subscription may run again.
+            const identityKey = this.failureIdentityKey(ws, attachment);
 
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
             const { subs } = attachment;
@@ -13134,15 +13176,14 @@ abstract class ShardDO {
                     await awaitWsDrain(ws);
 
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
+                    this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
-                    // is left untouched ("unknown deps"), so this subscription
-                    // re-runs on the next flush — but until now that failure was
-                    // silent (DO-01): a subscription whose refresh throws
-                    // DETERMINISTICALLY (a bad handler cast, say) repeated
-                    // unnoticed for the life of the socket with no signal an
-                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
+                    // is left untouched ("unknown deps"), so the subscription is
+                    // retried — but not on every flush: a failure that repeats
+                    // (a bad handler cast, say) is latched with a growing backoff
+                    // and announced to the client once. See `noteFailingSubscription`.
                     if (isDeliveryAccessDenied(error)) {
                         this.revokeSubscription(ws, subId);
                         return;
@@ -13150,8 +13191,10 @@ abstract class ShardDO {
                     if (this.deliveryAuthorization && isLunoraError(error) && error.code === "SUBSCRIPTION_PERSIST_FAILED") {
                         this.unsubscribe(ws, subId);
                         this.sendSubscriptionError(ws, subId, error.code, error.message);
+                        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+                        return;
                     }
-                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
+                    this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
                 }
             };
 
@@ -13197,6 +13240,10 @@ abstract class ShardDO {
                 const memo = this.subMemos.get(ws)?.get(subId);
 
                 if (!this.deliveryAuthorization && memoProvesUnchanged(memo, changed, changedKeys)) {
+                    continue;
+                }
+
+                if (this.subscriptionFailures.isBackingOff(ws, subId, identityKey, Date.now())) {
                     continue;
                 }
 
