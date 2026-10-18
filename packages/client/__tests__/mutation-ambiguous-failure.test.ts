@@ -77,4 +77,81 @@ describe("direct mutation whose response was lost", () => {
 
         client.close();
     });
+
+    it("gives up after a bounded number of attempts and rolls the optimistic write back", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchImpl = vi.fn<typeof fetch>(async () => new Response("<html>bad gateway</html>", { status: 502 }));
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { replayRetry: { baseDelayMs: 10, maxDelayMs: 20 } },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket,
+        });
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        const [frame] = sockets[0]?.frames() ?? [];
+
+        sockets[0]?.receive({ delta: 5, id: frame?.id, type: "delta" });
+
+        const outcome = client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (typeof current === "number" ? current + 1 : 1) }).then(
+            () => "resolved",
+            (error: unknown) => (error as { code?: string }).code,
+        );
+
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        await expect(outcome).resolves.toBe("INTERNAL");
+        // The write is not retried for ever, and its predicted value is taken back.
+        expect(received).toStrictEqual([5, 6, 5]);
+        expect(client.pendingCount()).toBe(0);
+        expect(fetchImpl.mock.calls.length).toBeLessThan(10);
+
+        client.close();
+    });
+
+    it("leaves an outbox app's failed write to reject as before", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const outbox = { enqueue: vi.fn<() => Promise<void>>(async () => undefined) };
+        const client = new LunoraClient({
+            fetch: vi.fn<typeof fetch>(async () => {
+                throw new TypeError("network connection lost");
+            }),
+            heartbeatIntervalMs: 0,
+            outbox,
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        const outcome = client.mutation(fnRef("todos.set"), { text: "a" }).then(
+            () => "resolved",
+            (error: unknown) => (error as Error).name,
+        );
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        await expect(outcome).resolves.toBe("TypeError");
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+
+        client.close();
+    });
 });

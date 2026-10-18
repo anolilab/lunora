@@ -85,6 +85,13 @@ const RESUBSCRIBE_CONCURRENCY = 3;
 const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 
 /**
+ * Replay attempts a write gets after its direct send failed ambiguously, before it
+ * is rejected and its optimistic update rolled back. The direct send itself is not
+ * counted. Few, because a caller is waiting on the answer.
+ */
+const MAX_AMBIGUOUS_SEND_ATTEMPTS = 5;
+
+/**
  * How many identities keep a cached mutator watermark. The nesting exists so
  * signing back into a previous identity recovers its watermark rather than
  * re-deriving `1` against a server watermark already past it (the `OUT_OF_ORDER`
@@ -100,6 +107,7 @@ export {
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
     DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
+    MAX_AMBIGUOUS_SEND_ATTEMPTS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
     QUERY_CACHE_DEBOUNCE_MS,

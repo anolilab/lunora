@@ -3,6 +3,13 @@ import isStaleVersion from "./persisted-version";
 import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
+    /**
+     * Set on a write that was queued because its direct send failed in a way that
+     * says nothing about its fate (see `LunoraClient.mutation`). Its caller is still
+     * waiting and was never told it failed, so the replay counts its transient
+     * failures and rejects it after a few, rather than retrying for ever.
+     */
+    readonly ambiguousSend?: boolean;
     readonly args: Record<string, unknown>;
 
     /**

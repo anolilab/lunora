@@ -89,6 +89,7 @@ import {
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
     DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
+    MAX_AMBIGUOUS_SEND_ATTEMPTS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
     QUERY_CACHE_DEBOUNCE_MS,
@@ -4755,7 +4756,7 @@ class LunoraClient {
         // through the outbox, under its own `mutationId`, which is safe.
         const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
 
-        const enqueue = async (): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
+        const enqueue = async (ambiguousSend = false): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
             this.enqueueOfflineMutation(
                 function_,
                 argsRecord,
@@ -4767,6 +4768,7 @@ class LunoraClient {
                 options.precondition,
                 options.mutationId,
                 replay?.stamp,
+                ambiguousSend,
             );
 
         if (socketDown || midReconnect || queuedAhead) {
@@ -4810,13 +4812,17 @@ class LunoraClient {
             // same `mutationId`, which the server dedups. A coded server verdict is not
             // ambiguous and still rejects; a durable replay (it carries a baseline) is
             // already owned by a queue and reports to it.
+            //
+            // Not for an outbox app: its sink would accept the write and resolve `undefined`
+            // where this used to reject, and it owns its own retry policy.
             if (
                 shouldQueueOffline &&
+                !this.outbox &&
                 options.replayBaseline === undefined &&
                 (error instanceof TypeError || error instanceof TransportError) &&
                 isEncodable(argsRecord)
             ) {
-                const queued = enqueue();
+                const queued = enqueue(true);
 
                 // Over a socket that is still open nothing else will flush the queue.
                 this.noteHeldRetryDelay(options.shardKey);
@@ -4887,6 +4893,7 @@ class LunoraClient {
         precondition: (() => boolean) | undefined,
         callerMutationId: string | undefined,
         replayStamp: null | string | undefined,
+        ambiguousSend: boolean,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue). A durable replay going
@@ -4944,6 +4951,7 @@ class LunoraClient {
 
         const value = await new Promise<ReturnOf<F>>((resolve, reject) => {
             const entry: QueuedMutation<ReturnOf<F>> = {
+                ambiguousSend,
                 args: argsRecord,
                 functionPath: function_.__lunoraRef,
                 // A live caller is awaiting this Promise, so a terminal verdict
@@ -9279,15 +9287,38 @@ class LunoraClient {
     }
 
     /**
-     * Count a `SHARD_ERROR` answer against `item` and report whether it was the
-     * last attempt the write gets (`offlineQueue.replayRetry`). Any
-     * other failure is not counted: only a coded answer from the shard says the
-     * write itself may be what fails, where a transport error, a timeout, a rate
-     * limit or a refused credential says nothing about it. A whole-batch
-     * `SHARD_ERROR` is not attributable to one write and is not counted either.
+     * Count a failed replay attempt against `item` and report whether it was the
+     * last attempt the write gets.
+     *
+     * Two kinds of write are bounded. Any write is bounded in `SHARD_ERROR`
+     * answers (`offlineQueue.replayRetry.maxShardErrorAttempts`): only a coded
+     * answer from the shard says the write itself may be what fails, where a
+     * transport error, a timeout, a rate limit or a refused credential says
+     * nothing about it. A whole-batch `SHARD_ERROR` is not attributable to one
+     * write and is not counted. A write queued after an ambiguous direct send has
+     * a caller still waiting, so it is also bounded in transport-level failures
+     * ({@link MAX_AMBIGUOUS_SEND_ATTEMPTS}); a rate limit or a refused credential
+     * still never counts for it.
      */
-    private spendsLastShardErrorAttempt(item: QueuedMutation, error: unknown): boolean {
-        if ((error as { code?: string } | null | undefined)?.code !== "SHARD_ERROR" || item.id === undefined) {
+    private spendsLastReplayAttempt(item: QueuedMutation, error: unknown): boolean {
+        if (item.id === undefined) {
+            return false;
+        }
+
+        const code = (error as { code?: string } | null | undefined)?.code;
+        let limit: number;
+
+        if (
+            item.ambiguousSend === true &&
+            !isAuthReplayFailure(error) &&
+            code !== "RATE_LIMITED" &&
+            code !== "TOO_MANY_REQUESTS" &&
+            isTransientReplayFailure(error)
+        ) {
+            limit = MAX_AMBIGUOUS_SEND_ATTEMPTS;
+        } else if (code === "SHARD_ERROR") {
+            limit = this.maxShardErrorAttempts;
+        } else {
             return false;
         }
 
@@ -9295,7 +9326,20 @@ class LunoraClient {
 
         this.shardErrorAttempts.set(item.id, attempts);
 
-        return attempts >= this.maxShardErrorAttempts;
+        return attempts >= limit;
+    }
+
+    /** Settle, terminally, the ambiguous-send writes among `items` that `error` was the last attempt for; the rest stay queued. */
+    private keepUnexhaustedAmbiguousWrites(items: QueuedMutation[], error: unknown): QueuedMutation[] {
+        return items.filter((item) => {
+            if (item.ambiguousSend === true && this.spendsLastReplayAttempt(item, error)) {
+                this.settleReplayTerminal(item, error);
+
+                return false;
+            }
+
+            return true;
+        });
     }
 
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
@@ -9357,7 +9401,7 @@ class LunoraClient {
                     continue;
                 }
 
-                if (!this.shouldRequeueReplayFailure(error, authToken) || this.spendsLastShardErrorAttempt(item, error)) {
+                if (!this.shouldRequeueReplayFailure(error, authToken) || this.spendsLastReplayAttempt(item, error)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
@@ -9486,7 +9530,7 @@ class LunoraClient {
                 this.noteReplayRetryDelay(shardKey, error, authToken);
             }
 
-            return { requeue: items, stop: true };
+            return { requeue: this.keepUnexhaustedAmbiguousWrites(items, error), stop: true };
         }
 
         const bookmark = response.headers.get("x-d1-bookmark");
@@ -9549,7 +9593,7 @@ class LunoraClient {
         if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error, authToken))) {
             this.noteReplayRetryDelay(shardKey, error, authToken);
 
-            return { requeue: items, stop: true };
+            return { requeue: this.keepUnexhaustedAmbiguousWrites(items, error), stop: true };
         }
 
         for (const item of items) {
@@ -9621,7 +9665,7 @@ class LunoraClient {
                 case "errored": {
                     refused ||= isAuthReplayFailure(verdict.error);
 
-                    if (this.shouldRequeueReplayFailure(verdict.error, authToken) && !this.spendsLastShardErrorAttempt(item, verdict.error)) {
+                    if (this.shouldRequeueReplayFailure(verdict.error, authToken) && !this.spendsLastReplayAttempt(item, verdict.error)) {
                         this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
                         requeue.push(item);
                     } else {
@@ -9634,7 +9678,15 @@ class LunoraClient {
                     // The server never returned this slot. It may or may not have committed,
                     // so retry under the same `mutationId` (idempotent). Over a socket that
                     // stays open no reconnect will flush it, so schedule the retry here.
-                    this.noteReplayRetryDelay(shardKey, unreadableSlotError(), authToken);
+                    const unanswered = unreadableSlotError();
+
+                    if (this.spendsLastReplayAttempt(item, unanswered)) {
+                        this.settleReplayTerminal(item, unanswered);
+
+                        break;
+                    }
+
+                    this.noteReplayRetryDelay(shardKey, unanswered, authToken);
                     requeue.push(item);
 
                     break;
