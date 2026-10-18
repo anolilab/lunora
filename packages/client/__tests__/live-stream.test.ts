@@ -517,6 +517,68 @@ describe("connectLiveStream", () => {
         expect(reported).toEqual(["second"]);
     });
 
+    it("does not send a subscribe on the dropped connection while the reconnect is in flight", async () => {
+        expect.assertions(1);
+
+        const streams: FakeStream[] = [];
+        const heldConnects: ((response: Response) => void)[] = [];
+        let connects = 0;
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                connects += 1;
+
+                // The first connection is served at once; the reconnect is held open until the test answers it.
+                if (connects === 1) {
+                    const stream = new FakeStream("c1");
+
+                    streams.push(stream);
+
+                    return Promise.resolve(stream.response);
+                }
+
+                return new Promise<Response>((resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new DOMException("aborted", "AbortError"));
+                    });
+                    heldConnects.push(resolve);
+                });
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            // The shard no longer knows the dropped connection.
+            return Promise.resolve(Response.json({ ok: true }, { status: call.connectionId === "c1" ? 404 : 200 }));
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        await live.ready;
+
+        streams[0]?.end();
+
+        await vi.waitFor(() => {
+            if (heldConnects.length === 0) {
+                throw new Error("reconnect not started");
+            }
+        });
+
+        live.subscribe({ id: "s1", topic: "feed" });
+
+        // Give a stale control reply time to arrive and, with the bug, to abort the reconnect.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(connects).toBe(2);
+
+        heldConnects[0]?.(new FakeStream("c2").response);
+        live.close();
+    });
+
     it("generates an id that skips one a caller already holds", async () => {
         expect.assertions(2);
 

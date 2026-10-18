@@ -86,7 +86,7 @@ interface LiveSubscription {
 interface LiveStream {
     /** Close the stream and stop reconnecting. */
     close: () => void;
-    /** The server-minted connection id, or `undefined` before the first connect. */
+    /** The server-minted connection id, or `undefined` before the first connect and while reconnecting. */
     readonly connectionId: string | undefined;
     /** Observe every event on the connection; returns an unsubscribe handle. */
     onEvent: (handler: (event: LiveStreamEvent) => void) => () => void;
@@ -425,6 +425,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             } catch {
                 // A fetch failure or a mid-stream throw falls through to the backoff.
             }
+
+            // The connection that id names is gone. A subscribe made during the backoff must not send it:
+            // it would be refused, and its refusal would abort the next connect attempt.
+            connectionId = undefined;
 
             if (isClosed()) {
                 return;
