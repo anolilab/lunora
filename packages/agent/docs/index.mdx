@@ -750,6 +750,8 @@ runs its steps in one shot and cannot hibernate mid-way for a human decision.
 one — the agent module throws on load rather than silently bypassing the gate.
 Expose that tool as a normal top-level tool, or gate the whole script with
 `codeTool`'s own `needsApproval`.
+The same holds for a `requestSecretTool`: a script step cannot pause for the owner
+to supply the value, so `codeTool` refuses it too. Expose it as a top-level tool.
 
 Scripts are capped at `maxSteps` (default 16); a
 longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
