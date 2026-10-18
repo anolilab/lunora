@@ -16,12 +16,14 @@ const THREADS_BARE_TABLE = "threads";
 const MESSAGES_BARE_TABLE = "messages";
 const RUN_QUEUE_BARE_TABLE = "run_queue";
 const GRANTS_BARE_TABLE = "approval_grants";
+const REQUESTS_BARE_TABLE = "secret_requests";
 
 /** The physical (merged) table names the runtime functions read/write. */
 const THREADS_TABLE: "agent_threads" = `${AGENT_EXTENSION_KEY}_${THREADS_BARE_TABLE}`;
 const MESSAGES_TABLE: "agent_messages" = `${AGENT_EXTENSION_KEY}_${MESSAGES_BARE_TABLE}`;
 const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_BARE_TABLE}`;
 const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_BARE_TABLE}`;
+const REQUESTS_TABLE: "agent_secret_requests" = `${AGENT_EXTENSION_KEY}_${REQUESTS_BARE_TABLE}`;
 
 /**
  * How many runs may park behind the one in flight under
@@ -94,6 +96,7 @@ const agentExtension: SchemaExtension<
         | keyof typeof graphTables
         | typeof GRANTS_BARE_TABLE
         | typeof MESSAGES_BARE_TABLE
+        | typeof REQUESTS_BARE_TABLE
         | typeof RUN_QUEUE_BARE_TABLE
         | typeof THREADS_BARE_TABLE,
         TableDefinition
@@ -292,6 +295,39 @@ const agentExtension: SchemaExtension<
             // See the threads table for why the agent tables are `.public()`.
             .public(),
 
+        /**
+         * One row per `requestSecretTool` pause, keyed by the request's tool-call id.
+         * Every transition (supply, decline, expiry, consumption) is a compare-and-set
+         * on `status` inside one mutation, so a supply and the timeout cannot both
+         * win. The row holds the host's ref, which the loop never sees: the model is
+         * handed the tool-call id, and the consuming tool resolves it here. The value
+         * itself is never stored in this table.
+         */
+        [REQUESTS_BARE_TABLE]: defineTable({
+            /** The only tool whose claimant may read the value (`requestSecretTool({ consumer })`). */
+            consumerTool: v.string(),
+            createdAt: v.number(),
+            /** Absolute deadline: a supply at or after it is refused, whether or not the loop has settled. */
+            expiresAt: v.number(),
+
+            /**
+             * The run that owns the request. A tool-call id is provider-issued, so a later
+             * run can reuse one; the instance tells a replayed pause from a new run.
+             */
+            instanceId: v.string(),
+            /** The host's ref, set by the supply and cleared when a later run reuses the row. Sensitive: never listed, logged or returned. */
+            ref: v.optional(v.string().nullable()),
+            status: v.union(v.literal("pending"), v.literal("supplied"), v.literal("declined"), v.literal("expired"), v.literal("consumed")),
+            threadKey: v.string(),
+            toolCallId: v.string(),
+            toolName: v.string(),
+            updatedAt: v.number(),
+        })
+            // One request per tool call per thread; the unique key makes a replayed pause a no-op.
+            .index("byThreadCall", ["threadKey", "toolCallId"], { unique: true })
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
+
         // The owner-scoped graph-memory tables (`agent_entities`/`agent_edges`)
         // live in graph-component.ts alongside the functions that read/write
         // them; spread in here so the app still merges one `agentExtension`.
@@ -365,11 +401,11 @@ const secretStoreOf = (context: unknown): SecretValueHost => {
  * knows its key, and it must NOT be allowed to take a credential. Requires a
  * verified identity that equals the thread's stored owner.
  */
-const ownedSecretThread = (thread: Record<string, unknown> | null, auth: { userId?: string | null }): Record<string, unknown> => {
+const ownedSecretThread = (thread: Record<string, unknown> | null, auth: { userId?: string | null }, action: string): Record<string, unknown> => {
     const userId = auth.userId ?? undefined;
 
     if (thread === null || userId === undefined || thread["owner"] !== userId) {
-        throw new LunoraError("FORBIDDEN", "@lunora/agent: only the thread's owner can supply or decline a secret on it");
+        throw new LunoraError("FORBIDDEN", `@lunora/agent: only the thread's owner can ${action}`);
     }
 
     return thread;
@@ -396,6 +432,32 @@ const pendingSecretMarker = async (database: QueueDatabase, thread: Record<strin
     }
 
     return marker;
+};
+
+/** The request row for one tool call on a thread, or `undefined` (a pre-change thread has none). */
+const secretRequestOf = async (database: QueueDatabase, threadKey: string, toolCallId: string): Promise<Record<string, unknown> | undefined> => {
+    const request = await database
+        .query(REQUESTS_TABLE)
+        .withIndex("byThreadCall", (q) => q.eq("threadKey", threadKey).eq("toolCallId", toolCallId))
+        .first();
+
+    return request ?? undefined;
+};
+
+/**
+ * The request row, which must still be open for an answer: pending and before its
+ * deadline. Read again after the host `put` in supply, because the deadline can pass
+ * while the value is being stored. A missing row (a thread paused before this table
+ * existed) refuses the same way, so nothing is stored for it.
+ */
+const openSecretRequestOrThrow = async (database: QueueDatabase, threadKey: string, toolCallId: string, now: number): Promise<Record<string, unknown>> => {
+    const request = await secretRequestOf(database, threadKey, toolCallId);
+
+    if (request?.["status"] !== "pending" || now >= (request["expiresAt"] as number)) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no open secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+    }
+
+    return request;
 };
 
 /**
@@ -589,11 +651,14 @@ export interface AgentComponent {
         agentGraphUpsert: AgentRegisteredFunction;
         agentHistory: AgentRegisteredFunction;
         agentMessages: AgentRegisteredFunction;
+        agentOpenSecretRequest: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
         agentRevokeApprovalGrant: AgentRegisteredFunction;
         agentRun: AgentRegisteredFunction;
+        agentSecretRequests: AgentRegisteredFunction;
         agentSetState: AgentRegisteredFunction;
+        agentSettleSecretRequest: AgentRegisteredFunction;
         agentState: AgentRegisteredFunction;
         agentSupplySecret: AgentRegisteredFunction;
         agentTakeSecret: AgentRegisteredFunction;
@@ -1255,14 +1320,21 @@ export const agentComponent = (): AgentComponent => {
         });
 
     /**
-     * Deliver a human-supplied secret to the paused `requestSecretTool` call. The
-     * value is written to the secret store and only its opaque ref travels in the
-     * wake-up event, so it never reaches the workflow journal, a message row or
-     * this mutation's return (`{ resolved: true }`, which the shard's idempotency
-     * row persists). PUBLIC and OWNER-GATED, fail closed (see
-     * {@link ownedSecretThread}). The plaintext transits this mutation's arguments,
-     * so the `secret` arg is marked `v.sensitive`: the request log masks it, a
-     * rejected value is not echoed, and the client never queues it offline.
+     * Store a human-supplied secret and wake the paused `requestSecretTool` call.
+     * The request row moves to `supplied` with the host's ref, and the wake-up
+     * carries no payload, so neither the ref nor the value reaches the workflow
+     * journal or an event. The loop reads the outcome from the row. PUBLIC and
+     * OWNER-GATED, fail closed (see {@link ownedSecretThread}). The plaintext
+     * transits this mutation's arguments, so the `secret` arg is marked
+     * `v.sensitive`: the request log masks it, a rejected value is not echoed, and
+     * the client never queues it offline.
+     *
+     * The host `put` writes through the raw storage handle, not the mutation's own
+     * transaction, so this code does not assume the value and the row commit
+     * together. The order is: check the request is open, `put`, check it is still
+     * open (the deadline can pass during the put), then the compare-and-set. Any
+     * failure after the `put` discards the value, so a refused supply leaves nothing
+     * readable behind it.
      */
     const agentSupplySecret = mutation
         .input({ secret: v.sensitive(v.string()), threadKey: v.string(), toolCallId: v.string() })
@@ -1273,10 +1345,13 @@ export const agentComponent = (): AgentComponent => {
                     .withIndex("byKey", (q) => q.eq("key", args.threadKey))
                     .first(),
                 context.auth,
+                "supply or decline a secret on it",
             );
             const store = secretStoreOf(context);
             const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
             const handle = secretWaitHandle(context, thread);
+
+            await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
 
             let ref: string;
 
@@ -1290,14 +1365,15 @@ export const agentComponent = (): AgentComponent => {
                 throw error;
             }
 
-            // Retire the marker in this same mutation, so a second submit is a
-            // CONFLICT rather than a second stored value.
-            await context.db.delete(marker["_id"] as never);
-
             try {
-                await handle.sendEvent(handle.instanceId, { payload: { ref }, type: `agent-secret:${args.toolCallId}` });
+                const request = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+
+                await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
+                // Retire the marker in this same mutation, so the UI stops offering the form.
+                await context.db.delete(marker["_id"] as never);
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
             } catch (error: unknown) {
-                // The wake-up never landed, so nothing will consume the value.
+                // Nothing will consume the value: the row never moved or the wake never landed.
                 await store.discard(ref);
 
                 throw error;
@@ -1307,9 +1383,10 @@ export const agentComponent = (): AgentComponent => {
         });
 
     /**
-     * Refuse a human-facing secret request: the paused call resumes with a
-     * deterministic "declined" tool result instead of waiting out its timeout.
-     * PUBLIC and OWNER-GATED like {@link agentSupplySecret}.
+     * Refuse a human-facing secret request: the request row moves to `declined` and
+     * the paused call resumes with a deterministic "declined" result instead of
+     * waiting out its timeout. Gated like {@link agentSupplySecret}, so a decline and
+     * a supply cannot both win. PUBLIC and OWNER-GATED.
      */
     const agentDeclineSecret = mutation
         .input({ threadKey: v.string(), toolCallId: v.string() })
@@ -1320,36 +1397,195 @@ export const agentComponent = (): AgentComponent => {
                     .withIndex("byKey", (q) => q.eq("key", args.threadKey))
                     .first(),
                 context.auth,
+                "supply or decline a secret on it",
             );
             const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
             const handle = secretWaitHandle(context, thread);
+            const request = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
 
+            await context.db.patch(request["_id"] as never, { status: "declined", updatedAt: Date.now() });
             await context.db.delete(marker["_id"] as never);
-            await handle.sendEvent(handle.instanceId, { payload: { declined: true }, type: `agent-secret:${args.toolCallId}` });
+            await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
 
             return { resolved: true };
         });
 
     /**
-     * Read a supplied secret for the consuming tool's claimant. INTERNAL: only a
-     * tool step dispatches it, with `claimant` set to its durable step name, so a
-     * client cannot spoof a claimant. The first take binds the ref; a null result
-     * means expired, unknown, already bound to another claimant, or the wrong thread.
+     * Record a pending secret request when a run pauses on one. INTERNAL and idempotent
+     * for the run that owns the row: a replayed pause finds its own row and changes
+     * nothing, so a retry never reopens a request that was already answered. A row left
+     * by an earlier run that reused this tool-call id is retired: that run has finished,
+     * so its value is discarded and the row starts over as pending for this run.
+     */
+    const agentOpenSecretRequest = asInternal(
+        mutation
+            .input({
+                consumerTool: v.string(),
+                expiresAt: v.number(),
+                instanceId: v.string(),
+                threadKey: v.string(),
+                toolCallId: v.string(),
+                toolName: v.string(),
+            })
+            .mutation(async ({ args, ctx: context }): Promise<void> => {
+                const existing = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+                const now = Date.now();
+
+                if (existing === undefined) {
+                    await context.db.insert(REQUESTS_TABLE, {
+                        consumerTool: args.consumerTool,
+                        createdAt: now,
+                        expiresAt: args.expiresAt,
+                        instanceId: args.instanceId,
+                        status: "pending",
+                        threadKey: args.threadKey,
+                        toolCallId: args.toolCallId,
+                        toolName: args.toolName,
+                        updatedAt: now,
+                    });
+
+                    return;
+                }
+
+                if (existing["instanceId"] === args.instanceId) {
+                    return;
+                }
+
+                if (typeof existing["ref"] === "string") {
+                    // The secret store is absent only on a target that cannot hold a value, where there is nothing to discard.
+                    const { agentSecrets } = context as { agentSecrets?: SecretValueHost };
+
+                    await agentSecrets?.discard(existing["ref"]);
+                }
+
+                await context.db.patch(existing["_id"] as never, {
+                    consumerTool: args.consumerTool,
+                    createdAt: now,
+                    expiresAt: args.expiresAt,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
+                    ref: null,
+                    instanceId: args.instanceId,
+                    status: "pending",
+                    toolName: args.toolName,
+                    updatedAt: now,
+                });
+            }),
+    );
+
+    /**
+     * Settle a paused secret request once its wait has ended, by a wake-up or by the
+     * timeout, and report the outcome. INTERNAL and idempotent. A pending row moves to
+     * `expired` here, so a supply that arrives later is refused; a supply that already
+     * landed is honoured even though the wait timed out. Returns the status only, never
+     * the ref. A missing row (a thread paused before this table existed) reads as
+     * `expired`, so the run fails closed instead of crashing.
+     */
+    const agentSettleSecretRequest = asInternal(
+        mutation
+            .input({ threadKey: v.string(), toolCallId: v.string() })
+            .mutation(async ({ args, ctx: context }): Promise<{ status: "declined" | "expired" | "supplied" }> => {
+                const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+                if (request === undefined) {
+                    return { status: "expired" };
+                }
+
+                const { status } = request;
+
+                if (status === "pending") {
+                    await context.db.patch(request["_id"] as never, { status: "expired", updatedAt: Date.now() });
+
+                    return { status: "expired" };
+                }
+
+                if (status === "supplied" || status === "consumed") {
+                    return { status: "supplied" };
+                }
+
+                return { status: status === "declined" ? "declined" : "expired" };
+            }),
+    );
+
+    /**
+     * Read a supplied secret for the consuming tool's claimant. INTERNAL: only a tool
+     * step dispatches it. Every check runs before the host is touched, so a refused
+     * take binds nothing: the request is supplied (or already consumed), the claimant
+     * is exactly the step of the consuming tool the request declared
+     * (`tool:<consumer>:<consumerCallId>`), and the request belongs to `threadKey`, which
+     * the host re-checks as its scope. The host binds the claimant on the first take.
      */
     const agentTakeSecret = asInternal(
         mutation
-            .input({ claimant: v.string(), ref: v.string(), threadKey: v.string() })
-            .mutation(({ args, ctx: context }): Promise<string | undefined> =>
-                secretStoreOf(context).take(args.ref, { claimant: args.claimant, scope: args.threadKey }),
-            ),
+            .input({ claimant: v.string(), consumerCallId: v.string(), threadKey: v.string(), toolCallId: v.string() })
+            .mutation(async ({ args, ctx: context }): Promise<string | undefined> => {
+                const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+                if (request === undefined || (request["status"] !== "supplied" && request["status"] !== "consumed")) {
+                    return undefined;
+                }
+
+                if (typeof request["ref"] !== "string" || args.claimant !== `tool:${request["consumerTool"] as string}:${args.consumerCallId}`) {
+                    return undefined;
+                }
+
+                return secretStoreOf(context).take(request["ref"], { claimant: args.claimant, scope: args.threadKey });
+            }),
     );
 
-    /** Discard a secret value once the consuming tool has used it. INTERNAL and idempotent. */
+    /**
+     * Discard a secret value and mark its request `consumed`. INTERNAL and idempotent.
+     * The consuming tool dispatches it only after a take succeeded, so a refused call
+     * cannot discard a value that another tool can still use.
+     */
     const agentDiscardSecret = asInternal(
-        mutation.input({ ref: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
-            await secretStoreOf(context).discard(args.ref);
+        mutation.input({ threadKey: v.string(), toolCallId: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
+            const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+            if (request === undefined) {
+                return;
+            }
+
+            if (typeof request["ref"] === "string") {
+                await secretStoreOf(context).discard(request["ref"]);
+            }
+
+            if (request["status"] === "supplied") {
+                await context.db.patch(request["_id"] as never, { status: "consumed", updatedAt: Date.now() });
+            }
         }),
     );
+
+    /**
+     * A thread's secret requests, so a client can show what is pending, supplied,
+     * declined or expired. PUBLIC and OWNER-GATED: an anonymous or ownerless caller is
+     * refused, as for supply. Each entry is built field by field, so neither the ref
+     * nor a value can appear in it.
+     */
+    const agentSecretRequests = query
+        .input({ threadKey: v.string() })
+        .query(async ({ args, ctx: context }): Promise<{ createdAt: number; expiresAt: number; status: string; toolCallId: string; toolName: string }[]> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                .first();
+
+            ownedSecretThread(thread, context.auth, "list its secret requests");
+
+            const requests = await context.db
+                .query(REQUESTS_TABLE)
+                .withIndex("byThreadCall", (q) => q.eq("threadKey", args.threadKey))
+                .collect();
+
+            return requests.map((request) => {
+                return {
+                    createdAt: request["createdAt"] as number,
+                    expiresAt: request["expiresAt"] as number,
+                    status: request["status"] as string,
+                    toolCallId: request["toolCallId"] as string,
+                    toolName: request["toolName"] as string,
+                };
+            });
+        });
 
     /**
      * Whether a thread-scoped approval grant exists for `toolName` on this thread.
@@ -1583,6 +1819,9 @@ export const agentComponent = (): AgentComponent => {
             agentThread,
             agentDeclineSecret,
             agentDiscardSecret,
+            agentOpenSecretRequest,
+            agentSecretRequests,
+            agentSettleSecretRequest,
         },
     };
 };

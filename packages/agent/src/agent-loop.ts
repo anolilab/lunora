@@ -3,7 +3,7 @@ import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
+import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
@@ -137,6 +137,8 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
+    /** Dispatch ref of `agents:agentOpenSecretRequest` — writes the pending request row when a run pauses on a secret. */
+    openSecretRef: ReturnType<typeof toFunctionReference>;
     /** Verified owner of THIS run's thread (`params.owner`), handed to every tool context. */
     owner: string | undefined;
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
@@ -144,6 +146,8 @@ interface TurnContext {
     run: AgentRunFunction;
     /** Replace the thread's synced state (dispatches `agents:agentSetState`) — the tool ctx's `setState`. */
     setState: (state: Record<string, unknown>) => Promise<void>;
+    /** Dispatch ref of `agents:agentSettleSecretRequest` — reads a paused secret request's status once its wait ends. */
+    settleSecretRef: ReturnType<typeof toFunctionReference>;
     step: AgentStepLike;
     /** The streaming LLM-turn seam, when available (else `undefined`). */
     streamGenerate: AgentStreamGenerate | undefined;
@@ -415,20 +419,46 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     return decision;
 };
 
-/** What a paused `requestSecretTool` call resolved to: the opaque ref, or why no value came. */
-type SecretOutcome = { ref: string } | { reason: string };
+/**
+ * How a paused `requestSecretTool` call ended. The value itself is never part of
+ * the outcome: a supplied call hands the model its request id, and the consuming
+ * tool reads the value from the store.
+ */
+type SecretOutcome = "declined" | "expired" | "supplied";
+
+/** Why a non-supplied secret request did not run, as the model reads it. */
+const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> = {
+    declined: "the user declined to supply it",
+    expired: "the secret was not supplied before the timeout",
+};
 
 /**
  * Pause the run on a `requestSecretTool` call until a human supplies or declines a
- * value. Same shape as {@link awaitApproval}: an `"awaiting_secret"` marker (filtered
- * out of the model prompt), the thread moves to `"awaiting_input"`, then a wait on
- * `secret:<toolCallId>` bounded by `approvalTimeout`, which the supply and decline
- * mutations wake. Only the ref comes back through the event. The value sits in the
- * secret store and is never a payload, a step output or a message.
+ * value. Same shape as {@link awaitApproval}, with the request row as the authority:
+ *
+ * 1. The pending request row is written inside a durable step. The step computes its deadline, and a replay keeps the stored one.
+ * 2. The `"awaiting_secret"` marker (filtered out of the model prompt) is persisted, and the thread moves to `"awaiting_input"`.
+ * 3. A wait on `secret:<toolCallId>` is armed for `approvalTimeout` plus a grace (see `SECRET_WAIT_GRACE_MS`). Supply and decline wake it with no payload.
+ * 4. When the wait ends, woken or timed out, a settle step reads the row's outcome. A pending row becomes `expired` there, so a late supply is refused. A supply that already landed is honoured even if the wait timed out.
+ *
+ * Only the status is journaled. The host ref stays in the row, and the model is handed
+ * the request id as its `secretRef`.
  */
-const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall): Promise<SecretOutcome> => {
-    const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
+const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string): Promise<SecretOutcome> => {
+    const { agent, deleteMessage, instanceId, openSecretRef, patchThread, persist, run, settleSecretRef, step, threadKey } = turnContext;
     const markerKey = `${instanceId}:secret:${call.id}`;
+    const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
+
+    await step.do(`secret:request:${call.id}`, async (): Promise<void> => {
+        await run(openSecretRef, {
+            consumerTool,
+            expiresAt: Date.now() + timeoutMs,
+            instanceId,
+            threadKey,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+    });
 
     await persist({
         content: `Awaiting a secret for tool "${call.name}".`,
@@ -440,38 +470,29 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall): Promi
     });
     await patchThread({ status: "awaiting_input" });
 
-    const outcome = await step
-        .waitForEvent<{ declined?: true; ref?: string }>(`secret:${call.id}`, {
-            timeout: approvalTimeoutMs(agent.approvalTimeout),
+    await step
+        .waitForEvent(`secret:${call.id}`, {
+            timeout: timeoutMs + SECRET_WAIT_GRACE_MS,
             type: `agent-secret:${call.id}`,
         })
-        .then((event): SecretOutcome => {
-            if (event.payload.declined === true) {
-                return { reason: "the user declined to supply it" };
-            }
-
-            if (typeof event.payload.ref !== "string") {
-                // The mutation only sends a ref or a decline. Anything else is a
-                // host bug, and guessing a decision would be a worse lie than a failed run.
-                throw new TypeError(`@lunora/agent: secret event for tool call "${call.id}" carried no ref`);
-            }
-
-            return { ref: event.payload.ref };
-        })
-        .catch((error: unknown): SecretOutcome => {
+        .catch((error: unknown): void => {
+            // A timeout is not an error here: the settle step below reads the row and decides.
             if (!isWaitTimeoutError(error)) {
                 throw error;
             }
-
-            return { reason: "the secret was not supplied before the timeout" };
         });
+
+    const { status } = await step.do(
+        `secret:settle:${call.id}`,
+        async (): Promise<{ status: SecretOutcome }> => (await run(settleSecretRef, { threadKey, toolCallId: call.id })) as { status: SecretOutcome },
+    );
 
     // Retired on every outcome, as the approval marker is: a client offers its
     // supply/decline controls from this row alone.
     await deleteMessage(markerKey);
     await patchThread({ status: "running" });
 
-    return outcome;
+    return status;
 };
 
 /**
@@ -546,11 +567,13 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // value and records only the opaque ref (or why none came). Outside `step.do`
     // for the same reason an approval wait is: the pause must not be memoized as a
     // tool output.
-    if (tool.secretRequest === true) {
-        const outcome = await awaitSecret(turnContext, call);
+    if (tool.secretRequest !== undefined) {
+        const outcome = await awaitSecret(turnContext, call, tool.secretRequest.consumer);
 
         await persist({
-            content: "ref" in outcome ? JSON.stringify({ secretRef: outcome.ref }) : `Error: tool "${call.name}" was not run: ${outcome.reason}.`,
+            // The request id is the handle: the consuming tool resolves it inside the thread.
+            content:
+                outcome === "supplied" ? JSON.stringify({ secretRef: call.id }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
             messageKey,
             role: "tool",
             stepName,
@@ -1537,6 +1560,8 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const appendMessage = toFunctionReference(paths.appendMessage);
     const approvalGrantedRef = toFunctionReference(paths.approvalGranted);
+    const openSecretRef = toFunctionReference(paths.openSecretRequest);
+    const settleSecretRef = toFunctionReference(paths.settleSecretRequest);
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
@@ -1639,6 +1664,8 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const turnContext: TurnContext = {
         agent,
         approvalGrantedRef,
+        openSecretRef,
+        settleSecretRef,
         compact,
         depth: normalizeDepth(params.depth),
         env,

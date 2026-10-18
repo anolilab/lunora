@@ -45,6 +45,8 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     state: `${AGENT_MODULE}:agentState`,
     takeSecret: `${AGENT_MODULE}:agentTakeSecret`,
     discardSecret: `${AGENT_MODULE}:agentDiscardSecret`,
+    openSecretRequest: `${AGENT_MODULE}:agentOpenSecretRequest`,
+    settleSecretRequest: `${AGENT_MODULE}:agentSettleSecretRequest`,
 };
 
 /**

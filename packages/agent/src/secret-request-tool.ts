@@ -26,31 +26,47 @@ class SecretUnavailableError extends Error {
 /**
  * An agent tool that asks the human for a secret value (an API key, a token) and
  * hands the model only an opaque `{ secretRef }` in return. The loop pauses the
- * run on a `awaiting_secret` marker until the owner supplies the value through
- * `agents:agentSupplySecret`, or declines through `agents:agentDeclineSecret`.
- * `execute` is never called: the loop resolves this tool itself.
+ * run until the owner supplies the value through `agents:agentSupplySecret`, or
+ * declines through `agents:agentDeclineSecret`. `execute` is never called: the
+ * loop resolves this tool itself.
  *
- * Another tool consumes the value with {@link withSecret}, passing it the
- * `secretRef` the model received. Codegen detects a value import of this name
- * from `@lunora/agent` and wires the secret store; without it the supply
- * mutation refuses. Requires a host that rates `secretValues` as supported.
+ * `consumer` names the one tool allowed to read the value. The model can pass the
+ * `secretRef` to any tool, but only the declared consumer's {@link withSecret} call
+ * takes it, so a prompt-injected model cannot route the value elsewhere.
+ *
+ * Codegen detects a value import of this name from `@lunora/agent` and wires the
+ * secret store; without it the supply mutation refuses. Requires a host that rates
+ * `secretValues` as supported.
  *
  * ```ts
  * import { defineAgent, requestSecretTool } from "@lunora/agent";
  *
  * export const billing = defineAgent({
- *     tools: { requestApiKey: requestSecretTool({ description: "Ask the user for their payment-provider API key." }) },
+ *     tools: {
+ *         requestApiKey: requestSecretTool({
+ *             consumer: "chargeCard",
+ *             description: "Ask the user for their payment-provider API key.",
+ *         }),
+ *         chargeCard: functionTool({ ... }), // reads the value with withSecret
+ *     },
  * });
  * ```
  *
  * The value transits the supply mutation's arguments, which are marked
- * `v.sensitive`: the request log masks them. Only the opaque ref is recorded in
- * the run's history.
+ * `v.sensitive`: the request log masks them. The run's history records only the
+ * request id.
  * @experimental
  */
-const requestSecretTool = (options: { description: string }): AgentToolDefinition<SecretRequestInput, { secretRef: string }> => {
+const requestSecretTool = (options: { consumer: string; description: string }): AgentToolDefinition<SecretRequestInput, { secretRef: string }> => {
     if (typeof options.description !== "string" || options.description.length === 0) {
         throw new LunoraError("INTERNAL", "@lunora/agent: requestSecretTool requires a non-empty `description` (the model decides from it)");
+    }
+
+    if (typeof options.consumer !== "string" || options.consumer.length === 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/agent: requestSecretTool requires a non-empty `consumer`: the name of the one tool allowed to read the value",
+        );
     }
 
     return {
@@ -64,7 +80,7 @@ const requestSecretTool = (options: { description: string }): AgentToolDefinitio
             type: "object",
         }),
         isLunoraAgentTool: true,
-        secretRequest: true,
+        secretRequest: { consumer: options.consumer },
     };
 };
 
@@ -92,27 +108,31 @@ const containsSecret = (value: unknown, secret: string): boolean => {
 };
 
 /**
- * Read a human-supplied secret inside a tool step, hand it to `use`, and return
- * only what `use` returns. The value never leaves the callback: it is not a step
- * output, not a tool result and not a message. The read is its own durable step
- * named for this call, so a retry of the same step re-takes the value (the claimant
- * is this step's name), while a different call cannot.
+ * Read a human-supplied secret inside the tool that the request declared as its
+ * `consumer`, hand it to `use`, and return only what `use` returns. The value never
+ * leaves the callback: it is not a step output, not a tool result and not a message.
+ * The read is its own durable step named for this call, so a retry of the same step
+ * re-takes the value (the claimant is this step's name), while a different call
+ * cannot.
  *
- * Call it from inside a tool's `execute`. The discard runs as a separate durable
- * step after `use` succeeds. If `use` keeps failing, the value stays until its TTL
- * expires, which is the backstop for a crash between the take and the discard.
- * `use` must not log or throw the value, and a result that carries it is refused
- * (the call fails with `LunoraError`) rather than journalled; `traceToolExecution`
- * records the tool's input and output.
- * @throws {SecretUnavailableError} when the ref is expired, unknown, already bound to another call, or from another thread
+ * Call it from inside a tool's `execute`. The discard runs as a separate durable step
+ * only after the take succeeded and `use` returned, so a call that is refused (the
+ * wrong tool, another thread, an expired request) cannot burn a value the declared
+ * consumer still needs. If `use` keeps failing, the value stays until its TTL expires,
+ * which is the backstop for a crash between the take and the discard. `use` must not
+ * return, log, or throw the value, and a result that carries it is refused (the call
+ * fails with `LunoraError`) rather than journalled; `traceToolExecution` records the
+ * tool's input and output.
+ * @throws {SecretUnavailableError} when the request is unknown, not supplied, declared for another consumer, or from another thread
  * @experimental
  */
 const withSecret = async <Result>(context: AgentToolContext, secretRef: string, use: (secret: string) => Promise<Result> | Result): Promise<Result> => {
     const consumed = await context.step.do(`secret:consume:${context.idempotencyKey}:${secretRef}`, async () => {
         const secret = await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.takeSecret), {
             claimant: context.idempotencyKey,
-            ref: secretRef,
+            consumerCallId: context.toolCallId,
             threadKey: context.threadKey,
+            toolCallId: secretRef,
         });
 
         if (typeof secret !== "string") {
@@ -131,13 +151,13 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
         return { result } as const;
     });
 
-    await context.step.do(`secret:discard:${context.idempotencyKey}:${secretRef}`, async () => {
-        await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.discardSecret), { ref: secretRef });
-    });
-
     if ("unavailable" in consumed) {
         throw new SecretUnavailableError();
     }
+
+    await context.step.do(`secret:discard:${context.idempotencyKey}:${secretRef}`, async () => {
+        await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.discardSecret), { threadKey: context.threadKey, toolCallId: secretRef });
+    });
 
     if ("leaked" in consumed) {
         throw new LunoraError("INTERNAL", "@lunora/agent: withSecret's callback returned the secret, so its result was not recorded");
