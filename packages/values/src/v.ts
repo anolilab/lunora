@@ -346,6 +346,15 @@ interface ParseContext {
     probe?: boolean;
 
     /**
+     * Set by {@link sensitive} for the duration of its child parse. While it is
+     * `true`, every error built from the value withholds it: the literal, the
+     * constructor name and any issue text a third-party Standard Schema produced
+     * from it. Restored in a `finally`, so a union probe that catches a miss
+     * cannot leave it set for a sibling branch.
+     */
+    redact?: boolean;
+
+    /**
      * Reject keys an object shape does not declare, instead of dropping them.
      *
      * Off for input, where stripping is what stops an over-posted field reaching
@@ -459,6 +468,17 @@ const isValidUrl = (value: string): boolean => {
  */
 const PROBE_MISS = new ValidationError("union branch probe miss (internal)", { expected: "", path: [], received: "" });
 
+/**
+ * The `received` tag for a value under {@link ParseContext.redact}: the bare type
+ * tag, with a non-plain object reduced to `"object"`. Its constructor name is
+ * client-controlled, so the redacted path cannot surface it the way
+ * {@link describeValue} does for ordinary failures.
+ */
+const describeRedacted = (value: unknown): string =>
+    typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof ArrayBuffer)
+        ? "object"
+        : describeValue(value, { literal: false });
+
 // Declared as a function (not an arrow expression) so TypeScript treats its
 // `: never` return as a control-flow assertion — callers rely on this to narrow
 // `value` after `if (!check) fail(...)`. `func-style` is disabled here because
@@ -476,7 +496,7 @@ function fail(context: ParseContext, expected: string, received: unknown, option
     // message. Set only on `.check()` refinement failures (the value already
     // passed its type check) so a secret-bearing field never leaks its value to
     // the wire/logs; type-mismatch failures keep the literal for diagnostics.
-    const receivedDescription = describeValue(received, { literal: !options?.redactValue });
+    const receivedDescription = context.redact === true ? describeRedacted(received) : describeValue(received, { literal: !options?.redactValue });
 
     throw new ValidationError(`Expected ${expected} at ${formatPath(path)}, received ${receivedDescription}`, {
         expected,
@@ -1015,13 +1035,17 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                     const undeclared = Object.keys(input).filter((key) => !declared.has(key));
 
                     if (undeclared.length > 0) {
+                        // Under `sensitive` the undeclared key names are withheld too: they are
+                        // caller-chosen text that can carry the secret itself.
+                        const listed = context.redact === true ? "[redacted]" : undeclared.join(", ");
+
                         throw new ValidationError(
-                            `object has ${String(undeclared.length)} undeclared key(s): ${undeclared.join(", ")}. ` +
+                            `object has ${String(undeclared.length)} undeclared key(s): ${listed}. ` +
                                 `Add them to the validator, or call .strip() on it to drop them on purpose.`,
                             {
                                 expected: `only the declared keys (${entries.map(({ key }) => key).join(", ")})`,
                                 path: [...path],
-                                received: undeclared.join(", "),
+                                received: listed,
                             },
                         );
                     }
@@ -1225,6 +1249,38 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
     );
 };
 
+/**
+ * Mark a validator's value as sensitive. Parsing and the accepted set are
+ * unchanged. A failed parse withholds the value from `received` and the message
+ * (see {@link ParseContext.redact}); the JSON Schema node is `writeOnly`, with
+ * `format: "password"` on a plain string; and the request log, the MCP proposal
+ * and the offline queue treat the argument as a secret (see
+ * {@link containsSensitive}).
+ *
+ * A marker is a meta flag on the same kind rather than a kind of its own, so
+ * every `switch (kind)` and `kind === "optional"` test keeps its meaning and
+ * `v.sensitive(v.optional(x))` stays optional.
+ */
+const sensitive = <V extends Validator>(validator: V): V => {
+    const inner = toInternal(validator as Validator);
+
+    return createValidator<unknown>(
+        inner.kind,
+        (value, context) => {
+            const previous = context.redact;
+
+            context.redact = true;
+
+            try {
+                return inner._parse(value, context);
+            } finally {
+                context.redact = previous;
+            }
+        },
+        { ...inner._meta, sensitive: true },
+    ) as unknown as V;
+};
+
 /** Every member of a shape made optional — the result of {@link partial}. */
 type PartialShape<S extends ObjectShape> = { [K in keyof S]: ColumnValidator<Infer<S[K]> | undefined, Infer<S[K]> | undefined> };
 
@@ -1408,18 +1464,44 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
             // `undefined` as though it had validated.
             if (syncResult.issues !== undefined) {
                 const first = syncResult.issues[0];
-                const message = first?.message ?? "Standard Schema validation failed";
+                // A third-party issue message may quote the value it rejected; under
+                // `sensitive` only the framework's generic wording is kept.
+                const message = context.redact === true ? "Standard Schema validation failed" : (first?.message ?? "Standard Schema validation failed");
 
                 throw new ValidationError(message, {
                     expected: "valid value",
                     path: [...context.path, ...standardIssuePath(first?.path)],
-                    received: describeValue(value),
+                    received: context.redact === true ? describeRedacted(value) : describeValue(value),
                 });
             }
 
             return syncResult.value;
         }),
     );
+};
+
+/**
+ * The validators nested directly inside `validator` (`inner`, key/value
+ * children, union members, object shape members), read from the internal `_meta`.
+ */
+const childValidatorsOf = (validator: Validator): Validator[] => {
+    const meta = (validator as { _meta?: Record<string, unknown> })._meta;
+
+    if (!meta) {
+        return [];
+    }
+
+    const children: unknown[] = [meta.inner, meta.keyValidator, meta.valueValidator];
+
+    if (Array.isArray(meta.members)) {
+        children.push(...(meta.members as unknown[]));
+    }
+
+    if (meta.shape !== null && typeof meta.shape === "object") {
+        children.push(...(Object.values(meta.shape) as unknown[]));
+    }
+
+    return children.filter((child): child is Validator => child !== null && typeof child === "object" && "kind" in child);
 };
 
 /**
@@ -1439,30 +1521,39 @@ const isOrWrapsFromValidator = (validator: Validator): boolean => {
         return true;
     }
 
-    const meta = (validator as { _meta?: Record<string, unknown> })._meta;
+    return childValidatorsOf(validator).some((child) => isOrWrapsFromValidator(child));
+};
 
-    if (!meta) {
-        return false;
+/**
+ * True when `validator` is marked with {@link sensitive} or wraps a marked
+ * validator anywhere in its tree. Coarse on purpose: an argument whose tree holds
+ * any secret is treated as a secret as a whole, which fails closed where a
+ * per-field walk over wire-encoded values would not.
+ */
+const containsSensitive = (validator: Validator): boolean =>
+    (validator as { _meta?: Record<string, unknown> })._meta?.sensitive === true || childValidatorsOf(validator).some((child) => containsSensitive(child));
+
+/** Per-map memo of {@link sensitiveArgumentNames}, keyed on the args object so a map is walked once. */
+const SENSITIVE_ARG_NAMES = new WeakMap<object, ReadonlySet<string>>();
+
+/**
+ * The names of a function's arguments that carry a {@link sensitive} marker.
+ * Memoised per args object: the request log asks on every dispatch.
+ */
+const sensitiveArgumentNames = (args: Readonly<Record<string, unknown>>): ReadonlySet<string> => {
+    const cached = SENSITIVE_ARG_NAMES.get(args);
+
+    if (cached !== undefined) {
+        return cached;
     }
 
-    // Gather candidate nested validators from the structural meta, then recurse.
-    const children: unknown[] = [meta.inner, meta.keyValidator, meta.valueValidator];
+    const names = new Set(
+        Object.keys(args).filter((name) => typeof args[name] === "object" && args[name] !== null && containsSensitive(args[name] as Validator)),
+    );
 
-    if (Array.isArray(meta.members)) {
-        children.push(...(meta.members as unknown[]));
-    }
+    SENSITIVE_ARG_NAMES.set(args, names);
 
-    if (meta.shape !== null && typeof meta.shape === "object") {
-        children.push(...(Object.values(meta.shape) as unknown[]));
-    }
-
-    for (const child of children) {
-        if (child !== null && typeof child === "object" && "kind" in child && isOrWrapsFromValidator(child as Validator)) {
-            return true;
-        }
-    }
-
-    return false;
+    return names;
 };
 
 /**
@@ -1503,6 +1594,7 @@ const v: {
     optional: typeof optional;
     partial: typeof partial;
     record: typeof record;
+    sensitive: typeof sensitive;
     storage: typeof storage;
     string: typeof string;
     timestamp: typeof timestamp;
@@ -1524,6 +1616,7 @@ const v: {
     optional,
     partial,
     record,
+    sensitive,
     storage,
     string,
     timestamp,
@@ -1558,4 +1651,4 @@ export type {
     Validator,
     ValidatorKind,
 };
-export { isOrWrapsFromValidator, optionalInner, v };
+export { containsSensitive, isOrWrapsFromValidator, optionalInner, sensitiveArgumentNames, v };
