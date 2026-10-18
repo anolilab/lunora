@@ -554,7 +554,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // database on the same data directory.
         // Not in attached mode (`--no-worker`): an external runner starts the worker, which would never see the
         // address this process puts in its own environment. That worker starts its own database (the Vite plugin does).
-        if (plan.workerEnabled) {
+        // Only for Cloudflare: Hyperdrive is a Cloudflare binding, and the other targets rate it unsupported.
+        if (plan.workerEnabled && target === "cloudflare") {
             handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
         }
 

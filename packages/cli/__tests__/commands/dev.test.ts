@@ -964,6 +964,32 @@ describe("lunora dev", () => {
             expect(stopped).toBe(0);
         });
 
+        it("starts no embedded Hyperdrive Postgres for a celld-target session, which has no Hyperdrive binding", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    return { exited: Promise.resolve(0), stop: async () => {} };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+            });
+
+            expect(start).not.toHaveBeenCalled();
+        });
+
         it("stops the celld session when the worker is killed", async () => {
             expect.assertions(1);
 
