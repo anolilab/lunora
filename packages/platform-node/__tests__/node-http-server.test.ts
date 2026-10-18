@@ -165,6 +165,49 @@ describe("createNodeHttpServer", () => {
         await expect(response.text()).resolves.toBe("true");
     });
 
+    it("delivers the 413 for a streamed body the handler cancels over its cap", async () => {
+        expect.hasAssertions();
+
+        // A handler that reads a streamed body up to a 64 KiB cap, then cancels it and answers 413, as the worker's body readers do.
+        const server = await listen(async (incoming) => {
+            const reader = incoming.body?.getReader();
+            let total = 0;
+
+            while (reader) {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design, each chunk counts toward the cap
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    break;
+                }
+
+                total += value.byteLength;
+
+                if (total > 65_536) {
+                    // eslint-disable-next-line no-await-in-loop -- one-shot cleanup before answering
+                    await reader.cancel();
+
+                    return new Response("too large", { status: 413 });
+                }
+            }
+
+            return new Response("ok");
+        });
+
+        const payload = new Uint8Array(1_048_576);
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(payload);
+                controller.close();
+            },
+        });
+
+        const response = await fetch(server.origin, { body, duplex: "half", method: "POST" } as RequestInit);
+
+        expect(response.status).toBe(413);
+        await expect(response.text()).resolves.toBe("too large");
+    });
+
     it("brackets an IPv6 host so the origin is a valid URL", async () => {
         expect.hasAssertions();
 

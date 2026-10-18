@@ -33,14 +33,28 @@ const LOOPBACK_HOST = /^(?:127\.\d+\.\d+\.\d+|::1|localhost)$/;
 
 /**
  * The request body as a web stream, pulled chunk by chunk. Not `Readable.toWeb`, which the supported Node range does not yet ship.
- * Cancelling the stream destroys the socket, so an unread body does not hold the connection open.
+ * Cancelling the stream discards the rest of the body rather than destroying the socket: the worker answers a cancelled over-cap body
+ * with a 413, and that response must still reach a client that is still uploading.
  */
-const bodyStream = (incoming: IncomingMessage): ReadableStream<Uint8Array> => {
+const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): ReadableStream<Uint8Array> => {
     const chunks = (incoming as AsyncIterable<Buffer>)[Symbol.asyncIterator]();
 
     return new ReadableStream<Uint8Array>({
         cancel() {
-            incoming.destroy();
+            if (outgoing.headersSent) {
+                incoming.destroy();
+
+                return;
+            }
+
+            // ponytail: the rest of the body is read and dropped without a ceiling, so a slow-drip upload holds its socket until it ends;
+            // a byte cap that closes the connection is the upgrade path if that matters.
+            incoming.removeAllListeners("readable");
+            incoming.on("readable", () => {
+                while (incoming.read() !== null) {
+                    // Discarded: the body was refused, so its bytes are only read to keep the connection usable.
+                }
+            });
         },
         async pull(controller) {
             const next = await chunks.next();
@@ -71,7 +85,7 @@ const requestUrl = (target: string | undefined, origin: string): URL => {
 
 // The body is streamed through, not buffered: the worker's own per-route body caps (`@lunora/runtime`) decide what is refused, so a
 // route with a larger budget than the framework default is not cut off here.
-const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSignal): Request => {
+const toRequest = (incoming: IncomingMessage, outgoing: ServerResponse, origin: string, signal: AbortSignal): Request => {
     const headers = new Headers();
 
     for (const [name, value] of Object.entries(incoming.headers)) {
@@ -89,7 +103,7 @@ const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSigna
     const init: RequestInit & { duplex?: "half" } = { headers, method, signal };
 
     if (method !== "GET" && method !== "HEAD") {
-        init.body = bodyStream(incoming);
+        init.body = bodyStream(incoming, outgoing);
         init.duplex = "half";
     }
 
@@ -206,7 +220,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         let request: Request;
 
         try {
-            request = toRequest(incoming, origin, abort.signal);
+            request = toRequest(incoming, outgoing, origin, abort.signal);
         } catch {
             outgoing.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
             outgoing.end("Bad Request");
