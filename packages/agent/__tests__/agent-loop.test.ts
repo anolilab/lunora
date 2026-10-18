@@ -2395,3 +2395,57 @@ describe("a turn whose stream fails in-band and is retried", () => {
         expect(assistant.map((message) => message.content)).toStrictEqual(["Retried answer."]);
     });
 });
+
+describe("usage of a failed streamed turn", () => {
+    it("counts the tokens the failed attempt was billed on the run that failed, and once more when the retry completes", async () => {
+        expect.assertions(4);
+
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta = captureTokenDeltas(deltas);
+        const billed = {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        };
+        const attempts: ProviderStreamPart[][] = [
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { id: "t0", type: "text-end" },
+                { finishReason: { raw: "stream-truncated", unified: "error" }, type: "finish", usage: billed },
+            ],
+            [
+                { id: "t1", type: "text-start" },
+                { delta: "Whole answer.", id: "t1", type: "text-delta" },
+                { id: "t1", type: "text-end" },
+                { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage: billed },
+            ],
+        ];
+        let call = 0;
+        const model = new MockLanguageModelV4({
+            doStream: () => {
+                const parts = attempts[call] ?? [];
+
+                call += 1;
+
+                return Promise.resolve({ stream: simulateReadableStream({ chunks: parts }) });
+            },
+        });
+        const streamGenerate = createStreamGenerate({ ...agent, model }, {});
+
+        await expect(runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }))).rejects.toThrow(
+            "provider reason: stream-truncated",
+        );
+
+        // The provider billed the failed attempt, so the run that failed reports those tokens.
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, totalTokens: 3 });
+
+        const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
+
+        // The retry is the same turn: its tokens count once, so the total is not the failed attempt added on top of it.
+        expect(result).toMatchObject({ stopped: "final", usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, totalTokens: 3 });
+    });
+});

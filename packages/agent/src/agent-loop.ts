@@ -4,7 +4,7 @@ import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
-import { resolveAgentModel } from "./generate";
+import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
@@ -1825,6 +1825,8 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // as `error`, blaming the run for its transport. The replay re-dispatches
         // the same terminal write, which converges on the right one.
         if (!completion.dispatched) {
+            // The failed turn was billed even though it produced no answer, so its tokens belong to this run's total.
+            usageBox.value = addUsage(usageBox.value, usageOfFailedTurn(error));
             await finishFailedRun(finishRun, error, usageBox.value);
         }
 
