@@ -51,6 +51,10 @@ const String offlineQueueOverflow = 'OFFLINE_QUEUE_OVERFLOW';
 /// write was discarded instead of being sent against state it no longer suits.
 const String offlinePreconditionFailed = 'OFFLINE_PRECONDITION_FAILED';
 
+/// An `onlineOnly` write was refused because the connection is not live, so it
+/// was never queued, persisted or sent.
+const String offlineNotQueued = 'OFFLINE_NOT_QUEUED';
+
 /// The client was closed with writes still queued.
 const String clientClosed = 'CLIENT_CLOSED';
 
