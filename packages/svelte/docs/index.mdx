@@ -528,6 +528,10 @@ The part the type signature does not tell you:
   `AudioContext` resumption outside one. It is idempotent while a call is
   active, and a denied permission lands in `error` rather than throwing at the
   call site.
+- **A failed turn drops its partial answer.** When the model fails mid-answer (or its
+  stream is cut short), the text already streamed for that turn is cleared from
+  `interimTranscript` and `error` is set; the call returns to `listening`. A retried
+  turn starts its text from empty, never from the failed attempt's prefix.
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. **Svelte has no auto-dispose here.**
   Unlike the other adapters nothing tears the call down for you, so call it
