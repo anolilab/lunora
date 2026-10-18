@@ -13046,7 +13046,7 @@ abstract class ShardDO {
 
         for (const ws of this.runner.sockets()) {
             for (const subId of Object.keys(this.readAttachment(ws).shapes ?? {})) {
-                this.sendSubscriptionError(ws, subId, "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+                this.sendSubscriptionError(ws, subId, "NOT_IMPLEMENTED", DELIVERY_MODE_UNSUPPORTED);
                 this.shapeUnsubscribe(ws, subId);
             }
 
@@ -15515,7 +15515,7 @@ abstract class ShardDO {
         let remaining = 0;
         for (const ws of sockets) {
             for (const topic of this.readAttachment(ws).whispers ?? []) {
-                const message = "delivery mode unsupported with delivery authorization";
+                const message = DELIVERY_MODE_UNSUPPORTED;
                 this.sendFrame(ws, JSON.stringify({ type: "error", code: "NOT_IMPLEMENTED", error: { code: "NOT_IMPLEMENTED", message }, topic }), "control");
                 if (this.setWhisperMembership(ws, topic, false)) {
                     this.whisperVerdicts.get(ws)?.delete(`subscribe:${topic}`);
