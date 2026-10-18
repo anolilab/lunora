@@ -22,9 +22,9 @@
  * being offline, a timeout, or a missing wrangler all still count as logged in.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 
 import join from "../path";
 
@@ -54,8 +54,14 @@ const LINE_BREAK = /\r?\n/u;
 /** What `wrangler whoami --json` prints when no usable login exists. */
 const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
 
-/** Projects whose login `wrangler whoami` already confirmed, so one dev start asks once. */
-const confirmedLogins = new Set<string>();
+/** What `wrangler whoami --json` prints when the login works. */
+const LOGGED_IN = /"loggedIn"\s*:\s*true/u;
+
+/** How long a "logged out" answer is reused, so the workers of one dev start ask once. */
+const LOGGED_OUT_TTL_MS = 10_000;
+
+/** Per project, the last explicit answer from `wrangler whoami`. */
+const answers = new Map<string, { at: number; loggedOut: boolean }>();
 
 /** A value wrapped in matching single or double quotes. */
 const QUOTED_VALUE = /^(["'])(.*)\1$/u;
@@ -85,25 +91,38 @@ const hasEntries = (directory: string): boolean => {
     }
 };
 
+/** The wrangler entry script the project installed, found the way node resolves a package: nearest `node_modules` upwards. */
+const findWrangler = (projectRoot: string): string | undefined => {
+    for (let directory = projectRoot; ; directory = dirname(directory)) {
+        const script = join(directory, "node_modules", "wrangler", "bin", "wrangler.js");
+
+        if (existsSync(script)) {
+            return script;
+        }
+
+        if (dirname(directory) === directory) {
+            return undefined;
+        }
+    }
+};
+
 /**
  * Whether the project's own wrangler says its on-disk login is unusable. Everything
  * short of that exact answer (no wrangler installed, a timeout, no network) is
  * `false`, so this can only ever switch Workers AI off for a login that is dead.
- * A confirmed login is remembered; a dead one is asked again, so a fresh
- * `wrangler login` is picked up without restarting.
+ * Only an explicit answer is remembered: a working login for the process, a dead one
+ * for a few seconds, so a fresh `wrangler login` is picked up without restarting.
  */
 const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string | undefined>): boolean => {
-    if (confirmedLogins.has(projectRoot)) {
-        return false;
+    const known = answers.get(projectRoot);
+
+    if (known !== undefined && (!known.loggedOut || Date.now() - known.at < LOGGED_OUT_TTL_MS)) {
+        return known.loggedOut;
     }
 
-    let script: string;
+    const script = findWrangler(projectRoot);
 
-    try {
-        const manifest = createRequire(join(projectRoot, "package.json")).resolve("wrangler/package.json");
-
-        script = join(manifest, "..", "bin", "wrangler.js");
-    } catch {
+    if (script === undefined) {
         return false;
     }
 
@@ -114,14 +133,13 @@ const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string |
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 10_000,
     });
+    const loggedOut = LOGGED_OUT.test(stdout);
 
-    if (LOGGED_OUT.test(stdout)) {
-        return true;
+    if (loggedOut || LOGGED_IN.test(stdout)) {
+        answers.set(projectRoot, { at: Date.now(), loggedOut });
     }
 
-    confirmedLogins.add(projectRoot);
-
-    return false;
+    return loggedOut;
 };
 
 /**
