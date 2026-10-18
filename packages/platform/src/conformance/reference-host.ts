@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+    PlatformCapabilities,
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
@@ -33,9 +34,10 @@ const createSecretValueTestKey = (): string => btoa(String.fromCodePoint(...cryp
  */
 interface ConformanceHost {
     /**
-     * Move the secret-value clock forward by `ms`. Optional: a host whose clock
-     * cannot be injected omits it, and the suite then skips the expiry legs
-     * rather than sleeping through a real TTL.
+     * Move the secret-value clock forward by `ms`. Required whenever
+     * {@link ConformanceHost.capabilities} rates `secretValues` supported: the
+     * expiry legs cannot drive a real TTL, so a supported host without it fails
+     * the suite. A host rated unsupported omits it.
      */
     advanceClock?: (ms: number) => void;
 
@@ -57,6 +59,18 @@ interface ConformanceHost {
      * @returns `true` when the job was dispatched at least once.
      */
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+
+    /**
+     * The capability matrix this host is rated against. The suite holds the
+     * host to its rating for `secretValues`: a host rated supported must offer
+     * `secretValues`, its clock and its raw store, and a host rated unsupported
+     * must offer none of them. Either mismatch fails the suite rather than
+     * skipping the legs.
+     *
+     * Omitted only by the reference harness, which is not a deployable target.
+     * It implements every optional surface, so it is held to `native`.
+     */
+    capabilities?: PlatformCapabilities;
 
     /** Optional cleanup hook (close DBs, release timers). */
     cleanup?: () => void;
@@ -165,18 +179,17 @@ interface ConformanceHost {
     scheduler?: SchedulerHost;
 
     /**
-     * The human-supplied secret store under test. Optional, because only a host
-     * that runs agents needs one; the suite reports the gap rather than skipping
-     * silently.
+     * The human-supplied secret store under test. Present exactly when
+     * {@link ConformanceHost.capabilities} rates `secretValues` supported (see
+     * there for the check in both directions).
      */
     secretValues?: SecretValueHost;
 
     /**
      * The raw store beneath `secretValues`, plus read and write access to its
      * records. The legs that prove what is at rest (no plaintext in storage, a
-     * tampered or moved record reads as absent, rotation) need it. Optional, like
-     * `secretValues`: a host that cannot expose its records omits it, and those
-     * legs skip rather than assert against a surface they cannot see.
+     * tampered or moved record reads as absent, rotation) need it, so it is
+     * present exactly when `secretValues` is.
      */
     secretValueStore?: {
         /** Every record the store holds, serialized: the plaintext scan reads this. */

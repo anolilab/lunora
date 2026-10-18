@@ -127,6 +127,13 @@ Host variance is declared through presence-based optional hooks on
 `cronTicks`, `scheduler`) rather than skipped blocks, so a gap shows up in the
 suite output instead of vanishing from it.
 
+`secretValues` is the one optional surface held to the capability matrix. A host
+passes its target's matrix as `capabilities`, and the suite requires the secret
+store, its clock and its raw records exactly when that matrix rates
+`secretValues` supported. A supported host that omits them fails, and so does an
+unsupported host that offers them. The reference harness omits `capabilities`
+and must provide every surface.
+
 The TCK covers host primitives. It does **not** yet cover the engine-level
 guarantees (OCC-409, poke ordering, RLS under a live subscription, scheduler
 at-least-once). Those are implemented by code still being extracted from
