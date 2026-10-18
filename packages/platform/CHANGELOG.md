@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.66...@lunora/platform@1.0.0-alpha.67) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of delivery authorization ([#1235](https://github.com/anolilab/lunora/issues/1235)) ([#1238](https://github.com/anolilab/lunora/issues/1238)) ([d73863b](https://github.com/anolilab/lunora/commit/d73863bd1e442675a751453284d5498ec4383a87))
+
 ## @lunora/platform [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.65...@lunora/platform@1.0.0-alpha.66) (2026-10-17)
 
 ### Features
