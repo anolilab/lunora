@@ -251,7 +251,10 @@ pausing. The approved tool result is marked `approvalScope: "thread"`. The grant
 are listed by `agents:agentApprovalGrants` and removed by
 `agents:agentRevokeApprovalGrant`; a revoke applies to calls whose gate has not
 resolved yet, never to one already in flight. A grant is per thread, not
-per user or per app.
+per user or per app. Only the thread's verified owner can record one: on a thread
+with no owner (an app that sets no identity) a plain approve or reject still
+works for any caller, but `approve_for_thread` is refused, because a grant would
+let anyone who knows the thread key skip the gate for every later call.
 
 **An unanswered approval is not pending forever.** The wait carries a timeout —
 `approvalTimeout` on the agent config, default `"3 days"`, **clamped to one
