@@ -136,7 +136,7 @@ const probeLazyModules = async (port: number): Promise<{ checked: number; failur
 
     if (response.status >= 500) {
         throw new SmokeLoadFailure(
-            `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}) — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
+            `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
         );
     }
 
