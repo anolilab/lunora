@@ -246,7 +246,7 @@ describe(localHyperdrive, () => {
         finishSecond();
         await second;
         // The startup is done and no server came: the countdown runs again, then stops both databases.
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(40_000);
 
         expect(stopped.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["ANALYTICS", "HYPERDRIVE"]);
     });
@@ -395,6 +395,44 @@ describe(localHyperdrive, () => {
         await vi.advanceTimersByTimeAsync(20_000);
 
         expect(stopped).toStrictEqual([]);
+    });
+
+    it("keeps the databases while the rest of the config resolution runs, longer than the countdown after a close", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const { start, stopped } = starter(["HYPERDRIVE"]);
+        const plugin = localHyperdrive({ projectRoot: "/project/slow-config", start });
+
+        await runConfigHook(plugin, "serve");
+        // Other plugins' config hooks and the framework setup run before the server exists.
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        attachServer(plugin);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(stopped).toStrictEqual([]);
+    });
+
+    it("stops the databases of a config that never got a server, after the longer countdown", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const { start, stopped } = starter(["HYPERDRIVE"]);
+        const plugin = localHyperdrive({ projectRoot: "/project/no-server", start });
+
+        await runConfigHook(plugin, "serve");
+        await vi.advanceTimersByTimeAsync(29_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        await vi.advanceTimersByTimeAsync(2000);
+
+        expect(stopped).toStrictEqual(["HYPERDRIVE"]);
     });
 
     it("starts a fresh database for a later session once the first one's were stopped", async () => {

@@ -26,6 +26,9 @@ import { registerDevServerClose, runPendingClose } from "./server-close";
 /** How long after the last server closes before the databases stop, so a restart keeps them. */
 const STOP_GRACE_MS = 5000;
 
+/** How long a resolved config waits for its server before the databases stop: the rest of the config resolution and the plugins' setup still run in between. */
+const ARRIVAL_GRACE_MS = 30_000;
+
 interface LocalHyperdriveOptions {
     projectRoot: string;
     /** Injection seam; defaults to the real PGlite. */
@@ -68,7 +71,7 @@ const stopAll = async (session: Session): Promise<void> => {
 };
 
 /** Stop the databases after the grace period. Unref'd: the countdown must not keep a finished process alive. */
-const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
+const scheduleStop = (session: Session, graceMs: number): ReturnType<typeof setTimeout> => {
     const timer = setTimeout(() => {
         // A startup still in flight adds its database after the timer fires: wait for it, then stop only if no server has come back.
         session.pending
@@ -82,7 +85,7 @@ const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
                 return undefined;
             })
             .catch((): undefined => undefined);
-    }, STOP_GRACE_MS);
+    }, graceMs);
 
     timer.unref();
 
@@ -139,7 +142,7 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
                 // a replacement that never does (its config failed later) does not keep the databases running.
                 if (session.servers === 0) {
                     clearTimeout(session.stopTimer);
-                    session.stopTimer = scheduleStop(session);
+                    session.stopTimer = scheduleStop(session, ARRIVAL_GRACE_MS);
                 }
             }
         },
@@ -164,7 +167,7 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
                 session.servers -= 1;
 
                 if (session.servers === 0) {
-                    session.stopTimer = scheduleStop(session);
+                    session.stopTimer = scheduleStop(session, STOP_GRACE_MS);
                 }
             });
         },
