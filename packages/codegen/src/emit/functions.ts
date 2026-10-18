@@ -602,6 +602,7 @@ export const LUNORA_FUNCTION_MANIFEST: Readonly<Record<string, FunctionManifestE
 const MODULE_LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {${moduleLoaders}};
 const loadedModules = new Map<string, Promise<Record<string, unknown>>>();
 const resolvedModules = new Map<string, Record<string, unknown>>();
+const boundFunctions = new Set<string>();
 const unloadedFunctionHandler = (): never => {
     throw new Error("a lazy function was invoked before it was prepared");
 };
@@ -612,6 +613,10 @@ export const getLoadedFunction = (functionPath: string): RegisteredLunoraFunctio
     const manifest = ${renderFunctionTableLookup("LUNORA_FUNCTION_MANIFEST")};
 
     if (!registered || !manifest) {
+        return registered;
+    }
+
+    if (boundFunctions.has(functionPath)) {
         return registered;
     }
 
@@ -628,6 +633,7 @@ export const getLoadedFunction = (functionPath: string): RegisteredLunoraFunctio
     }
 
     Object.assign(registered, loaded);
+    boundFunctions.add(functionPath);
 
     return registered;
 };
@@ -654,19 +660,10 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
         loadedModules.set(manifest.moduleId, pending);
     }
 
-    let module: Record<string, unknown>;
-
-    try {
-        module = await pending;
-    } catch (error: unknown) {
-        if (loadedModules.get(manifest.moduleId) === pending) {
-            loadedModules.delete(manifest.moduleId);
-        }
-
-        throw error;
-    }
-
-    resolvedModules.set(manifest.moduleId, module);
+    // A module that failed to evaluate stays failed for the isolate: the runtime has already cached
+    // the failed evaluation, and a bundler's lazy initializer can hand a retry a half-initialized
+    // namespace, so every later call rethrows the original error instead.
+    resolvedModules.set(manifest.moduleId, await pending);
 
     return getLoadedFunction(functionPath);
 };
@@ -808,7 +805,10 @@ export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
     );
 };
 
-/** Emit one generated shim per user module; importing a shim installs that module's compiled validators once. */
+/** Directory under `_generated/` holding the per-module lazy import shims. */
+const LAZY_FUNCTION_DIRECTORY = "fn";
+
+/** Emit one generated shim per user module, keyed by file name under {@link LAZY_FUNCTION_DIRECTORY}; importing a shim installs that module's compiled validators once. */
 const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, string> => {
     if (options.lazyFunctions !== true) {
         return {};
@@ -849,10 +849,10 @@ const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, 
             migrations.some((migration) => migration.filePath === filePath && migration.exportName === "default");
         const defaultExport = hasDefault ? `export { default } from "${sourcePath}";\n` : "";
 
-        output[`fn/${moduleId}.ts`] = `${GENERATED_HEADER}${compiledImport}${namespaceImport}${installBlock}export * from "${sourcePath}";\n${defaultExport}`;
+        output[`${moduleId}.ts`] = `${GENERATED_HEADER}${compiledImport}${namespaceImport}${installBlock}export * from "${sourcePath}";\n${defaultExport}`;
     }
 
     return output;
 };
 
-export { emitFunctions, emitLazyFunctionModules };
+export { emitFunctions, emitLazyFunctionModules, LAZY_FUNCTION_DIRECTORY };

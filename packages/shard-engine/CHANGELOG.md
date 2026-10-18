@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.135...@lunora/shard-engine@1.0.0-alpha.136) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** stop scanning retired shapes after cleanup ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([487d2ab](https://github.com/anolilab/lunora/commit/487d2abec6ad50c9fce2074689e322de8c0891e5))
+
 ## @lunora/shard-engine [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.134...@lunora/shard-engine@1.0.0-alpha.135) (2026-10-18)
 
 ### Features

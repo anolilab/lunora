@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import resolveLazyFunctions from "../../src/util/lazy-functions";
+import { resolveLazyFunctions } from "../src/codegen-env";
 
 describe("lazy function opt-in", () => {
     afterEach(() => {

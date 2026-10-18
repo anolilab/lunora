@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
 
+import { resolveLazyFunctions } from "@lunora/config";
+
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";

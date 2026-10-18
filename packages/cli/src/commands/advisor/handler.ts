@@ -4,12 +4,12 @@ import { isAbsolute, join } from "node:path";
 import type { AdvisorMap, BaselineComparison } from "@lunora/advisor";
 import { compareToBaseline, parseAdvisorMap, scoreAdvisor } from "@lunora/advisor";
 import { runCodegen } from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";

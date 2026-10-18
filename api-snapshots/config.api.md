@@ -1682,6 +1682,12 @@ const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
 const resolveDeployDriver: (target?: string) => DeployDriver;
 ```
 
+### `resolveLazyFunctions` (const)
+
+```ts
+const resolveLazyFunctions: (flag?: boolean) => boolean;
+```
+
 ### `resolveProjectTarget` (const)
 
 ```ts

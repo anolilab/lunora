@@ -29,10 +29,10 @@ import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { renderCodegenFailure } from "./codegen-error";
-import resolveLazyFunctions from "./lazy-functions";
 import type { Logger } from "./logger";
 import reportPlatformDiagnostics from "./platform-diagnostics";
 import { runPostCodegenHook } from "./post-codegen-hook";
