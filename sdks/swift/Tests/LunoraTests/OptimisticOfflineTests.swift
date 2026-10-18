@@ -1698,11 +1698,27 @@ extension ConformanceTests {
         )
         client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
 
-        XCTAssertThrowsError(try client.submit(onlineOnlyWrite())) { error in
+        // A subscription on the write's own path and args, primed with a server value,
+        // so an overlay the write applied would be displayed.
+        var seen: [Any] = []
+
+        client.attachSocket { _ in }
+        _ = client.subscribe("auth:setPassword", args: ["token": onlineOnlySecret], onData: { seen.append($0) })
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        client.detachSocket()
+
+        var options = onlineOnlyWrite()
+        options.optimistic = appender("c")
+
+        XCTAssertThrowsError(try client.submit(options)) { error in
             XCTAssertEqual((error as? LunoraAPIError)?.code, LunoraOfflineCode.notQueued)
         }
         XCTAssertEqual(client.pendingMutationCount, 0)
         XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+
+        for value in seen {
+            XCTAssertNotEqual(canonical(value), canonical(["a", "c"]), "a refused write's overlay was displayed")
+        }
 
         let persisted = try JSONSerialization.data(withJSONObject: store.records)
 
