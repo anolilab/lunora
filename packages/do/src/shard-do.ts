@@ -48,6 +48,7 @@ import {
     ISSUE_STATE_TABLE,
     latencyBucketIndex,
     LogBuffer,
+    maskSensitiveArgs,
     mergeScanAttribution,
     MetricBuffer,
     parseLogArgs,
@@ -65,6 +66,8 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    scrubSensitiveText,
+    sensitiveStrings,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -478,6 +481,9 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 
     return decoded as Record<string, unknown>;
 };
+
+/** The empty answer of {@link ShardDO.sensitiveArgNames}: a function with no `v.sensitive` argument. */
+const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
 
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
@@ -5848,6 +5854,18 @@ abstract class ShardDO {
     }
 
     /**
+     * The argument names of `functionPath` whose validators carry a `v.sensitive`
+     * marker. The request log replaces them before anything is persisted, logged or
+     * shipped, so a marked value survives neither the durable row nor a dev
+     * `captureRaw` capture. The base class has no function registry and marks
+     * nothing; the codegen-generated subclass answers from `LUNORA_FUNCTIONS`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected sensitiveArgNames(_functionPath: string): ReadonlySet<string> {
+        return NO_SENSITIVE_ARGS;
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -8576,7 +8594,10 @@ abstract class ShardDO {
             this.metrics.errors += 1;
             dispatchError = { thrown: error };
             const durationMs = Date.now() - dispatchStartedAt;
-            const message = error instanceof Error ? error.message : String(error);
+            // A handler's own message can quote a `v.sensitive` argument it rejected;
+            // the free-text sinks below (metrics, request log, dev log) get it scrubbed.
+            const sensitive = this.sensitiveArgNames(payload.functionPath);
+            const message = scrubSensitiveText(error instanceof Error ? error.message : String(error), sensitiveStrings(payload.args ?? {}, sensitive));
             // Count only OCC conflicts as write contention — a unique-index
             // breach / onDelete-restrict / trigger-overflow also surfaces as a
             // 409 ConflictError but is a constraint failure, not contention, and
@@ -11728,7 +11749,9 @@ abstract class ShardDO {
             outcome,
             // Same by-value capture as `traceId` below.
             ...(trace.rayId === undefined ? {} : { rayId: trace.rayId }),
-            redactedArgs: Object.keys(args).length === 0 ? undefined : args,
+            // Masked here, before `redactArgs` and before the dev `captureRaw` branch
+            // either of them takes, so no sink can see a marked value.
+            redactedArgs: Object.keys(args).length === 0 ? undefined : maskSensitiveArgs(args, this.sensitiveArgNames(functionPath)),
             shardKey: this.runner.shardKey,
             tablesRead: attribution.readTables === undefined ? [] : [...attribution.readTables],
             tablesWritten,

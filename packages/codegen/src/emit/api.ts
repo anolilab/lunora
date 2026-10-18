@@ -10,6 +10,7 @@ import {
     assertIdentifier,
     baseSpecifiers,
     GENERATED_HEADER,
+    isSensitiveFunction,
     pascalCase,
     renderArgsType,
     renderNamespaceTree,
@@ -35,7 +36,11 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
             const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
             const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-            return `${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
+            // A sensitive reference is typed as such so `client.mutation` can refuse
+            // `onlineOnly: false` for it, see `SensitiveFunctionReference`.
+            const reference = `FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>`;
+
+            return `${definition.exportName}: ${isSensitiveFunction(definition) ? `${reference} & { readonly sensitive: true }` : reference};`;
         },
         // A namespace derived from a leading-digit filename (e.g. `2fa.ts`) is a
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
@@ -326,7 +331,7 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
         },
         {
             args: {
-                secret: { kind: "string" },
+                secret: { kind: "string", sensitive: true },
                 threadKey: { kind: "string" },
                 toolCallId: { kind: "string" },
             },
@@ -532,7 +537,7 @@ const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
     renderNamespaceTree(
         functions,
         (definition) =>
-            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
+            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)}${isSensitiveFunction(definition) ? ", sensitive: true" : ""} },`,
         "value",
     );
 
