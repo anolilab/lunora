@@ -1297,9 +1297,11 @@ scripts; `harness.thread(key)` reads the persisted thread record; provide `funct
 runtime stubs to back the functions your tools dispatch to.
 
 A run that pauses for a human (an approval or a `requestSecretTool` request) stops
-at its wait. Resolve it with `harness.awaitWait("secret:call_1")` to reach the
-pause, then `harness.supply(threadKey, toolCallId, value)`, `harness.decline(threadKey, toolCallId)`,
-`harness.deliver(name, payload)` or `harness.expire(name)`. The secret
+at its wait. Give the run an `instanceId` (`harness.run(params, { instanceId: "run-1" })`)
+and resolve it with `harness.awaitWait("run-1", "secret:call_1")` to reach the pause, then
+`harness.supply(threadKey, toolCallId, value)`, `harness.decline(threadKey, toolCallId)`,
+`harness.deliver("run-1", name, payload)` or `harness.expire("run-1", name)`. Waits are scoped
+to their run, so two runs may wait on the same name. The secret
 store is `harness.secrets`, and `harness.journalEntries()` is what to assert a
 supplied value never reached.
 

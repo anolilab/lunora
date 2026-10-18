@@ -1,9 +1,12 @@
 /**
- * Event waits shared by every run of one harness: a run's `waitForEvent` resolves
- * from here, so a test can deliver or expire the event at a point it chooses.
+ * Event waits shared by every run of one harness. A wait belongs to one run (its
+ * workflow instance id), as a Workflows `waitForEvent` does: a delivery or expiry
+ * reaches only that run, so two runs may wait on the same event name at once.
  */
 /** The name a host gives an elapsed wait; the loop reads it as a timeout. */
 const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
+
+const waitKey = (instanceId: string, name: string): string => JSON.stringify([instanceId, name]);
 
 class WaitRegistry {
     /** Every wait a run resolved, in order: the payload the journal recorded for it. */
@@ -15,52 +18,63 @@ class WaitRegistry {
 
     private readonly reached = new Map<string, (() => void)[]>();
 
-    public wait(name: string, type: string): Promise<unknown> {
-        const early = this.delivered.get(name);
+    public wait(instanceId: string, name: string, type: string): Promise<unknown> {
+        const key = waitKey(instanceId, name);
 
-        if (this.delivered.has(name)) {
-            this.delivered.delete(name);
+        if (this.delivered.has(key)) {
+            const early = this.delivered.get(key);
+
+            this.delivered.delete(key);
 
             return Promise.resolve(this.record(name, type, early));
         }
 
         return new Promise<unknown>((resolve, reject) => {
-            this.pending.set(name, {
+            // A second wait on the same key would orphan the first one's resolver, so it is refused.
+            if (this.pending.has(key)) {
+                reject(new Error(`agentHarness: run "${instanceId}" is already waiting on "${name}"`));
+
+                return;
+            }
+
+            this.pending.set(key, {
                 reject,
                 resolve: (payload) => {
                     resolve(this.record(name, type, payload));
                 },
             });
 
-            for (const listener of this.reached.get(name) ?? []) {
+            for (const listener of this.reached.get(key) ?? []) {
                 listener();
             }
 
-            this.reached.delete(name);
+            this.reached.delete(key);
         });
     }
 
-    public deliver(name: string, payload: unknown): void {
-        const waiting = this.pending.get(name);
+    public deliver(instanceId: string, name: string, payload: unknown): void {
+        const key = waitKey(instanceId, name);
+        const waiting = this.pending.get(key);
 
         if (waiting === undefined) {
-            this.delivered.set(name, payload);
+            this.delivered.set(key, payload);
 
             return;
         }
 
-        this.pending.delete(name);
+        this.pending.delete(key);
         waiting.resolve(payload);
     }
 
-    public expire(name: string): void {
-        const waiting = this.pending.get(name);
+    public expire(instanceId: string, name: string): void {
+        const key = waitKey(instanceId, name);
+        const waiting = this.pending.get(key);
 
         if (waiting === undefined) {
-            throw new Error(`agentHarness: no pending wait "${name}" to expire`);
+            throw new Error(`agentHarness: no pending wait "${name}" on run "${instanceId}" to expire`);
         }
 
-        this.pending.delete(name);
+        this.pending.delete(key);
 
         const error = new Error(`agentHarness: wait "${name}" timed out`);
 
@@ -68,13 +82,15 @@ class WaitRegistry {
         waiting.reject(error);
     }
 
-    public awaitWait(name: string): Promise<void> {
-        if (this.pending.has(name)) {
+    public awaitWait(instanceId: string, name: string): Promise<void> {
+        const key = waitKey(instanceId, name);
+
+        if (this.pending.has(key)) {
             return Promise.resolve();
         }
 
         return new Promise<void>((resolve) => {
-            this.reached.set(name, [...(this.reached.get(name) ?? []), resolve]);
+            this.reached.set(key, [...(this.reached.get(key) ?? []), resolve]);
         });
     }
 

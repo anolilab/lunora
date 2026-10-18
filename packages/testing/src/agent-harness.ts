@@ -113,10 +113,11 @@ interface AgentRunOverrides {
 
 interface AgentHarness {
     /**
-     * Resolve once a run has reached the wait named `name` (e.g. `secret:call_1`),
-     * so a test can act on the run at a known point instead of after a delay.
+     * Resolve once the run `instanceId` has reached the wait named `name` (e.g.
+     * `secret:call_1`), so a test can act on the run at a known point instead of
+     * after a delay.
      */
-    awaitWait: (name: string) => Promise<void>;
+    awaitWait: (instanceId: string, name: string) => Promise<void>;
 
     /**
      * Decline the `requestSecretTool` call `toolCallId` on `threadKey` and wake its
@@ -124,8 +125,11 @@ interface AgentHarness {
      */
     decline: (threadKey: string, toolCallId: string) => void;
 
-    /** Deliver the event a run is waiting on. Delivered before the wait is reached, it is held for it. */
-    deliver: (name: string, payload: unknown) => void;
+    /**
+     * Deliver the event the run `instanceId` is waiting on. Delivered before that
+     * wait is reached, it is held for it.
+     */
+    deliver: (instanceId: string, name: string, payload: unknown) => void;
 
     /**
      * Every function dispatch the loop has made through `ctx.run`, in order —
@@ -135,8 +139,8 @@ interface AgentHarness {
      */
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
 
-    /** Fail a pending wait the way an elapsed host timeout does. */
-    expire: (name: string) => void;
+    /** Fail the run `instanceId`'s pending wait the way an elapsed host timeout does. */
+    expire: (instanceId: string, name: string) => void;
 
     /**
      * Every journal entry the runs have written, in order: each memoized step
@@ -202,7 +206,10 @@ class DurableStepJournal implements AgentStepLike {
 
     private readonly entries = new Map<string, { output: unknown }>();
 
-    public constructor(private readonly waits: WaitRegistry) {}
+    public constructor(
+        private readonly waits: WaitRegistry,
+        private readonly instanceId: string,
+    ) {}
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -221,7 +228,7 @@ class DurableStepJournal implements AgentStepLike {
     }
 
     public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
-        const payload = await this.waits.wait(name, options.type);
+        const payload = await this.waits.wait(this.instanceId, name, options.type);
 
         return { payload: payload as Readonly<T>, type: options.type };
     }
@@ -245,11 +252,13 @@ const createRuntime = (
     extra: Record<string, HarnessFunction>,
     secrets: SecretValueHost,
 ): {
-    declineSecret: (threadKey: string, toolCallId: string) => void;
+    /** The run that owns the request, so its wait can be woken; undefined when no request was ever opened. */
+    declineSecret: (threadKey: string, toolCallId: string) => string | undefined;
     dispatches: HarnessDispatch[];
     messages: Map<string, HarnessMessage>;
     run: AgentRunFunction;
-    supplySecret: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
+    /** The run that owns the request, so its wait can be woken. */
+    supplySecret: (threadKey: string, toolCallId: string, value: string) => Promise<string>;
     threads: Map<string, HarnessThread>;
 } => {
     const threads = new Map<string, HarnessThread>();
@@ -442,7 +451,7 @@ const createRuntime = (
         }
     };
 
-    const supplySecret = async (threadKey: string, toolCallId: string, value: string): Promise<void> => {
+    const supplySecret = async (threadKey: string, toolCallId: string, value: string): Promise<string> => {
         const request = requests.get(`${threadKey}:${toolCallId}`);
 
         if (request?.status !== "pending") {
@@ -452,14 +461,18 @@ const createRuntime = (
         // The value lives as long as the agent's supply window; a take after it refuses.
         request.ref = await secrets.put(value, { scope: threadKey, ttlMs: SECRET_VALUE_TTL_MS });
         request.status = "supplied";
+
+        return request.instanceId;
     };
 
-    const declineSecret = (threadKey: string, toolCallId: string): void => {
+    const declineSecret = (threadKey: string, toolCallId: string): string | undefined => {
         const request = requests.get(`${threadKey}:${toolCallId}`);
 
         if (request?.status === "pending") {
             request.status = "declined";
         }
+
+        return request?.instanceId;
     };
 
     const handlers = new Map<string, HarnessFunction>([
@@ -530,8 +543,8 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
     const waits = new WaitRegistry();
     const journals: DurableStepJournal[] = [];
 
-    const newJournal = (): DurableStepJournal => {
-        const journal = new DurableStepJournal(waits);
+    const newJournal = (instanceId: string): DurableStepJournal => {
+        const journal = new DurableStepJournal(waits, instanceId);
 
         journals.push(journal);
 
@@ -566,7 +579,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
                 params,
                 paths: DEFAULT_AGENT_FUNCTION_PATHS,
                 run: runtime.run,
-                step: newJournal(),
+                step: newJournal(instanceId),
                 streamGenerate: createStreamGenerate(modelAgent, env),
             });
         }
@@ -582,22 +595,25 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             params,
             paths: DEFAULT_AGENT_FUNCTION_PATHS,
             run: runtime.run,
-            step: newJournal(),
+            step: newJournal(instanceId),
         });
     };
 
     return {
-        awaitWait: (name: string) => waits.awaitWait(name),
-        deliver: (name: string, payload: unknown) => {
-            waits.deliver(name, payload);
+        awaitWait: (instanceId: string, name: string) => waits.awaitWait(instanceId, name),
+        deliver: (instanceId: string, name: string, payload: unknown) => {
+            waits.deliver(instanceId, name, payload);
         },
         decline: (threadKey: string, toolCallId: string) => {
-            runtime.declineSecret(threadKey, toolCallId);
-            waits.deliver(`secret:${toolCallId}`, {});
+            const instanceId = runtime.declineSecret(threadKey, toolCallId);
+
+            if (instanceId !== undefined) {
+                waits.deliver(instanceId, `secret:${toolCallId}`, {});
+            }
         },
         dispatches: runtime.dispatches,
-        expire: (name: string) => {
-            waits.expire(name);
+        expire: (instanceId: string, name: string) => {
+            waits.expire(instanceId, name);
         },
         journalEntries: (): unknown[] => [
             ...journals.flatMap((journal) => journal.steps()),
@@ -613,8 +629,9 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         run,
         secrets,
         supply: async (threadKey: string, toolCallId: string, value: string) => {
-            await runtime.supplySecret(threadKey, toolCallId, value);
-            waits.deliver(`secret:${toolCallId}`, {});
+            const instanceId = await runtime.supplySecret(threadKey, toolCallId, value);
+
+            waits.deliver(instanceId, `secret:${toolCallId}`, {});
         },
         thread: (threadKey: string): HarnessThread | undefined => runtime.threads.get(threadKey),
     };
