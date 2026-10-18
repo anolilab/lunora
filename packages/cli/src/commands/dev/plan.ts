@@ -285,7 +285,7 @@ const planWorkerSidecar = (
     options: DevCommandOptions,
     cwd: string,
     manager: ReturnType<typeof detectPackageManager>,
-): { cleanup: () => void; sidecar: SpawnDescriptor & { tag: string } } => {
+): { cleanup: () => void; sidecar: SpawnDescriptor & { tag: string }; withheld: WithheldBinding[] } => {
     // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
     // `wrangler.jsonc` — check its own `dev.ip` first.
     const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
@@ -309,7 +309,7 @@ const planWorkerSidecar = (
     });
     const exec = toolchainExecArgs(manager, devCommand);
 
-    return { cleanup: services.cleanup, sidecar: { args: exec.args, command: exec.command, cwd, tag: "worker" } };
+    return { cleanup: services.cleanup, sidecar: { args: exec.args, command: exec.command, cwd, tag: "worker" }, withheld: services.withheld };
 };
 
 /**
@@ -383,7 +383,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             runsCodegenWatch: false,
             flavor,
             ipv4LoopbackForced: false,
-            remote: { bindings: [], cleanup: noopCleanup, enabled: options.remote === true, withheld: [] },
+            remote: { bindings: [], cleanup: noopCleanup, enabled: options.remote === true, withheld: worker?.withheld ?? [] },
             ...(worker ? { serviceConfigCleanup: worker.cleanup } : {}),
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,

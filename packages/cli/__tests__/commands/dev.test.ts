@@ -593,6 +593,32 @@ describe("lunora dev", () => {
             expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
         });
 
+        it("carries the Artifacts binding a service's sidecar session left out onto the plan, so the banner can say so", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({
+                cwd: workdir,
+                hasIpv6Loopback: () => true,
+                logger: silentLogger(),
+                materializeServiceConfigs: () => {
+                    return { cleanup: () => {}, configPaths: [], withheld: [{ binding: "ARTIFACTS", kind: "artifacts" }] };
+                },
+            });
+
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "ARTIFACTS", kind: "artifacts" }]);
+        });
+
         it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
             expect.assertions(2);
 
