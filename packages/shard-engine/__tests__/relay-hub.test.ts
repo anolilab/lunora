@@ -1127,16 +1127,7 @@ describe("relay hub", () => {
 
     describe("relay announce", () => {
         /** A relay whose attach to its owner answers `status`; the owner's answer is all `announce` can see. */
-        const announcingRelay = (status: number): RelayMember => {
-            const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };
-            const host = {
-                doName: () => `${OWNER_KEY}::relay::0`,
-                env: () => {
-                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
-                },
-                shardBinding: () => "SHARD",
-                shardJurisdiction: () => undefined,
-            } as unknown as RelayHost;
+        const memberOf = (host: RelayHost): RelayMember => {
             const link = createRelayLink(host);
 
             if (!(link instanceof RelayMember)) {
@@ -1145,6 +1136,22 @@ describe("relay hub", () => {
 
             return link;
         };
+
+        const announcingRelay = (status: number): RelayMember => {
+            const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };
+
+            return memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+            } as unknown as RelayHost);
+        };
+
+        /** The `type` of a control frame posted to the owner, read from its JSON body. */
+        const frameType = (init: RequestInit | undefined): string => (typeof init?.body === "string" ? (JSON.parse(init.body) as { type: string }).type : "");
 
         it("reports a failed attach, so the connect handler does not advertise the socket as grant-ready", async () => {
             expect.assertions(1);
@@ -1159,6 +1166,51 @@ describe("relay hub", () => {
 
             await expect(relay.announce()).resolves.toBe(true);
             await expect(relay.announce()).resolves.toBe(true);
+        });
+
+        it("re-attaches after a drain, even when the attach begun before it answers late", async () => {
+            expect.assertions(3);
+
+            // Each attach is held until the test answers it, so the drain can land while it is in flight.
+            const answers: ((response: Response) => void)[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    if (frameType(init) !== "relay_attach") {
+                        return Promise.resolve(new Response());
+                    }
+
+                    return new Promise<Response>((resolve) => {
+                        answers.push(resolve);
+                    });
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const first = link.announce();
+
+            // The last socket closes: the owner drops the relay, then the held attach answers OK.
+            await link.announceDrain({} as ShardSocketLike);
+            answers[0]!(new Response());
+            await first;
+
+            // The next socket must attach again rather than trust a latch the drain already cleared.
+            const second = link.announce();
+
+            expect(answers).toHaveLength(2);
+
+            answers[1]!(new Response());
+
+            await expect(second).resolves.toBe(true);
+            await expect(link.announce()).resolves.toBe(true);
         });
     });
 });

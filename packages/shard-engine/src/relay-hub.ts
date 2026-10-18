@@ -1460,6 +1460,12 @@ class RelayMember extends RelayLink {
     private pendingAnnounce: Promise<boolean> | undefined;
 
     /**
+     * Bumped by every drain. An attach records the generation it started in and sets the latch only if it is still current:
+     * a drain detaches the relay from the owner, so an attach that answers after it must not mark the relay announced.
+     */
+    private announceGeneration = 0;
+
+    /**
      * Every socket's cohort memos on this relay, `connectionId → subId → memo`:
      * an in-memory CACHE over `__lunora_relay_memos`, hydrated by
      * {@link RelayMember.relayMemos} on first use and undefined until then.
@@ -1644,15 +1650,25 @@ class RelayMember extends RelayLink {
             return Promise.resolve(true);
         }
 
-        this.pendingAnnounce ??= this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })
-            .then((response) => {
-                this.relayAnnounced = response?.ok === true;
+        if (this.pendingAnnounce === undefined) {
+            const generation = this.announceGeneration;
 
-                return this.relayAnnounced;
-            })
-            .finally(() => {
-                this.pendingAnnounce = undefined;
-            });
+            this.pendingAnnounce = this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })
+                .then((response) => {
+                    const attached = response?.ok === true;
+
+                    if (generation === this.announceGeneration) {
+                        this.relayAnnounced = attached;
+                    }
+
+                    return attached;
+                })
+                .finally(() => {
+                    if (generation === this.announceGeneration) {
+                        this.pendingAnnounce = undefined;
+                    }
+                });
+        }
 
         return this.pendingAnnounce;
     }
@@ -1686,6 +1702,9 @@ class RelayMember extends RelayLink {
         }
 
         this.relayAnnounced = false;
+        // An attach still in flight answers for a registration the owner has just dropped: the next socket starts its own attach.
+        this.announceGeneration += 1;
+        this.pendingAnnounce = undefined;
         await this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" });
     }
 
