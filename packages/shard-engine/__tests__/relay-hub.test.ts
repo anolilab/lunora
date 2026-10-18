@@ -1242,12 +1242,74 @@ describe("relay hub", () => {
             // The next socket must attach again rather than trust a latch the drain already cleared.
             const second = link.announce();
 
+            await vi.waitFor(() => {
+                if (answers.length !== 2) {
+                    throw new Error("the second attach has not been sent yet");
+                }
+            });
+
             expect(answers).toHaveLength(2);
 
             answers[1]!(new Response());
 
             await expect(second).resolves.toBe(true);
             await expect(link.announce()).resolves.toBe(true);
+        });
+
+        it("sends an attach that follows a drain only after the owner has answered the drain's detach", async () => {
+            expect.assertions(2);
+
+            // The detach is held, so a socket can arrive while the owner has not yet dropped the relay.
+            const sent: string[] = [];
+            const detach: { answer?: (response: Response) => void } = {};
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>((resolve) => {
+                            detach.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const drained = link.announceDrain({} as ShardSocketLike);
+
+            await vi.waitFor(() => {
+                if (!sent.includes("relay_detach")) {
+                    throw new Error("the detach has not been sent yet");
+                }
+            });
+
+            const attached = link.announce();
+
+            // Give a wrongly ordered attach every chance to go out first.
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_detach"]);
+
+            detach.answer?.(new Response());
+            await drained;
+            await attached;
+
+            expect(sent).toStrictEqual(["relay_detach", "relay_attach"]);
         });
     });
 });

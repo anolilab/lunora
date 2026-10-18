@@ -54,8 +54,11 @@ const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): Readab
                 return;
             }
 
-            // The whole body has already arrived: nothing is left to drain, and the keep-alive socket stays usable.
+            // The whole body has already arrived: nothing is left to cut off, and the keep-alive socket stays usable. What is still
+            // buffered is read out, so the request ends and the connection can parse the next one.
             if (incoming.complete) {
+                incoming.resume();
+
                 return;
             }
 

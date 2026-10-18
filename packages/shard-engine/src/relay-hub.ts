@@ -1468,6 +1468,12 @@ class RelayMember extends RelayLink {
     private announceGeneration = 0;
 
     /**
+     * The detach a drain sent, while the owner has not yet answered it. A later attach waits for it, so the owner never applies a
+     * detach after the attach that followed it and drops a relay that has live sockets again.
+     */
+    private pendingDetach: Promise<void> | undefined;
+
+    /**
      * Every socket's cohort memos on this relay, `connectionId → subId → memo`:
      * an in-memory CACHE over `__lunora_relay_memos`, hydrated by
      * {@link RelayMember.relayMemos} on first use and undefined until then.
@@ -1655,7 +1661,8 @@ class RelayMember extends RelayLink {
         if (this.pendingAnnounce === undefined) {
             const generation = this.announceGeneration;
 
-            this.pendingAnnounce = this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })
+            this.pendingAnnounce = (this.pendingDetach ?? Promise.resolve())
+                .then(async () => this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" }))
                 .then((response) => {
                     const attached = response?.ok === true;
 
@@ -1707,7 +1714,17 @@ class RelayMember extends RelayLink {
         // An attach still in flight answers for a registration the owner has just dropped: the next socket starts its own attach.
         this.announceGeneration += 1;
         this.pendingAnnounce = undefined;
-        await this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" });
+
+        const detach = this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" })
+            .catch(() => undefined)
+            .finally(() => {
+                if (this.pendingDetach === detach) {
+                    this.pendingDetach = undefined;
+                }
+            });
+
+        this.pendingDetach = detach;
+        await detach;
     }
 
     /**
