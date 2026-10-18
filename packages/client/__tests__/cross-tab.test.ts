@@ -891,6 +891,7 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                         resubscribePending?: Map<string, unknown>;
                         resubscribeQueue?: unknown[];
                         socket?: { close: () => void };
+                        unackedRetryTimers?: Map<string, unknown>;
                         wsState?: string;
                     }
                 >;
@@ -908,6 +909,7 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                 resubscribePending: new Map(),
                 resubscribeQueue: [],
                 socket: { close: socketClose },
+                unackedRetryTimers: new Map(),
                 wsState: "open",
             });
 

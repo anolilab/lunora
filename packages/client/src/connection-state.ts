@@ -143,9 +143,9 @@ interface ShardConnection {
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
      */
     roomsRejoined?: boolean;
+
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
-
     socket: undefined | WebSocket;
 
     /**
@@ -164,6 +164,15 @@ interface ShardConnection {
      * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Per subscription id, the timer that re-sends its `subscribe` frame once if
+     * the server answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS`. Separate from
+     * `resubscribePending`: that frees a pacing slot, this recovers a frame the
+     * server silently dropped. Cleared by the first frame bearing the id and by
+     * every teardown of the socket.
+     */
+    unackedRetryTimers: Map<string, ReturnType<typeof setTimeout>>;
 
     wasEverConnected: boolean;
 

@@ -5717,6 +5717,7 @@ class LunoraClient {
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
                 resubscribePending: new Map(),
+                unackedRetryTimers: new Map(),
                 resubscribeQueue: [],
                 shardKey,
                 socket: undefined,
@@ -6806,9 +6807,11 @@ class LunoraClient {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
     private clearResubscribeQueue(conn: ShardConnection): void {
-        for (const watchdog of conn.resubscribePending.values()) {
+        for (const watchdog of [...conn.resubscribePending.values(), ...conn.unackedRetryTimers.values()]) {
             clearTimeout(watchdog);
         }
+
+        conn.unackedRetryTimers.clear();
 
         conn.resubscribePending.clear();
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do
@@ -6816,7 +6819,7 @@ class LunoraClient {
     }
 
     /** Send `state`'s `subscribe` frame when the shard's socket can carry it; `true` when a frame actually went out. */
-    private sendSubscribeIfOpen(state: SubscriptionState): boolean {
+    private sendSubscribeIfOpen(state: SubscriptionState, isRetry = false): boolean {
         const conn = this.getConnection(state.shardKey);
 
         if (conn?.wsState !== "open" || state.acked) {
@@ -6833,7 +6836,7 @@ class LunoraClient {
         // Drop `sinceSeq` there and take the full snapshot.
         const resumable = state.serverCursor !== undefined && state.serverBase !== undefined;
 
-        return sendOn(conn, {
+        const sent = sendOn(conn, {
             id: state.id,
             // `sinceSeq` rides along when we hold a persisted cursor for this
             // sub (a hydrated read or an earlier frame), so the server can
@@ -6863,6 +6866,34 @@ class LunoraClient {
             },
             type: "subscribe",
         });
+
+        if (sent && !isRetry) {
+            this.armUnackedRetry(conn, state);
+        }
+
+        return sent;
+    }
+
+    /**
+     * Re-send `state`'s `subscribe` once if no frame bearing its id arrives within
+     * {@link RESUBSCRIBE_ACK_TIMEOUT_MS}. A server that drops the frame without
+     * replying (a shard still waking, a swallowed message) would otherwise leave
+     * the subscription un-acked on a perfectly live socket until the next
+     * reconnect, because the pacing watchdog only frees its slot. One retry, not a
+     * loop: a query that is merely slow must not be re-run repeatedly.
+     */
+    private armUnackedRetry(conn: ShardConnection, state: SubscriptionState): void {
+        clearTimeout(conn.unackedRetryTimers.get(state.id));
+        conn.unackedRetryTimers.set(
+            state.id,
+            setTimeout(() => {
+                conn.unackedRetryTimers.delete(state.id);
+
+                if (!state.acked && this.subscriptions.getById(state.id) === state) {
+                    this.sendSubscribeIfOpen(state, true);
+                }
+            }, RESUBSCRIBE_ACK_TIMEOUT_MS),
+        );
     }
 
     private sendShapeSubscribeIfOpen(state: ShapeSubscriptionState): void {
@@ -6925,6 +6956,8 @@ class LunoraClient {
 
             if (conn) {
                 this.releaseResubscribeSlot(conn, (message as { id: string }).id);
+                clearTimeout(conn.unackedRetryTimers.get((message as { id: string }).id));
+                conn.unackedRetryTimers.delete((message as { id: string }).id);
             }
         }
 
