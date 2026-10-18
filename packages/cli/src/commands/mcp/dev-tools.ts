@@ -90,6 +90,7 @@ const tailLines = (path: string, count: number): string => {
 const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
     {
         definition: {
+            annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false, readOnlyHint: true, title: "Check the local dev server" },
             description:
                 "Report whether a `lunora dev` server is running for this project, and its URL, studio URL, mode and uptime. Call this first when a query or mutation tool fails to connect.",
             inputSchema: { properties: {}, type: "object" },
@@ -117,6 +118,7 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
     },
     {
         definition: {
+            annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false, readOnlyHint: true, title: "Read the local dev server log" },
             description:
                 "Return the tail of the running dev server's captured log — worker output, request errors, and stack traces. Only available when the server was started in the background (`lunora dev --background`); a foreground server prints to its own terminal.",
             inputSchema: {

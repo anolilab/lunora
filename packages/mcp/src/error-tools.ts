@@ -17,7 +17,7 @@
 import type { ErrorCatalogEntry, ErrorHint, Solution } from "@lunora/errors";
 import { findIssueSolution, getCatalogEntry, isInternalCode, resolveHint } from "@lunora/errors";
 
-import { errorResult, okStructured } from "./tool-result";
+import { errorResult, okStructured, withErrorShape } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 
 /** Static catalog content: no state, no deployment, same answer every time. */
@@ -64,7 +64,7 @@ const ERROR_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             "Explain a Lunora error before guessing at a fix: pass its code (CONFLICT, RLS_REQUIRED, …) or the raw error message, and get the catalog's transport status, title and actionable hint, plus any matched codegen/Cloudflare solution and a link to the reference. Static catalog data — no deployment and no credentials needed.",
         inputSchema: EXPLAIN_INPUT_SCHEMA,
         name: "lunora_explain_error",
-        outputSchema: EXPLAIN_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(EXPLAIN_OUTPUT_SCHEMA),
     },
 ];
 
@@ -147,14 +147,14 @@ const explainError = (code: string | undefined, message: string | undefined): Re
  */
 const callErrorTool = (name: string, input: Record<string, unknown>): ToolResult => {
     if (name !== "lunora_explain_error") {
-        return errorResult(`unknown error tool: ${name}`);
+        return errorResult("NOT_FOUND", `unknown error tool: ${name}`);
     }
 
     const code = readText(input.code);
     const message = readText(input.message);
 
     if (code === undefined && message === undefined) {
-        return errorResult('lunora_explain_error needs a "code" or a "message" (or both); received neither.');
+        return errorResult("BAD_REQUEST", 'lunora_explain_error needs a "code" or a "message" (or both); received neither.');
     }
 
     // A miss comes back as `found: false`, not an `isError`: "nothing knows this

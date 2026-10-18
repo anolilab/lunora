@@ -178,7 +178,7 @@ describe("localTools", () => {
         const result = await listFunctions?.handle({});
 
         expect(result?.isError).toBe(true);
-        expect(result?.content[0]?.text).toBe(NO_DEPLOYMENT_MESSAGE);
+        expect(result?.content[0]?.text).toBe(`NO_DEPLOYMENT: ${NO_DEPLOYMENT_MESSAGE}`);
     });
 
     it("picks up a deployment that appears after the tools were built", async () => {
@@ -222,7 +222,12 @@ describe("localTools", () => {
         expect.assertions(1);
 
         const extra = {
-            definition: { description: "x", inputSchema: { properties: {}, type: "object" as const }, name: "custom" },
+            definition: {
+                annotations: { readOnlyHint: true as const },
+                description: "x",
+                inputSchema: { properties: {}, type: "object" as const },
+                name: "custom",
+            },
             handle: async () => {
                 return { content: [] };
             },

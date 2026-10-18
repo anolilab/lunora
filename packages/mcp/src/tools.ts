@@ -4,7 +4,7 @@ import { LunoraError } from "@lunora/errors";
 import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
 import { callObservabilityTool, OBSERVABILITY_TOOL_DEFINITIONS, OBSERVABILITY_TOOL_NAMES } from "./observability-tools";
 import { callRowReadTool, ROW_READ_TOOL_DEFINITIONS, ROW_READ_TOOL_NAMES } from "./row-read-tools";
-import { errorResult, ok } from "./tool-result";
+import { errorFromThrown, errorResult, ok } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 import { readConfirmation, screenWriteConfirmation, WRITE_CONFIRMATION_PROPERTIES } from "./write-confirmation";
 
@@ -291,7 +291,7 @@ const callReadOnlyTool = async (client: LunoraClient, name: string, input: Recor
             const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
             if (descriptor === undefined) {
-                return errorResult(`function not found: ${functionPath}`);
+                return errorResult("NOT_FOUND", `function not found: ${functionPath}`);
             }
 
             return ok({ args: descriptor.args ?? [], kind: descriptor.kind, path: descriptor.path });
@@ -484,21 +484,19 @@ const callTool = async (
     const family = TOOL_FAMILIES.find((candidate) => candidate.names.has(name));
 
     if (family === undefined) {
-        return errorResult(`unknown tool: ${name}`);
+        return errorResult("NOT_FOUND", `unknown tool: ${name}`);
     }
 
     const closed = closedGate(family, { allowDataReads, allowObservability, allowWrites });
 
     if (closed !== undefined) {
-        return errorResult(closed.refuse(name));
+        return errorResult("FORBIDDEN", closed.refuse(name));
     }
 
     try {
         return await family.call(client, name, input);
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        return errorResult(message);
+        return errorFromThrown(error);
     }
 };
 

@@ -21,7 +21,7 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 
-import { okStructured } from "./tool-result";
+import { okStructured, withErrorShape } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 
 /** Introspection reads touch no state; every call goes to the deployment. */
@@ -192,7 +192,7 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             "Read the deployment's recent log entries (newest first) after running a function, to see what it printed and where it failed. In-memory and per-shard: resets when the shard hibernates.",
         inputSchema: LOGS_INPUT_SCHEMA,
         name: "lunora_get_logs",
-        outputSchema: LOGS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(LOGS_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "List grouped error Issues" },
@@ -200,28 +200,28 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             "List errors grouped into Issues by fingerprint, with occurrence counts and triage status — the first call when asking what is currently broken, rather than reading raw logs.",
         inputSchema: ISSUES_INPUT_SCHEMA,
         name: "lunora_get_issues",
-        outputSchema: ISSUES_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(ISSUES_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "List schema and query advisories" },
         description: "List the deployment's schema/query advisories (missing indexes, unsafe policies, and similar lints) before or after changing the schema.",
         inputSchema: ADVISORIES_INPUT_SCHEMA,
         name: "lunora_get_advisories",
-        outputSchema: ADVISORIES_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(ADVISORIES_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read query insights" },
         description: "Read per-statement execution counts and latency over a recent time window, to find which query is slow or hot before optimizing one.",
         inputSchema: INSIGHTS_INPUT_SCHEMA,
         name: "lunora_get_query_insights",
-        outputSchema: INSIGHTS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(INSIGHTS_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read migration status" },
         description: "Read which migrations have been applied and which are pending, to check whether a schema change has actually landed on the deployment.",
         inputSchema: MIGRATION_STATUS_INPUT_SCHEMA,
         name: "lunora_get_migration_status",
-        outputSchema: MIGRATION_STATUS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(MIGRATION_STATUS_OUTPUT_SCHEMA),
     },
 ];
 

@@ -32,6 +32,7 @@ import { docsResources } from "./docs/resources";
 import { docsTools } from "./docs/tools";
 import type { DocsIndex } from "./docs/types";
 import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
+import { errorResult } from "./tool-result";
 import type { ToolResult } from "./tool-types";
 import { callTool, toolDefinitions } from "./tools";
 
@@ -198,7 +199,7 @@ const lazyDeploymentTools = (
                     const deployment = resolve();
 
                     if (deployment === undefined) {
-                        return { content: [{ text: NO_DEPLOYMENT_MESSAGE, type: "text" }], isError: true };
+                        return errorResult("NO_DEPLOYMENT", NO_DEPLOYMENT_MESSAGE);
                     }
 
                     return callTool(clientFor(deployment), definition.name, input, allowWrites, hasAdminToken(deployment));
