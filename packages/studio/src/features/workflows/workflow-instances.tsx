@@ -3,6 +3,7 @@ import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -285,21 +286,36 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                                                     {t("Steps")}
                                                 </Button>
                                                 {actionImpl !== undefined &&
-                                                    ACTIONS.map((action) => (
-                                                        <Button
-                                                            data-testid={`workflow-instance-${action}-${instance.id}`}
-                                                            disabled={busyId === instance.id}
-                                                            key={action}
-                                                            onClick={() => {
-                                                                fireAndForget(act(instance.id, action));
-                                                            }}
-                                                            size="sm"
-                                                            type="button"
-                                                            variant="ghost"
-                                                        >
-                                                            {t(action)}
-                                                        </Button>
-                                                    ))}
+                                                    ACTIONS.map((action) =>
+                                                        action === "restart" ? (
+                                                            // Restart re-runs every step from the start, so side-effecting steps run again.
+                                                            <ConfirmButton
+                                                                confirmLabel={t("Restart?")}
+                                                                disabled={busyId === instance.id}
+                                                                key={action}
+                                                                onConfirm={() => {
+                                                                    fireAndForget(act(instance.id, action));
+                                                                }}
+                                                                testId={`workflow-instance-${action}-${instance.id}`}
+                                                            >
+                                                                {t(action)}
+                                                            </ConfirmButton>
+                                                        ) : (
+                                                            <Button
+                                                                data-testid={`workflow-instance-${action}-${instance.id}`}
+                                                                disabled={busyId === instance.id}
+                                                                key={action}
+                                                                onClick={() => {
+                                                                    fireAndForget(act(instance.id, action));
+                                                                }}
+                                                                size="sm"
+                                                                type="button"
+                                                                variant="ghost"
+                                                            >
+                                                                {t(action)}
+                                                            </Button>
+                                                        ),
+                                                    )}
                                             </div>
                                         </TableCell>
                                     </TableRow>

@@ -113,6 +113,11 @@ describe("workflowInstanceHistory", () => {
 
         fireEvent.click(await screen.findByTestId("workflow-instance-restart-i1"));
 
+        // The first click only asks for confirmation.
+        expect(runAction).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId("workflow-instance-restart-i1-confirm"));
+
         await waitFor(() => {
             expect(runAction).toHaveBeenCalledWith({ action: "restart", id: "i1", name: "orders" });
         });

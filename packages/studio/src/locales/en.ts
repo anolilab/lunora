@@ -1281,6 +1281,7 @@ const MESSAGE_IDS = [
     "pause",
     "resume",
     "restart",
+    "Restart?",
     "terminate",
     // Query insights (metrics panel — slow-query leaderboard).
     ">100ms avg execution",
