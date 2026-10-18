@@ -241,6 +241,13 @@ checkout URL).
 Web Audio, `WebSocket`): on native, pass your own `createMicrophone` /
 `createSpeaker` implementations.
 
+`useLiveTopic` is re-exported too, but it reads the global `fetch` and has no
+per-call override. It needs a response body it can read as a stream, and stock
+React Native `fetch` does not expose one: the subscription receives no events
+and reports no error. Install a streaming `fetch` before the first live topic
+mounts, e.g. `globalThis.fetch = fetch` from `expo/fetch` on Expo, or a
+streaming polyfill elsewhere.
+
 ### `@lunora/react-native/auth`
 
 - `expoBearerToken(authClient)` — reads the better-auth Expo session token (from
