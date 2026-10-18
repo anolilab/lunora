@@ -242,8 +242,13 @@ const finishErrorOf = (finishReason: { raw: string | undefined; unified: string 
  * error did not come from a turn or the provider reported none. A turn that is retried
  * by its durable step is counted once, by the attempt whose error reaches the loop.
  */
-const usageOfFailedTurn = (error: unknown): AgentUsage | undefined =>
-    (typeof error === "object" && error !== null ? (error as { [FAILED_TURN_USAGE]?: AgentUsage })[FAILED_TURN_USAGE] : undefined);
+const usageOfFailedTurn = (error: unknown): AgentUsage | undefined => {
+    if (typeof error !== "object" || error === null) {
+        return undefined;
+    }
+
+    return (error as { [FAILED_TURN_USAGE]?: AgentUsage })[FAILED_TURN_USAGE];
+};
 
 /**
  * Wrap the turn's model so a provider turn that did not complete fails in-band.
