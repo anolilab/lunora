@@ -346,13 +346,31 @@ private fun onlineOnlyWriteIsRefusedWhenDisconnected() {
 
     client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
 
-    val refused = runCatching { client.submit(onlineOnlyWrite()) }.exceptionOrNull() as? OfflineException
+    // A subscription on the write's own path and args, primed with a server value, so an
+    // overlay the write applied would be displayed.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val seen = mutableListOf<WireValue>()
+
+    client.attachSocket { }
+    client.subscribe("auth:setPassword", args, { seen.add(it) })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+    client.detachSocket()
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + WireValue.Text("c")) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
 
     check(refused?.code == OFFLINE_NOT_QUEUED, "an online-only write is refused with OFFLINE_NOT_QUEUED")
     check(client.pendingMutationCount() == 0, "and nothing is queued")
     check(store.appended.isEmpty(), "the persistence adapter never sees the write")
     check(!Json.write(store.records).contains(ONLINE_ONLY_SECRET), "the arguments never reach storage")
     check(posts == 0, "and a refused write never reaches the wire")
+    check(
+        seen.none { it == WireValue.Arr(listOf(WireValue.Text("a"), WireValue.Text("c"))) },
+        "and a refused write's overlay is never displayed",
+    )
 }
 
 /** With the socket up, an online-only write is sent normally and commits. */
