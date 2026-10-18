@@ -69,7 +69,9 @@ every `put`.
   `SecretValueKeyError`. Nothing falls back to storing plaintext.
 - **Unreadable records read as absent.** A tampered record, one moved to another
   ref or scope, or one sealed under a key that is no longer configured, makes
-  `take` return `undefined`. It never throws with the plaintext in the error.
+  `take` return `undefined`. It never throws with the plaintext in the error. A
+  failed take does not bind the claimant, so the real claimant can still take the
+  value once the record opens; the first take that opens it binds the ref.
 - **Rotation.** Set `LUNORA_SECRET_VALUE_KEY_PREVIOUS` to the current key and
   `LUNORA_SECRET_VALUE_KEY` to a new one, then deploy. New values seal under the
   new key, and `take` opens values under either. Wait until every value sealed

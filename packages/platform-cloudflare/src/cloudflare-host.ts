@@ -379,7 +379,7 @@ const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () 
 
             return ref;
         },
-        take: (ref, take) =>
+        take: (ref, take, open) =>
             storage.transaction(async (txn) => {
                 const key = keyOf(ref);
                 const record = await txn.get<SecretRecord>(key);
@@ -398,13 +398,23 @@ const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () 
                     return undefined;
                 }
 
-                if (record.claimant === undefined) {
-                    await txn.put(key, { ...record, claimant: take.claimant } satisfies SecretRecord);
-
-                    return record.value;
+                if (record.claimant !== undefined && record.claimant !== take.claimant) {
+                    return undefined;
                 }
 
-                return record.claimant === take.claimant ? record.value : undefined;
+                // Bind only what opens: a record that fails to authenticate must not
+                // spend the ref for the claimant that presented it.
+                const value = await open(record.value);
+
+                if (value === undefined) {
+                    return undefined;
+                }
+
+                if (record.claimant === undefined) {
+                    await txn.put(key, { ...record, claimant: take.claimant } satisfies SecretRecord);
+                }
+
+                return value;
             }),
     };
 };

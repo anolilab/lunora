@@ -158,8 +158,8 @@ const parseEnvelope = (stored: string): SealedEnvelope | undefined => {
  * `put` and `take` refuse with {@link SecretValueKeyError} when the key is missing
  * or malformed, before any record is touched. A take whose record cannot be
  * opened (tampered, moved to another ref or scope, or sealed under a key that is
- * no longer configured) reads `undefined`; it never throws with the plaintext in
- * the error.
+ * no longer configured) reads `undefined` and leaves the claimant unbound, so the
+ * real claimant can still take it; it never throws with the plaintext in the error.
  *
  * The key is validated on first use, not at construction, so an app that never
  * uses the feature boots without a key.
@@ -226,9 +226,8 @@ const encryptingSecretValueHost = (raw: SecretValueStore, options: SecretValueKe
         },
         take: async (ref: string, take: SecretValueTakeOptions) => {
             const candidates = await keys();
-            const stored = await raw.take(ref, take);
 
-            return stored === undefined ? undefined : open(stored, ref, take.scope, candidates);
+            return raw.take(ref, take, async (stored) => open(stored, ref, take.scope, candidates));
         },
     };
 };
