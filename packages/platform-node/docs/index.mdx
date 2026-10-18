@@ -170,9 +170,9 @@ Node upgrade can fail to read back values it wrote. See
 is honoured through a durable alias row, because the engine mints its own run
 ids, so `instance.id` is the engine's. `terminate` is a barrier within one
 process only: the store handed to the runtime drops writes for terminated ids,
-but a `terminate` in another process cannot do that. `ctx.run` fails (there is
-no Node HTTP server), and a `ctx.parallel` join cannot interleave in one
-trigger.
+but a `terminate` in another process cannot do that. `ctx.run` fails (the
+workflow host is given no way to reach the scheduler dispatch route), and a
+`ctx.parallel` join cannot interleave in one trigger.
 
 **Object storage is a development emulation.** `createNodeR2Bucket` is
 filesystem-backed and not production-durable. There is no multipart upload and

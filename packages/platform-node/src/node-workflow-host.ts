@@ -48,8 +48,8 @@
  * engine, which mints its own run ids: the same id twice resolves to one run
  * and `get(id)` finds it. The id is not the run id, so `instance.id` is the
  * engine's.
- * - `ctx.run` still dispatches to `/_lunora/scheduler/dispatch`, which has no
- * Node HTTP server — a workflow body that calls `ctx.run` fails at runtime.
+ * - `ctx.run` still dispatches to `/_lunora/scheduler/dispatch`, and this host is
+ * given no way to reach that route — a workflow body that calls `ctx.run` fails at runtime.
  * - `ctx.parallel`'s join cannot interleave inside one synchronous `trigger`
  * activation (the child's signal arrives before the parent's `waitForEvent` is
  * persisted); `spawn` + direct create/get/signal flows are sound.
