@@ -1352,6 +1352,27 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(packages).not.toContain("@lunora/notify");
     });
 
+    it("keys the secret-value key to a value import of requestSecretTool, not to @lunora/agent alone", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/agent.ts", `import { requestSecretTool } from "@lunora/agent";\nexport const ask = requestSecretTool({ description: "API key" });`);
+
+        const withTool = await inferLunoraBindings({ projectRoot: root });
+
+        expect(withTool.usesRequestSecretTool).toBe(true);
+        expect(secretSourcesFromBindings(withTool)).toContain("@lunora/agent:requestSecretTool");
+
+        // A type-only import is not a wired tool, and an agent import without the tool needs no key.
+        write("lunora/agent.ts", `import type { requestSecretTool } from "@lunora/agent";\nexport type Ask = typeof requestSecretTool;`);
+
+        const typeOnly = await inferLunoraBindings({ projectRoot: root });
+
+        expect(typeOnly.usesRequestSecretTool).toBe(false);
+        expect(secretSourcesFromBindings(typeOnly)).not.toContain("@lunora/agent:requestSecretTool");
+    });
+
     it("scaffolds only the webPush secrets when defineNotify gets a readable variable config (webPush-only, #1039)", async () => {
         expect.assertions(2);
 

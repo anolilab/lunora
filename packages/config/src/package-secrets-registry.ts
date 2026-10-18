@@ -113,6 +113,20 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
+    // `requestSecretTool` seals the value a human supplies under this key. It is
+    // base64 of 32 random bytes, not hex: a hex value is 64 characters that also
+    // decode as base64, but to 48 bytes, which the host refuses. The angle-bracket
+    // placeholder keeps the key out of MINTABLE_SECRET_KEYS, so nothing generates
+    // it and the operator runs the openssl command below.
+    "@lunora/agent:requestSecretTool": [
+        {
+            description:
+                "AES-256 key that seals secret values held for one agent step, base64 of 32 bytes. Generate with: openssl rand -base64 32. Rotate by moving the old value to LUNORA_SECRET_VALUE_KEY_PREVIOUS first.",
+            docsUrl: "https://lunora.sh/docs/packages/agent#secret-values",
+            key: "LUNORA_SECRET_VALUE_KEY",
+            placeholderValue: "<your-base64-32-byte-key>",
+        },
+    ],
     // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to

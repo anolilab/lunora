@@ -744,6 +744,7 @@ interface InferredBindings {
     usesPaymentStripe: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
+    usesRequestSecretTool: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
