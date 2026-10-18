@@ -23,6 +23,8 @@ export type {
     TestSubscription,
 } from "./harness";
 export { lunoraTest } from "./harness";
+export type { RecordedStreamPart, RecordedTurn, StreamGate } from "./recorded-model";
+export { createStreamGate, recordedModel } from "./recorded-model";
 export type { RetrievalScorerOptions } from "./retrieval-scorer";
 export { groundednessScorer, mrrScorer, ndcgAtK, precisionAtK, recallAtK } from "./retrieval-scorer";
 export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample } from "./scorer";

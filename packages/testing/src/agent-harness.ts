@@ -8,8 +8,10 @@ import type {
     AgentRunInput,
     AgentRunResult,
     AgentStepLike,
+    AgentTokenDelta,
 } from "@lunora/agent";
-import { DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
+import { createAgentGenerate, createStreamGenerate, DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
+import type { LanguageModel } from "ai";
 
 /** A thread message as the in-memory runtime stores it (superset of {@link AgentMessageRow}). */
 interface HarnessMessage extends AgentMessageRow {
@@ -66,15 +68,30 @@ interface AgentHarnessOptions {
      * Scripted model decisions, one {@link AgentGenerateResult} per LLM turn —
      * the default script for {@link AgentHarness.run}. A terminal turn has an
      * empty `toolCalls`; a tool-calling turn lists the calls the loop then runs
-     * against the agent's own tools. Override per run via `run(..., { script })`.
+     * against the agent's own tools. Override per run via `run(..., { script })`,
+     * or replace it per run with a streamed `model` via `run(..., { model })`.
      */
-    script: AgentGenerateResult[];
+    script?: AgentGenerateResult[];
 }
 
 /** Per-run overrides for {@link AgentHarness.run}. */
 interface AgentRunOverrides {
     /** The workflow instance id for this run (default: an auto-incrementing `wf-N`). */
     instanceId?: string;
+
+    /**
+     * The model for THIS run, replacing the scripted decisions. Each turn runs
+     * through the production seam over this model: `createStreamGenerate` (the
+     * `streamText` path, so a recorded stream from `recordedModel` is consumed
+     * part by part) with `onTokenDelta` as its live sink.
+     */
+    model?: LanguageModel;
+
+    /**
+     * Live token-delta sink for a `model` run — receives each text delta as the
+     * recorded stream produces it. Ignored for scripted runs.
+     */
+    onTokenDelta?: (delta: AgentTokenDelta) => void;
 
     /** The model script for THIS run, replacing the harness default. */
     script?: AgentGenerateResult[];
@@ -331,7 +348,34 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         runCount += 1;
 
         const instanceId = overrides?.instanceId ?? `wf-${String(runCount)}`;
-        const script = overrides?.script ?? options.script;
+        const { model, onTokenDelta } = overrides ?? {};
+
+        if (model !== undefined) {
+            // The production seams over a model: `agent.model` is the only thing the
+            // seams read from the definition, so the spread just swaps that one field.
+            const modelAgent = { ...agent, model };
+
+            return runAgentLoop({
+                agent,
+                env,
+                exportName,
+                generate: createAgentGenerate(modelAgent, env),
+                instanceId,
+                onTokenDelta: (event) => {
+                    // The loop's token sink also carries progress events; the harness surfaces tokens only.
+                    if (event.kind !== "progress") {
+                        onTokenDelta?.(event);
+                    }
+                },
+                params,
+                paths: DEFAULT_AGENT_FUNCTION_PATHS,
+                run: runtime.run,
+                step: new DurableStepJournal(),
+                streamGenerate: createStreamGenerate(modelAgent, env),
+            });
+        }
+
+        const script = overrides?.script ?? options.script ?? [];
 
         return runAgentLoop({
             agent,

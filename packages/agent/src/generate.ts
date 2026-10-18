@@ -246,15 +246,18 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
                 onDelta(delta);
             }
         } catch (error) {
-            // A barge-in aborts the turn: `streamText` rejects the stream once
-            // its `abortSignal` fires. Resolve to the text streamed so far (the
-            // spoken prefix) rather than propagating — the caller persists it.
-            // Any non-abort failure is re-thrown.
-            if (options.signal?.aborted) {
-                return { text: streamed, toolCalls: [] };
+            // Any failure that is not a barge-in abort is re-thrown below.
+            if (!options.signal?.aborted) {
+                throw error;
             }
+        }
 
-            throw error;
+        // A barge-in aborts the turn. The delta stream may end by rejecting or by
+        // closing cleanly; either way resolve to the text streamed so far (the
+        // spoken prefix) rather than reading the settled promises, which reject
+        // with the abort — the caller persists the prefix.
+        if (options.signal?.aborted) {
+            return { text: streamed, toolCalls: [] };
         }
 
         // `output` is only awaited when the agent declared a structured schema —
