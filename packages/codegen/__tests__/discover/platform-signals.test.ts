@@ -140,6 +140,19 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(false);
     });
 
+    it("does not flag an `app:` callback on an unrelated object under lunora/ as the app hook", () => {
+        expect.assertions(1);
+
+        // Only the project's lunora.config.* carries the app hook. An `app` key
+        // on any other object is not the generated builder's hook.
+        write(
+            "widgets.ts",
+            `export const widget = {\n    app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined),\n};\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(false);
+    });
+
     it("does not flag a shadowed same-named object inside the lunora.config.* app hook", () => {
         expect.assertions(1);
 

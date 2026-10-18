@@ -1,6 +1,7 @@
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
 import { chainRootOf, listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
@@ -119,12 +120,17 @@ const APP_FACTORY = "defineApp";
 /** The `lunora.config` hook whose function receives the generated `defineApp()` builder. */
 const APP_HOOK_KEY = "app";
 
-/** True when `node` is a `lunora.config` `app` hook function, `app: (app) => …`. */
+/**
+ * True when `node` is a `lunora.config` `app` hook function, `app: (app) => …`.
+ * Only the project's config file carries the hook: an `app` key on any object
+ * under `lunora/` is not the generated builder's hook.
+ */
 const isAppHookFunction = (node: Node | undefined): boolean => {
     const owner = node?.getParent();
 
     return (
         node !== undefined &&
+        PROJECT_CONFIG_FILENAMES.includes(node.getSourceFile().getBaseName()) &&
         (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) &&
         Node.isPropertyAssignment(owner) &&
         propertyKeyName(owner) === APP_HOOK_KEY
