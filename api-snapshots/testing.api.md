@@ -16,6 +16,11 @@ interface AgentHarness {
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
     messages: (threadKey: string) => AgentMessageRow[];
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
+    journalEntries: () => unknown[];
+    awaitWait: (name: string) => Promise<void>;
+    deliver: (name: string, payload: unknown) => void;
+    expire: (name: string) => void;
+    readonly secrets: SecretValueHost;
     thread: (threadKey: string) => HarnessThread | undefined;
 }
 ```
@@ -28,6 +33,7 @@ interface AgentHarnessOptions {
     exportName?: string;
     functions?: Record<string, HarnessFunction>;
     script?: AgentGenerateResult[];
+    secrets?: SecretValueHost;
 }
 ```
 
@@ -151,6 +157,14 @@ interface FakeSchedulerControls {
     failures: () => ScheduledJobFailure[];
     list: () => FakeScheduledJob[];
     runPending: (options?: SweepOptions) => Promise<number>;
+}
+```
+
+### `FakeSecretValues` (interface)
+
+```ts
+interface FakeSecretValues extends SecretValueHost {
+    advanceClock: (ms: number) => void;
 }
 ```
 
@@ -444,6 +458,12 @@ const containsScorer: (needle: string, options?: {
 const createArtifactsFake: (options?: {
     namespace?: string;
 }) => ArtifactsFake;
+```
+
+### `createFakeSecretValues` (const)
+
+```ts
+const createFakeSecretValues: () => FakeSecretValues;
 ```
 
 ### `createStreamGate` (const)

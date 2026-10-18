@@ -69,6 +69,7 @@
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mail": "1.0.0-alpha.114",
         "@lunora/notify": "1.0.0-alpha.87",
+        "@lunora/platform": "1.0.0-alpha.66",
         "@lunora/queue": "1.0.0-alpha.115",
         "@lunora/scheduler": "1.0.0-alpha.137",
         "@lunora/server": "1.0.0-alpha.219",
