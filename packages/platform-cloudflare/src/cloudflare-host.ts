@@ -318,11 +318,15 @@ const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
                 throw new TypeError("storage.list is not available on this DurableObjectStorage");
             }
 
-            const entries = await storage.list<T>(options);
+            // Only the contracted prefix reaches storage. A limit carried in on an
+            // untyped options object would be spent on reserved records before any
+            // app key, so the page would come back short.
+            const prefix = options?.prefix;
+            const entries = await storage.list<T>(prefix === undefined ? {} : { prefix });
 
-            // Filtered after the read rather than by a narrower query: storage.list
-            // has no exclude, and the reserved namespace only ever holds a bounded
-            // number of records (see SECRET_VALUE_SWEEP_LIMIT).
+            // storage.list has no exclude, so reserved records are read and dropped
+            // here. The sweep in put does not bound them: it removes only expired
+            // records, so live secret records can be numerous.
             for (const key of entries.keys()) {
                 if (isReservedKey(key)) {
                     entries.delete(key);
