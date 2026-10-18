@@ -17,6 +17,9 @@ import type { LanguageModel } from "ai";
 import { createFakeSecretValues } from "./fake-secret-values";
 import WaitRegistry from "./wait-registry";
 
+/** How long a supplied value stays takeable: the agent's secret value lifetime (15 minutes). */
+const SECRET_VALUE_TTL_MS = 15 * 60 * 1000;
+
 /** A thread message as the in-memory runtime stores it (superset of {@link AgentMessageRow}). */
 interface HarnessMessage extends AgentMessageRow {
     messageKey: string;
@@ -115,6 +118,12 @@ interface AgentHarness {
      */
     awaitWait: (name: string) => Promise<void>;
 
+    /**
+     * Decline the `requestSecretTool` call `toolCallId` on `threadKey` and wake its
+     * wait, as the owner's decline does.
+     */
+    decline: (threadKey: string, toolCallId: string) => void;
+
     /** Deliver the event a run is waiting on. Delivered before the wait is reached, it is held for it. */
     deliver: (name: string, payload: unknown) => void;
 
@@ -151,6 +160,13 @@ interface AgentHarness {
 
     /** The secret store the runs use (see {@link AgentHarnessOptions.secrets}). */
     readonly secrets: SecretValueHost;
+
+    /**
+     * Supply `value` for the `requestSecretTool` call `toolCallId` on `threadKey` and
+     * wake its wait, as the owner's supply does. The value goes to the secret store
+     * and only the request's handle reaches the run.
+     */
+    supply: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
 
     /** The stored thread record (status, error, instanceId, usage, …), or `undefined` before its first run. */
     thread: (threadKey: string) => HarnessThread | undefined;
@@ -228,7 +244,14 @@ class DurableStepJournal implements AgentStepLike {
 const createRuntime = (
     extra: Record<string, HarnessFunction>,
     secrets: SecretValueHost,
-): { dispatches: HarnessDispatch[]; messages: Map<string, HarnessMessage>; run: AgentRunFunction; threads: Map<string, HarnessThread> } => {
+): {
+    declineSecret: (threadKey: string, toolCallId: string) => void;
+    dispatches: HarnessDispatch[];
+    messages: Map<string, HarnessMessage>;
+    run: AgentRunFunction;
+    supplySecret: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
+    threads: Map<string, HarnessThread>;
+} => {
     const threads = new Map<string, HarnessThread>();
     const messages = new Map<string, HarnessMessage>();
     const dispatches: HarnessDispatch[] = [];
@@ -338,11 +361,106 @@ const createRuntime = (
         return {};
     };
 
-    // The secret mutations, as the shard runs them: a take is scoped to the thread
-    // and bound to its claimant, and a discard needs only the ref.
-    const takeSecret = (args?: Record<string, unknown>): Promise<unknown> =>
-        secrets.take(args?.["ref"] as string, { claimant: args?.["claimant"] as string, scope: args?.["threadKey"] as string });
-    const discardSecret = (args?: Record<string, unknown>): Promise<unknown> => secrets.discard(args?.["ref"] as string);
+    // The secret-request rows, one per `(threadKey, toolCallId)`. The harness has no
+    // database, so the transitions below restate the component's: a pending row settles
+    // once, a supply binds its ref, and a take must name the consumer the request declared.
+    // The component's own tests pin each transition against the real mutations.
+    const requests = new Map<
+        string,
+        { consumerTool: string; instanceId: string; ref?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied" }
+    >();
+    const requestOf = (args?: Record<string, unknown>) => requests.get(`${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`);
+
+    // A replay of the owning run keeps its row. A row left by an earlier run that reused the
+    // tool-call id is retired first, which discards its value, and then starts over as pending.
+    const openSecretRequest = async (args?: Record<string, unknown>): Promise<unknown> => {
+        const key = `${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`;
+        const existing = requests.get(key);
+
+        const owner = args?.["instanceId"] as string | undefined;
+
+        if (owner !== undefined && existing?.instanceId === owner) {
+            return undefined;
+        }
+
+        if (existing?.ref !== undefined) {
+            await secrets.discard(existing.ref);
+        }
+
+        requests.set(key, { consumerTool: args?.["consumerTool"] as string, instanceId: args?.["instanceId"] as string, status: "pending" });
+
+        return undefined;
+    };
+
+    const settleSecretRequest = (args?: Record<string, unknown>): { status: "declined" | "expired" | "supplied" } => {
+        const request = requestOf(args);
+
+        if (request === undefined) {
+            return { status: "expired" };
+        }
+
+        if (request.status === "pending") {
+            request.status = "expired";
+
+            return { status: "expired" };
+        }
+
+        if (request.status === "supplied" || request.status === "consumed") {
+            return { status: "supplied" };
+        }
+
+        return { status: request.status === "declined" ? "declined" : "expired" };
+    };
+
+    const takeSecret = (args?: Record<string, unknown>): Promise<unknown> => {
+        const request = requestOf(args);
+
+        if (request?.ref === undefined || (request.status !== "supplied" && request.status !== "consumed")) {
+            return Promise.resolve(undefined);
+        }
+
+        if (args?.["claimant"] !== `tool:${request.consumerTool}:${args?.["consumerCallId"] as string}`) {
+            return Promise.resolve(undefined);
+        }
+
+        return secrets.take(request.ref, { claimant: args["claimant"], scope: args["threadKey"] as string });
+    };
+
+    const discardSecret = async (args?: Record<string, unknown>): Promise<void> => {
+        const request = requestOf(args);
+
+        if (request === undefined) {
+            return;
+        }
+
+        if (request.ref !== undefined) {
+            await secrets.discard(request.ref);
+        }
+
+        if (request.status === "supplied") {
+            request.status = "consumed";
+        }
+    };
+
+    const supplySecret = async (threadKey: string, toolCallId: string, value: string): Promise<void> => {
+        const request = requests.get(`${threadKey}:${toolCallId}`);
+
+        if (request?.status !== "pending") {
+            throw new Error(`agentHarness: no pending secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+        }
+
+        // The value lives as long as the agent's supply window; a take after it refuses.
+        request.ref = await secrets.put(value, { scope: threadKey, ttlMs: SECRET_VALUE_TTL_MS });
+        request.status = "supplied";
+    };
+
+    const declineSecret = (threadKey: string, toolCallId: string): void => {
+        const request = requests.get(`${threadKey}:${toolCallId}`);
+
+        if (request?.status === "pending") {
+            request.status = "declined";
+        }
+    };
 
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
@@ -354,7 +472,9 @@ const createRuntime = (
         [DEFAULT_AGENT_FUNCTION_PATHS.discardSecret, discardSecret],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
+        [DEFAULT_AGENT_FUNCTION_PATHS.openSecretRequest, openSecretRequest],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
+        [DEFAULT_AGENT_FUNCTION_PATHS.settleSecretRequest, settleSecretRequest],
         [DEFAULT_AGENT_FUNCTION_PATHS.takeSecret, takeSecret],
         ...Object.entries(extra),
     ]);
@@ -373,7 +493,7 @@ const createRuntime = (
         return Promise.resolve(handler(args));
     };
 
-    return { dispatches, messages, run, threads };
+    return { declineSecret, dispatches, messages, run, supplySecret, threads };
 };
 
 /**
@@ -471,6 +591,10 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         deliver: (name: string, payload: unknown) => {
             waits.deliver(name, payload);
         },
+        decline: (threadKey: string, toolCallId: string) => {
+            runtime.declineSecret(threadKey, toolCallId);
+            waits.deliver(`secret:${toolCallId}`, {});
+        },
         dispatches: runtime.dispatches,
         expire: (name: string) => {
             waits.expire(name);
@@ -488,6 +612,10 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
                 .map(({ messageKey: _messageKey, threadKey: _threadKey, ...row }) => row),
         run,
         secrets,
+        supply: async (threadKey: string, toolCallId: string, value: string) => {
+            await runtime.supplySecret(threadKey, toolCallId, value);
+            waits.deliver(`secret:${toolCallId}`, {});
+        },
         thread: (threadKey: string): HarnessThread | undefined => runtime.threads.get(threadKey),
     };
 };
