@@ -2035,10 +2035,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `SyncStatus` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `SyncWatermark` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -3945,7 +3941,11 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `SOCKET_TAG_BUDGET` (const)
+### `SECRET_VALUE_MAX_BYTES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -3962,6 +3962,22 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `SchedulerHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValuePutOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTakeOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTooLargeError` (class)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -4069,7 +4085,11 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `findSocketTagBudgetViolation` (const)
+### `assertSecretValueSize` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `clampSecretValueTtl` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 

@@ -35,6 +35,15 @@ interface AdminAuthListResult<T> {
 }
 ```
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -380,8 +389,10 @@ interface UseAgentApi {
 ```ts
 interface UseAgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -406,11 +417,14 @@ interface UseAgentChatOptions {
 
 ```ts
 interface UseAgentChatResult {
+    approvalGrants: ReadonlyArray<AgentApprovalGrant>;
     approve: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
     error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
     streamingText: string;
@@ -1412,6 +1426,14 @@ interface AdminAuthQueryOptions {
 }
 ```
 
+### `AgentApprovalGrantsReference` (type)
+
+```ts
+type AgentApprovalGrantsReference = FunctionReference<"query", {
+    key: string;
+}, ReadonlyArray<AgentApprovalGrant>>;
+```
+
 ### `AgentApprovalReference` (type)
 
 ```ts
@@ -1450,6 +1472,17 @@ type AgentMessagesReference$1 = FunctionReference<"query", {
     key: string;
     limit?: number;
 }, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentRevokeApprovalGrantReference` (type)
+
+```ts
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolName: string;
+}, {
+    revoked: boolean;
+}>;
 ```
 
 ### `AgentThreadReference` (type)
