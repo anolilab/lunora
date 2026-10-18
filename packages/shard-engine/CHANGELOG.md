@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.136...@lunora/shard-engine@1.0.0-alpha.137) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of the retired shape scan ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([#1244](https://github.com/anolilab/lunora/issues/1244)) ([62fcfad](https://github.com/anolilab/lunora/commit/62fcfadfcca02f41c17f1e29a37d6faff5efaaed))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/shard-engine [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.135...@lunora/shard-engine@1.0.0-alpha.136) (2026-10-18)
 
 ### Bug Fixes

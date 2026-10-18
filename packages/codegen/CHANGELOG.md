@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.320...@lunora/codegen@1.0.0-alpha.321) (2026-10-18)
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+* **do:** address review of delivery authorization ([#1235](https://github.com/anolilab/lunora/issues/1235)) ([#1238](https://github.com/anolilab/lunora/issues/1238)) ([d73863b](https://github.com/anolilab/lunora/commit/d73863bd1e442675a751453284d5498ec4383a87))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.230
+* **@lunora/agent:** upgraded to 1.0.0-alpha.222
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/queue:** upgraded to 1.0.0-alpha.112
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.134
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.119
+* **@lunora/do:** upgraded to 1.0.0-alpha.224
+* **@lunora/payment:** upgraded to 1.0.0-alpha.217
+* **@lunora/server:** upgraded to 1.0.0-alpha.214
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+
 ## @lunora/codegen [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.319...@lunora/codegen@1.0.0-alpha.320) (2026-10-18)
 
 ### Features

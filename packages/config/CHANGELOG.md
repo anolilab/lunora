@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.369](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.368...@lunora/config@1.0.0-alpha.369) (2026-10-18)
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.321
+* **@lunora/seed:** upgraded to 1.0.0-alpha.232
+* **@lunora/studio:** upgraded to 1.0.0-alpha.312
+
 ## @lunora/config [1.0.0-alpha.368](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.367...@lunora/config@1.0.0-alpha.368) (2026-10-18)
 
 ### Features
