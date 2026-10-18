@@ -1129,6 +1129,52 @@ expect(harness.dispatches).toContainEqual({ args: { city: "Berlin" }, path: "wea
 scripts; `harness.thread(key)` reads the persisted thread record; provide `functions`
 runtime stubs to back the functions your tools dispatch to.
 
+### Recorded model streams
+
+Scripted turns skip the streaming layer. To test it, pass a recorded stream
+instead: `recordedModel(turns)` replays one turn per model call, each an array of
+AI SDK provider stream parts, and the run goes through the production `streamText`
+seam. `onTokenDelta` receives the text deltas as they are produced.
+
+```ts
+import { agentHarness, recordedModel } from "@lunora/testing";
+
+const deltas: string[] = [];
+const harness = agentHarness(support, {});
+
+const result = await harness.run(
+    { input: "where is o_42?", threadKey: "t1" },
+    {
+        model: recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "It ", id: "t0", type: "text-delta" },
+                    { delta: "shipped.", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                    // `usage` is the provider's usage object (AI SDK `LanguageModelV4Usage`).
+                    { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage },
+                ],
+            },
+        ]),
+        onTokenDelta: (delta) => deltas.push(delta.text),
+    },
+);
+```
+
+- **Tool-call arguments** arrive as `tool-input-delta` chunks. The provider's
+  `tool-call` part carries the assembled JSON `input`, which is what the loop runs.
+- **Usage** is read from the `finish` part, as providers report it at the end.
+- **Mid-stream failure:** `error: { after, cause }` fails the stream after `after`
+  parts. The run then follows the loop's normal model-error path: `harness.run`
+  rejects and `harness.thread(key)` has `status: "error"`.
+- **Pausing:** `pause: { after, gate }` holds the stream until `gate.release()`.
+  `createStreamGate()` exposes `gate.reached`, so a test can wait for the pause point
+  and check the partial state without sleeping. Aborting the `signal` passed to
+  `createStreamGenerate` resolves to the text streamed so far once the held stream is
+  released. The recorded stream does not watch the signal, so release the gate after
+  aborting.
+
 ## See also
 
 - [@lunora/ai](/docs/packages/ai): the model surface (`ctx.ai`) + `defineRag`
