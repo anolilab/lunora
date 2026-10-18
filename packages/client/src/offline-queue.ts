@@ -176,6 +176,12 @@ class OfflineQueue {
 
     private readonly items: QueuedMutation[] = [];
 
+    /** Appends still in flight, by write id. Anything that touches a record durably waits on its append first. */
+    private readonly appending = new Map<string, Promise<void>>();
+
+    /** Records whose append was rejected (a quota error, a closed connection), kept to be tried again — see {@link OfflineQueue.flushUnpersisted}. */
+    private readonly unpersisted = new Map<string, PersistedMutation>();
+
     public constructor(options: OfflineQueueOptions = {}, deps: OfflineQueueDeps = {}) {
         this.maxItems = options.maxItems ?? 1000;
         this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
@@ -196,24 +202,44 @@ class OfflineQueue {
         item.id ??= nextId();
         this.items.push(item);
 
-        this.persistence
-            ?.append({
-                args: item.args,
-                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
-                clientId: item.clientId,
-                functionPath: item.functionPath,
-                id: item.id,
-                identity: item.identity,
-                shardKey: item.shardKey,
-                ...(this.version === undefined ? {} : { version: this.version }),
-            })
-            .catch((error: unknown) => {
-                reportPersistenceError(this.onPersistenceError, "append", error, item.id);
-            });
+        this.persist(this.recordOf(item, item.id));
 
         this.evictOverflow();
 
         this.notifySize();
+    }
+
+    /**
+     * Remove a settled write's durable record — after its append, if that is
+     * still in flight. A write that replays quickly can settle before its append
+     * has landed; a `remove` that overtook it found nothing, and the record then
+     * landed behind it and replayed in the next session.
+     */
+    public discard(id: string): void {
+        this.unpersisted.delete(id);
+
+        const { persistence } = this;
+
+        if (!persistence) {
+            return;
+        }
+
+        (this.appending.get(id) ?? Promise.resolve())
+            .then(async () => persistence.remove(id))
+            .catch((error: unknown) => {
+                reportPersistenceError(this.onPersistenceError, "remove", error, id);
+            });
+    }
+
+    /**
+     * Try again to persist every write whose append was rejected. Called when the
+     * page is being hidden: the last chance to get a still-queued write into
+     * durable storage before a reload or a discard of the tab loses it.
+     */
+    public flushUnpersisted(): void {
+        for (const record of this.unpersisted.values()) {
+            this.persist(record);
+        }
     }
 
     /**
@@ -345,16 +371,12 @@ class OfflineQueue {
                 continue;
             }
 
-            const record: PersistedMutation = {
-                args: item.args,
-                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
-                clientId: item.clientId,
-                functionPath: item.functionPath,
-                id,
-                identity: to,
-                shardKey: item.shardKey,
-                ...(this.version === undefined ? {} : { version: this.version }),
-            };
+            const record = this.recordOf(item, id);
+
+            // Not durable yet: the retry must carry the new stamp too.
+            if (this.unpersisted.has(id)) {
+                this.unpersisted.set(id, record);
+            }
 
             this.rewriteStamp(id, record).catch((error: unknown) => {
                 // `rewriteStamp` reports and contains every failure of the durable
@@ -477,6 +499,52 @@ class OfflineQueue {
         this.notifySize();
     }
 
+    /** The durable form of a queued write. */
+    private recordOf(item: QueuedMutation, id: string): PersistedMutation {
+        return {
+            args: item.args,
+            ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
+            clientId: item.clientId,
+            functionPath: item.functionPath,
+            id,
+            identity: item.identity,
+            shardKey: item.shardKey,
+            ...(this.version === undefined ? {} : { version: this.version }),
+        };
+    }
+
+    /** Append `record`, remembering it as unpersisted if the append is rejected. */
+    private persist(record: PersistedMutation): void {
+        const { persistence } = this;
+
+        if (!persistence) {
+            return;
+        }
+
+        const landing = (async (): Promise<void> => {
+            try {
+                await persistence.append(record);
+                this.unpersisted.delete(record.id);
+            } catch (error: unknown) {
+                // Only a write still queued is worth retrying; one settled meanwhile is gone for good.
+                if (this.items.some((item) => item.id === record.id)) {
+                    this.unpersisted.set(record.id, record);
+                }
+
+                reportPersistenceError(this.onPersistenceError, "append", error, record.id);
+            }
+        })();
+
+        this.appending.set(record.id, landing);
+        landing
+            .finally(() => {
+                if (this.appending.get(record.id) === landing) {
+                    this.appending.delete(record.id);
+                }
+            })
+            .catch(() => undefined);
+    }
+
     /**
      * The durable half of {@link OfflineQueue.restampIdentity}: rewrite the
      * persisted record under the new identity stamp.
@@ -505,6 +573,9 @@ class OfflineQueue {
         }
 
         try {
+            // A `replace` of a record that has not landed is a no-op, which would
+            // leave the old stamp behind when the append does land.
+            await this.appending.get(id);
             await store.replace(record);
         } catch (error: unknown) {
             reportPersistenceError(this.onPersistenceError, "replace", error, id);
@@ -525,9 +596,7 @@ class OfflineQueue {
 
             if (dropped) {
                 if (dropped.id) {
-                    this.persistence?.remove(dropped.id).catch((error: unknown) => {
-                        reportPersistenceError(this.onPersistenceError, "remove", error, dropped.id);
-                    });
+                    this.discard(dropped.id);
                 }
 
                 const error = new Error("offline queue overflow");

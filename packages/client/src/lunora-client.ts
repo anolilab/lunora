@@ -109,7 +109,7 @@ import { createLocalStore } from "./local-store";
 import type { ManagedSocketOptions } from "./managed-socket";
 import { openManagedSocket, stopHeartbeat } from "./managed-socket";
 import type { QueuedMutation } from "./offline-queue";
-import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
+import { nextId, OfflineQueue } from "./offline-queue";
 import type { OptimisticLayerHandle } from "./optimistic-layers";
 import {
     acknowledgementMark,
@@ -186,7 +186,6 @@ import type {
     LunoraClientOptions,
     OutboxSink,
     PersistenceAdapter,
-    PersistenceErrorContext,
     PipelineLogPage,
     PipelineLogQuery,
     QueryCacheAdapter,
@@ -660,12 +659,13 @@ class LunoraClient {
     /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
     private outboxMutationCounter = 0;
 
-    private readonly onPersistenceError: ((context: PersistenceErrorContext) => void) | undefined;
-
     private readonly persistence: PersistenceAdapter | undefined;
 
     /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
     private readonly persistenceVersion: string | undefined;
+
+    /** Removes the page-hide flush listeners on close (see `installPageHideFlush`). */
+    private releasePageHideFlush: (() => void) | undefined;
 
     /** Releases the multi-tab outbox-leader Web Lock on close (see `hydrateAsOutboxLeader`). */
     private outboxLeaderRelease: (() => void) | undefined;
@@ -1092,7 +1092,6 @@ class LunoraClient {
         this.persistence = resolvePersistenceAdapter(options.persistence, options.outbox === undefined);
         this.persistenceVersion = options.persistenceVersion;
         this.queryCache = resolveQueryCacheAdapter(options.queryCache);
-        this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.clientQueryStore = new ClientQueryStore();
 
         // Cross-tab coordinator: when `crossTabSync` is set, tabs coordinate
@@ -1141,6 +1140,8 @@ class LunoraClient {
                 this.hydrateAsOutboxLeader();
             });
         }
+
+        this.installPageHideFlush();
 
         if (this.queryCache) {
             // Load the durable read cache into `hydratedQueryCache` so the first
@@ -4089,6 +4090,9 @@ class LunoraClient {
         this.releaseSessionChangeListener?.();
         this.releaseSessionChangeListener = undefined;
 
+        this.releasePageHideFlush?.();
+        this.releasePageHideFlush = undefined;
+
         // Release multi-tab outbox leadership so another tab can take over.
         this.outboxLeaderRelease?.();
         this.outboxLeaderRelease = undefined;
@@ -5347,6 +5351,43 @@ class LunoraClient {
         // `put` is deferred into promise-land so a synchronously-throwing
         // adapter is captured per-entry too, not allowed to escape `.map()`.
         await Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry)));
+    }
+
+    /**
+     * Flush what is buffered for durable storage when the page is hidden or going
+     * away: writes whose append was rejected get another try, and the debounced
+     * read-cache writes (which would otherwise wait out their timer on a page
+     * that never gets to run it) are written out. Browser lifecycle events only —
+     * a runtime without them (SSR, workers, React Native) installs nothing.
+     */
+    private installPageHideFlush(): void {
+        const target = globalThis as { addEventListener?: EventTarget["addEventListener"]; document?: EventTarget & { visibilityState?: string } };
+
+        if ((!this.persistence && !this.queryCache) || typeof target.addEventListener !== "function") {
+            return;
+        }
+
+        const flush = (): void => {
+            this.offlineQueue.flushUnpersisted();
+
+            if (this.cacheFlushTimer !== undefined) {
+                clearTimeout(this.cacheFlushTimer);
+                this.flushQueryCacheWrites().catch(() => undefined);
+            }
+        };
+        const onVisibilityChange = (): void => {
+            if (target.document?.visibilityState === "hidden") {
+                flush();
+            }
+        };
+
+        target.addEventListener("pagehide", flush);
+        target.document?.addEventListener("visibilitychange", onVisibilityChange);
+
+        this.releasePageHideFlush = (): void => {
+            (globalThis as { removeEventListener?: EventTarget["removeEventListener"] }).removeEventListener?.("pagehide", flush);
+            target.document?.removeEventListener("visibilitychange", onVisibilityChange);
+        };
     }
 
     /** Derive the aggregate status from the per-shard socket states. */
@@ -7771,9 +7812,7 @@ class LunoraClient {
     private unpersist(id: string | undefined): void {
         if (id) {
             this.shardErrorAttempts.delete(id);
-            this.persistence?.remove(id).catch((error: unknown) => {
-                reportPersistenceError(this.onPersistenceError, "remove", error, id);
-            });
+            this.offlineQueue.discard(id);
         }
     }
 

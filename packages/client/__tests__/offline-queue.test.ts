@@ -190,6 +190,11 @@ describe("offlineQueue — persistence", () => {
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
+        // The removal follows the dropped entry's own append, so it lands a few turns later.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
         const persisted = await persistence.load();
 
         expect(persisted.map((m) => m.functionPath)).toEqual(["new"]);
@@ -635,9 +640,10 @@ describe("offlineQueue — persistence error reporting", () => {
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
-        // Allow both the append and remove promise rejections to settle
-        await Promise.resolve();
-        await Promise.resolve();
+        // Allow the append to land and the remove that follows it to be rejected
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
 
         const removeCalls = handler.mock.calls.filter((call) => call[0]?.operation === "remove");
 
