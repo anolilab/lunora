@@ -633,7 +633,7 @@ describe("connectLiveStream", () => {
             }
         });
 
-        holdFirstReply(Response.json({ ok: false }, { status: 404 }));
+        holdFirstReply?.(Response.json({ ok: false }, { status: 404 }));
 
         await new Promise((resolve) => {
             setTimeout(resolve, 20);
