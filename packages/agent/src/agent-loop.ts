@@ -10,6 +10,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import { SecretUnavailableError } from "./secret-request-tool";
 import { flushTelemetry, traceToolExecution } from "./telemetry/tool-execution";
 import { capToolOutputText } from "./tool-output";
 import type {
@@ -407,6 +408,65 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     return decision;
 };
 
+/** What a paused `requestSecretTool` call resolved to: the opaque ref, or why no value came. */
+type SecretOutcome = { ref: string } | { reason: string };
+
+/**
+ * Pause the run on a `requestSecretTool` call until a human supplies or declines a
+ * value. Same shape as {@link awaitApproval}: an `"awaiting_secret"` marker (filtered
+ * out of the model prompt), the thread moves to `"awaiting_input"`, then a wait on
+ * `secret:<toolCallId>` bounded by `approvalTimeout`, which the supply and decline
+ * mutations wake. Only the ref comes back through the event. The value sits in the
+ * secret store and is never a payload, a step output or a message.
+ */
+const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall): Promise<SecretOutcome> => {
+    const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
+    const markerKey = `${instanceId}:secret:${call.id}`;
+
+    await persist({
+        content: `Awaiting a secret for tool "${call.name}".`,
+        messageKey: markerKey,
+        role: "tool",
+        status: "awaiting_secret",
+        toolCallId: call.id,
+        toolName: call.name,
+    });
+    await patchThread({ status: "awaiting_input" });
+
+    const outcome = await step
+        .waitForEvent<{ declined?: true; ref?: string }>(`secret:${call.id}`, {
+            timeout: approvalTimeoutMs(agent.approvalTimeout),
+            type: `agent-secret:${call.id}`,
+        })
+        .then((event): SecretOutcome => {
+            if (event.payload.declined === true) {
+                return { reason: "the user declined to supply it" };
+            }
+
+            if (typeof event.payload.ref !== "string") {
+                // The mutation only sends a ref or a decline. Anything else is a
+                // host bug, and guessing a decision would be a worse lie than a failed run.
+                throw new TypeError(`@lunora/agent: secret event for tool call "${call.id}" carried no ref`);
+            }
+
+            return { ref: event.payload.ref };
+        })
+        .catch((error: unknown): SecretOutcome => {
+            if (!isWaitTimeoutError(error)) {
+                throw error;
+            }
+
+            return { reason: "the secret was not supplied before the timeout" };
+        });
+
+    // Retired on every outcome, as the approval marker is: a client offers its
+    // supply/decline controls from this row alone.
+    await deleteMessage(markerKey);
+    await patchThread({ status: "running" });
+
+    return outcome;
+};
+
 /**
  * Wrapper key under which a tool step memoizes its outcome.
  *
@@ -465,6 +525,25 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     if (call.invalid !== undefined) {
         await persist({
             content: `Error: invalid input for tool "${call.name}" — it was not run. ${call.invalid}`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    // A `requestSecretTool` call never runs `execute`: it pauses for a human-supplied
+    // value and records only the opaque ref (or why none came). Outside `step.do`
+    // for the same reason an approval wait is: the pause must not be memoized as a
+    // tool output.
+    if (tool.secretRequest === true) {
+        const outcome = await awaitSecret(turnContext, call);
+
+        await persist({
+            content: "ref" in outcome ? JSON.stringify({ secretRef: outcome.ref }) : `Error: tool "${call.name}" was not run: ${outcome.reason}.`,
             messageKey,
             role: "tool",
             stepName,
@@ -562,7 +641,9 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
 
                 return { [TOOL_OUTCOME_KEY]: { ok: output } };
             } catch (error: unknown) {
-                if (isDeterministicDispatchFailure(error)) {
+                // A consumed secret that is gone is deterministic like a 404 from the
+                // app: a retry reads the same absence.
+                if (isDeterministicDispatchFailure(error) || error instanceof SecretUnavailableError) {
                     return { [TOOL_OUTCOME_KEY]: { failed: error.message } };
                 }
 

@@ -99,6 +99,7 @@
         "@lunora/ai": "1.0.0-alpha.133",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mail": "1.0.0-alpha.111",
+        "@lunora/platform": "1.0.0-alpha.66",
         "@lunora/server": "1.0.0-alpha.212",
         "@lunora/values": "1.0.0-alpha.69",
         "@lunora/workflow": "1.0.0-alpha.81",

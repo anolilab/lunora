@@ -561,7 +561,10 @@ ${specEntries}
  * run is a side effect — the type omits it from QueryCtx), but at runtime it is
  * woven onto the shared ctx literal exactly like `ctx.workflows` / `ctx.queues`.
  */
-const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+const emitAgentFragments = (
+    agents: ReadonlyArray<AgentIR>,
+    hasSecretValues: boolean,
+): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (agents.length === 0) {
         return { build: "", contextField: "", importLines: [], specs: "" };
     }
@@ -579,7 +582,10 @@ const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; co
         build: `
             const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });
 `,
-        contextField: `\n                agents,`,
+        // `agentSecrets` is the shard's secret-value store, woven only when the target can
+        // hold one and the app imports `requestSecretTool`. Left off otherwise, so the
+        // secret mutations refuse with a typed error rather than reaching an undefined field.
+        contextField: hasSecretValues ? `\n                agents,\n                agentSecrets: this.secretValues,` : `\n                agents,`,
         importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
         // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `

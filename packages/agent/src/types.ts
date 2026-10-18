@@ -235,6 +235,14 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * {@link AgentApprovalContext}.
      */
     needsApproval?: ((input: Input, context: AgentApprovalContext) => boolean | Promise<boolean>) | boolean;
+
+    /**
+     * Set by `requestSecretTool`. The loop never calls `execute` on such a tool: it
+     * pauses the run until a human supplies (or declines) a value and records
+     * `{ secretRef }` as the tool result. The value never reaches the loop, the
+     * thread or the model.
+     */
+    secretRequest?: true;
 }
 
 /**
@@ -1096,6 +1104,8 @@ export interface AgentFunctionPaths {
      * retire the HITL approval marker once the decision has landed.
      */
     deleteMessage: string;
+    /** The internal `agents:agentDiscardSecret` mutation a secret-consuming tool dispatches after it has used the value. */
+    discardSecret: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;
@@ -1124,16 +1134,19 @@ export interface AgentFunctionPaths {
     setState: string;
     /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
     state: string;
+    /** The internal `agents:agentTakeSecret` mutation a secret-consuming tool dispatches to read a supplied value. */
+    takeSecret: string;
 }
 
 /**
  * Approval lifecycle marker on a message: `"awaiting_approval"` on the
  * placeholder written while a run pauses on a gated tool, then `"approved"` /
- * `"rejected"` on the tool result once a client resolves it. Absent on ordinary
- * messages. `"awaiting_approval"` rows are filtered out of the model prompt.
+ * `"rejected"` on the tool result once a client resolves it. `"awaiting_secret"`
+ * is the same pause for a {@link AgentToolDefinition.secretRequest} tool. Absent
+ * on ordinary messages. Both pause markers are filtered out of the model prompt.
  * @experimental
  */
-export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
+export type AgentMessageStatus = "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
 
 /**
  * One persisted thread message, as the loop reads it back.

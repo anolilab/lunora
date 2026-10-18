@@ -325,6 +325,24 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             returnType: "{ resolved: boolean }",
         },
         {
+            args: {
+                secret: { kind: "string" },
+                threadKey: { kind: "string" },
+                toolCallId: { kind: "string" },
+            },
+            exportName: "agentSupplySecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolCallId: { kind: "string" } },
+            exportName: "agentDeclineSecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
             args: { key: { kind: "string" } },
             exportName: "agentApprovalGrants",
             filePath: "agents",

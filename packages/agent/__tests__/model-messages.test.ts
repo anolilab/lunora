@@ -58,6 +58,24 @@ describe(buildModelMessages, () => {
         expect(messages).toStrictEqual([{ content: "hi", role: "user" }]);
     });
 
+    it("drops the awaiting-secret placeholder the way it drops the approval one", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "store my key", role: "user", seq: 0 },
+                {
+                    content: 'Awaiting a secret for tool "requestKey".',
+                    role: "tool",
+                    seq: 1,
+                    status: "awaiting_secret",
+                    toolCallId: "call_1",
+                    toolName: "requestKey",
+                },
+            ],
+        });
+
+        expect(messages).toStrictEqual([{ content: "store my key", role: "user" }]);
+    });
+
     it("omits empty instructions and memory, and skips text-less tool-call parts", () => {
         const messages = buildModelMessages({
             history: [{ content: "", role: "assistant", seq: 0, toolCalls: [{ id: "c", input: {}, name: "t" }] }],

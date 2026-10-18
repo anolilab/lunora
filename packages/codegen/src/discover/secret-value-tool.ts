@@ -6,11 +6,10 @@ import { listLunoraSourceFiles } from "./ast";
 const AGENT_MODULE_SPECIFIER = "@lunora/agent";
 
 /**
- * The agent tool that asks a human for a secret value. Reserved: its import from
- * {@link AGENT_MODULE_SPECIFIER} is the signal, and the tool itself is not shipped
- * yet. Mirrors how `jsCodeTool` drives `workerLoaders` (see `./sandbox`), except
- * this tool is not a sandbox tool and so gets its own scan rather than a flag in
- * `SandboxUsage`.
+ * The agent tool that asks a human for a secret value. Its value import from
+ * {@link AGENT_MODULE_SPECIFIER} is the signal that wires the secret store. Mirrors
+ * how `jsCodeTool` drives `workerLoaders` (see `./sandbox`), except this tool is not
+ * a sandbox tool and so gets its own scan rather than a flag in `SandboxUsage`.
  */
 const REQUEST_SECRET_TOOL = "requestSecretTool";
 
