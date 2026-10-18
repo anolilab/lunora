@@ -289,6 +289,9 @@ const createRuntime = (
 
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        // No approval grants are recorded by this harness: a gated tool always
+        // pauses, exactly as an ungranted one does against the real component.
+        [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, () => false],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],

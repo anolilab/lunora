@@ -930,7 +930,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 type AgentApprovalReference = FunctionReference<"mutation", {
-    decision: "approve" | "reject";
+    decision: "approve" | "approve_for_thread" | "reject";
     instanceId: string;
     note?: string;
     threadKey: string;

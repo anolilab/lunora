@@ -42,7 +42,8 @@ export const support = defineAgent({
 Declaring an agent is enough: codegen auto-registers the runtime functions the
 durable loop persists through (`agents:agentAppendMessage`, `agents:agentEnsureThread`,
 `agents:agentPatchThread`, `agents:agentResolveApproval`) plus the public thread
-queries (`agents:agentMessages`, `agents:agentThread`), and wires the typed
+queries (`agents:agentMessages`, `agents:agentThread`, `agents:agentApprovalGrants`)
+and the approval-grant revoke (`agents:agentRevokeApprovalGrant`), and wires the typed
 `ctx.agents.<name>` producer.
 
 Merge the thread tables into your schema. They auto-prefix to
@@ -233,6 +234,15 @@ helpers dispatch it). On approve the tool runs exactly as normal; on reject it
 is skipped and a tool result explaining the rejection is persisted so the next
 turn recovers. Because `needsApproval` runs on replay, keep it deterministic
 (no `Date.now()`/`Math.random()`).
+
+**Approve for the thread.** `agents:agentResolveApproval` also accepts
+`decision: "approve_for_thread"`: it approves the paused call and records a grant
+for that tool, so later calls to the same tool in the same thread run without
+pausing. The approved tool result is marked `approvalScope: "thread"`. The grants
+are listed by `agents:agentApprovalGrants` and removed by
+`agents:agentRevokeApprovalGrant`; a revoke applies to calls whose gate has not
+resolved yet, never to one already in flight. A grant is per thread, not
+per user or per app.
 
 **An unanswered approval is not pending forever.** The wait carries a timeout —
 `approvalTimeout` on the agent config, default `"3 days"`, **clamped to one
