@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.375](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.374...@lunora/config@1.0.0-alpha.375) (2026-10-18)
+
+### Features
+
+* **cli:** provision KV and Hyperdrive bindings, and serve Hyperdrive from PGlite in dev ([#1242](https://github.com/anolilab/lunora/issues/1242)) ([1b38891](https://github.com/anolilab/lunora/commit/1b388917c15564a88693f41d204d458bfaf0d1b0))
+* **config:** write the Artifacts binding and leave it out when logged out ([#1243](https://github.com/anolilab/lunora/issues/1243)) ([5e7f80f](https://github.com/anolilab/lunora/commit/5e7f80fb9b3f28868606455d9f48a05000e45162))
+
+
+### Dependencies
+
+* **@lunora/seed:** upgraded to 1.0.0-alpha.237
+* **@lunora/studio:** upgraded to 1.0.0-alpha.317
+
 ## @lunora/config [1.0.0-alpha.374](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.373...@lunora/config@1.0.0-alpha.374) (2026-10-18)
 
 
