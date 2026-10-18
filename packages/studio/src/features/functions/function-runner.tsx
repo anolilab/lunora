@@ -135,6 +135,30 @@ const formatResult = (value: unknown): string => {
     return JSON.stringify(value, jsonRowReplacer, 2);
 };
 
+interface RecordedRun {
+    argsText: string;
+    runStatus: "error" | "success";
+    selected: FunctionDescriptor;
+    sensitive: ReadonlyArray<string>;
+    shardKey: string;
+}
+
+/** `previous` with this run at the front, newest first, capped at {@link MAX_HISTORY}. */
+const withRecordedRun = (previous: RunHistoryEntry[], run: RecordedRun): RunHistoryEntry[] => {
+    const entry: RunHistoryEntry = {
+        argsText: historyArgsText(run.argsText, run.sensitive),
+        at: Date.now(),
+        id: (previous[0]?.id ?? 0) + 1,
+        kind: run.selected.kind,
+        path: run.selected.path,
+        redacted: run.sensitive.length > 0,
+        shardKey: run.shardKey,
+        status: run.runStatus,
+    };
+
+    return [entry, ...previous].slice(0, MAX_HISTORY);
+};
+
 /**
  * Interactive runner for the registered functions: pick one, edit its JSON
  * arguments, optionally target a shard, then invoke it against the live
@@ -237,20 +261,7 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         // Snapshot the inputs so a re-run from history replays what ran, except that a
         // sensitive value is never kept: the entry holds a placeholder and is flagged.
         const record = (runStatus: "error" | "success"): void => {
-            setRuns((previous) => {
-                const entry: RunHistoryEntry = {
-                    argsText: historyArgsText(argsText, sensitive),
-                    at: Date.now(),
-                    id: (previous[0]?.id ?? 0) + 1,
-                    kind: selected.kind,
-                    path: selected.path,
-                    redacted: sensitive.length > 0,
-                    shardKey,
-                    status: runStatus,
-                };
-
-                return [entry, ...previous].slice(0, MAX_HISTORY);
-            });
+            setRuns((previous) => withRecordedRun(previous, { argsText, runStatus, selected, sensitive, shardKey }));
         };
 
         setStatus("running");
