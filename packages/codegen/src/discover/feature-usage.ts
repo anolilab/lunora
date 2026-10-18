@@ -66,8 +66,14 @@ const collectLiteralKeyReads = (sourceFile: SourceFile, reachesContext: (receive
  */
 const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     const names = new Set<string>();
-    /** Local names bound to the context. `ctx` itself always counts — it is the conventional spelling and the one every fixture uses. */
-    const contextNames = new Set<string>([CONTEXT_PROPERTY]);
+    /** Local names bound to the context. */
+    const contextNames = new Set<string>();
+
+    // A plain `ctx` parameter (`async (ctx) => …`) is a context, but it is not a binding pattern, so the walk below cannot see it. Count the
+    // bare spelling only where the file binds one as a parameter; a `const ctx = {}` that is no handler's context must not read as one.
+    if (sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).some((parameter) => parameter.getName() === CONTEXT_PROPERTY)) {
+        contextNames.add(CONTEXT_PROPERTY);
+    }
 
     const collectPatternNames = (pattern: Node): void => {
         if (!Node.isObjectBindingPattern(pattern)) {
