@@ -2251,12 +2251,32 @@ pub fn offline_online_only_refused_when_disconnected() {
     let posts = Arc::new(Mutex::new(Vec::new()));
     let mut client = disconnected_client(&store, Arc::clone(&posts));
 
-    let error = client.submit(online_only_write()).expect_err("an online-only write must be refused");
+    // A subscription on the write's own path and args, primed with a server value,
+    // so an overlay the write applied would be displayed.
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    client.attach_socket(Box::new(|_frame| {}));
+    client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
+    client.detach_socket();
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("an online-only write must be refused");
 
     assert!(
         matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
         "refused with OFFLINE_NOT_QUEUED, got {error:?}"
     );
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+
+    assert!(!seen.lock().expect("seen").contains(&predicted), "a refused write's overlay is never displayed");
     assert_eq!(client.pending_mutation_count(), 0);
     assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
     let persisted = serde_json::to_string(&store.inner.lock().expect("store lock").records).expect("records");
