@@ -1136,32 +1136,74 @@ interface LivePublisher {
 ### `LiveStream` (interface)
 
 ```ts
-interface LiveStream {
+interface LiveStream<Topics extends LiveTopics = LiveTopics> {
     connect: LunoraRouteHandler;
     connectPath: string;
     control: LunoraRouteHandler;
     controlPath: string;
     id: string;
+    readonly topics: Topics;
+    validatePublish: (topic: string, payload: unknown) => void;
 }
 ```
 
 ### `LiveStreamConfig` (interface)
 
 ```ts
-interface LiveStreamConfig {
+interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
     allowAnonymousControl?: boolean;
     id: string;
-    onSubscribe?: LiveSubscribeHandler;
+    onSubscribe?: LiveSubscribeHandler<Topics>;
+    topics: Topics;
 }
 ```
 
 ### `LiveSubscribeHandler` (type)
 
 ```ts
-type LiveSubscribeHandler = (options: {
-    ctx: HttpActionCtx;
-    topic: string;
-}) => boolean | Promise<boolean>;
+type LiveSubscribeHandler<Topics extends LiveTopics = LiveTopics> = (options: LiveSubscribeOptions<Topics>) => boolean | Promise<boolean>;
+```
+
+### `LiveSubscribeOptions` (type)
+
+```ts
+type LiveSubscribeOptions<Topics extends LiveTopics> = {
+    [Name in keyof Topics & string]: {
+        ctx: HttpActionCtx;
+        key: LiveTopicKey<Topics[Name]>;
+        raw: string;
+        topic: Name;
+    };
+}[keyof Topics & string];
+```
+
+### `LiveTopicDeclaration` (interface)
+
+```ts
+interface LiveTopicDeclaration {
+    key?: Readonly<Record<string, Validator<string>>>;
+    payload: Validator;
+}
+```
+
+### `LiveTopicKey` (type)
+
+```ts
+type LiveTopicKey<Topic extends LiveTopicDeclaration> = Topic["key"] extends Readonly<Record<string, Validator>> ? {
+    readonly [Field in keyof Topic["key"]]: Infer<Topic["key"][Field]>;
+} : Readonly<Record<string, never>>;
+```
+
+### `LiveTopicPayload` (type)
+
+```ts
+type LiveTopicPayload<Topic extends LiveTopicDeclaration> = Infer<Topic["payload"]>;
+```
+
+### `LiveTopics` (type)
+
+```ts
+type LiveTopics = Readonly<Record<string, LiveTopicDeclaration>>;
 ```
 
 ### `LogFields` (type)
@@ -3490,7 +3532,7 @@ const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O 
 ### `defineLiveStream` (const)
 
 ```ts
-const defineLiveStream: (config: LiveStreamConfig) => LiveStream;
+const defineLiveStream: <const Topics extends LiveTopics>(config: LiveStreamConfig<Topics>) => LiveStream<Topics>;
 ```
 
 ### `defineMigration` (const)

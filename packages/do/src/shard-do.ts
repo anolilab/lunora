@@ -277,6 +277,9 @@ import {
     LIVE_PUBLISH_PATH,
     LIVE_SSE_HEADERS,
     liveSubscriptionKey,
+    MAX_LIVE_CONTROL_KEY_LENGTH,
+    ROOM_TOPIC_PREFIX,
+    SOCKET_TOPIC_PREFIX,
 } from "../../../shared/live-stream";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -470,24 +473,6 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
-
-/**
- * The whisper-topic prefix a `defineRoom` lives under. Mirrors `@lunora/server`'s
- * room prefix (this package does not import the server). A server publish may
- * not name a room topic: the room's members trust a frame there as its handler's
- * output.
- */
-const ROOM_TOPIC_PREFIX = "room:";
-
-/**
- * Prefix of the reserved whisper topic a `defineWebSocket` route's sockets join
- * so `socket.broadcast` reuses the whisper fan-out — local delivery AND the
- * cross-DO relay — instead of a second broadcast path. Derived from the route's
- * function path (`__lunora_socket__:<namespace>:<fn>`), so no client-supplied
- * topic can address a route channel: the whisper envelope handler refuses any
- * topic under this prefix, and membership is established only at upgrade.
- */
-const SOCKET_TOPIC_PREFIX = "__lunora_socket__:";
 
 /**
  * The outbound frame a `defineWebSocket` handler's `send`/`broadcast` writes:
@@ -1754,12 +1739,6 @@ interface LiveSubscriber {
 
 /** A validated live control request, or the 400/404 response that refuses it. */
 type LiveControlRead = { response: Response } | { action: unknown; connectionId: string; key: string; subscriptionId: string };
-
-/**
- * Longest topic or subscription id a live control call may name. Both are held in the
- * shard's memory for the life of the connection, so an unbounded name is a memory lever.
- */
-const MAX_LIVE_CONTROL_KEY_LENGTH = 256;
 
 /**
  * Read and validate a live subscribe/unsubscribe body. The connection lookup is

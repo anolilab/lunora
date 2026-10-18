@@ -25,7 +25,7 @@ import type { ConformanceHost } from "@lunora/platform/conformance";
 import { createShardDirectory } from "@lunora/platform-cloudflare";
 import type { ShardNamespaceLike } from "@lunora/runtime";
 import { createWorker } from "@lunora/runtime";
-import { defineLiveStream, httpAction, httpRouter } from "@lunora/server";
+import { defineLiveStream, httpAction, httpRouter, v } from "@lunora/server";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 
 import { createCelldShardPlatform } from "../../src/celld-platform";
@@ -38,13 +38,14 @@ import { collectLegs, describeFailure, LegSkipped } from "./tck-legs";
 type Env = BindingEnv & { ECHO: unknown; LIVE_SHARD: ShardNamespaceLike; TCK: DurableObjectNamespace };
 
 /**
- * The live stream an app declares with `defineLiveStream`. It admits only the
- * `tck:` topics, so the leg can show a topic it did not subscribe to is never
+ * The live stream an app declares with `defineLiveStream`. It declares only the
+ * `tck:<name>` topic, so the leg can show a topic it did not subscribe to is never
  * delivered. Its connect and control routes are the shard's own handlers.
  */
 const feed = defineLiveStream({
     id: "tck-feed",
-    onSubscribe: ({ topic }) => topic.startsWith("tck:"),
+    onSubscribe: ({ topic }) => topic === "tck",
+    topics: { tck: { key: { name: v.string() }, payload: v.object({ n: v.number() }) } },
 });
 
 /** The worker's HTTP routes for the real live path: the stream plus a publish action. */

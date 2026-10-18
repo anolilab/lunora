@@ -5,7 +5,7 @@ import { defineLiveStream } from "@lunora/server";
 
 import { internalAction, v } from "./_generated/server.js";
 
-export const feed = defineLiveStream({ id: "feed", onSubscribe: () => true });
+export const feed = defineLiveStream({ id: "feed", onSubscribe: () => true, topics: { news: { payload: v.object({ text: v.string() }) } } });
 
 // A scheduled job's action. The scheduler dispatches it to its shard as a trusted
 // system call, and the publish lands on that shard's own subscribers.
