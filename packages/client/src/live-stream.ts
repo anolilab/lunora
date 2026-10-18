@@ -96,6 +96,14 @@ interface LiveStream {
     subscribe: (options: LiveStreamSubscribeOptions) => () => void;
 }
 
+/** Wrap a callback so each handle holds its own reference, even when handles share one function. */
+const wrapCallback = <Args extends unknown[]>(callback: ((...args: Args) => void) | undefined): ((...args: Args) => void) | undefined =>
+    callback === undefined
+        ? undefined
+        : (...args: Args) => {
+              callback(...args);
+          };
+
 /** A single leading space after an SSE field colon. */
 const LEADING_SPACE = /^ /u;
 
@@ -482,12 +490,9 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                 refs: 0,
                 topic,
             };
-            const listener =
-                onEvent === undefined
-                    ? undefined
-                    : (payload: unknown) => {
-                          onEvent(payload);
-                      };
+            const listener = wrapCallback(onEvent);
+            // Wrapped per handle: two handles may pass the same function, and releasing one must not drop the other's.
+            const errorListener = wrapCallback(onError);
 
             entry.refs += 1;
 
@@ -495,8 +500,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                 entry.handlers.add(listener);
             }
 
-            if (onError !== undefined) {
-                entry.errors.add(onError);
+            if (errorListener !== undefined) {
+                entry.errors.add(errorListener);
             }
 
             if (active === undefined) {
@@ -546,6 +551,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
                 if (listener !== undefined) {
                     entry.handlers.delete(listener);
+                }
+
+                if (errorListener !== undefined) {
+                    entry.errors.delete(errorListener);
                 }
 
                 entry.refs -= 1;

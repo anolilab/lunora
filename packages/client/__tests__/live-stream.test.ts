@@ -498,6 +498,25 @@ describe("connectLiveStream", () => {
         expect(controls.filter((call) => call.topic === "open")).toHaveLength(1);
     });
 
+    it("stops reporting a refusal to a handle that unsubscribed from a shared registration", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = setup((call) => (call.action === "subscribe" ? 403 : 200));
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+        const reported: string[] = [];
+
+        // Two handles share one subscription id; the first releases before the connection registers it.
+        const releaseFirst = live.subscribe({ id: "s1", onError: () => reported.push("first"), topic: "feed" });
+
+        live.subscribe({ id: "s1", onError: () => reported.push("second"), topic: "feed" });
+        releaseFirst();
+
+        // The refusal lands inside the registration that `ready` waits for.
+        await live.ready;
+
+        expect(reported).toEqual(["second"]);
+    });
+
     it("generates an id that skips one a caller already holds", async () => {
         expect.assertions(2);
 
