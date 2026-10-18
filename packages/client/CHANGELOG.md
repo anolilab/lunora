@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.222...@lunora/client@1.0.0-alpha.223) (2026-10-18)
+
+### Bug Fixes
+
+* **client:** harden live stream subscriptions ([#1246](https://github.com/anolilab/lunora/issues/1246)) ([92f7427](https://github.com/anolilab/lunora/commit/92f74276040193aab4389eb007ae48777d854c98))
+
 ## @lunora/client [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.221...@lunora/client@1.0.0-alpha.222) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
