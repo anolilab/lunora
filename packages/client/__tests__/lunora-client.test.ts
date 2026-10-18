@@ -4570,6 +4570,43 @@ describe("lunoraClient", () => {
             expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ topic: "cursors", type: "whisper_unsubscribe" });
         });
 
+        it("forgets the join state of each topic once it is left and acknowledged", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // The first join creates the socket; it is opened and that join left and acknowledged, so the count starts at zero.
+            const warm = client.whisperSubscribe("warm", () => undefined);
+            const socket = latestSocket();
+
+            socket.open();
+            warm();
+            socket.receive({ topic: "warm", type: "whisper_subscribed" });
+
+            const joinStateSize = (): number => (client as unknown as { whisperJoins: Map<string, Map<string, unknown>> }).whisperJoins.get("")?.size ?? 0;
+
+            // Each topic is joined, left, and then acknowledged: the ack for the leave-time join arrives last.
+            for (let index = 0; index < 50; index += 1) {
+                const topic = `cursors-${String(index)}`;
+                const unsubscribe = client.whisperSubscribe(topic, () => undefined);
+
+                unsubscribe();
+                socket.receive({ topic, type: "whisper_subscribed" });
+            }
+
+            expect(joinStateSize()).toBe(0);
+
+            // A topic that is still joined keeps its state.
+            client.whisperSubscribe("kept", () => undefined);
+            socket.receive({ topic: "kept", type: "whisper_subscribed" });
+
+            expect(joinStateSize()).toBe(1);
+        });
+
         it("holds a room send made before the socket opens and delivers it on connect", () => {
             expect.assertions(3);
 

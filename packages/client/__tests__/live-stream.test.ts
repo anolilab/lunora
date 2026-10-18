@@ -498,6 +498,199 @@ describe("connectLiveStream", () => {
         expect(controls.filter((call) => call.topic === "open")).toHaveLength(1);
     });
 
+    it("stops reporting a refusal to a handle that unsubscribed from a shared registration", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = setup((call) => (call.action === "subscribe" ? 403 : 200));
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+        const reported: string[] = [];
+
+        // Two handles share one subscription id; the first releases before the connection registers it.
+        const releaseFirst = live.subscribe({ id: "s1", onError: () => reported.push("first"), topic: "feed" });
+
+        live.subscribe({ id: "s1", onError: () => reported.push("second"), topic: "feed" });
+        releaseFirst();
+
+        // The refusal lands inside the registration that `ready` waits for.
+        await live.ready;
+
+        expect(reported).toEqual(["second"]);
+    });
+
+    it("does not send a subscribe on the dropped connection while the reconnect is in flight", async () => {
+        expect.assertions(1);
+
+        const streams: FakeStream[] = [];
+        const heldConnects: ((response: Response) => void)[] = [];
+        let connects = 0;
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                connects += 1;
+
+                // The first connection is served at once; the reconnect is held open until the test answers it.
+                if (connects === 1) {
+                    const stream = new FakeStream("c1");
+
+                    streams.push(stream);
+
+                    return Promise.resolve(stream.response);
+                }
+
+                return new Promise<Response>((resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new DOMException("aborted", "AbortError"));
+                    });
+                    heldConnects.push(resolve);
+                });
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            // The shard no longer knows the dropped connection.
+            return Promise.resolve(Response.json({ ok: true }, { status: call.connectionId === "c1" ? 404 : 200 }));
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        await live.ready;
+
+        streams[0]?.end();
+
+        await vi.waitFor(() => {
+            if (heldConnects.length === 0) {
+                throw new Error("reconnect not started");
+            }
+        });
+
+        live.subscribe({ id: "s1", topic: "feed" });
+
+        // Give a stale control reply time to arrive and, with the bug, to abort the reconnect.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(connects).toBe(2);
+
+        heldConnects[0]?.(new FakeStream("c2").response);
+        live.close();
+    });
+
+    it("does not let a stale subscribe reply drop the connection after its subscription was released", async () => {
+        expect.assertions(1);
+
+        const streams: FakeStream[] = [];
+        const controls: ControlCall[] = [];
+        let holdFirstReply: ((response: Response) => void) | undefined;
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                const stream = new FakeStream(`c${String(streams.length + 1)}`);
+
+                streams.push(stream);
+
+                // A real fetch errors the body when its signal aborts; closing the stream stands in for that.
+                init?.signal?.addEventListener("abort", () => {
+                    stream.end();
+                });
+
+                return Promise.resolve(stream.response);
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            controls.push(call);
+
+            // The first subscribe's reply is held, so it lands after the id has been released and re-used.
+            if (controls.length === 1) {
+                return new Promise<Response>((resolve) => {
+                    holdFirstReply = resolve;
+                });
+            }
+
+            return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        await live.ready;
+
+        const release = live.subscribe({ id: "s1", topic: "feed" });
+
+        release();
+        live.subscribe({ id: "s1", topic: "feed" });
+
+        // The release and the re-subscribe queue behind the held reply, so only that reply is on the wire now.
+        await vi.waitFor(() => {
+            if (holdFirstReply === undefined) {
+                throw new Error("first subscribe not sent yet");
+            }
+        });
+
+        holdFirstReply?.(Response.json({ ok: false }, { status: 404 }));
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(streams).toHaveLength(1);
+
+        live.close();
+    });
+
+    it("does not send a control call that was queued behind one close() cancelled", async () => {
+        expect.assertions(1);
+
+        const controls: ControlCall[] = [];
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                return Promise.resolve(new FakeStream("c1").response);
+            }
+
+            const body = init?.body;
+
+            controls.push((typeof body === "string" ? JSON.parse(body) : {}) as ControlCall);
+
+            // Held until the signal aborts, as a real fetch is.
+            return new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("aborted", "AbortError"));
+                });
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+
+        await live.ready;
+
+        const release = live.subscribe({ id: "s1", topic: "feed" });
+
+        await vi.waitFor(() => {
+            if (controls.length === 0) {
+                throw new Error("subscribe not sent yet");
+            }
+        });
+
+        // The unsubscribe queues behind the stalled subscribe; close() cancels that subscribe.
+        release();
+        live.close();
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(controls.map((call) => call.action)).toEqual(["subscribe"]);
+    });
+
     it("generates an id that skips one a caller already holds", async () => {
         expect.assertions(2);
 
