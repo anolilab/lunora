@@ -707,27 +707,29 @@ describe("lunora deploy", () => {
                 expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
             });
 
-            it("creates nothing on a --temporary deploy, whose Worker goes to an account that would never see the namespace", async () => {
-                expect.assertions(2);
+            it("makes no lookup on a --temporary deploy, whose Worker goes to a throwaway account, and warns instead of stopping", async () => {
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
-                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
-                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
 
                 const { fetchStub, posts } = absentUntilCreated();
 
                 vi.stubGlobal("fetch", fetchStub);
 
+                const { logger, warns } = silentLogger();
                 const result = await runDeployCommand({
                     cwd: workdir,
-                    logger: silentLogger().logger,
+                    logger,
                     secretLister: noRemoteSecrets,
                     spawner: createRecordingSpawner().spawner,
                     temporary: true,
                 });
 
                 expect(posts).toStrictEqual([]);
-                expect(result.error).toContain("does not exist");
+                expect(fetchStub).not.toHaveBeenCalled();
+                expect(result.error).toBeUndefined();
+                expect(warns.some((message) => message.includes("--temporary deploys to a throwaway account") && message.includes('"repos"'))).toBe(true);
             });
 
             it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {

@@ -757,22 +757,23 @@ const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | 
 
 /**
  * The first Artifacts check lets a missing namespace pass when a real deploy will create it, and a dry run or
- * build (which has the same outcome) reports that and goes on. Only a temporary deploy, which never creates
- * one, reports it as missing.
+ * build (which has the same outcome) reports that and goes on. A temporary deploy goes to a throwaway account
+ * that can neither be checked nor have a namespace created in it, so it only says so.
  */
 const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): ArtifactsCheckMode => {
     if (options.temporary === true) {
-        return "report";
+        return "temporary";
     }
 
     return options.dryRun === true ? "preview" : "defer";
 };
 
 /**
- * How the Artifacts namespace check treats a namespace that does not exist yet: `report` refuses (a
- * dry run, a temporary deploy), `defer` lets it pass because `create` makes it later, just before the deploy.
+ * How the Artifacts namespace check treats a namespace that does not exist yet: `defer` lets it pass because
+ * `create` makes it later, just before the deploy; `preview` (a dry run) also lets it pass and only warns when
+ * it cannot be checked; `temporary` makes no lookup at all.
  */
-type ArtifactsCheckMode = "create" | "defer" | "preview" | "report";
+type ArtifactsCheckMode = "create" | "defer" | "preview" | "temporary";
 
 /**
  * One refused namespace check as a line. An unchecked namespace stops the deploy too: the first
@@ -848,9 +849,20 @@ const checkArtifactsNamespaces = async (
         return undefined;
     }
 
-    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
     // One check per namespace: two bindings on a missing namespace would both see it absent and race to create it.
     const namespaces = [...new Map(entries.map((entry) => [entry.namespace, entry])).values()];
+
+    if (mode === "temporary") {
+        // The Worker goes to a throwaway account: a lookup in the real one says nothing about it, and --temporary
+        // works without the token a lookup needs. The namespace is made there on first use, in no jurisdiction.
+        logger.warn(
+            `--temporary deploys to a throwaway account, so the jurisdiction ("${jurisdiction}") of Artifacts namespace ${namespaces.map((entry) => `"${entry.namespace}"`).join(", ")} was not checked: it is created there on first use, in no jurisdiction.`,
+        );
+
+        return undefined;
+    }
+
+    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
     const checks = await Promise.all(
         namespaces.map(async (entry) =>
             checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" || mode === "preview" }),
