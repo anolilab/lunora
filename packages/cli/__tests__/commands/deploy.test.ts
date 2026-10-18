@@ -731,7 +731,7 @@ describe("lunora deploy", () => {
             });
 
             it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {
-                expect.assertions(2);
+                expect.assertions(3);
 
                 seedPinnedArtifacts();
                 vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
@@ -741,16 +741,21 @@ describe("lunora deploy", () => {
 
                 vi.stubGlobal("fetch", fetchStub);
 
+                const { infos, logger } = silentLogger();
                 const result = await runDeployCommand({
                     cwd: workdir,
                     dryRun: true,
-                    logger: silentLogger().logger,
+                    logger,
                     secretLister: noRemoteSecrets,
                     spawner: createRecordingSpawner().spawner,
                 });
 
                 expect(posts).toStrictEqual([]);
                 expect(result.error).toBeUndefined();
+                // Said, so the operator learns from the dry run that a real deploy will create it.
+                expect(
+                    infos.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS) does not exist yet; it will be created')),
+                ).toBe(true);
             });
 
             it("warns and deploys when there is no API token to check with", async () => {

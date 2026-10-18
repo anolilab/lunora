@@ -30,6 +30,8 @@ const REQUEST_TIMEOUT_MS = 5000;
  * `wrangler login` has no API token to make it with.
  */
 interface ArtifactsJurisdictionCheck {
+    /** Set on an `ok` that tells the operator the account is about to change (or just did), which the caller should say. */
+    changesAccount?: true;
     fix?: string;
     message: string;
     verdict: "mismatch" | "missing" | "ok" | "unchecked";
@@ -133,7 +135,7 @@ const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: s
         reason = created.reason;
 
         if (reason === undefined) {
-            return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
+            return { changesAccount: true, message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
         }
 
         const now = await jurisdictionOf(options, accountId, token);
@@ -148,7 +150,11 @@ const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: s
     }
 
     if (options.missingOk === true) {
-        return { message: `${subject} does not exist yet; it will be created in the "${jurisdiction}" jurisdiction just before the deploy.`, verdict: "ok" };
+        return {
+            changesAccount: true,
+            message: `${subject} does not exist yet; it will be created in the "${jurisdiction}" jurisdiction just before the deploy.`,
+            verdict: "ok",
+        };
     }
 
     const reasonSuffix = reason === undefined ? "" : ` (${reason})`;

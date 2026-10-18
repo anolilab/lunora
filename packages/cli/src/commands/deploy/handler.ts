@@ -768,6 +768,30 @@ const artifactsModeFor = (options: Pick<DeployCommandOptions, "temporary">): Art
  */
 type ArtifactsCheckMode = "create" | "defer" | "report";
 
+/** Log each namespace check's outcome; returns the lines of the ones that stop the deploy. */
+const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof checkArtifactsJurisdiction>>>, logger: Logger): string[] => {
+    const failures: string[] = [];
+
+    for (const check of checks) {
+        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+        if (check.verdict === "unchecked") {
+            logger.warn(line);
+        } else if (check.verdict === "ok") {
+            // Said, not silent: a dry run or a build is where the operator learns a real deploy will create it.
+            if (check.changesAccount === true) {
+                logger.info(line);
+            }
+        } else {
+            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
+            logger.error(line);
+            failures.push(line);
+        }
+    }
+
+    return failures;
+};
+
 /**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
  * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
@@ -808,19 +832,7 @@ const checkArtifactsNamespaces = async (
             checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" }),
         ),
     );
-    const failures: string[] = [];
-
-    for (const check of checks) {
-        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
-
-        if (check.verdict === "unchecked") {
-            logger.warn(line);
-        } else if (check.verdict !== "ok") {
-            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
-            logger.error(line);
-            failures.push(line);
-        }
-    }
+    const failures = reportArtifactsChecks(checks, logger);
 
     return failures.length === 0 ? undefined : failures.join("\n");
 };
