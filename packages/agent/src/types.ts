@@ -239,10 +239,11 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
     /**
      * Set by `requestSecretTool`. The loop never calls `execute` on such a tool: it
      * pauses the run until a human supplies (or declines) a value and records
-     * `{ secretRef }` as the tool result. The value never reaches the loop, the
-     * thread or the model.
+     * `{ secretRef }` as the tool result, where `secretRef` is the request's
+     * tool-call id. `consumer` names the only tool that may read the value. The
+     * value never reaches the loop, the thread or the model.
      */
-    secretRequest?: true;
+    secretRequest?: { consumer: string };
 }
 
 /**
@@ -1132,6 +1133,9 @@ export interface AgentFunctionPaths {
      */
     history: string;
     listMessages: string;
+    /** The internal `agents:agentOpenSecretRequest` mutation that writes the pending request row when a run pauses. */
+    openSecretRequest: string;
+
     patchThread: string;
 
     /**
@@ -1142,6 +1146,8 @@ export interface AgentFunctionPaths {
     run: string;
     /** The internal `agents:agentSetState` mutation the loop dispatches for `setState`. */
     setState: string;
+    /** The internal `agents:agentSettleSecretRequest` mutation that reads a paused request's outcome once its wait ends. */
+    settleSecretRequest: string;
     /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
     state: string;
     /** The internal `agents:agentTakeSecret` mutation a secret-consuming tool dispatches to read a supplied value. */

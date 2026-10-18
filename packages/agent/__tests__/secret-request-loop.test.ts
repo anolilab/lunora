@@ -1,3 +1,4 @@
+import type { SecretValueHost } from "@lunora/platform";
 import { createReferenceHost } from "@lunora/platform/conformance";
 import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
@@ -7,12 +8,20 @@ import { agentComponent } from "../src/component";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { requestSecretTool, SecretUnavailableError, withSecret } from "../src/secret-request-tool";
 import type { AgentDefinition, AgentStepLike, AgentToolContext } from "../src/types";
-import { finalTurn, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { fakeDatabase, finalTurn, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
 
 const SECRET = "sk_live_correct-horse-battery-staple";
 const SECRET_WORKS = "charged";
 const WORKFLOW_TIMEOUT = "WorkflowTimeoutError";
 const TOOL_FAILED_PATTERN = /failed and will not be retried\. the secret is no longer available/u;
+const THREAD = "thread-1";
+const INSTANCE = "wf-1";
+const OWNER = "user-a";
+/** The agent's default `approvalTimeout`: the request's deadline, which the wait outlasts by the grace. */
+const DEADLINE_MS = 3 * 24 * 60 * 60 * 1000;
+const WAIT_GRACE_MS = 60 * 1000;
+/** The value's lifetime in the store (`AGENT_SECRET_TTL_MS`), past which a take refuses. */
+const VALUE_TTL_MS = 15 * 60 * 1000;
 
 /**
  * Durable-step double for the secret wait: a pre-delivered event resolves the
@@ -91,25 +100,127 @@ const flushMicrotasks = async (): Promise<void> => {
     });
 };
 
-/** The secret store the runtime's take/discard dispatches reach, through the real component mutations. */
-const secretHost = () => {
-    const host = createReferenceHost();
+type Handler = { handler: (context: unknown, args: never) => unknown };
 
-    if (host.secretValues === undefined || host.advanceClock === undefined) {
+/**
+ * The secret-request component over ONE database, as the shard runs it. The loop's
+ * runtime double dispatches the internal functions here (`handlers`), and the owner's
+ * supply and decline go through the same component. A wake-up lands in the journal the
+ * way the workflow host would deliver it. Supply and decline also write the loop's
+ * `awaiting_secret` marker into this database, which the loop writes into its own
+ * runtime double; the supply reads it from here, so the test mirrors it.
+ */
+const secretHost = async (journal: WaitJournal) => {
+    const reference = createReferenceHost();
+
+    if (reference.secretValues === undefined || reference.advanceClock === undefined) {
         throw new Error("the reference host must expose its secret store and clock");
     }
 
+    const { secretValues, advanceClock } = reference;
+    const puts: string[] = [];
+    const store: SecretValueHost = {
+        discard: (ref) => secretValues.discard(ref),
+        put: async (value, options) => {
+            const ref = await secretValues.put(value, options);
+
+            puts.push(value);
+
+            return ref;
+        },
+        take: (ref, options) => secretValues.take(ref, options),
+    };
+    const { database, rows } = fakeDatabase();
+    const insert = database["insert"] as (table: string, document: Record<string, unknown>) => Promise<unknown>;
     const { functions } = agentComponent();
-    const context = { agentSecrets: host.secretValues };
-    const dispatch = (fn: unknown) => (args?: Record<string, unknown>) =>
-        (fn as { handler: (c: unknown, a: never) => unknown }).handler(context, args as never);
+    const context = {
+        agentSecrets: store,
+        agents: {
+            support: {
+                sendEvent: (_id: string, event: { payload: unknown; type: string }) => {
+                    journal.events.set(event.type.replace("agent-", ""), event.payload);
+
+                    return Promise.resolve();
+                },
+            },
+        },
+        db: database,
+    };
+    const dispatch =
+        (fn: unknown) =>
+        (args?: Record<string, unknown>): unknown =>
+            (fn as Handler).handler(context, args as never);
+
+    await insert("agent_threads", {
+        agent: "support",
+        createdAt: 0,
+        instanceId: INSTANCE,
+        key: THREAD,
+        messageCount: 0,
+        owner: OWNER,
+        status: "awaiting_input",
+        updatedAt: 0,
+    });
+
+    const mirrorMarker = async (toolCallId: string): Promise<void> => {
+        await insert("agent_messages", {
+            content: "marker",
+            createdAt: 0,
+            messageKey: `${INSTANCE}:secret:${toolCallId}`,
+            role: "tool",
+            seq: 0,
+            status: "awaiting_secret",
+            threadKey: THREAD,
+            toolCallId,
+            toolName: "requestKey",
+        });
+    };
+
+    const asOwner = (fn: unknown, args: Record<string, unknown>): unknown => (fn as Handler).handler({ ...context, auth: { userId: OWNER } }, args as never);
 
     return {
-        advanceClock: host.advanceClock,
-        discard: dispatch(functions.agentDiscardSecret),
-        host: { secretValues: host.secretValues },
-        take: dispatch(functions.agentTakeSecret),
+        advanceClock,
+        /** Every dispatch the runtime double routes here, keyed by its function path. */
+        handlers: {
+            "agents:agentDiscardSecret": dispatch(functions.agentDiscardSecret),
+            "agents:agentOpenSecretRequest": dispatch(functions.agentOpenSecretRequest),
+            "agents:agentSettleSecretRequest": dispatch(functions.agentSettleSecretRequest),
+            "agents:agentTakeSecret": dispatch(functions.agentTakeSecret),
+        } as Record<string, (args?: Record<string, unknown>) => unknown>,
+        puts,
+        rows,
+        decline: async (toolCallId: string): Promise<unknown> => {
+            await mirrorMarker(toolCallId);
+
+            return asOwner(functions.agentDeclineSecret, { threadKey: THREAD, toolCallId });
+        },
+        supply: async (toolCallId: string, secret: string): Promise<unknown> => {
+            await mirrorMarker(toolCallId);
+
+            return asOwner(functions.agentSupplySecret, { secret, threadKey: THREAD, toolCallId });
+        },
     };
+};
+
+type SecretHost = Awaited<ReturnType<typeof secretHost>>;
+
+/** A fresh journal, host and runtime wired together. */
+const setup = async () => {
+    const journal = new WaitJournal();
+    const host = await secretHost(journal);
+    const runtime = memoryRuntime({ handlers: host.handlers });
+
+    return { host, journal, runtime };
+};
+
+/** Every value a record the run keeps can hold, as text, for the "no ref, no value" checks. */
+const serialized = (values: unknown): string => JSON.stringify(values);
+
+/** The host ref the request row holds, read the way a test may: from the table, never from a client. */
+const storedRef = (host: SecretHost): string => {
+    const [row] = host.rows.get("agent_secret_requests") ?? [];
+
+    return String(row?.["ref"]);
 };
 
 const secretAgent = (used: string[]): AgentDefinition =>
@@ -126,11 +237,22 @@ const secretAgent = (used: string[]): AgentDefinition =>
                     }),
                 inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }) as never,
             }),
-            requestKey: requestSecretTool({ description: "Ask the user for their payment API key." }),
+            // A second tool that is NOT the declared consumer. It tries to read the value and must be refused.
+            other: defineAgentTool({
+                description: "Tries to use a stored key it was never given.",
+                execute: (input, context) =>
+                    withSecret(context, (input as { secretRef: string }).secretRef, (secret) => {
+                        used.push(`other:${secret}`);
+
+                        return "leaked";
+                    }),
+                inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }) as never,
+            }),
+            requestKey: requestSecretTool({ consumer: "charge", description: "Ask the user for their payment API key." }),
         },
     });
 
-/** Run the paused request to its wait, then resolve it with `event`. */
+/** Run the paused request to its wait. The paused invocation never settles, so it is left pending. */
 const pauseAt = async (
     agent: AgentDefinition,
     journal: WaitJournal,
@@ -146,55 +268,60 @@ const pauseAt = async (
 };
 
 describe("requestSecretTool — the loop pauses and resumes", () => {
-    it("pauses on the request, resumes on the ref, consumes the value once, and keeps it out of every record", async () => {
-        expect.assertions(15);
+    it("pauses on the request, resumes on the request id, consumes the value once, and keeps it out of every record", async () => {
+        expect.assertions(23);
 
         const used: string[] = [];
         const agent = secretAgent(used);
-        const { host, take, discard } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
-        const runtime = memoryRuntime({ handlers: { "agents:agentTakeSecret": take, "agents:agentDiscardSecret": discard } });
-        const journal = new WaitJournal();
+        const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: ref }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
             finalTurn("done"),
         ]);
 
-        // Phase A — the run stops on the secret wait with the marker persisted.
+        // Phase A — the run stops on the secret wait, with the request row and the marker written.
         await pauseAt(agent, journal, runtime, generate);
 
         expect(journal.waitedNames).toStrictEqual(["secret:call_1"]);
-        expect(journal.waitOptions.get("secret:call_1")).toStrictEqual({ timeout: 3 * 24 * 60 * 60 * 1000, type: "agent-secret:call_1" });
+        expect(journal.waitOptions.get("secret:call_1")).toStrictEqual({ timeout: DEADLINE_MS + WAIT_GRACE_MS, type: "agent-secret:call_1" });
         expect([...runtime.messages.values()].some((message) => message.status === "awaiting_secret")).toBe(true);
         expect(used).toStrictEqual([]);
 
-        // Phase B — the supply lands: the wake-up carries the ref, and the same
-        // instance replays into the consuming tool.
-        journal.events.set("secret:call_1", { ref });
+        // Phase B — the supply lands. The wake-up is payload-free, and the same instance replays into the consuming tool.
+        await host.supply("call_1", SECRET);
+
+        expect(journal.events.get("secret:call_1")).toStrictEqual({});
+
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 3 });
         expect(used).toStrictEqual([SECRET]);
 
-        // The tool result the model sees is the ref, not the value.
+        // The tool result the model sees is the request id, not the host ref.
         const requestRow = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool");
 
-        expect(requestRow?.content).toBe(JSON.stringify({ secretRef: ref }));
+        expect(requestRow?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
         expect(runtime.messages.has("thread-1:wf-1:secret:call_1")).toBe(false);
 
-        // The consuming call claimed the value under its own step name and discarded it after use.
+        // The consuming call claimed the value under its own step name, and discarded it after use.
         const takes = runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret");
 
-        expect(takes.map((dispatch) => dispatch.args)).toStrictEqual([{ claimant: "tool:charge:call_2", ref, threadKey: "thread-1" }]);
+        expect(takes.map((dispatch) => dispatch.args)).toStrictEqual([
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: THREAD, toolCallId: "call_1" },
+        ]);
         expect(runtime.dispatches.some((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toBe(true);
 
-        // The value is in no record the run keeps.
-        expect(JSON.stringify([...runtime.messages.values()])).not.toContain(SECRET);
-        expect(JSON.stringify(runtime.dispatches)).not.toContain(SECRET);
-        expect(JSON.stringify([...journal.payloads.values()])).not.toContain(SECRET);
+        // Neither the value nor the host ref is in any record the run keeps.
+        const ref = storedRef(host);
+
+        for (const record of [runtime.messages.values(), runtime.dispatches, runtime.threads.values(), journal.events.values(), journal.payloads.values()]) {
+            expect(serialized([...record])).not.toContain(SECRET);
+            expect(serialized([...record])).not.toContain(ref);
+        }
+
         expect(journal.persisted()).not.toContain(SECRET);
-        expect(JSON.stringify([...runtime.threads.values()])).not.toContain(SECRET);
+        expect(journal.invoked.join("\n")).not.toContain(ref);
     });
 
     it("does not re-run the consuming tool, or re-take the value, when the instance replays", async () => {
@@ -202,14 +329,11 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         const used: string[] = [];
         const agent = secretAgent(used);
-        const { host, take, discard } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
-        const runtime = memoryRuntime({ handlers: { "agents:agentTakeSecret": take, "agents:agentDiscardSecret": discard } });
-        const journal = new WaitJournal();
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), toolTurn("call_2", "charge", { secretRef: ref }), finalTurn("done")]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), toolTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")]);
 
         await pauseAt(agent, journal, runtime, generate);
-        journal.events.set("secret:call_1", { ref });
+        await host.supply("call_1", SECRET);
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         // A replay of the completed instance serves every step from the journal.
@@ -225,19 +349,17 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         const used: string[] = [];
         const agent = secretAgent(used);
-        const { host, take, discard, advanceClock } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
-        const runtime = memoryRuntime({ handlers: { "agents:agentTakeSecret": take, "agents:agentDiscardSecret": discard } });
-        const journal = new WaitJournal();
+        const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", {}),
-            toolTurn("call_2", "charge", { secretRef: ref }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
             finalTurn("could not charge"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        advanceClock(2 * 60_000);
-        journal.events.set("secret:call_1", { ref });
+        await host.supply("call_1", SECRET);
+        host.advanceClock(VALUE_TTL_MS + 1);
+
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "could not charge", turns: 3 });
@@ -249,18 +371,45 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect(failed?.content).toMatch(TOOL_FAILED_PATTERN);
     });
 
+    it("refuses a call from a tool that was not declared as the consumer, and leaves the value for the declared one", async () => {
+        expect.assertions(4);
+
+        const used: string[] = [];
+        const agent = secretAgent(used);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", {}),
+            toolTurn("call_2", "other", { secretRef: "call_1" }),
+            toolTurn("call_3", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 4 });
+        // The wrong tool never saw the value, and the declared consumer still got it.
+        expect(used).toStrictEqual([SECRET]);
+
+        const takes = runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret");
+
+        expect(takes.map((dispatch) => (dispatch.args as { claimant: string }).claimant)).toStrictEqual(["tool:other:call_2", "tool:charge:call_3"]);
+        // Only the successful consume discards: a refused call cannot burn the value.
+        expect(runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toHaveLength(1);
+    });
+
     it("records a decline as a deterministic tool result and never takes a value", async () => {
         expect.assertions(4);
 
         const used: string[] = [];
         const agent = secretAgent(used);
-        const { take, discard } = secretHost();
-        const runtime = memoryRuntime({ handlers: { "agents:agentTakeSecret": take, "agents:agentDiscardSecret": discard } });
-        const journal = new WaitJournal();
+        const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), finalTurn("no key")]);
 
         await pauseAt(agent, journal, runtime, generate);
-        journal.events.set("secret:call_1", { declined: true });
+        await host.decline("call_1");
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         const row = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool");
@@ -272,11 +421,10 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
     });
 
     it("treats a timed-out wait as no value supplied, retires the marker, and lets the run go on", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const agent = secretAgent([]);
-        const runtime = memoryRuntime();
-        const journal = new WaitJournal();
+        const { host, journal, runtime } = await setup();
 
         journal.timeoutWaits.add("secret:call_1");
 
@@ -286,31 +434,88 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect(result).toStrictEqual({ stopped: "final", text: "no key", turns: 2 });
         expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
         expect(runtime.messages.has("thread-1:wf-1:secret:call_1")).toBe(false);
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["status"]).toBe("expired");
+    });
+
+    it("honours a supply that landed before the timeout was settled, and runs the consumer on it", async () => {
+        expect.assertions(3);
+
+        const used: string[] = [];
+        const agent = secretAgent(used);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), toolTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+
+        // The wait reports an elapsed timeout even though the supply committed: the settle step must read the row.
+        journal.timeoutWaits.add("secret:call_1");
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 3 });
+        expect(used).toStrictEqual([SECRET]);
+        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
+    });
+
+    it("refuses a supply that arrives after the timeout settled the request, with CONFLICT and nothing stored", async () => {
+        expect.assertions(4);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), finalTurn("no key")]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        journal.timeoutWaits.add("secret:call_1");
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        await expect(host.supply("call_1", SECRET)).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(host.puts).toStrictEqual([]);
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["status"]).toBe("expired");
+        expect(serialized([...runtime.messages.values()])).not.toContain(SECRET);
     });
 });
 
 describe("withSecret — the consuming step", () => {
-    it("replays a completed consume from its journal entry when the enclosing tool step runs again", async () => {
-        expect.assertions(3);
+    /** An open request on `toolCallId`, supplied with `secret`, as the loop and the owner would leave it. */
+    const suppliedRequest = async (host: SecretHost, toolCallId: string, secret: string): Promise<string> => {
+        await host.handlers["agents:agentOpenSecretRequest"]?.({
+            consumerTool: "charge",
+            expiresAt: Date.now() + DEADLINE_MS,
+            instanceId: INSTANCE,
+            threadKey: THREAD,
+            toolCallId,
+            toolName: "requestKey",
+        });
+        await host.supply(toolCallId, secret);
 
-        const { host, take, discard } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
-        const claims: string[] = [];
-        const journal = new WaitJournal();
-        const context = {
-            idempotencyKey: "tool:charge:call_2",
+        return toolCallId;
+    };
+
+    /** A consuming tool's context whose dispatches reach the real component. */
+    const consumerContext = (host: SecretHost, step: AgentStepLike, claims: string[], idempotencyKey: string, toolCallId: string): AgentToolContext =>
+        ({
+            idempotencyKey,
             run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => {
                 if (reference["__lunoraRef"] === "agents:agentTakeSecret") {
                     claims.push(String(args?.["claimant"]));
-
-                    return Promise.resolve(take(args));
                 }
 
-                return Promise.resolve(discard(args));
+                return Promise.resolve(host.handlers[reference["__lunoraRef"]]?.(args));
             },
-            step: journal,
-            threadKey: "thread-1",
-        } as unknown as AgentToolContext;
+            step,
+            threadKey: THREAD,
+            toolCallId,
+        }) as unknown as AgentToolContext;
+
+    it("replays a completed consume from its journal entry when the enclosing tool step runs again", async () => {
+        expect.assertions(3);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const claims: string[] = [];
+        const journal = new WaitJournal();
+        const context = consumerContext(host, journal, claims, "tool:charge:call_2", "call_2");
 
         // The enclosing tool step failed after `withSecret` returned, so the outer
         // step re-runs against the same journal: the consume must not re-take.
@@ -322,27 +527,11 @@ describe("withSecret — the consuming step", () => {
     it("re-takes on a retry of the same call, and refuses a different call", async () => {
         expect.assertions(4);
 
-        const { host, take, discard } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "call_1", SECRET);
         const claims: string[] = [];
-        const context = (idempotencyKey: string): AgentToolContext =>
-            ({
-                idempotencyKey,
-                run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => {
-                    if (reference["__lunoraRef"] === "agents:agentTakeSecret") {
-                        claims.push(String(args?.["claimant"]));
-
-                        return Promise.resolve(take(args));
-                    }
-
-                    return Promise.resolve(discard(args));
-                },
-                step: new WaitJournal(),
-                threadKey: "thread-1",
-            }) as unknown as AgentToolContext;
-
         let attempts = 0;
-        const flaky = context("tool:charge:call_2");
+        const flaky = consumerContext(host, new WaitJournal(), claims, "tool:charge:call_2", "call_2");
 
         // The first attempt fails inside `use`, after the take; the retry re-takes with the same claimant.
         const value = await withSecret(flaky, ref, (secret) => {
@@ -361,28 +550,48 @@ describe("withSecret — the consuming step", () => {
 
         expect(retried).toBe(SECRET.length);
         expect(claims).toStrictEqual(["tool:charge:call_2", "tool:charge:call_2"]);
-        await expect(withSecret(context("tool:other:call_3"), ref, () => "never")).rejects.toBeInstanceOf(SecretUnavailableError);
+        await expect(withSecret(consumerContext(host, new WaitJournal(), claims, "tool:other:call_3", "call_3"), ref, () => "never")).rejects.toBeInstanceOf(
+            SecretUnavailableError,
+        );
     });
 });
 
 describe("withSecret — two secrets in one call", () => {
-    it("runs each callback with its own value, because each ref names its own durable step", async () => {
+    it("runs each callback with its own value, because each request names its own durable step", async () => {
         expect.assertions(2);
 
-        const { host, take, discard } = secretHost();
-        const keyRef = await host.secretValues.put("alpha-key-123", { scope: "thread-1", ttlMs: 60_000 });
-        const signingRef = await host.secretValues.put("beta-signing-secret-xyz", { scope: "thread-1", ttlMs: 60_000 });
+        const host = await secretHost(new WaitJournal());
+
+        await host.handlers["agents:agentOpenSecretRequest"]?.({
+            consumerTool: "charge",
+            expiresAt: Date.now() + DEADLINE_MS,
+            instanceId: INSTANCE,
+            threadKey: THREAD,
+            toolCallId: "call_a",
+            toolName: "requestKey",
+        });
+        await host.handlers["agents:agentOpenSecretRequest"]?.({
+            consumerTool: "charge",
+            expiresAt: Date.now() + DEADLINE_MS,
+            instanceId: INSTANCE,
+            threadKey: THREAD,
+            toolCallId: "call_b",
+            toolName: "requestKey",
+        });
+        await host.supply("call_a", "alpha-key-123");
+        await host.supply("call_b", "beta-signing-secret-xyz");
+
         const journal = new WaitJournal();
         const context = {
             idempotencyKey: "tool:charge:call_2",
-            run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) =>
-                Promise.resolve(reference["__lunoraRef"] === "agents:agentTakeSecret" ? take(args) : discard(args)),
+            run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => Promise.resolve(host.handlers[reference["__lunoraRef"]]?.(args)),
             step: journal,
-            threadKey: "thread-1",
+            threadKey: THREAD,
+            toolCallId: "call_2",
         } as unknown as AgentToolContext;
 
-        const keyLength = await withSecret(context, keyRef, (secret) => secret.length);
-        const signingLength = await withSecret(context, signingRef, (secret) => secret.length);
+        const keyLength = await withSecret(context, "call_a", (secret) => secret.length);
+        const signingLength = await withSecret(context, "call_b", (secret) => secret.length);
 
         expect(keyLength).toBe("alpha-key-123".length);
         expect(signingLength).toBe("beta-signing-secret-xyz".length);

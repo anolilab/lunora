@@ -1,11 +1,14 @@
 import type { SecretValueHost } from "@lunora/platform";
 import { createReferenceHost } from "@lunora/platform/conformance";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { agentComponent } from "../src/component";
 import { fakeDatabase } from "./loop-harness";
 
 const SECRET = "sk_live_correct-horse-battery-staple";
+const DEADLINE_MS = 60_000;
+const NOW = 1_000_000;
+const REQUESTS = "agent_secret_requests";
 
 interface Caller {
     agents: Record<string, { sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void> }>;
@@ -32,8 +35,12 @@ const fakeAgents = (fail?: Error): Caller => {
     };
 };
 
-/** Store spy: counts what the mutations put and discard, delegating to the real reference store. */
-const spyStore = (): { discarded: string[]; puts: string[]; store: SecretValueHost } => {
+/**
+ * Store spy: counts what the mutations put and discard, delegating to the real
+ * reference store. `afterPut` runs once the host has accepted a value, which is
+ * where a test injects the deadline passing or a concurrent settle.
+ */
+const spyStore = (afterPut?: () => void): { discarded: string[]; puts: string[]; store: SecretValueHost } => {
     const { secretValues } = createReferenceHost();
 
     if (secretValues === undefined) {
@@ -57,6 +64,7 @@ const spyStore = (): { discarded: string[]; puts: string[]; store: SecretValueHo
 
                 // Recorded only once the host accepted the value, so a refused put is not a store.
                 puts.push(value);
+                afterPut?.();
 
                 return ref;
             },
@@ -68,13 +76,25 @@ const spyStore = (): { discarded: string[]; puts: string[]; store: SecretValueHo
 type Handler = { handler: (context: unknown, args: never) => unknown };
 const call = async (fn: unknown, context: unknown, args: Record<string, unknown>): Promise<unknown> => (fn as Handler).handler(context, args as never);
 
-/** A thread owned by `owner` (or ownerless) with a pending `requestSecretTool` marker for `call_1`. */
+/**
+ * A thread owned by `owner` (or ownerless), paused on a `requestSecretTool` call
+ * `call_1` whose consumer is `charge`. The request row and the marker are written
+ * the way the loop writes them.
+ */
 const stagedThread = async (owner: string | undefined, store?: SecretValueHost, caller: Caller = fakeAgents()) => {
     const { functions } = agentComponent();
     const { database, rows } = fakeDatabase();
     const ctx = { agentSecrets: store, agents: caller.agents, auth: { userId: owner }, db: database };
 
     await call(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", ...(owner === undefined ? {} : { owner }) });
+    await call(functions.agentOpenSecretRequest, ctx, {
+        consumerTool: "charge",
+        expiresAt: Date.now() + DEADLINE_MS,
+        instanceId: "wf-1",
+        threadKey: "t-1",
+        toolCallId: "call_1",
+        toolName: "requestKey",
+    });
     await call(functions.agentAppendMessage, ctx, {
         content: 'Awaiting a secret for tool "requestKey".',
         messageKey: "wf-1:secret:call_1",
@@ -91,206 +111,522 @@ const stagedThread = async (owner: string | undefined, store?: SecretValueHost, 
 const markerCount = (rows: ReadonlyMap<string, ReadonlyArray<Record<string, unknown>>>): number =>
     (rows.get("agent_messages") ?? []).filter((row) => row["status"] === "awaiting_secret").length;
 
-describe("agentSupplySecret", () => {
-    it("stores the value, wakes the run with only the ref, and returns no value", async () => {
-        expect.assertions(6);
+const requestRow = (rows: ReadonlyMap<string, ReadonlyArray<Record<string, unknown>>>): Record<string, unknown> => {
+    const [row] = rows.get(REQUESTS) ?? [];
 
-        const { store, puts } = spyStore();
-        const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+    if (row === undefined) {
+        throw new Error("no secret request row");
+    }
 
-        const result = await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+    return row;
+};
 
-        expect(result).toStrictEqual({ resolved: true });
-        expect(puts).toStrictEqual([SECRET]);
-        expect(caller.sent).toHaveLength(1);
-        expect(caller.sent[0]?.event.type).toBe("agent-secret:call_1");
-        expect(JSON.stringify(caller.sent)).not.toContain(SECRET);
-        expect(markerCount(rows)).toBe(0);
+const take = (functions: ReturnType<typeof agentComponent>["functions"], ctx: unknown, args: Record<string, unknown>): Promise<unknown> =>
+    call(functions.agentTakeSecret, ctx, args);
+
+describe("secret request component", () => {
+    beforeEach(() => {
+        // Only Date is faked: the expiry rules read the clock, and nothing else here waits on a timer.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW);
     });
 
-    it("fails closed for an anonymous caller, storing nothing", async () => {
-        expect.assertions(3);
+    afterEach(() => {
+        vi.useRealTimers();
+    });
 
-        const { store, puts } = spyStore();
-        const { caller, ctx, functions } = await stagedThread("user-a", store);
+    describe("agentSupplySecret", () => {
+        it("stores the value, marks the request supplied, and wakes the run with an empty payload", async () => {
+            expect.assertions(6);
 
-        await expect(call(functions.agentSupplySecret, { ...ctx, auth: {} }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject(
-            {
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+
+            const result = await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+            const { ref } = requestRow(rows);
+
+            expect(result).toStrictEqual({ resolved: true });
+            expect(puts).toStrictEqual([SECRET]);
+            expect(caller.sent).toStrictEqual([{ event: { payload: {}, type: "agent-secret:call_1" }, id: "wf-1" }]);
+            expect(requestRow(rows)["status"]).toBe("supplied");
+            expect(typeof ref === "string" && JSON.stringify(caller.sent).includes(ref)).toBe(false);
+            expect(JSON.stringify([...rows.values()])).not.toContain(SECRET);
+        });
+
+        it("fails closed for an anonymous caller, storing nothing", async () => {
+            expect.assertions(3);
+
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions } = await stagedThread("user-a", store);
+
+            await expect(
+                call(functions.agentSupplySecret, { ...ctx, auth: {} }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
+            ).rejects.toMatchObject({
                 code: "FORBIDDEN",
-            },
-        );
-        expect(puts).toStrictEqual([]);
-        expect(caller.sent).toStrictEqual([]);
-    });
-
-    it("refuses an ownerless thread even to an authenticated caller, since anyone with the key could read it", async () => {
-        expect.assertions(2);
-
-        const { store, puts } = spyStore();
-        const { ctx, functions } = await stagedThread(undefined, store);
-
-        await expect(
-            call(functions.agentSupplySecret, { ...ctx, auth: { userId: "user-a" } }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
-        ).rejects.toMatchObject({
-            code: "FORBIDDEN",
+            });
+            expect(puts).toStrictEqual([]);
+            expect(caller.sent).toStrictEqual([]);
         });
-        expect(puts).toStrictEqual([]);
-    });
 
-    it("refuses a caller who owns a different thread", async () => {
-        expect.assertions(2);
+        it("refuses an ownerless thread even to an authenticated caller, since anyone with the key could read it", async () => {
+            expect.assertions(2);
 
-        const { store, puts } = spyStore();
-        const { ctx, functions } = await stagedThread("user-a", store);
+            const { store, puts } = spyStore();
+            const { ctx, functions } = await stagedThread(undefined, store);
 
-        await expect(
-            call(functions.agentSupplySecret, { ...ctx, auth: { userId: "user-b" } }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
-        ).rejects.toMatchObject({
-            code: "FORBIDDEN",
+            await expect(
+                call(functions.agentSupplySecret, { ...ctx, auth: { userId: "user-a" } }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            expect(puts).toStrictEqual([]);
         });
-        expect(puts).toStrictEqual([]);
-    });
 
-    it("refuses with a typed error on a target without a secret store, before accepting the value", async () => {
-        expect.assertions(2);
+        it("refuses a caller who owns a different thread", async () => {
+            expect.assertions(2);
 
-        const { caller, ctx, functions } = await stagedThread("user-a");
+            const { store, puts } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store);
 
-        await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
-            code: "NOT_IMPLEMENTED",
+            await expect(
+                call(functions.agentSupplySecret, { ...ctx, auth: { userId: "user-b" } }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            expect(puts).toStrictEqual([]);
         });
-        expect(caller.sent).toStrictEqual([]);
-    });
 
-    it("answers a second submit with CONFLICT rather than a second stored value", async () => {
-        expect.assertions(3);
+        it("refuses with a typed error on a target without a secret store, before accepting the value", async () => {
+            expect.assertions(2);
 
-        const { store, puts } = spyStore();
-        const { ctx, functions } = await stagedThread("user-a", store);
+            const { caller, ctx, functions } = await stagedThread("user-a");
 
-        await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
-
-        await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
-            code: "CONFLICT",
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "NOT_IMPLEMENTED",
+            });
+            expect(caller.sent).toStrictEqual([]);
         });
-        expect(puts).toHaveLength(1);
-        expect(puts).toStrictEqual([SECRET]);
-    });
 
-    it("answers a late supply, after the loop retired the marker on timeout, with CONFLICT and stores nothing", async () => {
-        expect.assertions(3);
+        it("answers a second submit with CONFLICT rather than a second stored value", async () => {
+            expect.assertions(3);
 
-        const { store, puts } = spyStore();
-        const { ctx, functions, rows } = await stagedThread("user-a", store);
+            const { store, puts } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store);
 
-        // The loop's timeout branch retires the marker (`agentDeleteMessage`).
-        await call(functions.agentDeleteMessage, ctx, { messageKey: "wf-1:secret:call_1", threadKey: "t-1" });
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
 
-        await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
-            code: "CONFLICT",
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(puts).toHaveLength(1);
+            expect(puts).toStrictEqual([SECRET]);
         });
-        expect(puts).toStrictEqual([]);
-        expect(markerCount(rows)).toBe(0);
-    });
 
-    it("discards the stored value when the wake-up never lands, then rethrows", async () => {
-        expect.assertions(3);
+        it("refuses a supply at or after the deadline, even though the loop has not settled the request", async () => {
+            expect.assertions(4);
 
-        const { store, discarded } = spyStore();
-        const { ctx, functions } = await stagedThread("user-a", store, fakeAgents(new Error("dispatch down")));
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
 
-        await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toThrow("dispatch down");
-        expect(discarded).toHaveLength(1);
+            vi.setSystemTime(NOW + DEADLINE_MS);
 
-        const [ref] = discarded;
-
-        await expect(store.take(ref as string, { claimant: "tool:x:1", scope: "t-1" })).resolves.toBeUndefined();
-    });
-
-    it("rejects an over-size value with PAYLOAD_TOO_LARGE and keeps the marker pending", async () => {
-        expect.assertions(4);
-
-        const { store, puts } = spyStore();
-        const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
-
-        await expect(call(functions.agentSupplySecret, ctx, { secret: "x".repeat(9000), threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
-            code: "PAYLOAD_TOO_LARGE",
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(puts).toStrictEqual([]);
+            expect(caller.sent).toStrictEqual([]);
+            expect(requestRow(rows)["status"]).toBe("pending");
         });
-        expect(caller.sent).toStrictEqual([]);
-        expect(markerCount(rows)).toBe(1);
 
-        expect(puts).toHaveLength(0);
-    });
-});
+        it("refuses a supply whose deadline passes while the host stores it, and discards the stored value", async () => {
+            expect.assertions(4);
 
-describe("the plaintext argument", () => {
-    it("is named `secret`, the name the request log masks", () => {
-        expect.assertions(1);
+            const { store, discarded } = spyStore(() => {
+                vi.setSystemTime(NOW + DEADLINE_MS);
+            });
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
 
-        const { args } = agentComponent().functions.agentSupplySecret as unknown as { args: Record<string, unknown> };
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(discarded).toHaveLength(1);
+            expect(caller.sent).toStrictEqual([]);
+            expect(requestRow(rows)["status"]).toBe("pending");
+        });
 
-        expect(Object.keys(args)).toContain("secret");
-    });
-});
+        it("discards the value when the request row cannot move after the put, so a failed supply leaves nothing readable", async () => {
+            expect.assertions(5);
 
-describe("agentDeclineSecret", () => {
-    it("retires the marker and wakes the run with a decline, storing nothing", async () => {
-        expect.assertions(4);
+            let patchFails = false;
+            const { store, discarded } = spyStore(() => {
+                patchFails = true;
+            });
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+            const realPatch = (ctx.db as unknown as { patch: (id: string, patch: Record<string, unknown>) => Promise<void> }).patch;
+            const flakyCtx = {
+                ...ctx,
+                db: {
+                    ...ctx.db,
+                    patch: async (id: string, patch: Record<string, unknown>) => {
+                        if (patchFails) {
+                            throw new Error("injected: row write failed");
+                        }
 
-        const { store, puts } = spyStore();
-        const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+                        return realPatch(id, patch);
+                    },
+                },
+            };
 
-        await expect(call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({ resolved: true });
-        expect(caller.sent).toStrictEqual([{ event: { payload: { declined: true }, type: "agent-secret:call_1" }, id: "wf-1" }]);
-        expect(markerCount(rows)).toBe(0);
-        expect(puts).toStrictEqual([]);
-    });
+            await expect(call(functions.agentSupplySecret, flakyCtx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toThrow(
+                "injected: row write failed",
+            );
 
-    it("applies the same owner gate as supply", async () => {
-        expect.assertions(1);
+            expect(discarded).toHaveLength(1);
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBeUndefined();
+            expect(caller.sent).toStrictEqual([]);
+            expect(requestRow(rows)["status"]).toBe("pending");
+        });
 
-        const { ctx, functions } = await stagedThread("user-a", spyStore().store);
+        it("discards the stored value when the wake-up never lands, then rethrows", async () => {
+            expect.assertions(3);
 
-        await expect(
-            call(functions.agentDeclineSecret, { ...ctx, auth: { userId: "user-b" } }, { threadKey: "t-1", toolCallId: "call_1" }),
-        ).rejects.toMatchObject({
-            code: "FORBIDDEN",
+            const { store, discarded } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store, fakeAgents(new Error("dispatch down")));
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toThrow("dispatch down");
+            expect(discarded).toHaveLength(1);
+
+            const [ref] = discarded;
+
+            await expect(store.take(ref as string, { claimant: "tool:charge:call_2", scope: "t-1" })).resolves.toBeUndefined();
+        });
+
+        it("rejects an over-size value with PAYLOAD_TOO_LARGE and keeps the request pending", async () => {
+            expect.assertions(5);
+
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: "x".repeat(9000), threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "PAYLOAD_TOO_LARGE",
+            });
+            expect(caller.sent).toStrictEqual([]);
+            expect(markerCount(rows)).toBe(1);
+            expect(requestRow(rows)["status"]).toBe("pending");
+            expect(puts).toHaveLength(0);
+        });
+
+        it("answers a supply for a pre-change thread (marker, no request row) with CONFLICT and stores nothing", async () => {
+            expect.assertions(3);
+
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+
+            rows.set(REQUESTS, []);
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(puts).toStrictEqual([]);
+            expect(caller.sent).toStrictEqual([]);
         });
     });
-});
 
-describe("agentTakeSecret and agentDiscardSecret", () => {
-    it("binds the first claimant, lets it re-take, refuses others, and discards", async () => {
-        expect.assertions(5);
+    describe("a supply and the loop's timeout, in both orders", () => {
+        it("honours a supply that landed before the loop settled the timeout", async () => {
+            expect.assertions(3);
 
-        const { store } = spyStore();
-        const { caller, ctx, functions } = await stagedThread("user-a", store);
+            const { store } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
 
-        await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
 
-        // The ref the run was woken with is the only handle the loop ever holds.
-        const { ref } = caller.sent[0]?.event.payload as { ref: string };
-        const take = (claimant: string, threadKey = "t-1"): Promise<unknown> => call(functions.agentTakeSecret, ctx, { claimant, ref, threadKey });
+            // The wait timed out after the supply committed: settle reports the supply, not the timeout.
+            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                status: "supplied",
+            });
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBe(SECRET);
+            expect(requestRow(rows)["status"]).toBe("supplied");
+        });
 
-        await expect(take("tool:charge:call_2")).resolves.toBe(SECRET);
+        it("refuses a supply that arrives after the timeout settled the request, with CONFLICT and nothing stored", async () => {
+            expect.assertions(5);
 
-        await expect(take("tool:charge:call_2")).resolves.toBe(SECRET);
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
 
-        await expect(take("tool:other:call_3")).resolves.toBeUndefined();
-
-        await expect(take("tool:charge:call_2", "t-other")).resolves.toBeUndefined();
-
-        await call(functions.agentDiscardSecret, ctx, { ref });
-
-        await expect(take("tool:charge:call_2")).resolves.toBeUndefined();
+            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                status: "expired",
+            });
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(puts).toStrictEqual([]);
+            expect(caller.sent).toStrictEqual([]);
+            expect(requestRow(rows)["status"]).toBe("expired");
+        });
     });
 
-    it("exposes the take and discard mutations internally only", () => {
-        expect.assertions(2);
+    describe("agentSettleSecretRequest", () => {
+        it("moves a pending request to expired once, and reports the same status on a replay", async () => {
+            expect.assertions(2);
 
-        const { functions } = agentComponent();
+            const { ctx, functions } = await stagedThread("user-a");
 
-        expect((functions.agentTakeSecret as { visibility?: string }).visibility).toBe("internal");
-        expect((functions.agentDiscardSecret as { visibility?: string }).visibility).toBe("internal");
+            await call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                status: "expired",
+            });
+            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_missing" })).resolves.toStrictEqual({
+                status: "expired",
+            });
+        });
+    });
+
+    describe("agentDeclineSecret", () => {
+        it("retires the marker and wakes the run with an empty payload, storing nothing", async () => {
+            expect.assertions(5);
+
+            const { store, puts } = spyStore();
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await expect(call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({ resolved: true });
+            expect(caller.sent).toStrictEqual([{ event: { payload: {}, type: "agent-secret:call_1" }, id: "wf-1" }]);
+            expect(markerCount(rows)).toBe(0);
+            expect(requestRow(rows)["status"]).toBe("declined");
+            expect(puts).toStrictEqual([]);
+        });
+
+        it("applies the same owner gate as supply", async () => {
+            expect.assertions(1);
+
+            const { ctx, functions } = await stagedThread("user-a", spyStore().store);
+
+            await expect(
+                call(functions.agentDeclineSecret, { ...ctx, auth: { userId: "user-b" } }, { threadKey: "t-1", toolCallId: "call_1" }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+        });
+
+        it("lets exactly one of a decline and a supply win", async () => {
+            expect.assertions(4);
+
+            const { store, puts } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            await expect(call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(puts).toStrictEqual([]);
+            expect(requestRow(rows)["status"]).toBe("declined");
+        });
+    });
+
+    describe("agentOpenSecretRequest", () => {
+        it("creates no second row when a paused call replays", async () => {
+            expect.assertions(2);
+
+            const { ctx, functions, rows } = await stagedThread("user-a");
+
+            await call(functions.agentOpenSecretRequest, ctx, {
+                consumerTool: "charge",
+                expiresAt: NOW + DEADLINE_MS,
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+            expect(rows.get(REQUESTS)).toHaveLength(1);
+            expect(requestRow(rows)["status"]).toBe("pending");
+        });
+
+        it("starts a new request for a later run that reuses a finished run's tool-call id, discarding the old value", async () => {
+            expect.assertions(5);
+
+            const { store, discarded, puts } = spyStore();
+            const caller = fakeAgents();
+            const { ctx, functions, rows } = await stagedThread("user-a", store, caller);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            // The first run ended without consuming the value. A second run takes the thread and reuses `call_1`.
+            await call(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-2", key: "t-1", onConcurrentRun: "replace", owner: "user-a" });
+            await call(functions.agentOpenSecretRequest, ctx, {
+                consumerTool: "charge",
+                expiresAt: NOW + DEADLINE_MS,
+                instanceId: "wf-2",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+            await call(functions.agentAppendMessage, ctx, {
+                content: 'Awaiting a secret for tool "requestKey".',
+                messageKey: "wf-2:secret:call_1",
+                role: "tool",
+                status: "awaiting_secret",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+            expect(discarded).toHaveLength(1);
+            expect(requestRow(rows)["status"]).toBe("pending");
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: "second-value", threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                resolved: true,
+            });
+            expect(puts).toStrictEqual([SECRET, "second-value"]);
+            expect(caller.sent.at(-1)?.id).toBe("wf-2");
+        });
+
+        it("does not reopen a request that was already answered", async () => {
+            expect.assertions(2);
+
+            const { store } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentOpenSecretRequest, ctx, {
+                consumerTool: "charge",
+                expiresAt: NOW + 2 * DEADLINE_MS,
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+            expect(requestRow(rows)["status"]).toBe("supplied");
+            expect(requestRow(rows)["expiresAt"]).toBe(NOW + DEADLINE_MS);
+        });
+    });
+
+    describe("agentTakeSecret and agentDiscardSecret", () => {
+        it("binds the declared consumer's claimant, lets it re-take, and refuses any other claimant", async () => {
+            expect.assertions(5);
+
+            const { store } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            const consumed = (claimant: string, consumerCallId: string, threadKey = "t-1"): Promise<unknown> =>
+                take(functions, ctx, { claimant, consumerCallId, threadKey, toolCallId: "call_1" });
+
+            await expect(consumed("tool:charge:call_2", "call_2")).resolves.toBe(SECRET);
+            await expect(consumed("tool:charge:call_2", "call_2")).resolves.toBe(SECRET);
+            await expect(consumed("tool:other:call_3", "call_3")).resolves.toBeUndefined();
+            await expect(consumed("tool:charge:call_2", "call_2", "t-other")).resolves.toBeUndefined();
+
+            expect(requestRow(rows)["status"]).toBe("supplied");
+        });
+
+        it("refuses a claimant that only starts with the consumer's name, and does not bind the host", async () => {
+            expect.assertions(3);
+
+            const { store } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            // A longer step name must not pass the consumer check: the claimant has to be exactly this call's step.
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2:extra", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBeUndefined();
+            // The refusal bound nothing, so the declared consumer still takes the value.
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBe(SECRET);
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_9", consumerCallId: "call_9", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBeUndefined();
+        });
+
+        it("discards the value, marks the request consumed, and stays idempotent", async () => {
+            expect.assertions(3);
+
+            const { store } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBe(SECRET);
+
+            await call(functions.agentDiscardSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentDiscardSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(
+                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBeUndefined();
+            expect(requestRow(rows)["status"]).toBe("consumed");
+        });
+
+        it("exposes the take and discard mutations internally only", () => {
+            expect.assertions(2);
+
+            const { functions } = agentComponent();
+
+            expect((functions.agentTakeSecret as { visibility?: string }).visibility).toBe("internal");
+            expect((functions.agentDiscardSecret as { visibility?: string }).visibility).toBe("internal");
+        });
+    });
+
+    describe("agentSecretRequests", () => {
+        it("lists the thread's requests to its owner, with status and deadline but never the ref or the value", async () => {
+            expect.assertions(4);
+
+            const { store } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            const listed = await call(functions.agentSecretRequests, ctx, { threadKey: "t-1" });
+            const ref = requestRow(rows)["ref"] as string;
+
+            expect(listed).toStrictEqual([{ createdAt: NOW, expiresAt: NOW + DEADLINE_MS, status: "supplied", toolCallId: "call_1", toolName: "requestKey" }]);
+            expect(JSON.stringify(listed)).not.toContain(ref);
+            expect(JSON.stringify(listed)).not.toContain(SECRET);
+            expect(JSON.stringify(listed)).not.toContain("ref");
+        });
+
+        it("refuses an anonymous caller, an ownerless thread, and another owner", async () => {
+            expect.assertions(3);
+
+            const owned = await stagedThread("user-a");
+            const ownerless = await stagedThread(undefined);
+
+            await expect(call(owned.functions.agentSecretRequests, { ...owned.ctx, auth: {} }, { threadKey: "t-1" })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            await expect(
+                call(ownerless.functions.agentSecretRequests, { ...ownerless.ctx, auth: { userId: "user-a" } }, { threadKey: "t-1" }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            await expect(call(owned.functions.agentSecretRequests, { ...owned.ctx, auth: { userId: "user-b" } }, { threadKey: "t-1" })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+        });
+    });
+
+    describe("the plaintext argument", () => {
+        it("is named `secret`, the name the request log masks", () => {
+            expect.assertions(1);
+
+            const { args } = agentComponent().functions.agentSupplySecret as unknown as { args: Record<string, unknown> };
+
+            expect(Object.keys(args)).toContain("secret");
+        });
     });
 });
