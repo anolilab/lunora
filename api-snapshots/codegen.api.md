@@ -110,6 +110,12 @@ interface CodegenOptions {
 }
 ```
 
+### `CodegenProgramScope` (type)
+
+```ts
+type CodegenProgramScope = "lunora" | "tsconfig";
+```
+
 ### `CodegenResult` (interface)
 
 ```ts
@@ -669,7 +675,9 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
-        unreadable?: boolean;
+        excludeUnreadable?: boolean;
+        program?: CodegenProgramScope;
+        programUnreadable?: boolean;
     };
     durableObjects?: {
         merge?: boolean;
@@ -1164,7 +1172,7 @@ const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads"
 ### `createCodegenProject` (const)
 
 ```ts
-const createCodegenProject: (lunoraDirectory: string) => Project;
+const createCodegenProject: (lunoraDirectory: string, programScope?: CodegenProgramScope) => Project;
 ```
 
 ### `describeErrorLevelFindings` (const)

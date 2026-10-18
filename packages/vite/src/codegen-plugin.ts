@@ -716,6 +716,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return false;
                 }
 
+                // `codegen.program` in lunora.config decides which files a Project is
+                // built from, so a reused one is stale the moment it changes. Dropped
+                // for any config save, not just that key: the rebuild costs one cold
+                // run, and reading the key out of the file here would need the parse
+                // `createCodegenProject` is about to do anyway.
+                if (PROJECT_CONFIG_FILENAMES.some((name) => normalized === resolve(options.projectRoot, name))) {
+                    cachedProject = undefined;
+
+                    return false;
+                }
+
                 // Only a file literally named `tsconfig.json` can possibly be the
                 // one `findTsconfig` would resolve, so gate its (existsSync-walk)
                 // cost on that cheap basename check instead of paying it on every

@@ -1,14 +1,66 @@
 /**
  * Creates and refreshes the ts-morph project codegen reads, and locates its tsconfig.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { Project } from "ts-morph";
+import { Project, ts } from "ts-morph";
 
-import { listLunoraSourceFiles } from "./discover/ast";
+import { configuredProgramScope, listLunoraSourceFiles, listSecurityScanFiles } from "./discover/ast";
+import type { CodegenProgramScope } from "./project-config-file";
 
 const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
+
+/**
+ * The exact set discovery reads: every non-`schema.ts` source file (the
+ * canonical `listLunoraSourceFiles`, shared with function/migration discovery)
+ * plus `schema.ts`, which `discoverSchema` loads separately. Reusing the
+ * canonical walker keeps a freshly-built Project's file set in lockstep with a
+ * refreshed one instead of forking the rules.
+ */
+const lunoraSeedFiles = (lunoraDirectory: string): string[] => {
+    const paths = listLunoraSourceFiles(lunoraDirectory);
+    const schemaPath = join(lunoraDirectory, "schema.ts");
+
+    if (existsSync(schemaPath)) {
+        paths.push(schemaPath);
+    }
+
+    return paths;
+};
+
+/**
+ * The source files one `runCodegen` reads or syncs, so a `"lunora"`-scope Project
+ * holds them before the first type query: the sources under `lunora/`, the worker
+ * entries and `lunora.config.*` the security lints scan, and the `_generated/`
+ * files already on disk — `syncProjectFile` overwrites those in place, a no-op when
+ * the content is unchanged, instead of creating them (a change) when absent. A file
+ * added AFTER the program exists throws the program (and its type checker, the
+ * expensive part) away, so one left out here is not a missed file but a rebuild.
+ */
+const programSeedFiles = (lunoraDirectory: string): string[] => {
+    const generatedDirectory = join(lunoraDirectory, "_generated");
+    const generated = existsSync(generatedDirectory)
+        ? readdirSync(generatedDirectory)
+              .filter((name) => name.endsWith(".ts"))
+              .map((name) => join(generatedDirectory, name))
+        : [];
+
+    return [...new Set([...lunoraSeedFiles(lunoraDirectory), ...listSecurityScanFiles(lunoraDirectory).map(({ filePath }) => filePath), ...generated])];
+};
+
+/**
+ * The `.d.ts` files a tsconfig includes. Ambient declarations (a generated
+ * `worker-configuration.d.ts`, a `src/env.d.ts` augmenting a global) are only
+ * ever pulled into a program by `include` — nothing imports them — yet types in
+ * `lunora/` resolve against them. They are declarations only, so loading them is
+ * cheap next to the app sources the `"lunora"` scope exists to skip.
+ */
+const ambientDeclarationFiles = (tsconfigPath: string): string[] => {
+    const host = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: (): void => {} };
+
+    return (ts.getParsedCommandLineOfConfigFile(tsconfigPath, undefined, host)?.fileNames ?? []).filter((path) => path.endsWith(".d.ts"));
+};
 
 /**
  * Walk up from `startPath` until we find a `tsconfig.json` or hit the file
@@ -46,13 +98,45 @@ export const findTsconfig = (startPath: string): string | undefined => {
  * dev-loop) can build one once and reuse it across runs via
  * {@link refreshCodegenProject} instead of re-parsing the user's whole TS
  * program on every save.
+ *
+ * `programScope` is the `codegen.program` setting of `lunora.config.*` unless a
+ * caller passes one. `"tsconfig"` loads every file the tsconfig includes — the
+ * app's UI, its tests, its tooling config — before codegen reads any of it.
+ * `"lunora"` (the default) keeps the tsconfig's compiler options and path aliases
+ * but seeds the program with the `lunora/` sources and the tsconfig's ambient
+ * `.d.ts` files only; anything else reaches it by being imported, which is all
+ * type resolution needs. A project whose tsconfig includes a whole frontend no
+ * longer pays to parse it on a cold run.
  */
-export const createCodegenProject = (lunoraDirectory: string): Project => {
+export const createCodegenProject = (lunoraDirectory: string, programScope: CodegenProgramScope = configuredProgramScope(lunoraDirectory)): Project => {
     const tsconfigPath = findTsconfig(lunoraDirectory);
 
-    return tsconfigPath
-        ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
-        : new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    if (tsconfigPath === undefined) {
+        return new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    }
+
+    if (programScope === "tsconfig") {
+        return new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false });
+    }
+
+    const project = new Project({ skipAddingFilesFromTsConfig: true, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false });
+
+    // `createSourceFile` from the text, not `addSourceFilesAtPaths`: adding a file that
+    // sits directly in the project root (`lunora.config.ts`, a root
+    // `worker-configuration.d.ts`) before the program exists makes ts-morph walk the
+    // root's directory tree — `node_modules` included — and the run never finishes.
+    for (const path of new Set([...programSeedFiles(lunoraDirectory), ...ambientDeclarationFiles(tsconfigPath)])) {
+        project.createSourceFile(path, readFileSync(path, "utf8"), { overwrite: true });
+    }
+
+    // Registers the local files those import (a validator shared from `src/`) as
+    // Project files, which is what a tsconfig-scope Project gets from `include`.
+    // Without it `refreshCodegenProject` cannot see them, and a reused Project
+    // keeps serving the first copy it parsed. It builds the program here instead
+    // of on the first type query — the same work, in a different place.
+    project.resolveSourceFileDependencies();
+
+    return project;
 };
 
 /**
@@ -76,17 +160,7 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
  * reinstate close to the full re-parse cost this cache exists to avoid.
  */
 export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
-    // The exact set discovery reads: every non-`schema.ts` source file (the
-    // canonical `listLunoraSourceFiles`, shared with function/migration
-    // discovery) plus `schema.ts`, which `discoverSchema` loads separately.
-    // Reusing the canonical walker keeps the reused Project's file set in
-    // lockstep with a freshly-constructed one instead of forking the rules.
-    const diskPaths = listLunoraSourceFiles(lunoraDirectory);
-    const schemaPath = join(lunoraDirectory, "schema.ts");
-
-    if (existsSync(schemaPath)) {
-        diskPaths.push(schemaPath);
-    }
+    const diskPaths = lunoraSeedFiles(lunoraDirectory);
 
     for (const path of diskPaths) {
         const existing = project.getSourceFile(path);
@@ -113,6 +187,16 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
             project.removeSourceFile(sourceFile);
         }
     }
+
+    // A `lunora/` file may have started importing a file outside it since the
+    // Project was built. Under `"lunora"` scope nothing else registers that file,
+    // so register it now — BEFORE the pass below, which is what re-reads it from
+    // disk; done after, it would be registered at the text the compiler last saw.
+    // A `lunora/` file may have started importing a file outside it since the
+    // Project was built. Under `"lunora"` scope nothing else registers that file,
+    // so register it now — BEFORE the pass below, which is what re-reads it from
+    // disk; done after, it would be registered at the text the compiler last saw.
+    project.resolveSourceFileDependencies();
 
     // Second pass: resync everything else the Project already has loaded (type
     // resolution reached past `lunoraDirectory` — a shared validator, a type

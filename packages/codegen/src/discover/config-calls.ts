@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralExpression, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
 import { listSecurityScanFiles, objectLiteralFromCallbackBody, propertyKeyName } from "./ast";
@@ -158,7 +158,7 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
  * `file` keeps its extension, unlike the `lunora/`-relative paths: `vite.config`
  * is not a file anyone can open.
  */
-const viteConfigCalls = (project: Project, projectRoot: string): ConfigCallIR[] => {
+const viteConfigCalls = (projectRoot: string): ConfigCallIR[] => {
     for (const name of VITE_CONFIG_FILES) {
         const filePath = join(projectRoot, name);
 
@@ -166,7 +166,15 @@ const viteConfigCalls = (project: Project, projectRoot: string): ConfigCallIR[] 
             continue;
         }
 
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
+        // Syntax only, so it never joins the shared Project: a file added after the
+        // program exists throws the program and its type checker away, and a
+        // `"lunora"`-scope Project does not hold the Vite config to begin with.
+        const sourceFile = new Project({
+            compilerOptions: { allowJs: true },
+            skipFileDependencyResolution: true,
+            skipLoadingLibFiles: true,
+            useInMemoryFileSystem: true,
+        }).createSourceFile(name, readFileSync(filePath, "utf8"));
         const rows: ConfigCallIR[] = [];
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
@@ -207,7 +215,7 @@ const discoverConfigCalls = (project: Project, lunoraDirectory: string): ConfigC
         calls.push(...configCallsInSourceFile(sourceFile, displayPath));
     }
 
-    calls.push(...viteConfigCalls(project, dirname(lunoraDirectory)));
+    calls.push(...viteConfigCalls(dirname(lunoraDirectory)));
 
     return calls;
 };

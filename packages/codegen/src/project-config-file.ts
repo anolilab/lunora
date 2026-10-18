@@ -69,10 +69,12 @@ interface ProjectConfigLiterals {
 
     /**
      * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
-     * skips on top of the built-in test-file patterns. `unreadable` when
-     * `codegen` is declared but `exclude` is not an array of string literals.
+     * skips on top of the built-in test-file patterns. `codegen.program`: which
+     * files the TypeScript program codegen resolves types over is built from.
+     * Each member carries its own `*Unreadable` flag — a `program` the parser
+     * cannot see must not discard a perfectly good `exclude`, and the reverse.
      */
-    codegen?: { exclude?: string[]; unreadable?: boolean };
+    codegen?: { exclude?: string[]; excludeUnreadable?: boolean; program?: CodegenProgramScope; programUnreadable?: boolean };
 
     /**
      * `durableObjects.merge`: host the shard, scheduler and shard registry in one
@@ -100,6 +102,13 @@ interface ProjectConfigLiterals {
     unreadable?: boolean;
 }
 
+/**
+ * What `codegen.program` selects: `"lunora"` builds the TypeScript program from the
+ * `lunora/` sources and whatever they import, `"tsconfig"` from every file the
+ * project's `tsconfig.json` includes (the app's UI, tests and config too).
+ */
+type CodegenProgramScope = "lunora" | "tsconfig";
+
 /** One `services.<key>` entry as written: the Worker's folder and, for RPC, its `WorkerEntrypoint` export. */
 interface ServiceLiteral {
     dir: string;
@@ -114,7 +123,7 @@ interface LunoraProjectConfig {
     advisor?: unknown;
     /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
     app?: unknown;
-    /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
+    /** Codegen source-walk and program settings (`exclude`, `program`). Read through {@link readProjectConfigLiterals}. */
     codegen?: unknown;
     /** Durable Object packaging (`merge`). Read through {@link readProjectConfigLiterals}. */
     durableObjects?: unknown;
@@ -375,16 +384,16 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         : { advisor: { ...accepts, unreadable: true } };
 };
 
-/** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `unreadable`. */
-const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+/** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `excludeUnreadable`. */
+const readCodegenExclude = (declared: TsNode | undefined, sourceFile: SourceFile): NonNullable<ProjectConfigLiterals["codegen"]> => {
     const member = readPlainMember(declared, sourceFile, "exclude");
 
     if ("absent" in member) {
-        return { codegen: {} };
+        return {};
     }
 
     if (!("literal" in member) || !TsNode.isArrayLiteralExpression(member.literal)) {
-        return { codegen: { unreadable: true } };
+        return { excludeUnreadable: true };
     }
 
     const exclude: string[] = [];
@@ -393,13 +402,36 @@ const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         // A `!` negation would read as "anything but this" to the any-match
         // matcher and exclude every source file, so it is refused, not honoured.
         if ((!TsNode.isStringLiteral(element) && !TsNode.isNoSubstitutionTemplateLiteral(element)) || element.getLiteralValue().startsWith("!")) {
-            return { codegen: { unreadable: true } };
+            return { excludeUnreadable: true };
         }
 
         exclude.push(element.getLiteralValue());
     }
 
-    return { codegen: { exclude } };
+    return { exclude };
+};
+
+/** `codegen.program` from the `codegen` object literal: `"lunora"` or `"tsconfig"`, or `programUnreadable`. */
+const readCodegenProgram = (declared: TsNode | undefined, sourceFile: SourceFile): NonNullable<ProjectConfigLiterals["codegen"]> => {
+    const member = readPlainMember(declared, sourceFile, "program");
+
+    if ("absent" in member) {
+        return {};
+    }
+
+    if ("literal" in member && (TsNode.isStringLiteral(member.literal) || TsNode.isNoSubstitutionTemplateLiteral(member.literal))) {
+        const value = member.literal.getLiteralValue();
+
+        if (value === "lunora" || value === "tsconfig") {
+            return { program: value };
+        }
+    }
+
+    return { programUnreadable: true };
+};
+
+const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    return { codegen: { ...readCodegenExclude(declared, sourceFile), ...readCodegenProgram(declared, sourceFile) } };
 };
 
 /** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
@@ -418,7 +450,7 @@ const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
-    ["codegen", { codegen: { unreadable: true } }],
+    ["codegen", { codegen: { excludeUnreadable: true, programUnreadable: true } }],
     ["durableObjects", { durableObjects: { unreadable: true } }],
     ["remote", { unreadable: true }],
     ["target", { unreadable: true }],
@@ -568,8 +600,8 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 };
 
 /**
- * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude` and
- * `services` LITERALS declared in the config, without evaluating it — see the
+ * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude`,
+ * `codegen.program` and `services` LITERALS declared in the config, without evaluating it — see the
  * module header for what this can and cannot see, and why.
  */
 const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
@@ -612,7 +644,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 
         return {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
-            ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
+            ...(declares("codegen") ? { codegen: { excludeUnreadable: true, programUnreadable: true } } : {}),
             ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
@@ -644,6 +676,6 @@ const readMergeDurableObjects = (projectRoot: string): boolean => {
     return durableObjects?.merge === true;
 };
 
-export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
+export type { CodegenProgramScope, LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
 export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals };
