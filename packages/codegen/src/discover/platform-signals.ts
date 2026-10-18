@@ -16,10 +16,12 @@ import { contextPropertiesRead } from "./feature-usage";
 interface PlatformCodeSignals {
     /** A `defineContainer` call carrying an egress policy (`allowedHosts` / `deniedHosts` / `interceptHttps`). */
     containerEgressPolicy: boolean;
-    /** A `.deliveryAuthorization(...)` call on the app builder — the shard answers its authority-fenced routes under it. */
+    /** A `.deliveryAuthorization(...)` call on the app builder, matched by receiver. The shard answers its authority-fenced routes under it, and with `liveStreams` it answers every live route 501. */
     deliveryAuthorization: boolean;
     /** A `.stream(handler, { durable: … })` registration — a persisted, socket-outliving stream run. */
     durableStreams: boolean;
+    /** A `ctx.live` read in a handler — the live publisher, which a target that withholds live streams never sets on the context. */
+    liveContext: boolean;
     /** A `defineLiveStream` call: a topic SSE stream the shard serves over its subscriber registry. */
     liveStreams: boolean;
     /** A `ctx.secrets` read — the Secrets Store facade, which needs a host binding. */
@@ -225,6 +227,7 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
         containerEgressPolicy: false,
         deliveryAuthorization: false,
         durableStreams: false,
+        liveContext: false,
         liveStreams: false,
         secrets: false,
         typedWebSockets: false,
@@ -234,14 +237,17 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        if (!signals.secrets) {
+        if (!signals.secrets || !signals.liveContext) {
             // The sibling walk `discoverFeatureUsage` uses for the same job, not
             // a third copy of it: it resolves the handler's context by binding,
             // so `{ ctx: context }` and `{ ctx: { secrets } }` count as much as
             // `ctx.secrets`. Reads spelled any other way used to slip past this
             // gate into exactly the surface-that-throws-on-first-use the
-            // `secrets` rating exists to refuse.
-            signals.secrets = contextPropertiesRead(sourceFile).has("secrets");
+            // `secrets` rating exists to refuse. `ctx.live` gets the same treatment.
+            const contextReads = contextPropertiesRead(sourceFile);
+
+            signals.secrets = signals.secrets || contextReads.has("secrets");
+            signals.liveContext = signals.liveContext || contextReads.has("live");
         }
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {

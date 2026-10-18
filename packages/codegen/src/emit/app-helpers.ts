@@ -57,6 +57,7 @@ interface EmitAppOptions {
     hasNotify: boolean;
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
+
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
 
@@ -85,6 +86,7 @@ interface EmitAppOptions {
      * alone then decides, as it did before the gate existed.
      */
     hasVectors?: boolean;
+
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
@@ -98,6 +100,20 @@ interface EmitAppOptions {
      * auth object (codegen refuses a project it can see doing that).
      */
     jurisdictionPinsAuth?: boolean;
+
+    /**
+     * The app declares a `defineLiveStream` the target serves (post platform gate) →
+     * the queue consumer forwards the runtime's publisher as `ctx.live`. Absent or
+     * `false` leaves the consumer without `ctx.live`.
+     */
+    liveStreams?: boolean;
+
+    /**
+     * The target withholds live streams (`PlatformGateResult.liveStreamsWithheld`).
+     * Emitted as `liveStreams: false` on `createWorker`, so the HTTP context carries
+     * no `ctx.live`. Absent or `false` leaves the emitted options unchanged.
+     */
+    liveStreamsWithheld?: boolean;
 
     /**
      * Every table the schema declares, with its shard mode. Emitted as a literal

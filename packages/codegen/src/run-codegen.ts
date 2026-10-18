@@ -713,6 +713,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
         // the Cloudflare one while the type surface was withheld.
         hasVectors: vectorStoreSupported,
+        // Declared AND not rejected by the gate: a target without live streams gets
+        // no `ctx.live` on its action ctx, and the gate has already reported why.
+        liveStreams: platformGate.signals.liveStreams === true,
         maskMetadata,
         mutators,
         queues,
@@ -799,6 +802,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasKvIntrospector: studioFeatures.kv,
         hasNotify,
         hasQueue: queues.some((queue) => queue.mode === "push"),
+        // Declared AND not rejected by the gate, as on the shard's action ctx.
+        liveStreams: platformGate.signals.liveStreams === true,
+        liveStreamsWithheld: platformGate.liveStreamsWithheld,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field

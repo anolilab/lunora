@@ -72,6 +72,26 @@ interface NodeGlobalStoreOptions {
 }
 ```
 
+### `NodeHttpServer` (interface)
+
+```ts
+interface NodeHttpServer {
+    close: () => Promise<void>;
+    origin: string;
+}
+```
+
+### `NodeHttpServerOptions` (interface)
+
+```ts
+interface NodeHttpServerOptions {
+    fetch: (request: Request) => Promise<Response> | Response;
+    host?: string;
+    origin?: string;
+    port?: number;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -324,6 +344,12 @@ const createNodeDispatchRoute: (options: NodeDispatchRouteOptions) => ((request:
 const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalStore;
 ```
 
+### `createNodeHttpServer` (const)
+
+```ts
+const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttpServer>;
+```
+
 ### `createNodePlatform` (const)
 
 ```ts
@@ -375,6 +401,12 @@ const createNodeShardHost: (options?: NodeShardHostOptions) => {
 
 ```ts
 const createNodeShardKvStore: (database: Database.Database) => ShardKvStore;
+```
+
+### `createNodeShardNamespace` (const)
+
+```ts
+const createNodeShardNamespace: (directory: DirectShardDirectory) => ShardNamespaceLike;
 ```
 
 ### `createNodeShardRegistry` (const)

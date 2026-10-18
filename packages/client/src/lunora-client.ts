@@ -193,6 +193,7 @@ import type {
     ServerDataMessage,
     ServerErrorMessage,
     ServerIdentityMessage,
+    ServerLiveMessage,
     ServerMessage,
     ServerPokeEndMessage,
     ServerResumeMessage,
@@ -449,6 +450,49 @@ const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 
 /** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
 const ROOM_PENDING_LIMIT = 100;
+
+/** Longest a live-grant control POST may take, headers and body. Past it the POST is aborted so the chain behind it moves on. */
+const LIVE_CONTROL_TIMEOUT_MS = 10_000;
+
+/**
+ * A whisper topic's join on one socket. The shard acknowledges each `whisper_subscribe` once, and a
+ * leave does not change the count: `pending` is the number of joins sent for the topic whose ack is
+ * still outstanding, and `joined` is set once it reaches zero. `waiters` run when the topic is
+ * joined, or on timeout.
+ */
+interface WhisperJoin {
+    joined: boolean;
+    pending: number;
+    waiters: WhisperWaiter[];
+}
+
+/** A grant waiting on a join: `run` once the topic is joined, or when `timer` fires first. */
+interface WhisperWaiter {
+    run: () => void;
+    timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+/**
+ * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
+ * the POST is sent, not when it was queued, and covers the body read too: a stalled response
+ * must not hold the chain behind it.
+ */
+const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<number> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+        controller.abort();
+    }, LIVE_CONTROL_TIMEOUT_MS);
+
+    try {
+        const response = await fetchImpl(url, { body, credentials: "include", headers, method: "POST", signal: controller.signal });
+
+        await response.text();
+
+        return response.status;
+    } finally {
+        clearTimeout(timer);
+    }
+};
 
 /**
  * @internal
@@ -860,6 +904,24 @@ class LunoraClient {
      * (re)connect so a topic survives a socket bounce.
      */
     private readonly whisperHandlers = new Map<string, Map<string, Set<(data: unknown, from?: string) => void>>>();
+
+    /**
+     * Live-topic grants this client asked for over a WebSocket, keyed `connectionKey(shardKey)` →
+     * subscription id → the stream and topic. Replayed on every `identity` frame: each socket is a
+     * new connection id with no grants, so a bounce would otherwise stop delivery silently.
+     */
+    private readonly liveSocketGrants = new Map<
+        string,
+        Map<string, { onError?: (error: { status: number; topic: string }) => void; onEvent: (payload: unknown) => void; stream: string; topic: string }>
+    >();
+
+    /** Tail of the live-grant control posts. One chain keeps a subscribe and its unsubscribe in order. */
+    private liveControlChain: Promise<unknown> = Promise.resolve();
+
+    /** Join state of each whisper topic, per `connectionKey(shardKey)`, on the current socket. Reset on every open. */
+    private readonly whisperJoins = new Map<string, Map<string, WhisperJoin>>();
+
+    private nextLiveSocketId = 0;
 
     /** Last status broadcast, so we only notify listeners on an actual change. */
     private lastStatus: ConnectionStatus = "idle";
@@ -1814,7 +1876,7 @@ class LunoraClient {
             const conn = this.getConnection(options.shardKey);
 
             if (conn) {
-                sendOn(conn, { topic, type: "whisper_subscribe" });
+                this.sendWhisperJoin(conn, key, topic);
             }
         }
 
@@ -1841,6 +1903,92 @@ class LunoraClient {
             }
 
             this.releaseIdleShard(options.shardKey);
+        };
+    }
+
+    /**
+     * Follow a live topic of a `defineLiveStream` stream over this client's WebSocket, instead of
+     * an SSE connection (`connectLiveStream`). Joins the bare topic as a whisper member, then asks
+     * the stream's control route (`/live/<stream>/control`) to grant this socket the topic, naming
+     * the socket's connection id. A live publish reaches the socket only with both in place.
+     *
+     * The join needs the app's `onWhisper` approval, the same as any whisper join. The shard runs
+     * the authorizer with `action: "subscribe"` on the bare topic, and a denied join is silent:
+     * the shard acknowledges every join once processed, admitted or not, so the client cannot tell
+     * a denial from a quiet topic. The grant is posted only after that acknowledgement (or after
+     * `LIVE_CONTROL_TIMEOUT_MS` if it never arrives), so a publish cannot outrun the membership it
+     * needs. A grant posted for a denied join still has no membership, so the shard relays no
+     * `live` frame and `onEvent` never fires. An app that streams private data here must declare an
+     * `onWhisper` that allows the topic; without one the join is open to any socket on the shard.
+     *
+     * Grants are re-issued on every reconnect, because each socket gets a new connection id.
+     * A control call that fails is not retried here, so a failed grant delivers nothing. A refusal
+     * (a 4xx other than 404 and 401) is final: the local grant is dropped, so a later subscribe can
+     * be tried again, and `onError` is called with the status. A transient failure keeps the grant.
+     * @returns an unsubscribe function that revokes the grant and leaves the topic
+     */
+    public subscribeLiveTopic(options: {
+        onError?: (error: { status: number; topic: string }) => void;
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
+    }): Unsubscribe {
+        const { onError, onEvent, shardKey, stream, topic } = options;
+
+        // Refused before the join: an empty topic is never acknowledged, so its grant would wait out the timer.
+        if (topic.length === 0) {
+            throw new LunoraError("INTERNAL", "LunoraClient: subscribeLiveTopic needs a non-empty topic");
+        }
+
+        this.nextLiveSocketId += 1;
+
+        const subscriptionId = `ws-live-${String(this.nextLiveSocketId)}`;
+        const key = connectionKey(shardKey);
+        const controlPath = `/live/${stream}/control`;
+        // The membership join only: a live publish arrives as a `live` frame (see `dispatchLive`),
+        // so a peer's whisper on this topic reaches no handler here.
+        const leaveTopic = this.whisperSubscribe(topic, () => undefined, { shardKey });
+
+        let grants = this.liveSocketGrants.get(key);
+
+        if (grants === undefined) {
+            grants = new Map();
+            this.liveSocketGrants.set(key, grants);
+        }
+
+        grants.set(subscriptionId, { onError, onEvent, stream, topic });
+
+        const connectionId = this.getConnection(shardKey)?.connectionId;
+
+        if (connectionId !== undefined) {
+            this.grantWhenJoined(shardKey, subscriptionId, connectionId);
+        }
+
+        let released = false;
+
+        return () => {
+            if (released) {
+                return;
+            }
+
+            released = true;
+
+            const current = this.liveSocketGrants.get(key);
+            // A grant the shard refused was already dropped locally, so there is nothing to revoke.
+            const wasGranted = current?.delete(subscriptionId) === true;
+
+            if (current?.size === 0) {
+                this.liveSocketGrants.delete(key);
+            }
+
+            const liveConnectionId = this.getConnection(shardKey)?.connectionId;
+
+            if (wasGranted && liveConnectionId !== undefined) {
+                this.postLiveControl(controlPath, shardKey, { action: "unsubscribe", connectionId: liveConnectionId, stream, subscriptionId, topic });
+            }
+
+            leaveTopic();
         };
     }
 
@@ -3828,6 +3976,10 @@ class LunoraClient {
     public close(): void {
         this.closed = true;
 
+        for (const key of this.whisperJoins.keys()) {
+            this.dropWhisperJoinWaiters(key);
+        }
+
         this.releaseSessionChangeListener?.();
         this.releaseSessionChangeListener = undefined;
 
@@ -3889,6 +4041,7 @@ class LunoraClient {
         this.mutationSettledListeners.clear();
         this.pendingChangeListeners.clear();
         this.whisperHandlers.clear();
+        this.liveSocketGrants.clear();
         // Room handles still open keep their held-send closures reachable through these; a closed client drops them.
         this.roomFlushes.clear();
         this.roomIdentityResets.clear();
@@ -6025,6 +6178,7 @@ class LunoraClient {
                 conn.wasEverConnected = true;
                 // A new socket has confirmed no identity and rejoined no room yet.
                 conn.identityConfirmed = false;
+                conn.connectionId = undefined;
                 conn.roomsRejoined = false;
 
                 // A socket opened, so whatever was refusing the upgrade is gone:
@@ -6099,11 +6253,16 @@ class LunoraClient {
 
                 // Rejoin every whisper topic registered for this shard so ephemeral
                 // channels survive a socket bounce.
-                const byTopic = this.whisperHandlers.get(connectionKey(shardKey));
+                // A new socket has joined nothing yet, so every join state starts over.
+                const key = connectionKey(shardKey);
+                const byTopic = this.whisperHandlers.get(key);
+
+                this.dropWhisperJoinWaiters(key);
+                this.whisperJoins.set(key, new Map());
 
                 if (byTopic) {
                     for (const topic of byTopic.keys()) {
-                        sendOn(conn, { topic, type: "whisper_subscribe" });
+                        this.sendWhisperJoin(conn, key, topic);
                     }
                 }
 
@@ -6181,6 +6340,11 @@ class LunoraClient {
 
         conn.socket = undefined;
         conn.wsState = "idle";
+        // The socket's connection id names a socket that no longer exists: clear it so no grant
+        // (or unsubscribe) posts against it, and drop the joins still waiting on its ack.
+        conn.connectionId = undefined;
+        conn.whisperAck = undefined;
+        this.dropWhisperJoinWaiters(connectionKey(conn.shardKey));
         this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
         // Frames still queued (or in flight) belong to the socket that just
@@ -6502,9 +6666,15 @@ class LunoraClient {
             }
             case "identity": {
                 this.handleIdentityFrame(message, shardKey);
+                this.adoptSocketConnectionId(message, shardKey);
                 // The identity is confirmed only after the handler above has acted on it: an
                 // identity change has already dropped any room sends queued under the old one.
                 this.confirmShardIdentity(shardKey);
+
+                break;
+            }
+            case "live": {
+                this.dispatchLive(message, shardKey);
 
                 break;
             }
@@ -6535,6 +6705,11 @@ class LunoraClient {
             }
             case "whisper": {
                 this.dispatchWhisper(message, shardKey);
+
+                break;
+            }
+            case "whisper_subscribed": {
+                this.acknowledgeWhisperJoin(connectionKey(shardKey), message.topic);
 
                 break;
             }
@@ -6864,6 +7039,227 @@ class LunoraClient {
             }
         }
         /* eslint-enable no-param-reassign */
+    }
+
+    /**
+     * Record the socket's connection id from its `identity` frame, then re-issue every live grant
+     * this shard holds: a new socket starts with none.
+     */
+    private adoptSocketConnectionId(message: ServerIdentityMessage, shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+
+        if (conn === undefined || typeof message.connectionId !== "string") {
+            return;
+        }
+
+        conn.connectionId = message.connectionId;
+        conn.whisperAck = message.whisperAck === true;
+
+        for (const subscriptionId of this.liveSocketGrants.get(connectionKey(shardKey))?.keys() ?? []) {
+            this.grantWhenJoined(shardKey, subscriptionId, message.connectionId);
+        }
+    }
+
+    /**
+     * Post the live grant `subscriptionId` for the socket `connectionId`, once the socket has
+     * acknowledged the join of the grant's topic. A publish reaches a member only with both in
+     * place, so a grant that landed first would drop a publish made before the join took effect.
+     * The post is skipped if the grant was released or refused meanwhile, or if the socket changed
+     * since `connectionId` was read: the new socket's identity posts its own grants.
+     */
+    private grantWhenJoined(shardKey: string | undefined, subscriptionId: string, connectionId: string): void {
+        const key = connectionKey(shardKey);
+        const grant = this.liveSocketGrants.get(key)?.get(subscriptionId);
+
+        if (grant === undefined) {
+            return;
+        }
+
+        const { stream, topic } = grant;
+
+        const post = (): void => {
+            const current = this.liveSocketGrants.get(key)?.get(subscriptionId);
+
+            if (current === undefined || this.getConnection(shardKey)?.connectionId !== connectionId) {
+                return;
+            }
+
+            this.postLiveControl(`/live/${stream}/control`, shardKey, { action: "subscribe", connectionId, stream, subscriptionId, topic }, (status) => {
+                this.refuseLiveGrant(shardKey, subscriptionId, status);
+            });
+        };
+
+        // A shard that does not advertise `whisperAck` never answers the join, so waiting would only
+        // delay the grant by the fallback timer. Post it now, as before the ack existed.
+        if (this.getConnection(shardKey)?.whisperAck === true) {
+            this.whenWhisperJoined(key, topic, post);
+        } else {
+            post();
+        }
+    }
+
+    /** Send a `whisper_subscribe` for `topic` on `conn`, and count it as pending until the shard acknowledges it. */
+    private sendWhisperJoin(conn: ShardConnection, key: string, topic: string): void {
+        const join = this.whisperJoinState(key, topic);
+
+        join.pending += 1;
+        join.joined = false;
+        sendOn(conn, { topic, type: "whisper_subscribe" });
+    }
+
+    /** One `whisper_subscribed` frame arrived: the topic is joined once every join sent for it is acknowledged. */
+    private acknowledgeWhisperJoin(key: string, topic: string): void {
+        const join = this.whisperJoins.get(key)?.get(topic);
+
+        if (join === undefined) {
+            return;
+        }
+
+        join.pending = Math.max(0, join.pending - 1);
+
+        if (join.pending > 0) {
+            return;
+        }
+
+        join.joined = true;
+
+        for (const waiter of join.waiters.splice(0)) {
+            clearTimeout(waiter.timer);
+            waiter.run();
+        }
+    }
+
+    /**
+     * Run `run` once `topic` is joined on the current socket, or after {@link LIVE_CONTROL_TIMEOUT_MS}.
+     * A lost ack must not hold a grant forever, so the timeout runs it anyway: an unacknowledged
+     * join is not necessarily a failed one, and a grant for a join that never landed delivers nothing.
+     */
+    private whenWhisperJoined(key: string, topic: string, run: () => void): void {
+        const join = this.whisperJoinState(key, topic);
+
+        if (join.joined) {
+            run();
+
+            return;
+        }
+
+        const waiter: WhisperWaiter = { run, timer: undefined };
+
+        waiter.timer = setTimeout(() => {
+            join.waiters = join.waiters.filter((other) => other !== waiter);
+
+            run();
+        }, LIVE_CONTROL_TIMEOUT_MS);
+
+        join.waiters.push(waiter);
+    }
+
+    /**
+     * Forget the waiters of a socket that is going away, without running them: a grant for the old
+     * socket's connection id is never valid, and the next socket's identity posts its own grants.
+     */
+    private dropWhisperJoinWaiters(key: string): void {
+        for (const join of this.whisperJoins.get(key)?.values() ?? []) {
+            for (const waiter of join.waiters.splice(0)) {
+                clearTimeout(waiter.timer);
+            }
+        }
+    }
+
+    private whisperJoinState(key: string, topic: string): WhisperJoin {
+        let byTopic = this.whisperJoins.get(key);
+
+        if (byTopic === undefined) {
+            byTopic = new Map();
+            this.whisperJoins.set(key, byTopic);
+        }
+
+        let join = byTopic.get(topic);
+
+        if (join === undefined) {
+            join = { joined: false, pending: 0, waiters: [] };
+            byTopic.set(topic, join);
+        }
+
+        return join;
+    }
+
+    /**
+     * Drop a live grant the shard refused for good, and tell its caller. A grant already released
+     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing.
+     */
+    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number): void {
+        const key = connectionKey(shardKey);
+        const grants = this.liveSocketGrants.get(key);
+        const grant = grants?.get(subscriptionId);
+
+        if (grants === undefined || grant === undefined) {
+            return;
+        }
+
+        grants.delete(subscriptionId);
+
+        if (grants.size === 0) {
+            this.liveSocketGrants.delete(key);
+        }
+
+        grant.onError?.({ status, topic: grant.topic });
+    }
+
+    /**
+     * POST one live-grant control call, behind every earlier one. The body names the shard when
+     * the socket is not the default one, as the SSE control call does. A refusal (a 4xx other
+     * than 404 and 401) is handed to `onRefused`. Failures are swallowed: a denied grant must
+     * never surface as an unhandled rejection.
+     */
+    private postLiveControl(controlPath: string, shardKey: string | undefined, body: Record<string, unknown>, onRefused?: (status: number) => void): void {
+        const { fetchImpl } = this;
+
+        if (!fetchImpl) {
+            return;
+        }
+
+        const payload = JSON.stringify(shardKey === undefined ? body : { ...body, shardKey });
+        const headers = this.rpcRequestHeaders({}, shardKey);
+
+        this.liveControlChain = this.liveControlChain
+            .then(() => sendLiveControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
+            .then((status) => {
+                // 404 and 401 are transient: a reconnect registers the grant again.
+                if (status >= 400 && status < 500 && status !== 404 && status !== 401) {
+                    onRefused?.(status);
+                }
+
+                return undefined;
+            })
+            .catch(() => undefined);
+    }
+
+    /**
+     * Route an inbound live publish to the grants on the originating shard whose stream and topic
+     * match. A grant exists only for a subscribed stream and topic, so a frame naming another
+     * stream reaches no handler.
+     */
+    private dispatchLive(message: ServerLiveMessage, shardKey?: string): void {
+        const grants = this.liveSocketGrants.get(connectionKey(shardKey));
+
+        if (!grants) {
+            return;
+        }
+
+        const data = decodeWire(message.data);
+
+        for (const grant of grants.values()) {
+            if (grant.stream !== message.stream || grant.topic !== message.topic) {
+                continue;
+            }
+
+            try {
+                grant.onEvent(data);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
     }
 
     /** Route an inbound whisper to the topic's handlers on the originating shard. */

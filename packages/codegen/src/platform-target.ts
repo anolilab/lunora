@@ -345,6 +345,8 @@ interface PlatformSignals {
     durableStreams?: boolean;
     /** A `.global()` table. */
     globalTables?: boolean;
+    /** A `ctx.live` read in a handler. Judged against {@link PlatformGateResult.liveStreamsWithheld}, not a feature key of its own. */
+    liveContext?: boolean;
     /** A `defineLiveStream` declaration: a topic SSE stream the shard serves. */
     liveStreams?: boolean;
     /** A `defineQueue` declaration. */
@@ -406,6 +408,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
+    liveContext: "the live publisher (`ctx.live`)",
     liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
@@ -427,8 +430,9 @@ interface PlatformDiagnostic {
     level: "error" | "warn";
     /** Human-readable explanation of the gap. */
     message: string;
-    /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, `platform_unknown_target`, `platform_unreadable_target` or `platform_vector_dimensions_out_of_range`. */
+    /** The lint id: one of the `platform_*` names in the union below. */
     name:
+        | "platform_live_stream_delivery_authorization"
         | "platform_undeclared_feature"
         | "platform_unknown_target"
         | "platform_unreadable_target"
@@ -444,6 +448,15 @@ interface PlatformDiagnostic {
 interface PlatformGateResult {
     /** The diagnostics — empty for a fully-supported app on a known target. */
     diagnostics: PlatformDiagnostic[];
+
+    /**
+     * The target's matrix withholds live streams: it rates `liveStreams` `unsupported`, or
+     * not at all. Read by the emitter, which passes it to `createWorker` so the runtime
+     * omits `ctx.live` from the HTTP context. Unlike `signals.liveStreams`, it does not
+     * depend on the app declaring a `defineLiveStream`: the HTTP context has no such
+     * declaration to hang off. An unknown target is emitted un-gated, so it is not withheld.
+     */
+    liveStreamsWithheld: boolean;
 
     /**
      * A copy of the {@link PlatformSignals} input with every rejected signal
@@ -469,6 +482,38 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
         message: `${matrix.name} does not support ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares.`,
         name: "platform_unsupported_feature",
         remediation: `Remove the declaration, or deploy to a target whose capability matrix marks "${key}" as native or emulated.`,
+        target,
+    };
+};
+
+/**
+ * The app reads `ctx.live` and the target withholds live streams, so the
+ * runtime never sets the publisher on the context: the read would throw a
+ * TypeError on first use. Refused here rather than left to fail at runtime.
+ */
+const liveContextWithheldDiagnostic = (matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `${matrix.name} withholds live streams, so ctx.live is not available on the "${target}" target, but this app reads ctx.live.`,
+        name: "platform_unsupported_feature",
+        remediation: `Remove the ctx.live usage, or deploy to a target whose capability matrix marks "liveStreams" as native or emulated.`,
+        target,
+    };
+};
+
+/**
+ * The app declares `defineLiveStream` topics AND `.deliveryAuthorization(...)`.
+ * The shard answers every `/_lunora/live/*` request 501 once delivery
+ * authorization is on, so the topics could never be served and `ctx.live.publish`
+ * would throw. Refused at build time on every target, not only the ones whose
+ * matrix withholds live streams.
+ */
+const liveStreamsDeliveryAuthorizationDiagnostic = (target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `This app declares defineLiveStream topics and enables delivery authorization. With delivery authorization on, the shard answers every /_lunora/live/* request with 501, so the live streams cannot be served.`,
+        name: "platform_live_stream_delivery_authorization",
+        remediation: `Remove the defineLiveStream declarations, or remove the .deliveryAuthorization(...) call. Live streams and delivery authorization cannot be combined.`,
         target,
     };
 };
@@ -606,7 +651,14 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     // output. Same fail-closed treatment of an undeclared rating as above.
     gateSignalPass({ diagnostics, gatedSignals, matrix, reported, signals, target });
 
-    return { diagnostics, signals: gatedSignals, usage: gated };
+    const liveLevel = matrix.features.liveStreams?.level;
+    const liveStreamsWithheld = liveLevel === undefined || liveLevel === "unsupported";
+
+    if (signals.liveContext === true && liveStreamsWithheld) {
+        diagnostics.push(liveContextWithheldDiagnostic(matrix, target));
+    }
+
+    return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
 };
 
 /**
@@ -635,6 +687,7 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
                     target,
                 },
             ],
+            liveStreamsWithheld: false,
             signals: { ...signals },
             usage: { ...usage },
         };
@@ -672,6 +725,7 @@ export {
     DEFAULT_TARGET,
     gateAgainstMatrix,
     gatePlatformFeatures,
+    liveStreamsDeliveryAuthorizationDiagnostic,
     platformFeatureAvailable,
     platformMatrixIds,
     readProjectTarget,

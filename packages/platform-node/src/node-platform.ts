@@ -81,8 +81,8 @@ export interface NodePlatform<
      * The scheduler dispatch route, served in-process: `Request` in, shard
      * response out, no listener. It answers the path `@lunora/dispatch` and
      * `@lunora/scheduler` POST to. Pass it to `dispatchQueueBatch` as
-     * `fetchImpl` so a queue handler's `message.run` / `ctx.run` reaches the
-     * shard; the env you pass there must carry `LUNORA_ORIGIN_URL` and the same
+     * `queueFetchImpl` on `createWorker` so a queue handler's `message.run` /
+     * `ctx.run` reaches the shard; the env you pass there must carry `LUNORA_ORIGIN_URL` and the same
      * `LUNORA_ADMIN_TOKEN` as `dispatch.adminToken`. Every request is refused
      * unless `dispatch` supplies a secret.
      */
@@ -200,9 +200,12 @@ export type NodePlatformOptions<
     objectStorageDirectory?: string;
 
     /**
-     * Deliver one assembled queue batch — wire this to `dispatchQueueBatch`.
-     * Required alongside `queues`; without it the messages would be stored
-     * and never consumed.
+     * Deliver one assembled queue batch — wire this to the app worker's `queue`
+     * export from `createWorker`, not to bare `dispatchQueueBatch`. That export
+     * is the only path that hands the consumer `ctx.live`, and it takes
+     * `queueFetchImpl` (this platform's `dispatch`, wrapped as a `fetch`) so
+     * `ctx.run` reaches the shard here rather than `LUNORA_ORIGIN_URL`. Required
+     * alongside `queues`; without it the messages would be stored and never consumed.
      */
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     /** The app's `defineQueue` results, keyed by export name. Omit when the app declares no queues. */
@@ -272,7 +275,7 @@ export const createNodePlatform = <
                           (() => {
                               throw new LunoraError(
                                   "VALIDATION_ERROR",
-                                  "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass dispatchQueueBatch from @lunora/queue",
+                                  "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass the worker's queue export from createWorker",
                               );
                           }),
                       queues: options.queues,

@@ -551,7 +551,8 @@ describe("capability classification", () => {
 
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };
 
-        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], signals: {}, usage });
+        // A matrix that rates no `liveStreams` withholds live streams: the fail-closed arm.
+        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], liveStreamsWithheld: true, signals: {}, usage });
     });
 });
 
@@ -878,6 +879,44 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.generated.app).not.toContain("public deliveryAuthorization(");
     });
 
+    it("wires ctx.live onto the shard action and the queue consumer only where the target serves live streams", () => {
+        expect.assertions(11);
+
+        // The declaration in `lunora/`, the signal the gate hands the emitters, and the
+        // surface they write: the shard's action ctx and the push consumer's publisher.
+        write("live.ts", `import { defineLiveStream } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts" });\n`);
+        write("queues.ts", `import { defineQueue } from "@lunora/queue";\n\nexport const digest = defineQueue({ handler: async () => {} });\n`);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const served = codegen();
+
+        expect(served.platformDiagnostics).toStrictEqual([]);
+        expect(served.generated.shard).toContain("ctx.live = live;");
+        expect(served.generated.app).toContain("live: queueLive,");
+
+        // The node host rates liveStreams emulated, so the same declaration is served
+        // there too: the publisher is wired and no diagnostic is raised.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+        const onNode = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onNode.generated.shard).toContain("ctx.live = live;");
+        expect(onNode.generated.app).toContain("live: queueLive,");
+
+        // celld rates liveStreams native (the celld TCK live leg), so it serves the same declaration.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+
+        const onCelld = codegen();
+
+        expect(onCelld.platformDiagnostics).toStrictEqual([]);
+        expect(onCelld.generated.shard).toContain("ctx.live = live;");
+        expect(onCelld.generated.app).toContain("live: queueLive,");
+        expect(onCelld.generated.app).not.toContain("liveStreams: false");
+        expect(onNode.generated.app).not.toContain("liveStreams: false");
+    });
+
     it("gates a schema-declared vector index the target has no binding for", () => {
         expect.assertions(6);
 
@@ -1104,6 +1143,24 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(result.platformDiagnostics[0]?.message).toContain("durable");
+    });
+
+    const LIVE_PUBLISH_ACTION = `import { action } from "@lunora/server";\n\nexport const announce = action.action(async ({ ctx }) => {\n    await ctx.live.publish("posts", { id: 1 });\n\n    return null;\n});\n`;
+
+    it("accepts the same ctx.live read on a target that serves live streams", () => {
+        expect.assertions(2);
+
+        // Node rates liveStreams emulated, so the publisher is wired and the read is supported.
+        write("announce.ts", LIVE_PUBLISH_ACTION);
+
+        const onNode = codegen();
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const onCloudflare = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onCloudflare.platformDiagnostics).toStrictEqual([]);
     });
 
     it("gates a declared agent on a target that cannot run one", () => {

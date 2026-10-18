@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlExec } from "../src/ctx-db";
 import type { RelayHost } from "../src/relay-hub";
-import { createRelayLink } from "../src/relay-hub";
+import { createRelayLink, OwnerRelay } from "../src/relay-hub";
 import type { ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -28,6 +28,8 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 interface RelayDouble {
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
+    /** The status this relay answers a forwarded live control call with; `404` when it holds no socket for it. Defaults to `204`. */
+    liveStatus?: number;
     posts: Record<string, unknown>[];
 }
 
@@ -54,9 +56,13 @@ const ownerFor = (
                     return Promise.reject(new Error("sibling unreachable"));
                 }
 
-                relay.posts.push(JSON.parse(init?.body ?? "{}") as Record<string, unknown>);
+                const message = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
 
-                return Promise.resolve(new Response(undefined, { status: 204 }));
+                relay.posts.push(message);
+
+                const status = message["type"] === "relay_live_control" ? (relay.liveStatus ?? 204) : 204;
+
+                return Promise.resolve(new Response(undefined, { status }));
             },
         };
     };
@@ -937,6 +943,118 @@ describe("relay hub", () => {
             // deleted the proxy registration the subscribe had just written — the
             // socket keeps its subscription and stops being poked until it detaches.
             expect(posts.filter((post) => post.startsWith("relay_shape"))).toStrictEqual(["relay_shape_subscribe:c-alice", "relay_shape_unsubscribe:c-alice"]);
+        });
+    });
+
+    describe("live publish and grant fan-out", () => {
+        /** The owner side of the tier: `createRelayLink` is typed as either role, and only the owner forwards live frames. */
+        const ownerOf = (relays: Map<number, RelayDouble>): OwnerRelay => {
+            const { owner } = ownerFor(database.sql, relays);
+
+            if (!(owner instanceof OwnerRelay)) {
+                throw new TypeError("expected an owner relay for an un-suffixed DO name");
+            }
+
+            return owner;
+        };
+
+        const attach = (owner: OwnerRelay, relayIndex: number): Promise<Response> =>
+            owner.handleControl(
+                new Request("https://owner.internal/_lunora/relay", {
+                    body: JSON.stringify({ relayIndex, type: "relay_attach" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+        const liveFramesIn = (relay: RelayDouble): Record<string, unknown>[] => relay.posts.filter((post) => post["type"] === "relay_live_frame");
+
+        const grant = async (owner: OwnerRelay, connectionId = "c-alice"): Promise<void> => {
+            await owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId, key: "k1", subscriptionId: "s1" });
+        };
+
+        it("makes no relay call for a publish when no relay has ever held a grant", async () => {
+            expect.assertions(4);
+
+            // Both relays answer 404, as a relay does for a connection it does not hold.
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, liveStatus: 404, posts: [] }],
+                [1, { down: false, liveStatus: 404, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(relayAt(relays, 0).posts).toStrictEqual([]);
+            expect(relayAt(relays, 1).posts).toStrictEqual([]);
+
+            // An unsubscribe for a connection no relay holds is not fanned out either.
+            await expect(
+                owner.forwardLiveControl({ action: "unsubscribe", callerId: "u1", connectionId: "c-ghost", key: "k1", subscriptionId: "s1" }),
+            ).resolves.toBeUndefined();
+
+            expect(relayAt(relays, 0).posts).toStrictEqual([]);
+        });
+
+        it("delivers a publish only to the relay that answered a grant with a non-404", async () => {
+            expect.assertions(3);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, posts: [] }],
+                [1, { down: false, liveStatus: 404, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+            await grant(owner);
+
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(1);
+            expect(liveFramesIn(relayAt(relays, 1))).toHaveLength(0);
+            expect(relayAt(relays, 1).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+        });
+
+        it("still forwards to a grant holder after the owner wakes, because the holder set is durable", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const first = ownerOf(relays);
+
+            await attach(first, 0);
+            await grant(first);
+
+            // A fresh owner over the same SQLite is what a hibernation wake looks like.
+            const woken = ownerOf(relays);
+
+            await woken.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(1);
+        });
+
+        it("forgets a relay's grants when it detaches", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await grant(owner);
+            await owner.handleControl(
+                new Request("https://owner.internal/_lunora/relay", {
+                    body: JSON.stringify({ relayIndex: 0, type: "relay_detach" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+            await attach(owner, 0);
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
         });
     });
 });

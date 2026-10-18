@@ -70,7 +70,13 @@ import type {
 } from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget, vectorizeDimensionDiagnostics } from "./platform-target";
+import {
+    gatePlatformFeatures,
+    liveStreamsDeliveryAuthorizationDiagnostic,
+    readTargetDiagnostics,
+    resolveCodegenTarget,
+    vectorizeDimensionDiagnostics,
+} from "./platform-target";
 import { findProjectConfigFile } from "./project-config-path";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
@@ -299,6 +305,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         deliveryAuthorization: codeSignals.deliveryAuthorization,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        liveContext: codeSignals.liveContext,
         liveStreams: codeSignals.liveStreams,
         typedWebSockets: codeSignals.typedWebSockets,
         queues: queues.length > 0,
@@ -380,6 +387,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
                 ...readTargetDiagnostics(projectRoot, options.target),
                 ...platformGate.diagnostics,
                 ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
+                ...(codeSignals.liveStreams && codeSignals.deliveryAuthorization ? [liveStreamsDeliveryAuthorizationDiagnostic(target)] : []),
             ],
         },
         queues,

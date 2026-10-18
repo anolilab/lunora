@@ -258,8 +258,8 @@ describe("shardDO rooms", () => {
 
         // Both members received the handler's broadcast — including the sender,
         // because the server handler (not the raw client send) is authoritative.
-        expect(a.frames).toEqual([{ data: { echo: { text: "hi" } }, topic: "room:chat", type: "whisper" }]);
-        expect(b.frames).toEqual([{ data: { echo: { text: "hi" } }, topic: "room:chat", type: "whisper" }]);
+        expect(a.frames.filter((frame) => frame.type === "whisper")).toEqual([{ data: { echo: { text: "hi" } }, topic: "room:chat", type: "whisper" }]);
+        expect(b.frames.filter((frame) => frame.type === "whisper")).toEqual([{ data: { echo: { text: "hi" } }, topic: "room:chat", type: "whisper" }]);
     });
 
     it("dispatches onLeave when a socket unsubscribes, even if access was revoked", async () => {
@@ -317,7 +317,7 @@ describe("shardDO rooms", () => {
         await send(shard, b, { data: encodeWire({ text: "forged" }), topic: "room:chat", type: "whisper" });
 
         expect(roomCalls(shard).filter((call) => call.args["kind"] === "message")).toHaveLength(0);
-        expect(a.frames).toEqual([]);
+        expect(a.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
     });
 
     it("discards a room broadcast when the handler's mutation fails, so members never see rolled-back writes", async () => {
@@ -341,8 +341,8 @@ describe("shardDO rooms", () => {
         await send(shard, b, { topic: "room:chat", type: "whisper_subscribe" });
         await send(shard, a, { data: encodeWire({ text: "x" }), topic: "room:chat", type: "whisper" });
 
-        expect(a.frames).toEqual([]);
-        expect(b.frames).toEqual([]);
+        expect(a.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
+        expect(b.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
     });
 
     it("leaves an ordinary whisper topic on the direct peer-relay path (no room dispatch)", async () => {
@@ -358,7 +358,7 @@ describe("shardDO rooms", () => {
 
         // No room handler ran, and the raw whisper was relayed to the other member.
         expect(roomCalls(shard)).toHaveLength(0);
-        expect(b.frames).toEqual([{ data: { x: 1 }, from: "user-a", topic: "cursors", type: "whisper" }]);
+        expect(b.frames.filter((frame) => frame.type === "whisper")).toEqual([{ data: { x: 1 }, from: "user-a", topic: "cursors", type: "whisper" }]);
     });
 
     it("does not record membership for a join whose onJoin rejects", async () => {
