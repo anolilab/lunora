@@ -404,6 +404,49 @@ const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<s
     return found;
 };
 
+/** The non-empty property names of one object. An array's keys are its positions, which are not data. */
+const propertyNamesOf = (value: object): string[] => (Array.isArray(value) ? [] : Object.keys(value).filter((key) => key.length > 0));
+
+/** Push the property names of every object under `root`, however deep. */
+const collectPropertyNames = (root: unknown, names: string[]): void => {
+    const seen = new Set<object>();
+    const pending: unknown[] = [root];
+
+    while (pending.length > 0) {
+        const value = pending.pop();
+
+        if (typeof value === "object" && value !== null && !seen.has(value)) {
+            seen.add(value);
+
+            for (const key of propertyNamesOf(value)) {
+                names.push(key);
+            }
+
+            for (const child of Object.values(value)) {
+                pending.push(child);
+            }
+        }
+    }
+};
+
+/**
+ * The property names of the marked arguments, taken from every object under them. A
+ * marked key can be used as a log field or span-attribute name, so it is matched as a
+ * whole field name only (see {@link SecretSet}): a name such as `value` is ordinary
+ * prose and must not be masked wherever it appears in text.
+ */
+const sensitiveNames = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+    const names: string[] = [];
+
+    for (const name of sensitive) {
+        if (Object.hasOwn(args, name)) {
+            collectPropertyNames(args[name], names);
+        }
+    }
+
+    return names;
+};
+
 /**
  * Replace each sensitive value found in free text with {@link SENSITIVE_ARG_MASK}.
  * A whole-text match is masked at any length. Inside longer text a value of
@@ -430,10 +473,46 @@ const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): strin
 };
 
 /**
- * Rebuild a container with each child passed through `scrubChild`. Returns the
- * container itself when no child changed.
+ * The marked values of one invocation. `texts` are replaced wherever they stand in a
+ * string, a field name included. `names` are matched only as a whole field name,
+ * since a property name of a marked object is not a value to search prose for.
  */
-const scrubContainer = (value: object, scrubChild: (child: unknown) => unknown): unknown => {
+interface SecretSet {
+    names: ReadonlySet<string>;
+    texts: ReadonlyArray<string>;
+}
+
+const NO_SECRETS: SecretSet = { names: new Set<string>(), texts: [] };
+
+const hasSecrets = (secrets: SecretSet): boolean => secrets.texts.length > 0 || secrets.names.size > 0;
+
+/** A field name with the marked values removed: a marked name is replaced whole, a marked value inside it as in text. */
+const scrubFieldName = (key: string, secrets: SecretSet): string => (secrets.names.has(key) ? SENSITIVE_ARG_MASK : scrubSensitiveText(key, secrets.texts));
+
+/**
+ * `name`, or `name#2`, `name#3`… when an earlier key of `out` already holds it. Two
+ * marked keys both mask to the placeholder, and one must not overwrite the other. The
+ * suffix is deterministic in key order, so the same record always reads the same way.
+ */
+const uniqueFieldName = (out: Record<string, unknown>, name: string): string => {
+    if (!Object.hasOwn(out, name)) {
+        return name;
+    }
+
+    let index = 2;
+
+    while (Object.hasOwn(out, `${name}#${String(index)}`)) {
+        index += 1;
+    }
+
+    return `${name}#${String(index)}`;
+};
+
+/**
+ * Rebuild a container with each child passed through `scrubChild`, and each field name
+ * through {@link scrubFieldName}. Returns the container itself when nothing changed.
+ */
+const scrubContainer = (value: object, secrets: SecretSet, scrubChild: (child: unknown) => unknown): unknown => {
     if (Array.isArray(value)) {
         const mapped = value.map((item) => scrubChild(item));
 
@@ -445,9 +524,10 @@ const scrubContainer = (value: object, scrubChild: (child: unknown) => unknown):
 
     for (const [key, child] of Object.entries(value)) {
         const scrubbed = scrubChild(child);
+        const name = uniqueFieldName(out, scrubFieldName(key, secrets));
 
-        changed ||= scrubbed !== child;
-        out[key] = scrubbed;
+        changed ||= scrubbed !== child || name !== key;
+        out[name] = scrubbed;
     }
 
     return changed ? out : value;
@@ -459,18 +539,18 @@ const scrubContainer = (value: object, scrubChild: (child: unknown) => unknown):
  * caller can tell untouched data from a copy and an unmarked sibling keeps its
  * identity.
  */
-const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: number, ancestors = new Set<object>()): unknown => {
+const scrubValue = (value: unknown, secrets: SecretSet, depth: number, ancestors = new Set<object>()): unknown => {
     if (typeof value === "string") {
-        return scrubSensitiveText(value, secrets);
+        return scrubSensitiveText(value, secrets.texts);
     }
 
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-        return secrets.includes(String(value)) ? SENSITIVE_ARG_MASK : value;
+        return secrets.texts.includes(String(value)) ? SENSITIVE_ARG_MASK : value;
     }
 
     if (value instanceof Error) {
         const text = String(value);
-        const scrubbed = scrubSensitiveText(text, secrets);
+        const scrubbed = scrubSensitiveText(text, secrets.texts);
 
         return scrubbed === text ? value : scrubbed;
     }
@@ -489,7 +569,7 @@ const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: numbe
 
     ancestors.add(value);
 
-    const scrubbed = scrubContainer(value, (child) => scrubValue(child, secrets, depth + 1, ancestors));
+    const scrubbed = scrubContainer(value, secrets, (child) => scrubValue(child, secrets, depth + 1, ancestors));
 
     ancestors.delete(value);
 
@@ -508,9 +588,10 @@ interface SensitiveScope {
     /**
      * Admit more values into the invocation: a composed call runs inside the
      * caller's invocation, so its own marked arguments are scrubbed from here on.
+     * `names` are that call's marked property names (see {@link sensitiveNames}).
      * A no-op once the scope is cleared.
      */
-    add: (values: ReadonlyArray<string>) => void;
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
 
     /**
      * Mark the dispatch settled. The values are forgotten once no `hold` is
@@ -534,12 +615,12 @@ interface SensitiveScope {
 }
 
 /**
- * Build the scope for one invocation from the values of its marked arguments
- * (see {@link sensitiveValues}). The array is copied, so the caller keeps no
- * handle on the values it passed in.
+ * Build the scope for one invocation from the values and property names of its marked
+ * arguments (see {@link sensitiveValues} and {@link sensitiveNames}). The arrays are
+ * copied, so the caller keeps no handle on the values it passed in.
  */
-const createSensitiveScope = (values: ReadonlyArray<string>): SensitiveScope => {
-    let secrets: ReadonlyArray<string> = [...new Set(values)];
+const createSensitiveScope = (values: ReadonlyArray<string>, names: ReadonlyArray<string> = []): SensitiveScope => {
+    let secrets: SecretSet = { names: new Set(names), texts: [...new Set(values)] };
     let settled = false;
     let holds = 0;
 
@@ -547,14 +628,17 @@ const createSensitiveScope = (values: ReadonlyArray<string>): SensitiveScope => 
     // before it is buffered, so the values drop only when nothing is waiting on them.
     const forgetIfIdle = (): void => {
         if (settled && holds === 0) {
-            secrets = [];
+            secrets = NO_SECRETS;
         }
     };
 
     return {
-        add(more) {
-            if (!settled && more.length > 0) {
-                secrets = [...new Set([...secrets, ...more])];
+        add(more, moreNames = []) {
+            if (!settled && (more.length > 0 || moreNames.length > 0)) {
+                secrets = {
+                    names: new Set([...secrets.names, ...moreNames]),
+                    texts: [...new Set([...secrets.texts, ...more])],
+                };
             }
         },
         clear() {
@@ -575,9 +659,9 @@ const createSensitiveScope = (values: ReadonlyArray<string>): SensitiveScope => 
             };
         },
         fields: <T extends Record<string, unknown> | undefined>(bag: T): T =>
-            bag === undefined || secrets.length === 0 ? bag : (scrubValue(bag, secrets, 0) as T),
-        text: (text) => (secrets.length === 0 ? text : scrubSensitiveText(text, secrets)),
-        value: <T>(value: T): T => (secrets.length === 0 ? value : (scrubValue(value, secrets, 0) as T)),
+            bag === undefined || !hasSecrets(secrets) ? bag : (scrubValue(bag, secrets, 0) as T),
+        text: (text) => (secrets.texts.length === 0 ? text : scrubSensitiveText(text, secrets.texts)),
+        value: <T>(value: T): T => (hasSecrets(secrets) ? (scrubValue(value, secrets, 0) as T) : value),
     };
 };
 
@@ -1312,6 +1396,7 @@ export {
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
     SENSITIVE_ARG_MASK,
+    sensitiveNames,
     sensitiveValues,
 };
 export type {

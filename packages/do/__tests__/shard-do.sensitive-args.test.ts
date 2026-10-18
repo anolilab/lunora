@@ -171,6 +171,13 @@ class TelemetryShard extends ShardDO {
             return { ok: true };
         }
 
+        if (functionPath === "vault:fields") {
+            // The marked value used as a field name, beside an unmarked sibling key.
+            log.info("named", { [String(args["value"])]: "x", label: args["label"] as string });
+
+            return { ok: true };
+        }
+
         if (functionPath === "vault:hold") {
             if (args["label"] === "first") {
                 await this.release;
@@ -231,6 +238,28 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
             expect(step?.attributes).toStrictEqual({ label: "primary", value: SENSITIVE_ARG_MASK });
             expect(step?.error?.message).toBe(`card ${SENSITIVE_ARG_MASK} declined`);
             expect(JSON.stringify([logs, spans])).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a marked value used as a log field name, and keeps the sibling key", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            await shard.fetch(telemetryRpc("vault:fields", { label: "primary", value: SECRET }));
+
+            const named = logs.find((event) => event.message === "named");
+
+            expect(named?.fields).toStrictEqual({ [SENSITIVE_ARG_MASK]: "x", label: "primary" });
+            expect(JSON.stringify(logs)).not.toContain(SECRET);
         } finally {
             database.close();
         }
