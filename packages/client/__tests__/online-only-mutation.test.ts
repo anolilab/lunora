@@ -111,7 +111,98 @@ const outcomeOf = (promise: Promise<unknown>): Promise<string> =>
         (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
     );
 
+/** A transport that never reaches the origin: every request fails the way a fetch does when offline. */
+const unreachable = (): typeof fetch => async () => {
+    throw new TypeError("fetch failed");
+};
+
 describe("online-only mutation", () => {
+    it("refuses with OFFLINE_NOT_QUEUED when a never-connected client's request fails on the wire", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: unreachable(),
+            heartbeatIntervalMs: 0,
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        await expect(client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true })).rejects.toMatchObject({
+            cause: expect.any(TypeError),
+            code: "OFFLINE_NOT_QUEUED",
+        });
+
+        expect(append).not.toHaveBeenCalled();
+        await expect(persistence.load()).resolves.toStrictEqual([]);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("leaves a normal write's transport error unchanged before the first connect", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: unreachable(),
+            heartbeatIntervalMs: 0,
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        await expect(client.mutation(fnRef("todos.set"), { text: "NEWER" })).rejects.toBeInstanceOf(TypeError);
+
+        expect(append).not.toHaveBeenCalled();
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("keeps the transport error of an online-only write on a live connection", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({
+            fetch: unreachable(),
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        sockets.at(-1)?.open();
+
+        const failed = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
+
+        await expect(failed).rejects.toBeInstanceOf(TypeError);
+
+        client.close();
+    });
+
+    it("does not reclassify a server error as OFFLINE_NOT_QUEUED", async () => {
+        expect.hasAssertions();
+
+        const client = new LunoraClient({
+            fetch: async () => Response.json({ error: { code: "INVALID_ARGUMENT", message: "bad" } }, { status: 400 }),
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket([]),
+        });
+
+        await expect(client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true })).rejects.toMatchObject({
+            code: "INVALID_ARGUMENT",
+        });
+
+        client.close();
+    });
+
     it("sends normally while the connection is live", async () => {
         expect.hasAssertions();
 

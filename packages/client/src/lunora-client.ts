@@ -587,6 +587,12 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
     });
 
 /**
+ * A request that failed on the wire: fetch rejects with a `TypeError`, and the args
+ * encode, so the codec did not reject them. Anything else is the server's answer.
+ */
+const isWireFailure = (error: unknown, args: Record<string, unknown>): boolean => error instanceof TypeError && isEncodable(args);
+
+/**
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
@@ -4823,7 +4829,7 @@ class LunoraClient {
         // Queue while offline (only mutations — queries fail fast). The gate is
         // read after the wait above, so a socket that dropped meanwhile queues
         // this write instead of sending it.
-        const { httpFirst, midReconnect, shouldQueueOffline, socketDown } = this.writeQueueGate(options.shardKey);
+        const { httpFirst, midReconnect, shouldQueueOffline, socketDown, socketOpen } = this.writeQueueGate(options.shardKey);
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -4899,7 +4905,8 @@ class LunoraClient {
             // network is down. Queue it under the same key, as it would have been
             // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
-            const networkDown = httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord);
+            const wireFailure = isWireFailure(error, argsRecord);
+            const networkDown = httpFirst && shouldQueueOffline && wireFailure;
 
             //
             // The same holds for any failure that leaves the write's fate unknown — a
@@ -4935,9 +4942,17 @@ class LunoraClient {
 
             this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.flags.authToken);
 
-            // An online-only write that would have been queued is refused with the
-            // typed error; the transport failure rides along as its `cause`.
-            throw networkDown && options.onlineOnly ? offlineNotQueuedError(function_.__lunoraRef, error) : error;
+            // An online-only write is never queued, so a transport failure with no open
+            // socket is refused with the typed error whether or not the shard ever
+            // connected: before the first connect nothing was queued either way. The
+            // transport failure rides along as its `cause`.
+            const refused = networkDown || (options.onlineOnly && wireFailure && !socketOpen);
+
+            if (refused) {
+                throw offlineNotQueuedError(function_.__lunoraRef, error);
+            }
+
+            throw error;
         }
     }
 
@@ -4963,7 +4978,13 @@ class LunoraClient {
      * which gate would queue it. A follower tab has no `ShardConnection` of its own —
      * `connectionGateState` derives the same triple from the mirrored leader status.
      */
-    private writeQueueGate(shardKey: string | undefined): { httpFirst: boolean; midReconnect: boolean; shouldQueueOffline: boolean; socketDown: boolean } {
+    private writeQueueGate(shardKey: string | undefined): {
+        httpFirst: boolean;
+        midReconnect: boolean;
+        shouldQueueOffline: boolean;
+        socketDown: boolean;
+        socketOpen: boolean;
+    } {
         const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(shardKey);
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
@@ -4977,7 +4998,7 @@ class LunoraClient {
         const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
         const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
 
-        return { httpFirst, midReconnect, shouldQueueOffline, socketDown };
+        return { httpFirst, midReconnect, shouldQueueOffline, socketDown, socketOpen: wsState === "open" };
     }
 
     /**
