@@ -19,6 +19,7 @@ type VoiceServerFrame =
     | { text: string; type: "assistant_delta" }
     | { text: string; type: "assistant_done" }
     | { text: string; type: "user_transcript" }
+    | { type: "assistant_discarded" }
     | { type: "interrupted" };
 
 /**
@@ -290,6 +291,18 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
 
                 status.set("speaking");
                 interimTranscript.update((current_) => current_ + frame.text);
+
+                break;
+            }
+            case "assistant_discarded": {
+                // The turn failed, so the text streamed for it is not an answer. Drop it,
+                // and silence any of its audio still queued or in flight.
+                if (connection) {
+                    connection.suppressAudio = true;
+                }
+
+                connection?.speaker?.interrupt();
+                interimTranscript.set("");
 
                 break;
             }
