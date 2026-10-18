@@ -1,3 +1,21 @@
+## @lunora/studio [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.311...@lunora/studio@1.0.0-alpha.312) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of the retired shape scan ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([#1244](https://github.com/anolilab/lunora/issues/1244)) ([62fcfad](https://github.com/anolilab/lunora/commit/62fcfadfcca02f41c17f1e29a37d6faff5efaaed))
+* **do:** stop scanning retired shapes after cleanup ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([487d2ab](https://github.com/anolilab/lunora/commit/487d2abec6ad50c9fce2074689e322de8c0891e5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.230
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.119
+* **@lunora/client:** upgraded to 1.0.0-alpha.221
+* **@lunora/react:** upgraded to 1.0.0-alpha.235
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.214
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+
 ## @lunora/studio [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.310...@lunora/studio@1.0.0-alpha.311) (2026-10-18)
 
 
