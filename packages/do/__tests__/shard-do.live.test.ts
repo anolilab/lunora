@@ -27,10 +27,17 @@ const withoutAck = (socket: { frames: Frame[] }): Frame[] => socket.frames.filte
 class FakeSocket {
     public readonly frames: Frame[] = [];
 
+    /** The close code and reason the shard closed this socket with, when it did. */
+    public closed: { code?: number; reason?: string } | undefined;
+
     private attachment: unknown;
 
     public constructor(initial?: unknown) {
         this.attachment = initial;
+    }
+
+    public close(code?: number, reason?: string): void {
+        this.closed = { code, reason };
     }
 
     public deserializeAttachment(): unknown {
@@ -503,6 +510,22 @@ describe("shardDO live streams", () => {
         await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
 
         expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
+    });
+
+    it("closes a WebSocket for a retry, and does not advertise its connection id, when its relay attach failed", async () => {
+        expect.assertions(3);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        // The owner did not register this relay, so a grant sent on its connection id would have nowhere to go.
+        Reflect.set(shard, "relay", { announce: () => Promise.resolve(false) });
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        expect(socket.closed).toStrictEqual({ code: 1013, reason: "relay is not yet registered with its owner" });
+        expect(withoutAck(socket).some((frame) => frame.type === "identity")).toBe(false);
+        expect(socket.frames.some((frame) => frame["connectionId"] === "ws-a")).toBe(false);
     });
 
     it("delivers a live publish to SSE readers without a relay hop that could fail it", async () => {

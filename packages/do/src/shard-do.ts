@@ -7538,7 +7538,15 @@ abstract class ShardDO {
             // Relay tier: a relay announces itself before the identity frame. The client names this
             // socket in a live subscribe as soon as it has the connection id, and the owner can only
             // forward that grant to a relay it already knows. A no-op on an owner.
-            await this.relay?.announce();
+            //
+            // A failed attach must not leave the socket advertised with a connection id the owner cannot
+            // route a grant to, and nothing else would re-attach it. Closing with 1013 (try again later)
+            // makes the client reconnect, and the next connect announces again.
+            if ((await this.relay?.announce()) === false) {
+                ws.close?.(1013, "relay is not yet registered with its owner");
+
+                return;
+            }
 
             // The connection id rides here so the client can name this socket in a live
             // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
