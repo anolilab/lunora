@@ -789,9 +789,10 @@ type SecurityFindingLevel = "error" | "info" | "warning";
 
 ```ts
 interface SensitiveScope {
-    add: (values: ReadonlyArray<string>) => void;
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
     clear: () => void;
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
     text: (text: string) => string;
     value: <T>(value: T) => T;
 }
@@ -1042,7 +1043,7 @@ const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ### `createSensitiveScope` (const)
 
 ```ts
-const createSensitiveScope: (values: ReadonlyArray<string>) => SensitiveScope;
+const createSensitiveScope: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => SensitiveScope;
 ```
 
 ### `createSpanCollector` (const)
@@ -1298,6 +1299,12 @@ const redactCredentials: (value: unknown, captureRaw?: boolean) => unknown;
 const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => TraceAnchor & {
     sampled: boolean;
 };
+```
+
+### `sensitiveNames` (const)
+
+```ts
+const sensitiveNames: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
 ```
 
 ### `sensitiveValues` (const)

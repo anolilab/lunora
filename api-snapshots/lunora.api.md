@@ -3779,6 +3779,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `sensitiveNames` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `sensitiveValues` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
