@@ -5,7 +5,9 @@ import { TransportError } from "./errors";
  * platform's `AbortError` when it carries none. Never a {@link TransportError} —
  * the caller walked away, so nothing about it is retryable.
  */
-const abortReason = (signal: AbortSignal): Error => (signal.reason as Error | undefined) ?? new DOMException("The operation was aborted", "AbortError");
+const abortReason = (signal: AbortSignal): Error =>
+    // No `DOMException` / `signal.reason` to lean on: React Native lacks both.
+    (signal.reason as Error | undefined) ?? Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
 
 /**
  * Run one HTTP exchange under a deadline and an optional caller signal.
@@ -104,4 +106,4 @@ const raceAbort = async <T>(promise: Promise<T>, signal: AbortSignal | undefined
     }
 };
 
-export { raceAbort, withinRpcDeadline };
+export { abortReason, raceAbort, withinRpcDeadline };

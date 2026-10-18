@@ -141,7 +141,7 @@ import {
     unreadableSlotError,
     utf8ByteLength,
 } from "./replay";
-import { raceAbort, withinRpcDeadline } from "./rpc-deadline";
+import { abortReason, raceAbort, withinRpcDeadline } from "./rpc-deadline";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
@@ -2652,8 +2652,9 @@ class LunoraClient {
      * (enabled) render of a live query behind hydration, so the user sees
      * cached data instead of an undefined flash before the socket round-trip.
      */
-    public async whenReady(options: { signal?: AbortSignal } = {}): Promise<void> {
-        return raceAbort(this.readyPromise, options.signal);
+    public whenReady(options: { signal?: AbortSignal } = {}): Promise<void> {
+        // The shared promise itself when there is nothing to abort: a caller may rely on its identity.
+        return options.signal === undefined ? this.readyPromise : raceAbort(this.readyPromise, options.signal);
     }
 
     /**
@@ -2793,7 +2794,9 @@ class LunoraClient {
         options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
         // Checked before anything starts: an aborted call applies no optimistic patch and sends nothing.
-        options.signal?.throwIfAborted();
+        if (options.signal?.aborted) {
+            throw abortReason(options.signal);
+        }
 
         const { value } = await raceAbort(this.runMutation(function_, args, options), options.signal);
 
@@ -5445,7 +5448,8 @@ class LunoraClient {
     private installPageHideFlush(): void {
         const target = globalThis as { addEventListener?: EventTarget["addEventListener"]; document?: EventTarget & { visibilityState?: string } };
 
-        if ((!this.persistence && !this.queryCache) || typeof target.addEventListener !== "function") {
+        // `document` is what tells a page from a worker, which also has `addEventListener` but no page lifecycle.
+        if ((!this.persistence && !this.queryCache) || !("document" in globalThis) || typeof target.addEventListener !== "function") {
             return;
         }
 
