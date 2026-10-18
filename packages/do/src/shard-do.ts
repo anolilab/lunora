@@ -3142,7 +3142,7 @@ abstract class ShardDO {
         // tests and public API stay stable.
         this.shardHost = createShardHost(state as never);
         this.socketHost = createSocketHost(state as never);
-        this.secretValues = createSecretValueHost(state.storage as never);
+        this.secretValues = createSecretValueHost(state.storage as never, env);
         this.runner = new ShardRunner(this.shardHost, this.socketHost, {
             handlers: {
                 handleAlarm: () => this.handleAlarmCloudflare(),
