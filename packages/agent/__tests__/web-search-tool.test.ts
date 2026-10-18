@@ -15,6 +15,7 @@ const toolContext = (ai: unknown): AgentToolContext => {
         env: ai === undefined ? {} : { AI: ai },
         getState: async () => undefined,
         idempotencyKey: "tool:search:call_1",
+        instanceId: "wf-1",
         reportProgress: () => {},
         run: async () => undefined,
         setState: async () => {},

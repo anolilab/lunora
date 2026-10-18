@@ -440,7 +440,6 @@ describe("secret request component", () => {
 
             await expect(
                 take(functions, ctx, {
-                    instanceId: "wf-1",
                     claimant: "tool:charge:call_2",
                     consumerCallId: "call_2",
                     instanceId: "wf-1",
@@ -453,7 +452,6 @@ describe("secret request component", () => {
             expect(requestRow(rows)).toMatchObject({ instanceId: "wf-2", status: "supplied" });
             await expect(
                 take(functions, ctx, {
-                    instanceId: "wf-1",
                     claimant: "tool:charge:call_2",
                     consumerCallId: "call_2",
                     instanceId: "wf-2",
