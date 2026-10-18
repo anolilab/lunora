@@ -1289,6 +1289,35 @@ const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
     }
 };
 
+/**
+ * How long socket teardown waits on a sibling DO's answer to a relay release or
+ * drain. Both are fire-and-forget control frames, so the answer carries nothing
+ * teardown needs; waiting longer only holds the close open (and the rest of its
+ * cleanup behind it) on a sibling that has stopped answering.
+ */
+const RELAY_CLOSE_WAIT_MS = 2000;
+
+/**
+ * Wait for `work`, at most `ms`. The work is left RUNNING when the deadline wins
+ * (the post still lands or fails on its own), and a rejection that arrives after
+ * it is swallowed rather than surfacing as an unhandled one.
+ */
+const settleWithin = async (work: Promise<unknown>, ms: number): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+    });
+
+    try {
+        await Promise.race([work, deadline]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+};
+
 const DIGITS = /^\d+$/u;
 
 /**
@@ -3449,7 +3478,7 @@ abstract class ShardDO {
             // sockets never detaches, and each of its retired connections would
             // otherwise leave a permanent row pinning op-log retention.
             try {
-                await this.relay?.releaseRelayShapes(ws);
+                await settleWithin(Promise.resolve(this.relay?.releaseRelayShapes(ws)), RELAY_CLOSE_WAIT_MS);
             } catch (error) {
                 // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release; a close handler must not reject (see above)
                 console.error("[@lunora/do] relay shape release failed during socket close:", error);
@@ -3465,7 +3494,7 @@ abstract class ShardDO {
             // both break the actor and displace a dispatch failure the caller
             // still has to see.
             try {
-                await this.relay?.announceDrain(ws);
+                await settleWithin(Promise.resolve(this.relay?.announceDrain(ws)), RELAY_CLOSE_WAIT_MS);
             } catch (error) {
                 // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay detach; a close handler must not reject (see above)
                 console.error("[@lunora/do] relay drain failed during socket close:", error);
