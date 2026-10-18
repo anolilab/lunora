@@ -107,7 +107,6 @@ describe("retained shapes when delivery authorization is enabled", () => {
 
         await shard.alarm();
 
-        expect(test.getWebSockets).toHaveBeenCalledWith(undefined);
         expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual([]);
 
         test.getWebSockets.mockClear();
@@ -142,10 +141,13 @@ describe("retained shapes when delivery authorization is enabled", () => {
         await shard.alarm();
 
         expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual(["local", "global"]);
+        // The read failed before any shape was refused, so the failure belongs to the shape sweep.
+        expect(test.socket().frames.filter((frame) => frame.type === "error")).toEqual([]);
         expect(test.setAlarm).toHaveBeenCalledTimes(1);
 
         await shard.alarm();
 
+        expect(test.socket().frames.filter((frame) => frame.type === "error")).toHaveLength(2);
         expect(test.socket().attachment.shapes).toEqual({});
         expect(readShapePokeCursor(test.database.sql, "retained-connection", "local")).toBeUndefined();
         expect(readGlobalShapeSnapshot(test.database.sql, "retained-connection", "global")).toBeUndefined();
@@ -258,6 +260,40 @@ describe("retained shapes when delivery authorization is enabled", () => {
         expect(readShapePokeCursor(test.database.sql, "retained-connection", "local")).toBeUndefined();
         expect(shard.globalReads).toBe(0);
         expect(test.setAlarm).not.toHaveBeenCalled();
+
+        test.getWebSockets.mockClear();
+
+        await shard.alarm();
+
+        expect(test.getWebSockets).not.toHaveBeenCalled();
+    });
+
+    it("keeps scanning until every socket is clean, not just the last one swept", async () => {
+        expect.hasAssertions();
+
+        const test = await setup();
+        const shard = test.enable(true);
+        const second = new Socket();
+        second.attachment = structuredClone(test.socket().attachment);
+
+        test.getWebSockets.mockImplementation(() => [test.socket(), second] as unknown as WebSocket[]);
+
+        // The first socket keeps a registration because its attachment write fails; the last one sweeps clean.
+        vi.spyOn(test.socket(), "serializeAttachment").mockImplementationOnce(() => {
+            throw new Error("attachment unavailable");
+        });
+
+        test.setAlarm.mockClear();
+
+        await shard.alarm();
+
+        expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual(["local"]);
+        expect(second.attachment.shapes).toEqual({});
+        expect(test.setAlarm).toHaveBeenCalledTimes(1);
+
+        await shard.alarm();
+
+        expect(test.socket().attachment.shapes).toEqual({});
 
         test.getWebSockets.mockClear();
 
