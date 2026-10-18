@@ -1,3 +1,16 @@
+/** A finite, non-negative token count, or `undefined`. */
+const tokenCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
+
+/**
+ * A breakdown count that is reported and non-zero, or `undefined`. The AI SDK fills
+ * 0 in for a detail the provider never sent, so a zero cannot be told from absence.
+ */
+const breakdownCount = (value: unknown): number | undefined => {
+    const count = tokenCount(value);
+
+    return count === undefined || count === 0 ? undefined : count;
+};
+
 /**
  * Privacy options shared by every telemetry integration in this package.
  *
@@ -41,21 +54,50 @@ export const readField = (source: unknown, key: string): unknown => {
 
 /**
  * Project a raw AI SDK `LanguageModelUsage`-shaped value onto a compact,
- * defined-only token summary. Missing or non-numeric fields are dropped;
- * returns `undefined` when nothing usable is present.
+ * defined-only token summary. Totals are `inputTokens`, `outputTokens`, `totalTokens`;
+ * the breakdowns `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens` are
+ * read from the `*TokenDetails` objects. Breakdowns are subsets of the totals and are
+ * never added to them. Missing or invalid fields are dropped; returns `undefined`
+ * when nothing usable is present.
  */
 export const summarizeUsage = (usage: unknown): Record<string, number> | undefined => {
+    const inputDetails = readField(usage, "inputTokenDetails");
+    const outputDetails = readField(usage, "outputTokenDetails");
     const summary: Record<string, number> = {};
-
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"]) {
-        const value = readField(usage, key);
-
-        if (typeof value === "number") {
+    const put = (key: string, value: number | undefined): void => {
+        if (value !== undefined) {
             summary[key] = value;
         }
-    }
+    };
+
+    put("inputTokens", tokenCount(readField(usage, "inputTokens")));
+    put("outputTokens", tokenCount(readField(usage, "outputTokens")));
+    put("totalTokens", tokenCount(readField(usage, "totalTokens")));
+    put("cacheReadTokens", breakdownCount(readField(inputDetails, "cacheReadTokens")));
+    put("cacheWriteTokens", breakdownCount(readField(inputDetails, "cacheWriteTokens")));
+    put("reasoningTokens", breakdownCount(readField(outputDetails, "reasoningTokens")));
 
     return Object.keys(summary).length > 0 ? summary : undefined;
+};
+
+/** The usage a call's token report carries, as {@link usageStatus} grades it. */
+export type UsageStatus = "complete" | "partial" | "unavailable";
+
+/**
+ * Whether a call's token report is whole, graded the same way `@lunora/ai` grades
+ * its spans. `complete`: input and output totals were both reported. `partial`: some
+ * of the token buckets were, not all. `unavailable`: none were. `totalTokens` alone
+ * does not count, because a total with no split cannot be priced.
+ * Only a complete report is priced by estimate; a partial one would understate.
+ */
+export const usageStatus = (usage: Record<string, number> | undefined): UsageStatus => {
+    if (usage?.["inputTokens"] !== undefined && usage["outputTokens"] !== undefined) {
+        return "complete";
+    }
+
+    const reported = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"].some((key) => usage?.[key] !== undefined);
+
+    return reported ? "partial" : "unavailable";
 };
 
 /**
