@@ -1,4 +1,4 @@
-import { resolveShard } from "../index";
+import { resolveShard, SECRET_VALUE_MAX_BYTES, SECRET_VALUE_MAX_TTL_MS, SecretValueTooLargeError } from "../index";
 import type { SocketHandle } from "../socket-host";
 import type { ConformanceHost, ConformanceHostFactory } from "./reference-host";
 
@@ -965,6 +965,175 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                     expect([...scoped.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["s:a", "s:b"]);
                     expect(all.size).toBe(3);
+                });
+            });
+        });
+
+        // The secret-value contract. Its legs are skipped, not failed, when a host
+        // does not offer it: a host with no agents has no secret store to test.
+        describe("SecretValueHost", () => {
+            const SCOPE = "run-1";
+
+            it("round-trips a value to its first claimant", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(1);
+
+                    const ref = await host.secretValues.put("hunter2", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("hunter2");
+                });
+            });
+
+            it("refuses a second claimant and lets the first re-take (a retried step)", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                    expect(await host.secretValues.take(ref, { claimant: "step-b", scope: SCOPE })).toBeUndefined();
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                });
+            });
+
+            it("reads undefined for a wrong scope without consuming the value", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: "run-2" })).toBeUndefined();
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                });
+            });
+
+            it("reads undefined after discard, and discard is idempotent", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.discard(ref)).toBe(true);
+                    expect(await host.secretValues.discard(ref)).toBe(false);
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("refuses a value past its TTL and clamps an oversized TTL", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    if (host.advanceClock === undefined) {
+                        context.skip(`${name} does not expose an injectable clock, so expiry is not driven`);
+
+                        return;
+                    }
+
+                    expect.assertions(4);
+
+                    const advance = host.advanceClock;
+                    const short = await host.secretValues.put("short", { scope: SCOPE, ttlMs: 1000 });
+
+                    advance(999);
+                    expect(await host.secretValues.take(short, { claimant: "step-a", scope: SCOPE })).toBe("short");
+
+                    const expiring = await host.secretValues.put("gone", { scope: SCOPE, ttlMs: 1000 });
+
+                    advance(1000);
+                    expect(await host.secretValues.take(expiring, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const clamped = await host.secretValues.put("long", { scope: SCOPE, ttlMs: Number.MAX_SAFE_INTEGER });
+
+                    advance(SECRET_VALUE_MAX_TTL_MS);
+                    expect(await host.secretValues.take(clamped, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+                    expect(await host.secretValues.put("x", { scope: SCOPE, ttlMs: Number.NaN }).catch((error: unknown) => error)).toBeInstanceOf(RangeError);
+                });
+            });
+
+            it("rejects a value over the byte limit, counting UTF-8 bytes", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    await expect(host.secretValues.put("x".repeat(SECRET_VALUE_MAX_BYTES), { scope: SCOPE, ttlMs: 60_000 })).resolves.toBeTypeOf("string");
+                    await expect(host.secretValues.put("x".repeat(SECRET_VALUE_MAX_BYTES + 1), { scope: SCOPE, ttlMs: 60_000 })).rejects.toBeInstanceOf(
+                        SecretValueTooLargeError,
+                    );
+                    // 4097 two-byte characters: 4097 < 8192 by length, 8194 by bytes.
+                    await expect(host.secretValues.put("\u00E9".repeat(4097), { scope: SCOPE, ttlMs: 60_000 })).rejects.toBeInstanceOf(
+                        SecretValueTooLargeError,
+                    );
+                });
+            });
+
+            it("exposes no enumerating or reading member beyond put, take and discard", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined) {
+                        context.skip(`${name} does not implement SecretValueHost`);
+
+                        return;
+                    }
+
+                    expect.assertions(1);
+
+                    expect(Object.keys(host.secretValues).toSorted((x, y) => x.localeCompare(y))).toStrictEqual(["discard", "put", "take"]);
+                });
+            });
+
+            it("keeps secret values out of ShardKvStore's listing and reads", async (context) => {
+                await withHost(async (host) => {
+                    if (host.secretValues === undefined || host.kv === undefined) {
+                        context.skip(`${name} does not implement both SecretValueHost and ShardKvStore`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    await host.kv.put("s:visible", 1);
+                    const beforeListing = await host.kv.list();
+                    const before = [...beforeListing.keys()].toSorted((a, b) => a.localeCompare(b));
+
+                    const ref = await host.secretValues.put("plaintext", { scope: SCOPE, ttlMs: 60_000 });
+                    const listed = await host.kv.list();
+                    const after = [...listed.keys()].toSorted((a, b) => a.localeCompare(b));
+
+                    expect(after).toStrictEqual(before);
+                    expect(await host.kv.get(ref)).toBeUndefined();
+                    expect(listed.size).toBe(before.length);
                 });
             });
         });

@@ -327,6 +327,7 @@ interface PlatformCapabilities {
         scheduler?: Capability;
         scheduleRateBreaker?: Capability;
         secrets?: Capability;
+        secretValues?: Capability;
         serverReactors?: Capability;
         services?: Capability;
         shardAlarms?: Capability;
@@ -550,13 +551,16 @@ interface R2UploadedPartLike {
 }
 ```
 
-### `SOCKET_TAG_BUDGET` (const)
+### `SECRET_VALUE_MAX_BYTES` (const)
 
 ```ts
-const SOCKET_TAG_BUDGET: {
-    readonly maxTagLength: 256;
-    readonly usableTags: 9;
-};
+const SECRET_VALUE_MAX_BYTES: number;
+```
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
+
+```ts
+const SECRET_VALUE_MAX_TTL_MS: number;
 ```
 
 ### `ScheduleOptions` (interface)
@@ -605,6 +609,43 @@ interface SchedulerHost {
     };
     list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
+}
+```
+
+### `SecretValueHost` (interface)
+
+```ts
+interface SecretValueHost {
+    discard: (ref: string) => Promise<boolean>;
+    put: (value: string, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+}
+```
+
+### `SecretValuePutOptions` (interface)
+
+```ts
+interface SecretValuePutOptions {
+    scope: string;
+    ttlMs: number;
+}
+```
+
+### `SecretValueTakeOptions` (interface)
+
+```ts
+interface SecretValueTakeOptions {
+    claimant: string;
+    scope: string;
+}
+```
+
+### `SecretValueTooLargeError` (class)
+
+```ts
+class SecretValueTooLargeError extends Error {
+    readonly code = "SECRET_VALUE_TOO_LARGE";
+    constructor(bytes: number);
 }
 ```
 
@@ -861,10 +902,16 @@ interface VectorizeVector {
 }
 ```
 
-### `findSocketTagBudgetViolation` (const)
+### `assertSecretValueSize` (const)
 
 ```ts
-const findSocketTagBudgetViolation: (tags?: ReadonlyArray<string>) => string | undefined;
+const assertSecretValueSize: (value: string) => void;
+```
+
+### `clampSecretValueTtl` (const)
+
+```ts
+const clampSecretValueTtl: (ttlMs: number) => number;
 ```
 
 ### `resolveShard` (const)
@@ -879,6 +926,7 @@ const resolveShard: (directory: ShardDirectory, name: string, locationHint?: Sha
 
 ```ts
 interface ConformanceHost {
+    advanceClock?: (ms: number) => void;
     awaitAlarmFired?: (target: number) => Promise<void>;
     awaitJobDispatched?: (id: string) => Promise<boolean>;
     cleanup?: () => void;
@@ -891,6 +939,7 @@ interface ConformanceHost {
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
+    secretValues?: SecretValueHost;
     shard: ShardHost;
     simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;

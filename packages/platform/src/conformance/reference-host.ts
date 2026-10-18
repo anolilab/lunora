@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable on Node ^22.15 || >=24.10 and is the deliberate in-memory engine for this Node-only reference host
 import { DatabaseSync } from "node:sqlite";
 
@@ -6,6 +7,7 @@ import type {
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
+    SecretValueHost,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -16,12 +18,20 @@ import type {
     SocketHost,
 } from "../index";
 import { findSocketTagBudgetViolation } from "../socket-host";
+import { assertSecretValueSize, clampSecretValueTtl } from "../index";
 
 /**
  * A conformance host bundles all four platform contracts so a single factory
  * can stand up a complete, isolated test environment.
  */
 interface ConformanceHost {
+    /**
+     * Move the secret-value clock forward by `ms`. Optional: a host whose clock
+     * cannot be injected omits it, and the suite then skips the expiry legs
+     * rather than sleeping through a real TTL.
+     */
+    advanceClock?: (ms: number) => void;
+
     /**
      * Resolve once a pending alarm has actually fired. Optional: hosts whose
      * alarm delivery is owned by the platform and can't be observed from inside
@@ -40,6 +50,7 @@ interface ConformanceHost {
      * @returns `true` when the job was dispatched at least once.
      */
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+
     /** Optional cleanup hook (close DBs, release timers). */
     cleanup?: () => void;
 
@@ -63,6 +74,7 @@ interface ConformanceHost {
      * has no per-tick identity.
      */
     cronTicks?: (functionPath: string) => number;
+
     /** The shard directory under test. */
     directory: ShardDirectory;
 
@@ -144,6 +156,13 @@ interface ConformanceHost {
      * A full composition root must supply one.
      */
     scheduler?: SchedulerHost;
+
+    /**
+     * The human-supplied secret store under test. Optional, because only a host
+     * that runs agents needs one; the suite reports the gap rather than skipping
+     * silently.
+     */
+    secretValues?: SecretValueHost;
     /** The shard execution slot under test. */
     shard: ShardHost;
 
@@ -631,15 +650,32 @@ const createReferenceHost = (): ReferenceHost => {
     // on write so a caller mutating the object it stored cannot reach back into
     // the "durable" copy — the same isolation a real serializing store gives.
     const kvData = new Map<string, unknown>();
+
+    // The secret-value records live in the SAME map as the KV surface, under a
+    // reserved prefix the KV surface hides. Sharing the map is what makes the
+    // "ShardKvStore shows no secret keys" leg mean something: with two stores it
+    // would pass no matter what the KV surface did.
+    const SECRET_KEY_PREFIX = "__secret_value:";
+    const isSecretKey = (key: string): boolean => key.startsWith(SECRET_KEY_PREFIX);
+    const assertNotSecretKey = (key: string): void => {
+        if (isSecretKey(key)) {
+            throw new TypeError(`key "${key}" is in the reserved secret-value namespace`);
+        }
+    };
+
     const kv: ShardKvStore = {
-        delete: async (key) => kvData.delete(key),
-        get: async (key) => kvData.get(key) as never,
+        delete: async (key) => {
+            assertNotSecretKey(key);
+
+            return kvData.delete(key);
+        },
+        get: async (key) => (isSecretKey(key) ? undefined : (kvData.get(key) as never)),
         list: async (options) => {
             const prefix = options?.prefix ?? "";
             const result = new Map<string, unknown>();
 
             for (const [key, value] of kvData) {
-                if (key.startsWith(prefix)) {
+                if (key.startsWith(prefix) && !isSecretKey(key)) {
                     result.set(key, value);
                 }
             }
@@ -647,7 +683,64 @@ const createReferenceHost = (): ReferenceHost => {
             return result as never;
         },
         put: async (key, value) => {
+            assertNotSecretKey(key);
             kvData.set(key, structuredClone(value));
+        },
+    };
+
+    // A fully fake clock, started at real time: real elapsed time must not leak
+    // into the expiry legs, or a slow run expires a value the test has not moved.
+    let secretClock = Date.now();
+    const now = (): number => secretClock;
+
+    type SecretRecord = { claimant?: string; expiresAt: number; scope: string; value: string };
+    const secretKey = (ref: string): string => `${SECRET_KEY_PREFIX}${ref}`;
+
+    const secretValues: SecretValueHost = {
+        discard: async (ref) => kvData.delete(secretKey(ref)),
+        put: async (value, options) => {
+            assertSecretValueSize(value);
+
+            // Sweep expired records on every put, so a value that is never taken
+            // does not outlive its TTL indefinitely.
+            const at = now();
+
+            for (const [key, stored] of kvData) {
+                if (isSecretKey(key) && (stored as SecretRecord).expiresAt <= at) {
+                    kvData.delete(key);
+                }
+            }
+
+            const expiresAt = at + clampSecretValueTtl(options.ttlMs);
+            const ref = `${String(expiresAt).padStart(15, "0")}.${randomUUID()}`;
+
+            kvData.set(secretKey(ref), { expiresAt, scope: options.scope, value } satisfies SecretRecord);
+
+            return ref;
+        },
+        take: async (ref, options) => {
+            const key = secretKey(ref);
+            const record = kvData.get(key) as SecretRecord | undefined;
+
+            if (record === undefined) {
+                return undefined;
+            }
+
+            if (record.expiresAt <= now()) {
+                kvData.delete(key);
+
+                return undefined;
+            }
+
+            if (record.scope !== options.scope) {
+                return undefined;
+            }
+
+            // The first take binds the ref; a retry by that same claimant still
+            // reads it, and anyone else is refused.
+            record.claimant ??= options.claimant;
+
+            return record.claimant === options.claimant ? record.value : undefined;
         },
     };
 
@@ -808,7 +901,11 @@ const createReferenceHost = (): ReferenceHost => {
         cleanup: teardown,
         directory,
         disposeTerminally: teardown,
+        advanceClock: (ms: number) => {
+            secretClock += ms;
+        },
         kv,
+        secretValues,
         // Text frames only: every Lunora wire frame is JSON, and returning
         // binary as a lossy string would let a corrupted frame read as a
         // delivered one.
