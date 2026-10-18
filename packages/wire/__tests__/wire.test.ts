@@ -40,3 +40,25 @@ describe("stableStringify arrays", () => {
         expect(stableWireKey(Array.from({ length: 1 }))).not.toBe(stableWireKey([]));
     });
 });
+
+const FUNCTION_ERROR = /function/u;
+const SYMBOL_ERROR = /symbol/u;
+
+describe("stableStringify values JSON cannot encode", () => {
+    it("throws for a function or symbol instead of returning undefined", () => {
+        expect.assertions(2);
+
+        // `JSON.stringify(fn)` is `undefined`, so these used to come back as a
+        // non-string — or, inside an object, as the text "undefined".
+        expect(() => stableStringify(() => 1)).toThrow(TypeError);
+        expect(() => stableStringify(Symbol("s"))).toThrow(TypeError);
+    });
+
+    it("does not let distinct arguments collide on one key", () => {
+        expect.assertions(3);
+
+        expect(() => stableStringify({ cb: () => 1 })).toThrow(FUNCTION_ERROR);
+        expect(() => stableStringify([Symbol("a")])).toThrow(SYMBOL_ERROR);
+        expect(stableStringify({ a: undefined })).toBe(stableStringify({}));
+    });
+});
