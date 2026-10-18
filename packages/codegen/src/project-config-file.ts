@@ -70,7 +70,7 @@ interface ProjectConfigLiterals {
     /**
      * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
      * skips on top of the built-in test-file patterns. `codegen.program`: which
-     * files the TypeScript program codegen resolves types over is built from.
+     * files the TypeScript program codegen builds from.
      * Each member carries its own `*Unreadable` flag — a `program` the parser
      * cannot see must not discard a perfectly good `exclude`, and the reverse.
      */
