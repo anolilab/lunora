@@ -1357,7 +1357,10 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/agent.ts", `import { requestSecretTool } from "@lunora/agent";\nexport const ask = requestSecretTool({ description: "API key" });`);
+        write(
+            "lunora/agent.ts",
+            `import { requestSecretTool } from "@lunora/agent";\nexport const ask = requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
 
         const withTool = await inferLunoraBindings({ projectRoot: root });
 
