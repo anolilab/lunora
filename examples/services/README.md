@@ -18,7 +18,9 @@ A Lunora app that calls two sibling Cloudflare Workers over service bindings
 ```bash
 pnpm install
 pnpm --filter @lunora-example/services dev
-curl -X POST http://localhost:5173/_lunora/rpc \
+# 5173 in the main checkout; a linked git worktree derives its own port, which the dev server prints
+PORT=5173
+curl -X POST "http://localhost:$PORT/_lunora/rpc" \
   -H 'content-type: application/json' \
   -d '{"functionPath":"documents:summarise","args":{"prompt":"hi"}}'
 # {"result":{"completed":"completed hi","parsed":"/documents/7"}}
