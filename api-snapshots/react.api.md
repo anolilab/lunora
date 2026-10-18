@@ -53,7 +53,7 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{
         id: string;
@@ -138,6 +138,11 @@ type AgentToolEvent = {
     toolCallId?: string;
     toolName?: string;
     type: "awaiting-approval";
+} | {
+    seq: number;
+    toolCallId?: string;
+    toolName?: string;
+    type: "awaiting-secret";
 };
 ```
 
@@ -390,9 +395,11 @@ interface UseAgentApi {
 interface UseAgentChatApi {
     agents: {
         agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
         agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -421,6 +428,7 @@ interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    declineSecret: (toolCallId: string) => Promise<void>;
     error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
@@ -428,6 +436,7 @@ interface UseAgentChatResult {
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
     streamingText: string;
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 ```
 
@@ -1421,6 +1430,17 @@ type AgentApprovalReference = FunctionReference<"mutation", {
 }>;
 ```
 
+### `AgentDeclineSecretReference` (type)
+
+```ts
+type AgentDeclineSecretReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
 ### `AgentLiveStreamReference` (type)
 
 ```ts
@@ -1455,6 +1475,18 @@ type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
     toolName: string;
 }, {
     revoked: boolean;
+}>;
+```
+
+### `AgentSupplySecretReference` (type)
+
+```ts
+type AgentSupplySecretReference = FunctionReference<"mutation", {
+    secret: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
 }>;
 ```
 
