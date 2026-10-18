@@ -105,6 +105,15 @@ const configName = (workerName: string, binding: string): string => {
     return `${identity.slice(0, NAME_LIMIT - HASH_SUFFIX).replace(TRAILING_DASH, "")}-${hash}`;
 };
 
+/** Cloudflare's name for the engine a URL scheme speaks: `postgresql` is `postgres`, and MariaDB is reached as `mysql`. */
+const engineOf = (scheme: string): string => {
+    if (scheme === "postgresql") {
+        return "postgres";
+    }
+
+    return scheme === "mariadb" ? "mysql" : scheme;
+};
+
 const defaultPort = (scheme: string): number => (scheme === "mysql" ? MYSQL_PORT : POSTGRES_PORT);
 
 /** The `origin` Cloudflare wants, from a `postgres://` or `mysql://` URL, or `undefined` when it is not one. */
@@ -114,7 +123,7 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
         const scheme = url.protocol.slice(0, -1);
         const database = decodeURIComponent(url.pathname.slice(1));
 
-        if (!["mysql", "postgres", "postgresql"].includes(scheme) || url.hostname === "" || database === "") {
+        if (!["mariadb", "mysql", "postgres", "postgresql"].includes(scheme) || url.hostname === "" || database === "") {
             return undefined;
         }
 
@@ -122,9 +131,9 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
             database,
             host: url.hostname,
             password: decodeURIComponent(url.password),
-            port: url.port === "" ? defaultPort(scheme) : Number(url.port),
+            port: url.port === "" ? defaultPort(engineOf(scheme)) : Number(url.port),
             // Cloudflare's name for the engine; `postgresql://` is the same thing spelled out.
-            scheme: scheme === "postgresql" ? "postgres" : scheme,
+            scheme: engineOf(scheme),
             user: decodeURIComponent(url.username),
         };
     } catch {

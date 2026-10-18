@@ -245,7 +245,8 @@ describe(localHyperdrive, () => {
 
         finishSecond();
         await second;
-        await vi.advanceTimersByTimeAsync(0);
+        // The startup is done and no server came: the countdown runs again, then stops both databases.
+        await vi.advanceTimersByTimeAsync(10_000);
 
         expect(stopped.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["ANALYTICS", "HYPERDRIVE"]);
     });
@@ -349,6 +350,51 @@ describe(localHyperdrive, () => {
 
         expect(start).toHaveBeenCalledTimes(2);
         expect(console.info).toHaveBeenCalledWith(expect.stringContaining("DB2"));
+    });
+
+    it("calls off the stop countdown as soon as a replacement config starts resolving, even if it takes longer than the countdown", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        let finishSecond: () => void = () => {};
+        let calls = 0;
+        const stopped: string[] = [];
+        const start = vi.fn<Start>(async () => {
+            calls += 1;
+
+            if (calls > 1) {
+                await new Promise<void>((resolve) => {
+                    finishSecond = resolve;
+                });
+            }
+
+            return {
+                bindings: [`DB${String(calls)}`],
+                stop: async () => {
+                    stopped.push(`DB${String(calls)}`);
+                },
+            };
+        });
+        const plugin = localHyperdrive({ projectRoot: "/project/slow-start", start });
+
+        await runConfigHook(plugin, "serve");
+        attachServer(plugin)();
+        // The old server has closed and its countdown runs; a replacement config starts, and takes longer than the countdown.
+        await vi.advanceTimersByTimeAsync(2000);
+
+        const second = runConfigHook(plugin, "serve");
+
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        finishSecond();
+        await second;
+        attachServer(plugin);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(stopped).toStrictEqual([]);
     });
 
     it("starts a fresh database for a later session once the first one's were stopped", async () => {

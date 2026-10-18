@@ -416,6 +416,28 @@ describe("hyperdrive on deploy", () => {
             expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
         });
 
+        it("accepts a mariadb:// connection string and sends it as mysql, with MySQL's default port", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = hyperdriveApi([]);
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "mariadb://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            const { origin } = JSON.parse(api.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body as string) as {
+                origin: { port: number; scheme: string };
+            };
+
+            expect(origin.scheme).toBe("mysql");
+            expect(origin.port).toBe(3306);
+        });
+
         it("sends postgres as the engine for a postgresql:// connection string", async () => {
             expect.assertions(1);
 

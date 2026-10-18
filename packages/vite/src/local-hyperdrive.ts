@@ -101,6 +101,9 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
 
             const session = sessionFor(projectRoot);
 
+            // A server is on its way: the countdown to stop the databases is off until it has come and gone again.
+            clearTimeout(session.stopTimer);
+
             const previous = session.pending;
             const attempt = (async () => {
                 await previous;
@@ -129,7 +132,16 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive, wranglerCo
             // Later attempts queue behind this one whether it succeeds or not; only this caller sees its error.
             session.pending = attempt.catch((): undefined => undefined);
 
-            await attempt;
+            try {
+                await attempt;
+            } finally {
+                // The countdown restarts once the startup is done, so a server gets the grace period to arrive and
+                // a replacement that never does (its config failed later) does not keep the databases running.
+                if (session.servers === 0) {
+                    clearTimeout(session.stopTimer);
+                    session.stopTimer = scheduleStop(session);
+                }
+            }
         },
         buildEnd() {
             // Middleware-mode close (no httpServer to listen on); a no-op in classic dev mode and for a build.

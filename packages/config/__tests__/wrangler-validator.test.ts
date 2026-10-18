@@ -798,15 +798,15 @@ describe("wrangler-validator", () => {
             wrangler.env = {
                 production: {
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                    // `hyperdrive` is a real WranglerConfig key with no verified
+                    // `pipelines` is a real WranglerConfig key with no verified
                     // entry in either NON_INHERITABLE_KEYS or INHERITABLE_KEYS.
-                    hyperdrive: [{ binding: "HYPERDRIVE", id: "env-only-id" }],
+                    pipelines: [{ binding: "EVENTS", stream: "env-only-stream" }],
                 },
             };
 
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
-            expect(report.warnings.some((line) => line.includes("hyperdrive") && line.includes("TOP-LEVEL value only"))).toBe(true);
+            expect(report.warnings.some((line) => line.includes("pipelines") && line.includes("TOP-LEVEL value only"))).toBe(true);
             // Exactly one such warning, not one per unverified key.
             expect(report.warnings.filter((line) => line.includes("TOP-LEVEL value only"))).toHaveLength(1);
         });
