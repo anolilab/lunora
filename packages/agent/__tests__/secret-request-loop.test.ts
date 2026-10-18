@@ -337,7 +337,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const takes = runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret");
 
         expect(takes.map((dispatch) => dispatch.args)).toStrictEqual([
-            { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: THREAD, toolCallId: "call_1" },
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: INSTANCE, threadKey: THREAD, toolCallId: "call_1" },
         ]);
         expect(runtime.dispatches.some((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toBe(true);
 
@@ -525,6 +525,7 @@ describe("withSecret — the consuming step", () => {
     const consumerContext = (host: SecretHost, step: AgentStepLike, claims: string[], idempotencyKey: string, toolCallId: string): AgentToolContext =>
         ({
             idempotencyKey,
+            instanceId: INSTANCE,
             run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => {
                 if (reference["__lunoraRef"] === "agents:agentTakeSecret") {
                     claims.push(String(args?.["claimant"]));
@@ -643,6 +644,7 @@ describe("withSecret — two secrets in one call", () => {
         const journal = new WaitJournal();
         const context = {
             idempotencyKey: "tool:charge:call_2",
+            instanceId: INSTANCE,
             run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => Promise.resolve(host.handlers[reference["__lunoraRef"]]?.(args)),
             step: journal,
             threadKey: THREAD,

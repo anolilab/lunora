@@ -108,6 +108,13 @@ export interface AgentToolContext {
     idempotencyKey: string;
 
     /**
+     * The workflow instance (the run) this tool call belongs to. A provider-issued
+     * tool-call id can repeat across runs, so a secret request is claimed by this
+     * id, not by the call id alone.
+     */
+    instanceId: string;
+
+    /**
      * Verified owner of the thread this run belongs to (the loop copies it off
      * {@link AgentRunInput.owner}); `undefined` on an anonymous/single-tenant
      * thread. `agent.asTool` forwards it to the CHILD run, so a sub-agent thread

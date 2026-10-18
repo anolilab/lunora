@@ -283,7 +283,7 @@ describe("secret request component", () => {
 
             expect(discarded).toHaveLength(1);
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBeUndefined();
             expect(caller.sent).toStrictEqual([]);
             expect(requestRow(rows)["status"]).toBe("pending");
@@ -348,7 +348,7 @@ describe("secret request component", () => {
                 status: "supplied",
             });
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBe(SECRET);
             expect(requestRow(rows)["status"]).toBe("supplied");
         });
@@ -387,6 +387,65 @@ describe("secret request component", () => {
             ).resolves.toStrictEqual({
                 status: "expired",
             });
+        });
+    });
+
+    describe("a take or discard from a run that no longer owns the request", () => {
+        it("neither takes nor discards the value a newer run was supplied under the same tool-call id", async () => {
+            expect.assertions(4);
+
+            const { store, discarded } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+
+            await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            // A newer run reuses `call_1`, reopens the request, and is supplied its own value.
+            await call(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-2", key: "t-1", onConcurrentRun: "replace", owner: "user-a" });
+            await call(functions.agentOpenSecretRequest, ctx, {
+                consumerTool: "charge",
+                expiresAt: NOW + DEADLINE_MS,
+                instanceId: "wf-2",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+            await call(functions.agentAppendMessage, ctx, {
+                content: 'Awaiting a secret for tool "requestKey".',
+                messageKey: "wf-2:secret:call_1",
+                role: "tool",
+                status: "awaiting_secret",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+            await call(functions.agentSupplySecret, ctx, { secret: "newer-value", threadKey: "t-1", toolCallId: "call_1" });
+
+            // The older run's delayed discard and take arrive only now.
+            await call(functions.agentDiscardSecret, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(
+                take(functions, ctx, {
+                    instanceId: "wf-1",
+                    claimant: "tool:charge:call_2",
+                    consumerCallId: "call_2",
+                    instanceId: "wf-1",
+                    threadKey: "t-1",
+                    toolCallId: "call_1",
+                }),
+            ).resolves.toBeUndefined();
+
+            expect(discarded).toHaveLength(1);
+            expect(requestRow(rows)).toMatchObject({ instanceId: "wf-2", status: "supplied" });
+            await expect(
+                take(functions, ctx, {
+                    instanceId: "wf-1",
+                    claimant: "tool:charge:call_2",
+                    consumerCallId: "call_2",
+                    instanceId: "wf-2",
+                    threadKey: "t-1",
+                    toolCallId: "call_1",
+                }),
+            ).resolves.toBe("newer-value");
         });
     });
 
@@ -522,7 +581,7 @@ describe("secret request component", () => {
             await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
 
             const consumed = (claimant: string, consumerCallId: string, threadKey = "t-1"): Promise<unknown> =>
-                take(functions, ctx, { claimant, consumerCallId, threadKey, toolCallId: "call_1" });
+                take(functions, ctx, { instanceId: "wf-1", claimant, consumerCallId, threadKey, toolCallId: "call_1" });
 
             await expect(consumed("tool:charge:call_2", "call_2")).resolves.toBe(SECRET);
             await expect(consumed("tool:charge:call_2", "call_2")).resolves.toBe(SECRET);
@@ -542,14 +601,20 @@ describe("secret request component", () => {
 
             // A longer step name must not pass the consumer check: the claimant has to be exactly this call's step.
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2:extra", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, {
+                    instanceId: "wf-1",
+                    claimant: "tool:charge:call_2:extra",
+                    consumerCallId: "call_2",
+                    threadKey: "t-1",
+                    toolCallId: "call_1",
+                }),
             ).resolves.toBeUndefined();
             // The refusal bound nothing, so the declared consumer still takes the value.
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBe(SECRET);
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_9", consumerCallId: "call_9", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_9", consumerCallId: "call_9", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBeUndefined();
         });
 
@@ -562,14 +627,14 @@ describe("secret request component", () => {
             await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
 
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBe(SECRET);
 
-            await call(functions.agentDiscardSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
-            await call(functions.agentDiscardSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentDiscardSecret, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentDiscardSecret, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
 
             await expect(
-                take(functions, ctx, { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
             ).resolves.toBeUndefined();
             expect(requestRow(rows)["status"]).toBe("consumed");
         });
