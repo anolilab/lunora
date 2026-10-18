@@ -344,6 +344,23 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `SecretRequestInput` (interface)
+
+```ts
+interface SecretRequestInput {
+    label: string;
+}
+```
+
+### `SecretUnavailableError` (class)
+
+```ts
+class SecretUnavailableError extends Error {
+    readonly code = "SECRET_UNAVAILABLE";
+    constructor();
+}
+```
+
 ### `SkillConfig` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -516,6 +533,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `requestSecretTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `resolveAgentModel` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -549,6 +570,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `webSearchTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `withSecret` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

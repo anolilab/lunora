@@ -63,5 +63,13 @@ const definedColumns = (columns: Record<string, unknown>): Record<string, unknow
     return result;
 };
 
+/**
+ * How long a supplied secret value stays takeable. Counted from the supply, so
+ * it has to cover the gap until the model's next turn calls the consuming tool;
+ * the consumer's `discard` removes it sooner on the success path, and this bound
+ * is the backstop for a crash in between. Kept well under the host's ceiling.
+ */
+const AGENT_SECRET_TTL_MS: number = 15 * 60 * 1000;
+
 export type { AgentRegisteredFunction };
-export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns };
+export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns };

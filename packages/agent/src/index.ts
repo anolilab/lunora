@@ -30,6 +30,8 @@ export type {
     FsToolOptions,
 } from "./sandbox";
 export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
+export type { SecretRequestInput } from "./secret-request-tool";
+export { requestSecretTool, SecretUnavailableError, withSecret } from "./secret-request-tool";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentApprovalContext,
