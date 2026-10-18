@@ -75,7 +75,7 @@ const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
             // returns to this topic before the next event arrives.
             setState(undefined);
         };
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-opens on `connectionKey`, a serialization of every connection field (url, topic, credentials, retry tuning, sorted headers). The field values are read from `latestRef`, so a caller passing a fresh `headers` literal with the same content does not resubscribe. The callbacks are read through `latestRef` too, so their identity never resubscribes.
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-opens on `connectionKey`, a serialization of every connection field (url, topic, credentials, retry tuning, headers). The field values are read from `latestRef`, so a caller passing a fresh `headers` literal with the same content does not resubscribe. The callbacks are read through `latestRef` too, so their identity never resubscribes.
     }, [connectionKey]);
 
     return { error: current?.error, lastEvent: current?.lastEvent };
