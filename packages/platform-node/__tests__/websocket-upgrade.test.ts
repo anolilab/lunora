@@ -294,6 +294,101 @@ describe("node websocket upgrades", () => {
     });
 });
 
+describe("node upgrade lifecycle", () => {
+    /** Open a raw upgrade to `path`; resolves once the request is written. */
+    const rawOpen = async (server: NodeHttpServer, path: string): Promise<import("node:net").Socket> => {
+        const { port } = new URL(server.origin);
+        const { createConnection } = await import("node:net");
+
+        return new Promise((resolve) => {
+            const socket = createConnection({ host: "127.0.0.1", port: Number(port) }, () => {
+                socket.write(
+                    // The RFC 6455 example key: a fixed value, not a credential.
+                    // eslint-disable-next-line no-secrets/no-secrets
+                    `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+                );
+                resolve(socket);
+            });
+
+            // The tests reset or destroy this socket on purpose.
+            socket.on("error", () => undefined);
+        });
+    };
+
+    const sleep = async (ms: number): Promise<void> => {
+        await new Promise((resolve) => {
+            setTimeout(resolve, ms);
+        });
+    };
+
+    it("aborts a pending upgrade when the client resets the connection during the handshake", async () => {
+        expect.assertions(2);
+
+        let upgradeSignal: AbortSignal | undefined;
+        const server = await createNodeHttpServer({
+            fetch: (request) => {
+                if (request.headers.get("upgrade") !== "websocket") {
+                    return Promise.resolve(new Response("ok"));
+                }
+
+                upgradeSignal = request.signal;
+
+                // The shard decides only after the client has gone, and its refusal is written to the dead socket.
+                return new Promise<Response>((resolve) => {
+                    request.signal.addEventListener("abort", () => {
+                        resolve(new Response("nope", { status: 401 }));
+                    });
+                });
+            },
+        });
+
+        const client = await rawOpen(server, "/slow");
+
+        await waitFor(() => upgradeSignal !== undefined);
+        client.resetAndDestroy();
+        await waitFor(() => upgradeSignal?.aborted === true);
+        // Give the refusal write time to reach the dead socket: a missing error listener would end the process here.
+        await sleep(50);
+
+        expect(upgradeSignal?.aborted).toBe(true);
+
+        const followUp = await fetch(`${server.origin}/`);
+
+        await expect(followUp.text()).resolves.toBe("ok");
+
+        await server.close();
+    });
+
+    it("shuts down promptly while an upgrade is still awaiting its fetch", async () => {
+        expect.assertions(1);
+
+        let entered = false;
+        const server = await createNodeHttpServer({
+            fetch: () => {
+                entered = true;
+
+                return new Promise<Response>(() => {
+                    // Never settles: the shard is still deciding.
+                });
+            },
+        });
+
+        const client = await rawOpen(server, "/slow");
+
+        await waitFor(() => entered);
+
+        const closed = server.close().then(() => "closed" as const);
+        const hung = new Promise<"hung">((resolve) => {
+            setTimeout(resolve, 2000, "hung" as const);
+        });
+        const outcome = await Promise.race([closed, hung]);
+
+        client.destroy();
+
+        expect(outcome).toBe("closed");
+    });
+});
+
 describe("bindShardSockets", () => {
     it("logs a synchronous throw from webSocketMessage the same way as a rejection", async () => {
         expect.assertions(2);

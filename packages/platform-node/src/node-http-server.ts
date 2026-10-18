@@ -216,6 +216,8 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
 
     // `noServer`: the HTTP listener owns the upgrade, so the worker's own checks run before any handshake is written.
     const webSockets = new WebSocketServer({ noServer: true });
+    // Raw sockets whose upgrade is still awaiting the worker. They are not in `webSockets.clients` yet, so `close` reaches them here.
+    const pendingUpgrades = new Set<Duplex>();
     const server = createServer();
     // The origin every request URL is built on, for plain requests and upgrades alike. The client's Host header is never read:
     // the configured public origin, or else the bound address.
@@ -270,8 +272,15 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         // An object, not a `let`: the close fires during the awaited fetch, which control-flow narrowing cannot see.
         const socketState = { closed: false };
 
+        pendingUpgrades.add(socket);
+        // The socket has no other 'error' listener until `ws` attaches one. A reset during the fetch, or while a refusal is
+        // written, would otherwise be an unhandled 'error' that ends the process. The close that follows does the cleanup.
+        socket.on("error", () => {
+            socket.destroy();
+        });
         socket.once("close", () => {
             socketState.closed = true;
+            pendingUpgrades.delete(socket);
             abort.abort();
         });
 
@@ -324,6 +333,12 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                 for (const ws of webSockets.clients) {
                     ws.terminate();
                 }
+
+                for (const socket of pendingUpgrades) {
+                    socket.destroy();
+                }
+
+                // A pending upgrade's fetch may never settle, so its raw socket is destroyed rather than waited for.
 
                 webSockets.close();
                 server.closeAllConnections();
