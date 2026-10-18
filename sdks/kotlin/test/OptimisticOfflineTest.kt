@@ -327,6 +327,76 @@ private fun optimisticCursorlessFramePreservesCursor() {
     check(live.state().layers.size == count(case["layersAfterConfirm"]), "so the reply's commit cursor can still drop the overlay")
 }
 
+/** The credential-shaped argument an online-only write carries; it must never reach storage. */
+private const val ONLINE_ONLY_SECRET = "sentinel-secret-7731"
+
+private fun onlineOnlyWrite(): SubmitOptions =
+    SubmitOptions("auth:setPassword", WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))).apply { onlineOnly = true }
+
+/** With the socket down, an online-only write is refused before anything is queued or sent. */
+private fun onlineOnlyWriteIsRefusedWhenDisconnected() {
+    covers("offline_online_only_refused_when_disconnected")
+    var posts = 0
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+
+    val refused = runCatching { client.submit(onlineOnlyWrite()) }.exceptionOrNull() as? OfflineException
+
+    check(refused?.code == OFFLINE_NOT_QUEUED, "an online-only write is refused with OFFLINE_NOT_QUEUED")
+    check(client.pendingMutationCount() == 0, "and nothing is queued")
+    check(store.appended.isEmpty(), "the persistence adapter never sees the write")
+    check(!Json.write(store.records).contains(ONLINE_ONLY_SECRET), "the arguments never reach storage")
+    check(posts == 0, "and a refused write never reaches the wire")
+}
+
+/** With the socket up, an online-only write is sent normally and commits. */
+private fun onlineOnlyWriteIsSentWhenConnected() {
+    covers("offline_online_only_sends_when_connected")
+    val bodies = mutableListOf<String>()
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, body ->
+        bodies.add(String(body, Charsets.UTF_8))
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+    client.attachSocket { }
+
+    val outcome = client.submit(onlineOnlyWrite())
+
+    check(outcome.status == MutationStatus.COMMITTED, "a connected online-only write commits")
+    check(bodies.size == 1 && bodies[0].contains(ONLINE_ONLY_SECRET), "and goes out once, with its arguments on the wire")
+    check(store.appended.isEmpty(), "and is never persisted")
+}
+
+/** A normal write made with the socket down still queues beside an online-only one. */
+private fun normalWriteStillQueuesBesideAnOnlineOnlyOne() {
+    covers("offline_online_only_leaves_normal_writes_queued")
+    var posts = 0
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"result\":null}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+
+    val outcome = client.submit(SubmitOptions("messages:send"))
+
+    check(outcome.status == MutationStatus.QUEUED, "a normal write still queues offline")
+    check(client.pendingMutationCount() == 1, "and the queue holds it")
+    check(store.appended.size == 1, "and it is persisted")
+    check(posts == 0, "and nothing is sent")
+}
+
 /**
  * A persistence adapter that records every call.
  *
@@ -1842,6 +1912,9 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueHydrateOverflowSettlesDiscarded()
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
+    onlineOnlyWriteIsRefusedWhenDisconnected()
+    onlineOnlyWriteIsSentWhenConnected()
+    normalWriteStillQueuesBesideAnOnlineOnlyOne()
     offlineFlushBatchesMultipleWrites()
     batchEntryCapMatchesProtocol()
     batchSplitsOnPayloadTooLarge()

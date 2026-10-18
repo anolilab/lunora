@@ -109,6 +109,14 @@ restored record whose args cannot be wire-_decoded_ is purged and settled
 Every discard — including one the capacity cap evicts out of a _restored_ queue,
 which has no caller left to tell — reaches `client.onMutationSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — sets
+`onlineOnly = true` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws an
+`OfflineException` coded `OFFLINE_NOT_QUEUED` before any optimistic layer is
+installed, and its arguments never reach the persistence adapter. It does not
+wait for a flush or queue behind pending writes, so it may land before an older
+queued write to the same document.
+
 A replay the server rate-limits is re-queued, not dropped: `FlushReport.retryAfterMs`
 carries the delay the envelope named, and the next flush is a no-op until it has
 passed.
