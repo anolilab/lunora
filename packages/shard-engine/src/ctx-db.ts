@@ -117,6 +117,7 @@ import type {
     RankIndexDefinitionLike,
     ReadHook,
     RelationDefinitionLike,
+    RelationEdge,
     RestrictableQueryOptions,
     SchemaLike,
     ScoredDocument,
@@ -1990,6 +1991,46 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * already the expensive part.
      */
     const relationEdges = deriveRelationEdges(schema);
+
+    /**
+     * The scalar `v.id` foreign keys of each table whose parent can be looked up
+     * in THIS database: both tables live on the same shard. A `.shardBy()` table
+     * has one database per key, so a parent that is sharded (or a child whose
+     * shard may differ) is somewhere this lookup cannot see, and a `.global()`
+     * parent is in D1. An array of ids is not checked either — that is one lookup
+     * per element, not per key.
+     */
+    const checkedForeignKeys = new Map<string, RelationEdge[]>();
+
+    for (const edge of relationEdges) {
+        const sameShard = (table: string): boolean => (schema.tables[table]?.shardMode?.kind ?? "root") === "root";
+
+        if (!edge.array && sameShard(edge.sourceTable) && sameShard(edge.targetTable)) {
+            checkedForeignKeys.set(edge.sourceTable, [...(checkedForeignKeys.get(edge.sourceTable) ?? []), edge]);
+        }
+    }
+
+    /**
+     * Throw `VALIDATION_ERROR` when a foreign-key column in `document` names a row
+     * that does not exist — one primary-key lookup per reference, inside the
+     * write's own transaction. `fields` narrows the check to the columns a patch
+     * sets, so a row that already held a dangling reference stays patchable.
+     */
+    const assertForeignKeysExist = (tableName: string, document: Record<string, unknown>, fields?: ReadonlySet<string>): void => {
+        for (const edge of checkedForeignKeys.get(tableName) ?? []) {
+            const value = document[edge.column];
+
+            if (typeof value !== "string" || (fields !== undefined && !fields.has(edge.column))) {
+                continue;
+            }
+
+            const parent = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(edge.targetTable)} WHERE id = ${value} LIMIT 1`).toArray();
+
+            if (parent.length === 0) {
+                throw new LunoraError("VALIDATION_ERROR", `${edge.name} references ${edge.targetTable} row "${value}", which does not exist`);
+            }
+        }
+    };
     const relationWrites = describeRelationWrites(schema, options.inTransaction);
     const deleteRereadTables = deriveDeleteRereadTables(schema);
     const softDeleteFields = deriveSoftDeleteFields(schema);
@@ -3839,6 +3880,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 trusted: insertOptions?.allowExplicitId === true,
             });
 
+            if (insertOptions?.allowExplicitId !== true) {
+                assertForeignKeysExist(tableName, withDefaults);
+            }
+
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
             // responds) or the trusted-import `allowExplicitId` (verbatim `_id`).
@@ -4160,6 +4205,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // `merged` is stored output, which its own transform would reject or
             // transform a second time.
             const merged = runRowValidators(tableDefinition, mergedRow, true, { only: new Set(Object.keys(effectivePatch)) });
+
+            assertForeignKeysExist(tableName, merged, new Set(Object.keys(effectivePatch)));
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -4664,6 +4711,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // is stored as its parsed output, except on a trusted replay, whose
             // document already holds it.
             const replaced = runRowValidators(tableDefinition, replacement, false, { trusted: replaceOptions?.allowExplicitId === true });
+
+            if (replaceOptions?.allowExplicitId !== true) {
+                assertForeignKeysExist(tableName, replaced);
+            }
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
