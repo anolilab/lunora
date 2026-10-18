@@ -95,7 +95,7 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { deriveWsUrl, joinUrl, withQuery } from "./client-urls";
+import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
@@ -2165,10 +2165,12 @@ class LunoraClient {
      * chat.close();
      * ```
      *
-     * The socket authenticates exactly like the shard socket: the browser's
-     * session cookie, or the `wsToken` credential (the same
-     * {@link setWsToken} / `?token=` scheme). A route declared `auth: true` on the
-     * server refuses a socket with no verified session. Reconnects with the
+     * The socket carries the browser's session cookie, and that cookie is the
+     * only credential that establishes a user. A route declared `auth: true` on
+     * the server refuses a socket with no verified session. The `wsToken`
+     * (`?token=`, see {@link setWsToken}) authorises the admin surfaces only; it
+     * does not sign a user in to a route, so a private route needs the session
+     * cookie. Reconnects with the
      * client's configured backoff. `onMessage` receives what the route's server
      * handler sent (via its `socket.send`/`socket.broadcast`), never the sender's
      * own raw frame — the handler is authoritative. Returns a handle with `send`
@@ -2905,7 +2907,8 @@ class LunoraClient {
             return () => undefined;
         }
 
-        const channel = this.openSupplementarySocket(this.supplementaryUrl(SCHEDULED_WS_PATH), {
+        // The admin socket lives on the shard's own origin, as it always has: a custom `wsUrl` (a proxy, a query) does not move it.
+        const channel = this.openSupplementarySocket(joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH), {
             onMessage: (event: MessageEvent) => {
                 // `lastFrameAt` is stamped by `openManagedSocket` itself (its
                 // `message` listener) for every caller — nothing to do here
@@ -5809,7 +5812,19 @@ class LunoraClient {
         // Closing the live socket re-arms the reconnect (`onClose` → `scheduleReconnect`),
         // which opens again under whatever credential is current.
         const bounce = (): void => {
-            conn.socket?.close();
+            const { socket } = conn;
+
+            if (socket === undefined) {
+                return;
+            }
+
+            // Detach first: the identity guard in `openManagedSocket` then drops this socket's late frames, and its
+            // close event no longer arms the reconnect, so the reconnect is armed here under the current credential.
+            conn.socket = undefined;
+            stopHeartbeat(conn);
+            socket.close();
+            handlers.onClose?.();
+            scheduleReconnect();
         };
 
         this.supplementaryBounces.add(bounce);
@@ -5834,12 +5849,12 @@ class LunoraClient {
      * applies to them too and the path never lands inside a query string.
      */
     private supplementaryUrl(path: string): string {
-        const url = new URL(this.wsUrl);
+        const url = parseSocketUrl(this.wsUrl);
         const prefix = url.pathname.endsWith(WS_PATH) ? url.pathname.slice(0, -WS_PATH.length) : url.pathname;
 
         url.pathname = joinUrl(prefix, path);
 
-        return url.toString();
+        return serializeSocketUrl(url, this.wsUrl);
     }
 
     private wsUrlFor(shardKey: string | undefined, token: string | undefined, base: string = this.wsUrl): string {
@@ -5849,7 +5864,7 @@ class LunoraClient {
 
         // The server reads the first value of a repeated parameter, so a copy already on the configured URL would
         // win over this connection's own. Set replaces it instead of appending after it.
-        const url = new URL(base);
+        const url = parseSocketUrl(base);
         const replaced = new Set<string>([...(shardKey === undefined ? [] : ["shard"]), ...(token === undefined ? [] : ["token"])]);
         const kept = [...url.searchParams]
             .filter(([name]) => !replaced.has(name))
@@ -5865,7 +5880,7 @@ class LunoraClient {
 
         url.search = kept.join("&");
 
-        return url.toString();
+        return serializeSocketUrl(url, base);
     }
 
     /**

@@ -125,6 +125,46 @@ describe("connectWebSocket", () => {
         expect(lastSocket().url).toBe("wss://app.example/chat?tenant=a");
     });
 
+    it("opens a route on a relative socket url instead of throwing on connect", () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ url: "/api", wsUrl: "/socket/_lunora/ws", WebSocket: WebSocketImpl });
+
+        expect(() => client.connectWebSocket("/chat", { onMessage: () => undefined })).not.toThrow();
+        expect(lastSocket().url).toBe("/socket/chat");
+    });
+
+    it("ignores a frame from a socket that a credential rotation bounced, so its frames never reach the old route", () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+        const onMessage = vi.fn<(message: unknown) => void>();
+
+        client.connectWebSocket("/chat", { onMessage });
+
+        const bounced = lastSocket();
+
+        bounced.fire("open");
+        client.setWsToken("rotated");
+        bounced.fire("message", { data: JSON.stringify({ data: encodeWire({ text: "late" }), type: "message" }) });
+
+        expect(onMessage).not.toHaveBeenCalled();
+    });
+
+    it("runs the scheduled-jobs admin socket on the shard origin, whatever the custom wsUrl", () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({
+            url: "https://app.example",
+            wsUrl: "wss://edge.example/socket/_lunora/ws?tenant=a",
+            WebSocket: WebSocketImpl,
+        });
+
+        client.subscribeScheduledJobs(() => undefined);
+
+        expect(lastSocket().url).toBe("wss://app.example/_lunora/admin/scheduled/ws");
+    });
+
     it("does not open on a token minted under a credential that was replaced while pending", async () => {
         expect.assertions(2);
 

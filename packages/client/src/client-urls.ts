@@ -34,4 +34,16 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
     return query === "" ? path : `${path}?${query}`;
 };
 
-export { bucketQuery, deriveWsUrl, joinUrl, withQuery };
+/** Base for a socket URL that is same-origin (relative), so it parses; the base is dropped again by {@link serializeSocketUrl}. */
+// eslint-disable-next-line sonarjs/no-clear-text-protocols -- a placeholder base that is never sent; it is stripped again
+const SAME_ORIGIN_BASE = "http://same-origin.invalid";
+
+/** Parse a socket URL that may be absolute or relative to the page. */
+const parseSocketUrl = (value: string): URL => new URL(value, SAME_ORIGIN_BASE);
+
+/** The URL back in the form it was given: absolute stays absolute, a relative URL stays relative. */
+const ABSOLUTE_URL = /^[a-z][a-z\d+.-]*:/iu;
+
+const serializeSocketUrl = (url: URL, original: string): string => (ABSOLUTE_URL.test(original) ? url.toString() : `${url.pathname}${url.search}${url.hash}`);
+
+export { bucketQuery, deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl, withQuery };
