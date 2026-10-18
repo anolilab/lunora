@@ -235,7 +235,6 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     const control = (subscriptionId: string, body: Record<string, unknown>): Promise<number | undefined> => {
         const previous = controlChains.get(subscriptionId) ?? Promise.resolve();
         // A call still queued when `close()` runs is dropped: `close()` only cancels the request already in flight.
-        // A call still queued when `close()` runs is dropped: `close()` only cancels the request already in flight.
         const run = previous.then(() => (isClosed() ? undefined : postControl(body)));
         const tail = run.then(
             () => undefined,
