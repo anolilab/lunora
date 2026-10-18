@@ -231,6 +231,52 @@ describe("node websocket upgrades", () => {
         expect(shardDo.calls.some((call) => call.functionPath === "sockets:chat" && call.args["kind"] === "close")).toBe(true);
     });
 
+    it("releases a socket whose directly registered close handler throws synchronously", async () => {
+        expect.assertions(1);
+
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("tenant-42");
+        const shardDo = new TestShardDO(createNodeShardState(shard) as never, {});
+
+        bindShardSockets(shardDo, {
+            onClose: () => {
+                // Registered on `inbound` directly, so nothing in `bindShardSockets` guards it.
+                shard.inbound.onClose(() => {
+                    throw new Error("sync close failure");
+                });
+            },
+            onMessage: (handler) => {
+                shard.inbound.onMessage(handler);
+            },
+        });
+
+        const server = await createNodeHttpServer({ fetch: async (request) => shardDo.fetch(request) });
+
+        cleanups.push(async () => {
+            await server.close();
+            registry.close();
+        });
+
+        const client = new WebSocket(socketUrl(server, "/chat"));
+
+        await new Promise<void>((resolve, reject) => {
+            client.addEventListener("open", () => {
+                resolve();
+            });
+            client.addEventListener("error", () => {
+                reject(new Error("the handshake failed"));
+            });
+        });
+        await waitFor(() => shardDo.pushToSockets("ready") > 0);
+
+        client.close(1000, "done");
+
+        // The throw is contained, and the socket is still deregistered.
+        await waitFor(() => shardDo.pushToSockets("after") === 0);
+
+        expect(shardDo.pushToSockets("after")).toBe(0);
+    });
+
     it("sends a shard frame out to the connected client", async () => {
         expect.assertions(1);
 

@@ -287,7 +287,16 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
     const hub = {
         close: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => {
-            const handled = listeners.close?.(socket, code, reason, wasClean);
+            // A handler registered directly on `inbound` may throw synchronously, inside a `ws` event or the marker timer, where nothing
+            // catches it: it is treated as a rejection, so the socket is still released.
+            let handled: Promise<void> | void;
+
+            try {
+                handled = listeners.close?.(socket, code, reason, wasClean);
+            } catch (error) {
+                handled = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+            }
+
             // The registry drops the socket only after the shard's close handler settles, so the handler can still resolve it.
             const release = (): void => {
                 const state = byRaw.get(socket);
@@ -307,7 +316,12 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             pendingCloses.add(settled);
         },
         message: (socket: NodeServerEnd, data: string | ArrayBuffer) => {
-            listeners.message?.(socket, data);
+            try {
+                listeners.message?.(socket, data);
+            } catch (error) {
+                // eslint-disable-next-line no-console -- a frame handler throwing must not unwind into the `ws` event loop
+                console.error("[@lunora/platform-node] socket message handler threw", error);
+            }
         },
     };
 
