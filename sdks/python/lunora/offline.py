@@ -44,6 +44,8 @@ from .wire import decode_wire, encode_wire
 OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
 #: The write's precondition no longer held when the flush reached it.
 OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED"
+#: An online-only write was refused because the connection is not live. Nothing was queued.
+OFFLINE_NOT_QUEUED = "OFFLINE_NOT_QUEUED"
 #: The write was queued under a different identity than the one now in effect.
 OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
 #: The write's args cannot be wire-encoded, so no replay of it can ever succeed.

@@ -137,8 +137,19 @@ type SubmitOptions struct {
 	// Precondition is re-evaluated just before a QUEUED write replays; false
 	// drops it rather than replaying a write that can only fail.
 	Precondition func() bool
+	// OnlineOnly is never queued, persisted or replayed. Where a normal write
+	// would be queued, Submit returns an OfflineError coded CodeOfflineNotQueued
+	// and the arguments never reach the queue or the persistence adapter. It does
+	// not wait for a queue flush or queue behind pending writes, so it may
+	// overtake them. For a credential or a one-time token.
+	OnlineOnly bool
 	// OnSettled reports the eventual verdict on a queued write.
 	OnSettled func(MutationSettled)
+}
+
+// onlineOnlyNotQueued is the refusal of an OnlineOnly write that would be queued.
+func onlineOnlyNotQueued(functionPath string) OfflineError {
+	return OfflineError{Code: CodeOfflineNotQueued, Message: "'" + functionPath + "' is online-only and the connection is not live, so it was not queued"}
 }
 
 // ErrClientClosed is returned by Submit after Close.
@@ -202,10 +213,18 @@ func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
 	closed := c.closed
+	// Read before any overlay is applied, so a refused online-only write leaves
+	// nothing to roll back. A socket that detaches after this read is caught by the
+	// check under the lock below.
+	queuesNow := c.send == nil && (c.wasEverConnected || c.offline.QueueBeforeFirstConnect())
 	c.mu.Unlock()
 
 	if closed {
 		return MutationOutcome{}, ErrClientClosed
+	}
+
+	if options.OnlineOnly && queuesNow {
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath)
 	}
 
 	writeID := options.MutationID
@@ -235,6 +254,15 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 
 	queue := c.offline
 	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
+
+	// Refused with the layers rolled back, which is what a closed client does
+	// above. The layers were installed before the lock, so they cannot be skipped.
+	if queueIt && options.OnlineOnly {
+		c.mu.Unlock()
+		c.settleLayers(nil, rollbacks, nil)
+
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath)
+	}
 
 	var evicted []Discarded
 

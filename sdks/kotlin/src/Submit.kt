@@ -94,6 +94,15 @@ class SubmitOptions(val functionPath: String, val args: WireValue? = null) {
      */
     var precondition: (() -> Boolean)? = null
 
+    /**
+     * Never queued, persisted or replayed. Where a normal write would be queued, submit throws an
+     * [OfflineException] coded [OFFLINE_NOT_QUEUED] before any optimistic layer is installed, so
+     * the arguments never reach the queue or the persistence adapter. It does not wait for a queue
+     * flush or queue behind pending writes, so it may overtake them. For a credential or a
+     * one-time token.
+     */
+    var onlineOnly: Boolean = false
+
     /** Reports the eventual verdict on a queued write. */
     var onSettled: ((MutationSettled) -> Unit)? = null
 }
@@ -129,14 +138,17 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
         // enqueued onto a queue that was just cleared settles to nobody.
         if (closed) throw OfflineException(CLIENT_CLOSED, "client is closed")
 
+        val queueIt = send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect)
+
+        // Refused before any layer is installed, so no overlay outlives the call.
+        if (queueIt && options.onlineOnly) {
+            throw OfflineException(OFFLINE_NOT_QUEUED, "'${options.functionPath}' is online-only and the connection is not live, so it was not queued")
+        }
+
         val installed = recorded.map { Optimistic.install(it, deferred) }
 
         handles = installed
-        evicted = if (send != null || !(wasEverConnected || offlineQueue.queueBeforeFirstConnect)) {
-            null
-        } else {
-            offlineQueue.enqueue(queuedWrite(options, writeId, installed))
-        }
+        evicted = if (queueIt) offlineQueue.enqueue(queuedWrite(options, writeId, installed)) else null
     }
 
     for (call in deferred) call()

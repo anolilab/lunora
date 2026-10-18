@@ -45,6 +45,9 @@ public final class Offline {
     /** The write's precondition no longer held when the flush reached it. */
     public static final String OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED";
 
+    /** An online-only write was refused because the connection is not live. Nothing was queued. */
+    public static final String OFFLINE_NOT_QUEUED = "OFFLINE_NOT_QUEUED";
+
     /** The write was queued under a different identity than the one now in effect. */
     public static final String OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED";
 

@@ -58,6 +58,9 @@ final class OptimisticOfflineTest {
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
         batchEntryCapMatchesProtocol();
+        onlineOnlyWriteIsRefusedWhenDisconnected();
+        onlineOnlyWriteIsSentWhenConnected();
+        normalWriteStillQueuesBesideAnOnlineOnlyOne();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
@@ -688,6 +691,123 @@ final class OptimisticOfflineTest {
         check(
                 live.layers() == count(testCase.get("layersAfterConfirm")),
                 "so the confirm at that cursor drops the overlay instead of stranding it");
+    }
+
+    /** The credential-shaped argument an online-only write carries; it must never reach storage. */
+    private static final String ONLINE_ONLY_SECRET = "sentinel-secret-7731";
+
+    private static SubmitOptions onlineOnlyWrite() {
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+
+        return new SubmitOptions("auth:setPassword", args).onlineOnly(true);
+    }
+
+    /** With the socket down, an online-only write is refused before anything is queued or sent. */
+    private static void onlineOnlyWriteIsRefusedWhenDisconnected() {
+        covers("offline_online_only_refused_when_disconnected");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        // A subscription on the write's own path and args, primed with a server value, so an
+        // overlay the write applied would be displayed.
+        Map<String, Object> args = new LinkedHashMap<>();
+        List<Object> seen = new ArrayList<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {});
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.detachSocket();
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write is refused with OFFLINE_NOT_QUEUED");
+        check(client.pendingMutationCount() == 0, "and nothing is queued");
+        check(store.appended.isEmpty(), "the persistence adapter never sees the write");
+        check(
+                !Json.write(store.records).contains(ONLINE_ONLY_SECRET),
+                "the arguments never reach storage");
+        check(posts[0] == 0, "and a refused write never reaches the wire");
+        check(
+                !seen.contains(List.of("a", "c")),
+                "and a refused write's overlay is never displayed");
+    }
+
+    /** With the socket up, an online-only write is sent normally and commits. */
+    private static void onlineOnlyWriteIsSentWhenConnected() {
+        covers("offline_online_only_sends_when_connected");
+        List<String> bodies = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            bodies.add(new String(body, StandardCharsets.UTF_8));
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+        client.attachSocket(frame -> {});
+
+        MutationOutcome outcome = client.submit(onlineOnlyWrite());
+
+        check(
+                outcome.status() == MutationStatus.COMMITTED,
+                "a connected online-only write commits");
+        check(bodies.size() == 1, "and goes out once");
+        check(bodies.get(0).contains(ONLINE_ONLY_SECRET), "with its arguments on the wire");
+        check(store.appended.isEmpty(), "and is never persisted");
+    }
+
+    /** A normal write made with the socket down still queues beside an online-only one. */
+    private static void normalWriteStillQueuesBesideAnOnlineOnlyOne() {
+        covers("offline_online_only_leaves_normal_writes_queued");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        MutationOutcome outcome =
+                client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+
+        check(outcome.status() == MutationStatus.QUEUED, "a normal write still queues offline");
+        check(client.pendingMutationCount() == 1, "and the queue holds it");
+        check(store.appended.size() == 1, "and it is persisted");
+        check(posts[0] == 0, "and nothing is sent");
     }
 
     /**

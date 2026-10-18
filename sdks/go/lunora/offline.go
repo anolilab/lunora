@@ -46,6 +46,9 @@ const (
 	// CodeOfflinePreconditionFailed marks a write whose precondition no longer
 	// held when the flush reached it.
 	CodeOfflinePreconditionFailed = "OFFLINE_PRECONDITION_FAILED"
+	// CodeOfflineNotQueued marks an online-only write refused because the
+	// connection is not live. Nothing was queued.
+	CodeOfflineNotQueued = "OFFLINE_NOT_QUEUED"
 	// CodeOfflineIdentityChanged marks a write queued under a different identity
 	// than the one now in effect.
 	CodeOfflineIdentityChanged = "OFFLINE_IDENTITY_CHANGED"

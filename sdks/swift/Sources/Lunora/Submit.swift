@@ -95,6 +95,13 @@ public struct LunoraSubmitOptions {
     /// replaying a write that can only fail.
     public var precondition: (() -> Bool)?
 
+    /// Never queued, persisted or replayed. Where a normal write would be queued,
+    /// `submit` throws `LunoraOfflineCode.notQueued` before the write reaches the
+    /// queue or the persistence adapter. It does not wait for a queue flush or
+    /// queue behind pending writes, so it may overtake them. For a credential or a
+    /// one-time token.
+    public var onlineOnly: Bool
+
     /// Reports the eventual verdict on a queued write.
     public var onSettled: ((LunoraMutationSettled) -> Void)?
 
@@ -106,6 +113,7 @@ public struct LunoraSubmitOptions {
         optimistic: LunoraOptimistic.Transform? = nil,
         optimisticUpdate: ((LunoraOptimisticLocalStore, Any?) -> Void)? = nil,
         precondition: (() -> Bool)? = nil,
+        onlineOnly: Bool = false,
         onSettled: ((LunoraMutationSettled) -> Void)? = nil
     ) {
         self.functionPath = functionPath
@@ -115,8 +123,17 @@ public struct LunoraSubmitOptions {
         self.optimistic = optimistic
         self.optimisticUpdate = optimisticUpdate
         self.precondition = precondition
+        self.onlineOnly = onlineOnly
         self.onSettled = onSettled
     }
+}
+
+/// The refusal of an online-only write that would be queued.
+private func onlineOnlyNotQueued(_ functionPath: String) -> LunoraAPIError {
+    LunoraAPIError(
+        code: LunoraOfflineCode.notQueued,
+        message: "'\(functionPath)' is online-only and the connection is not live, so it was not queued"
+    )
 }
 
 // MARK: - The write path
@@ -150,6 +167,13 @@ extension LunoraClient {
             throw LunoraAPIError(code: LunoraOfflineCode.clientClosed, message: "client is closed")
         }
 
+        // Read before any overlay is applied, so a refused online-only write leaves
+        // nothing to roll back. A socket that detaches after this read is caught by
+        // the check under the lock below.
+        if options.onlineOnly, withLock({ send == nil && (wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect) }) {
+            throw onlineOnlyNotQueued(options.functionPath)
+        }
+
         var deferred: LunoraOptimistic.Deferred = []
         let handles = applyOptimistic(options, &deferred)
 
@@ -169,6 +193,12 @@ extension LunoraClient {
 
                 guard send == nil, wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect else {
                     return (false, [])
+                }
+
+                // Thrown inside the lock, so the catch below rolls back the overlay
+                // this call installed.
+                if options.onlineOnly {
+                    throw onlineOnlyNotQueued(options.functionPath)
                 }
 
                 return (true, storedOfflineQueue.enqueue(queuedEntryLocked(options, writeID: writeID, handles: handles)))
