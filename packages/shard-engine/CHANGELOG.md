@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.140...@lunora/shard-engine@1.0.0-alpha.141) (2026-10-18)
+
+### Bug Fixes
+
+* **shard-engine:** sequence relay attach, detach and live control ([#1248](https://github.com/anolilab/lunora/issues/1248)) ([46da031](https://github.com/anolilab/lunora/commit/46da031cd6a5b917f644b3a454fe5f755f68c284))
+
 ## @lunora/shard-engine [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.139...@lunora/shard-engine@1.0.0-alpha.140) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
