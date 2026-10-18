@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 182 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 183 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -517,6 +517,10 @@ Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy 
 
 `404` — Live connection not found
 
+### `LIVE_CONTROL_SUPERSEDED`
+
+`409` — Live control superseded
+
 ### `LIVE_STREAMS_UNSUPPORTED`
 
 `501` — Live streams are not served by this worker
@@ -597,7 +601,7 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 
 `503` — Offline, write not queued
 
-A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), so it was refused instead of queued. A request that failed on the wire with no open socket is refused the same way, with the transport error as its `cause`. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
+A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), so it was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
 
 ### `OUT_OF_ORDER`
 

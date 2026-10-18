@@ -168,6 +168,8 @@ export const ERROR_CATALOG = {
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
+    /** A live control call arrived after a later one for the same key had already applied. */
+    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "Live control superseded" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
 
     /**
