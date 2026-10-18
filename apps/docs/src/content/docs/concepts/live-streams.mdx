@@ -12,7 +12,7 @@ related:
 A live query pushes the result of a query. A live topic stream pushes an event
 that is not a row and has no query behind it: "a comment was posted", "the build
 finished". Declare the stream once with `defineLiveStream`, publish to a topic
-from server code, and let the browser follow any number of topics over one
+from server code, and let the browser follow up to 64 topics at once over one
 Server-Sent Events connection.
 
 ## Declare the stream
@@ -55,11 +55,11 @@ await ctx.live.publish(`post:${postId}`, { event: "comment_added", commentId }, 
 
 The three publishing contexts differ in where the event goes:
 
-| Publisher                                  | Where the event is delivered                                                                                                                                                                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| HTTP action                                | The shard named by `shardKey`, or the default (root) shard. A caller that may not address the named shard is refused.                                                                                              |
-| Queue consumer                             | Forwarded to the shard named by `shardKey`, or the default shard. The publish is not checked against a caller, so do not take a `shardKey` from a message body without checking it yourself.                       |
-| Action, including a scheduled job's action | The shard the action runs on. A scheduled job runs on the `shardKey` it was scheduled with. A `shardKey` naming another shard is refused with `BAD_REQUEST`, because nothing forwards a live event between shards. |
+| Publisher                                  | Where the event is delivered                                                                                                                                                                                                                                                                               |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP action                                | The shard named by `shardKey`, or the default (root) shard. A caller that may not address the named shard is refused.                                                                                                                                                                                      |
+| Queue consumer                             | Forwarded to the shard named by `shardKey`, or the default shard. The publish is not checked against a caller, so do not take a `shardKey` from a message body without checking it yourself.                                                                                                               |
+| Action, including a scheduled job's action | The shard the action runs on. A scheduled job runs on the `shardKey` it was scheduled with, or on the default (root) shard if it was scheduled without one, even from another shard. A publish naming any other shard is refused with `BAD_REQUEST`, because nothing forwards a live event between shards. |
 
 On the action context, `ctx.live` is typed optional, since the same type serves
 every target. Codegen refuses the build, with `platform_unsupported_feature`, when a
@@ -112,17 +112,27 @@ To pick a shard, put it in the connect URL: `/live/posts/connect?shard=<key>`. T
 control calls carry the same shard, so the subscription lands on the connection's
 shard.
 
+A connection follows at most 64 topics. A subscribe past that is refused with 429
+`TOO_MANY_LIVE_TOPICS`, which `onError` reports. A shard holds at most 1024 live
+connections, a signed-in caller at most 32, and an anonymous client address at most 32.
+A connect past one of those limits is refused with 503 `LIVE_CONNECTION_LIMIT`.
+
 ### Framework hooks
 
-Each framework adapter provides a hook that follows one topic. The hooks are being
-built alongside this page, and they wrap `subscribeLiveTopic`. Each returns
-`{ lastEvent, error }`:
+Each framework package exports a hook that follows one topic. Each wraps
+`subscribeLiveTopic`, so it shares the connection and takes the same options. The
+result is `{ lastEvent, error }`, in that framework's reactive form:
 
-| Framework       | Hook              |
-| --------------- | ----------------- |
-| React, Vue      | `useLiveTopic`    |
-| Solid           | `createLiveTopic` |
-| Svelte, Angular | `liveTopic`       |
+| Framework | Hook              | Result                                      |
+| --------- | ----------------- | ------------------------------------------- |
+| React     | `useLiveTopic`    | `{ lastEvent, error }` as plain values      |
+| Vue       | `useLiveTopic`    | `{ lastEvent, error }` as refs              |
+| Solid     | `createLiveTopic` | `{ lastEvent, error }` as accessors         |
+| Svelte    | `liveTopic`       | a readable store of `{ lastEvent, error }`  |
+| Angular   | `liveTopic`       | `{ lastEvent, error }` as read-only signals |
+
+`lastEvent` is `undefined` until the first event arrives. `error` is set when the
+shard refuses the subscription.
 
 ## Authorization
 
@@ -172,7 +182,9 @@ The matrix is `PlatformCapabilities` in `@lunora/platform`, the `liveStreams` en
 ## React Native
 
 `connectLiveStream` takes a `fetch` option, so you can pass a streaming fetch such
-as `expo/fetch`. `subscribeLiveTopic` does not take `fetch`, so it uses the global
-`fetch`. If you need a streaming fetch on React Native, use `connectLiveStream`
-directly. If events arrive in bursts or not at all, the response body may be
-buffered. A streaming fetch such as `expo/fetch` avoids that.
+as `expo/fetch` to it directly.
+
+`subscribeLiveTopic` and the framework hooks take no `fetch`, and they use the global
+one. Stock React Native `fetch` may not expose a readable response body. Then the
+subscription receives no events and reports no error. Set a streaming fetch before the
+first live topic mounts, for example `globalThis.fetch = fetch` from `expo/fetch`.
