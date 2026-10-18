@@ -1667,7 +1667,12 @@ const applyInsertDefaults = (
         if (column.defaultFn) {
             result[field] = column.defaultFn();
         } else if ("defaultValue" in column) {
-            result[field] = column.defaultValue;
+            // The literal is declared once in the schema. An object or array handed out by
+            // reference lets a hook that mutates one inserted row rewrite the default of
+            // every insert after it.
+            const { defaultValue } = column;
+
+            result[field] = typeof defaultValue === "object" && defaultValue !== null ? structuredClone(defaultValue) : defaultValue;
         }
     }
 
