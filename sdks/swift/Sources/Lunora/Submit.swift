@@ -128,6 +128,14 @@ public struct LunoraSubmitOptions {
     }
 }
 
+/// The refusal of an online-only write that would be queued.
+private func onlineOnlyNotQueued(_ functionPath: String) -> LunoraAPIError {
+    LunoraAPIError(
+        code: LunoraOfflineCode.notQueued,
+        message: "'\(functionPath)' is online-only and the connection is not live, so it was not queued"
+    )
+}
+
 // MARK: - The write path
 
 /// ``LunoraClient``'s offline-capable writes, beside the value types they use.
@@ -159,6 +167,13 @@ extension LunoraClient {
             throw LunoraAPIError(code: LunoraOfflineCode.clientClosed, message: "client is closed")
         }
 
+        // Read before any overlay is applied, so a refused online-only write leaves
+        // nothing to roll back. A socket that detaches after this read is caught by
+        // the check under the lock below.
+        if options.onlineOnly, withLock({ send == nil && (wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect) }) {
+            throw onlineOnlyNotQueued(options.functionPath)
+        }
+
         var deferred: LunoraOptimistic.Deferred = []
         let handles = applyOptimistic(options, &deferred)
 
@@ -183,10 +198,7 @@ extension LunoraClient {
                 // Thrown inside the lock, so the catch below rolls back the overlay
                 // this call installed.
                 if options.onlineOnly {
-                    throw LunoraAPIError(
-                        code: LunoraOfflineCode.notQueued,
-                        message: "'\(options.functionPath)' is online-only and the connection is not live, so it was not queued"
-                    )
+                    throw onlineOnlyNotQueued(options.functionPath)
                 }
 
                 return (true, storedOfflineQueue.enqueue(queuedEntryLocked(options, writeID: writeID, handles: handles)))
