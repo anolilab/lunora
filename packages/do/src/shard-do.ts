@@ -3248,7 +3248,9 @@ abstract class ShardDO {
                 // One storage transaction per page: the follow cursor only moves past a
                 // whole page, so a change that throws midway must not leave the rows
                 // before it applied behind a cursor that says they were not.
-                const { applied } = await this.runInTransaction(() => this.runShardApplyCdc({ changes }));
+                // Independent: waits for the writer gate rather than failing the page when another
+                // transaction happens to be open on this DO.
+                const { applied } = await this.runInTransaction(() => this.runShardApplyCdc({ changes }), { independent: true });
 
                 // Same post-replay step the `applyCdc` admin RPC takes: replayed
                 // rows are real writes, so any live subscriber on this DO has to
