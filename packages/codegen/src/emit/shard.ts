@@ -1003,6 +1003,7 @@ ${dispatchRun}
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {${constructorOverride}
+        private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
 ${relationFanout.override}
 ${subscriptionMethods}
@@ -1037,7 +1038,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -1109,13 +1110,29 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
 
 ${ADMIN_WRITE_METHODS}
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through \`ensureServable\`, which refuses until the
+         * index exists. \`migrated\` stays false while one is outstanding, so every
+         * call retries the build.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
-            this.migrated = true;
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true${snapshotArgument} });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 ${
     hasShardSearchIndexes

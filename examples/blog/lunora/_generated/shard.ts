@@ -313,6 +313,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
+        private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown> {
@@ -339,7 +340,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // `headroom`, when the caller supplied one, is threaded straight
             // through to `buildCtx` — bypassing its `this.transactionHeadroom()`
@@ -521,7 +522,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
@@ -544,7 +545,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
@@ -593,7 +594,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -892,13 +893,29 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { applied: args.changes.length };
         }
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through `ensureServable`, which refuses until the
+         * index exists. `migrated` stays false while one is outstanding, so every
+         * call retries the build.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
-            this.migrated = true;
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 
         private vectorSync(env: Record<string, unknown>): { backfill: VectorBackfillSync; onWrite: WriteHook; vectors: VectorSearchLike } | undefined {

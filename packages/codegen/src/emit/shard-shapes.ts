@@ -58,7 +58,7 @@ ${shapeResolveEntry}
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // Trusted ctx from the socket's OWN verified identity — the client
             // supplies only the shape name + args; \`compileWhere\` validates the

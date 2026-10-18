@@ -74,15 +74,26 @@ import { recordSchemaVersion } from "./schema-history";
 const INDEX_SORT_KEYS = dsql`_creationTime, id`;
 
 /**
+ * Raised when a UNIQUE index cannot be built because existing rows already violate
+ * it. A distinct type so a caller that opted into deferral
+ * (`deferBlockedUniqueIndexes`) can tell this recoverable state from a real
+ * migration failure, which must keep propagating.
+ */
+class BlockedUniqueIndexError extends LunoraError {}
+
+/**
  * Refuse to build a UNIQUE index over rows that already violate it.
  *
  * `CREATE UNIQUE INDEX` raises a bare `UNIQUE constraint failed: index '<name>'`
- * on duplicates, and it raises it from inside the cold-start migration —
- * `ensureMigrated()` leaves `migrated` false, so every later dispatch re-runs
- * the pass and re-throws. The shard never opens, and the de-dup
- * `defineMigration` that would clear it cannot run either, because
- * `runShardDataMigration` calls `ensureMigrated()` first. Probing first turns a
- * wedged shard into a diagnostic that names the table and the remedy.
+ * on duplicates, and it raises it from inside the cold-start migration. Probing
+ * first turns that into a diagnostic that names the table and the remedy.
+ *
+ * Throwing from the migration would also wedge the shard: the de-dup
+ * `defineMigration` that clears the duplicates runs through the admin path, which
+ * migrates first. So a host that serves admin traffic passes
+ * `deferBlockedUniqueIndexes` to {@link runShardMigrations}: the rest of the pass
+ * completes, the blocked index is reported instead of thrown, and the host
+ * refuses user dispatch (not admin) until a later pass builds it.
  *
  * Restricted to rows where EVERY indexed column is non-NULL, because the two
  * sides disagree about NULL: `GROUP BY` treats NULLs as equal, a SQLite UNIQUE
@@ -99,7 +110,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
     const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
 
     if (duplicates.toArray().length > 0) {
-        throw new LunoraError(
+        throw new BlockedUniqueIndexError(
             "INTERNAL",
             `unique index "${indexName}" on "${tableName}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
         );
@@ -202,6 +213,23 @@ const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, 
 };
 
 /**
+ * Run one index build; when `blocked` is supplied, a {@link BlockedUniqueIndexError}
+ * is recorded there instead of propagating, so the remaining indexes and tables
+ * still migrate. Any other failure still throws.
+ */
+const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void => {
+    try {
+        build();
+    } catch (error) {
+        if (blocked === undefined || !(error instanceof BlockedUniqueIndexError)) {
+            throw error;
+        }
+
+        blocked.push(error.message);
+    }
+};
+
+/**
  * Create the secondary + `.unique()` expression indexes declared on a table.
  *
  * A UNIQUE index does NOT get the sort keys appended: they would become part of
@@ -209,7 +237,7 @@ const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, 
  * the constraint would silently stop rejecting duplicates. That is data
  * corruption rather than a slow query, so the two cases are split deliberately.
  */
-const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, blocked: string[] | undefined): void => {
     for (const index of definition.indexes) {
         const indexName = `${tableName}_${index.name}`;
         const unique = index.unique ?? false;
@@ -217,8 +245,10 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         const fields = dsql.join(refs, dsql`, `);
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
-        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
-        createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+        deferIfBlocked(blocked, () => {
+            dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
+            createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+        });
     }
 
     // `.unique()` columns synthesize a UNIQUE expression index so SQLite
@@ -230,7 +260,9 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
 
         const reference = jsonPathSql(field);
 
-        createIndexGuarded(sql, `${tableName}_unique_${field}`, tableName, reference, true, [reference]);
+        deferIfBlocked(blocked, () => {
+            createIndexGuarded(sql, `${tableName}_unique_${field}`, tableName, reference, true, [reference]);
+        });
     }
 };
 
@@ -371,13 +403,29 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
  *
  * Global tables (`.global()`) live in D1, not in the DO — they're skipped
  * here. The DO sees them via the D1 adapter exposed elsewhere.
+ *
+ * Returns the diagnostics of UNIQUE indexes that were deferred (always empty
+ * unless `deferBlockedUniqueIndexes` is set).
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runShardMigrations }`), per the repo's no-default-mixing convention
 export const runShardMigrations = (
     sql: SqlExec,
     schema: SchemaLike,
-    options: { cdc?: boolean; schemaSnapshot?: { hash: string; json: string } } = {},
-): void => {
+    options: {
+        cdc?: boolean;
+
+        /**
+         * Report a UNIQUE index that existing duplicate rows block, rather than
+         * throwing: every other table, index and companion still migrates. The
+         * blocked index stays absent (or keeps its previous shape) until a later
+         * pass finds the table de-duplicated.
+         */
+        deferBlockedUniqueIndexes?: boolean;
+        schemaSnapshot?: { hash: string; json: string };
+    } = {},
+): ReadonlyArray<string> => {
+    const blocked: string[] | undefined = options.deferBlockedUniqueIndexes ? [] : undefined;
+
     // Record this schema shape in the version ledger before touching any table.
     // Codegen threads the snapshot it already computes for the deploy gate, so
     // the ledger and the gate can never describe different shapes. Absent (a
@@ -433,7 +481,7 @@ export const runShardMigrations = (
         // table big enough to care is the expensive state, not the build.
         runDrizzle(sql, createIndexSql(`${tableName}__by_creation`, tableName, INDEX_SORT_KEYS, false));
 
-        migrateSecondaryIndexes(sql, tableName, definition);
+        migrateSecondaryIndexes(sql, tableName, definition, blocked);
         migrateSearchIndexes(sql, tableName, definition);
         migrateGeoIndexes(sql, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
@@ -510,4 +558,6 @@ export const runShardMigrations = (
     // a schema change, so the transcript tables have to exist before the first
     // one runs. Empty (and free) on a shard that never opens a durable stream.
     migrateDurableStreams(sql);
+
+    return blocked ?? [];
 };

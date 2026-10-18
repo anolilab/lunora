@@ -5167,11 +5167,12 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 ```ts
 const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
     cdc?: boolean;
+    deferBlockedUniqueIndexes?: boolean;
     schemaSnapshot?: {
         hash: string;
         json: string;
     };
-}) => void;
+}) => ReadonlyArray<string>;
 ```
 
 ### `runSocketPool` (const)
