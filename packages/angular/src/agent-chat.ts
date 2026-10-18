@@ -18,6 +18,12 @@ type AgentApprovalReference = FunctionReference<
     { resolved: boolean }
 >;
 
+/** The `agents:agentSupplySecret` reference — stores a person's value for a paused `requestSecretTool` call. */
+type AgentSupplySecretReference = FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
+/** The `agents:agentDeclineSecret` reference — refuses a paused `requestSecretTool` call. */
+type AgentDeclineSecretReference = FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
 
@@ -50,9 +56,11 @@ type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, Ag
 interface AgentChatApi {
     agents: {
         agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference;
         agentResolveApproval: AgentApprovalReference;
         agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -132,6 +140,8 @@ interface AgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** Refuse a paused `requestSecretTool` call: the run resumes with a "declined" result. */
+    declineSecret: (toolCallId: string) => Promise<void>;
     /** The history, thread, or grants subscription's last error, or `undefined`. */
     error: Signal<SubscriptionError | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
@@ -147,6 +157,14 @@ interface AgentChatResult {
 
     /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: Signal<string>;
+
+    /**
+     * Give a paused `requestSecretTool` call its value. Always sent online-only: the
+     * value is never queued, persisted or replayed, and the call rejects with
+     * `OFFLINE_NOT_QUEUED` while the connection is down. The service keeps no copy;
+     * a failure rethrows the original error.
+     */
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 
 /**
@@ -161,7 +179,7 @@ const EMPTY_GRANTS: ReadonlyArray<AgentApprovalGrant> = [];
 
 /**
  * A first-class agent chat surface: live durable history + in-flight token
- * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * streaming + the send / approve / reject / secret / cancel writes, keyed by `threadKey` —
  * the Angular counterpart to React's `useAgentChat`, re-expressed with signals.
  *
  * It composes the existing primitives rather than adding transport:
@@ -314,6 +332,14 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
         await client.mutation(api.agents.agentRevokeApprovalGrant, { threadKey, toolName });
     };
 
+    const supplySecret = async (toolCallId: string, secret: string): Promise<void> => {
+        await client.mutation(api.agents.agentSupplySecret, { secret, threadKey, toolCallId }, { onlineOnly: true });
+    };
+
+    const declineSecret = async (toolCallId: string): Promise<void> => {
+        await client.mutation(api.agents.agentDeclineSecret, { threadKey, toolCallId });
+    };
+
     const cancel = async (): Promise<void> => {
         const instanceId = thread()?.instanceId;
 
@@ -330,6 +356,7 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
         approve,
         approveForThread,
         cancel,
+        declineSecret,
         error: subscriptionError,
         messages,
         reject,
@@ -337,6 +364,7 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
         send,
         status,
         streamingText,
+        supplySecret,
     };
 };
 
