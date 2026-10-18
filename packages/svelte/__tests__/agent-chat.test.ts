@@ -19,6 +19,8 @@ const makeStreamRef = (reference: string): FunctionReference<"stream", { key: st
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:agentEvents";
@@ -26,8 +28,10 @@ const STREAM_REF = "chat:agentEvents";
 const buildApi = (): AgentChatApi =>
     ({
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
             agentThread: makeRef(THREAD_REF),
         },
     }) as unknown as AgentChatApi;
@@ -49,8 +53,12 @@ describe(agentChat, () => {
         const fake = createFakeClient();
         const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
 
-        // Both the history and thread channels open eagerly on setup.
-        expect(fake.subscribeCalls.map((call) => call.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([MESSAGES_REF, THREAD_REF]);
+        // The history, thread and grants channels open eagerly on setup.
+        expect(fake.subscribeCalls.map((call) => call.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            GRANTS_REF,
+            MESSAGES_REF,
+            THREAD_REF,
+        ]);
         expect(get(handle.messages)).toStrictEqual([]);
         expect(get(handle.status)).toBeUndefined();
         // With no `stream` reference the token stream is opened with `"skip"` args,
@@ -68,7 +76,7 @@ describe(agentChat, () => {
 
         handle.teardown();
 
-        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(2);
+        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(3);
     });
 
     it("forwards onError so a history or thread subscription error reaches the caller", () => {
@@ -88,7 +96,11 @@ describe(agentChat, () => {
             call.options.onError?.({ code: "UNAUTHORIZED", message: `expired:${call.functionPath}` });
         }
 
-        expect(errors.map((error) => error.message).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([`expired:${MESSAGES_REF}`, `expired:${THREAD_REF}`]);
+        expect(errors.map((error) => error.message).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            `expired:${GRANTS_REF}`,
+            `expired:${MESSAGES_REF}`,
+            `expired:${THREAD_REF}`,
+        ]);
     });
 
     it("accumulates in-flight token deltas into streamingText, then clears once the turn persists", async () => {
@@ -253,6 +265,55 @@ describe(agentChat, () => {
         const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
 
         await expect(handle.approve("call-1")).rejects.toThrow("no in-flight run");
+
+        handle.teardown();
+    });
+
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        const fake = createFakeClient();
+        const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+        fake.push(THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+
+        await handle.approveForThread("call-1", "ok for this thread");
+
+        expect(fake.mutationSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
+            { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            undefined,
+        );
+
+        handle.teardown();
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        const fake = createFakeClient();
+        const handle = agentChat(fake.client, { api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+        expect(get(handle.approvalGrants)).toStrictEqual([]);
+
+        fake.push(GRANTS_REF, [
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        expect(get(handle.approvalGrants)).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await handle.revokeGrant("sendEmail");
+
+        expect(fake.mutationSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: REVOKE_REF }),
+            { threadKey: "t1", toolName: "sendEmail" },
+            undefined,
+        );
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        fake.push(GRANTS_REF, [{ createdAt: 2, toolName: "refund" }]);
+
+        expect(get(handle.approvalGrants)).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
 
         handle.teardown();
     });

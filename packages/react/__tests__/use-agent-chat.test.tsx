@@ -67,6 +67,8 @@ const buildClient = (): {
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:tokens";
@@ -74,8 +76,10 @@ const STREAM_REF = "chat:tokens";
 const buildOptions = (overrides: Partial<UseAgentChatOptions> = {}): UseAgentChatOptions => {
     const api = {
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
             agentThread: makeRef(THREAD_REF),
         },
     } as unknown as UseAgentChatApi;
@@ -466,6 +470,85 @@ describe("useAgentChat", () => {
             { decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
             undefined,
         );
+    });
+
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+        });
+
+        await act(async () => {
+            await latest?.approveForThread("call-1", "ok for this thread");
+        });
+
+        expect(mutation).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
+            { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            undefined,
+        );
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        expect(latest?.approvalGrants).toStrictEqual([]);
+
+        await act(async () => {
+            emit(GRANTS_REF, [
+                { createdAt: 1, toolName: "sendEmail" },
+                { createdAt: 2, toolName: "refund" },
+            ]);
+        });
+
+        expect(latest?.approvalGrants).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await act(async () => {
+            await latest?.revokeGrant("sendEmail");
+        });
+
+        expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: REVOKE_REF }), { threadKey: "t1", toolName: "sendEmail" }, undefined);
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        await act(async () => {
+            emit(GRANTS_REF, [{ createdAt: 2, toolName: "refund" }]);
+        });
+
+        expect(latest?.approvalGrants).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
     });
 
     it("cancel terminates the in-flight run via the cancel mutation", async () => {
