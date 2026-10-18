@@ -60,6 +60,20 @@ describe("local hyperdrive", () => {
             expect(bindingsNeedingDatabase(root, { [`${VAR}DB_C`]: "postgres://env" })).toStrictEqual(["DB_A"]);
         });
 
+        it("reads a named environment's own Hyperdrive array, since the binding does not inherit", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({ env: { staging: { hyperdrive: [{ binding: "STAGING_DB", id: "s" }] } }, hyperdrive: [{ binding: "DB", id: "a" }] }),
+                "utf8",
+            );
+
+            expect(bindingsNeedingDatabase(root, {}, "staging")).toStrictEqual(["STAGING_DB"]);
+            expect(bindingsNeedingDatabase(root, { CLOUDFLARE_ENV: "staging" })).toStrictEqual(["STAGING_DB"]);
+            expect(bindingsNeedingDatabase(root, {})).toStrictEqual(["DB"]);
+        });
+
         it("counts wrangler's deprecated variable name as a database too", () => {
             expect.assertions(1);
 

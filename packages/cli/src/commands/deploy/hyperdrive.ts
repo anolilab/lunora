@@ -120,7 +120,8 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
             host: url.hostname,
             password: decodeURIComponent(url.password),
             port: url.port === "" ? defaultPort(scheme) : Number(url.port),
-            scheme,
+            // Cloudflare's name for the engine; `postgresql://` is the same thing spelled out.
+            scheme: scheme === "postgresql" ? "postgres" : scheme,
             user: decodeURIComponent(url.username),
         };
     } catch {
@@ -254,7 +255,12 @@ const configId = async (request: Request, name: string, origin: Record<string, n
 };
 
 /** Why a binding cannot get its config yet, or `undefined` when it can. */
-const blocker = (binding: string, origin: unknown, hasCredentials: boolean): string | undefined => {
+const blocker = (binding: string, origin: unknown, hasCredentials: boolean, supplied: boolean): string | undefined => {
+    if (origin === undefined && supplied) {
+        // Never echo the value: it holds the password.
+        return `${connectionStringVariable(binding)} is set but is not a usable connection string for the "${binding}" Hyperdrive binding: it needs a postgres://, postgresql:// or mysql:// scheme, a host and a database name, with any special characters percent-encoded.`;
+    }
+
     if (origin === undefined) {
         return `the "${binding}" Hyperdrive binding has no config yet. Set ${connectionStringVariable(binding)} to its postgres:// or mysql:// connection string and Lunora creates the config, or run \`wrangler hyperdrive create\` and put its id in wrangler.jsonc.`;
     }
@@ -354,7 +360,7 @@ const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined):
  * error that blocks the deploy, if any.
  */
 const preflight = (
-    origins: ReadonlyArray<{ binding: string; origin: Record<string, number | string> | undefined }>,
+    origins: ReadonlyArray<{ binding: string; origin: Record<string, number | string> | undefined; supplied: boolean }>,
     hasCredentials: boolean,
     options: Pick<ProvisionHyperdriveOptions, "dryRun" | "logger">,
 ): string | undefined => {
@@ -368,8 +374,8 @@ const preflight = (
         return message;
     }
 
-    for (const { binding, origin } of origins) {
-        const blocked = blocker(binding, origin, hasCredentials);
+    for (const { binding, origin, supplied } of origins) {
+        const blocked = blocker(binding, origin, hasCredentials, supplied);
 
         if (blocked !== undefined && options.dryRun === true) {
             options.logger.warn(`dry run: ${blocked} A real deploy stops here.`);
@@ -400,7 +406,9 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     const environment = options.environment ?? process.env;
     const { accountId, token } = resolveCloudflareCredentials(environment, scan.accountId);
     const origins = entries.map(({ binding }) => {
-        return { binding, origin: parseOrigin(environment[connectionStringVariable(binding)] ?? "") };
+        const value = environment[connectionStringVariable(binding)] ?? "";
+
+        return { binding, origin: parseOrigin(value), supplied: value !== "" };
     });
     // Everything a binding needs is checked before the first API call, so a later binding's missing
     // connection string cannot leave an earlier one's config created and its id unrecorded.

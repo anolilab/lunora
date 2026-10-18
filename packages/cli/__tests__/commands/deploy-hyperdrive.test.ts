@@ -416,6 +416,42 @@ describe("hyperdrive on deploy", () => {
             expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
         });
 
+        it("sends postgres as the engine for a postgresql:// connection string", async () => {
+            expect.assertions(1);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = hyperdriveApi([]);
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgresql://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            const post = api.mock.calls.find(([, init]) => init?.method === "POST");
+
+            expect((JSON.parse(post?.[1]?.body as string) as { origin: { scheme: string } }).origin.scheme).toBe("postgres");
+        });
+
+        it("says a set-but-unusable connection string is unusable, without echoing it, rather than asking for it to be set", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "redis://user:hunter2@h/db" }, // gitleaks:allow -- a placeholder, not a real secret
+                fetch: hyperdriveApi([]),
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("is set but is not a usable connection string");
+            expect(result).not.toContain("hunter2");
+            expect(result).not.toContain("has no config yet");
+        });
+
         it("blocks, rather than throws, on a connection string with invalid percent-encoding", async () => {
             expect.assertions(2);
 

@@ -59,14 +59,18 @@ const hasLocalDatabase = (binding: string, entry: { localConnectionString?: unkn
     LOCAL_CONNECTION_STRING_PREFIXES.some((prefix) => (env[`${prefix}${binding}`] ?? "") !== "");
 
 /** The Hyperdrive bindings in `wrangler.jsonc` that nothing local backs yet. */
-const bindingsNeedingDatabase = (projectRoot: string, env: NodeJS.ProcessEnv): string[] => {
+const bindingsNeedingDatabase = (projectRoot: string, env: NodeJS.ProcessEnv, wranglerEnvironment: string | undefined = env["CLOUDFLARE_ENV"]): string[] => {
     const wranglerPath = findWranglerFile(projectRoot);
+    type Entries = ReadonlyArray<{ binding?: string; localConnectionString?: string } | null>;
     const parsed =
         wranglerPath === undefined
             ? undefined
-            : readWranglerJsonc<{ hyperdrive?: ReadonlyArray<{ binding?: string; localConnectionString?: string } | null> }>(wranglerPath).parsed;
+            : readWranglerJsonc<{ env?: Record<string, { hyperdrive?: Entries } | undefined>; hyperdrive?: Entries }>(wranglerPath).parsed;
+    // `hyperdrive` does not inherit into an environment: a named session reads that block's own array.
+    const named = wranglerEnvironment === undefined || wranglerEnvironment === "" ? undefined : parsed?.env?.[wranglerEnvironment];
+    const entries = named === undefined ? parsed?.hyperdrive : named.hyperdrive;
 
-    return (parsed?.hyperdrive ?? []).flatMap((entry) =>
+    return (entries ?? []).flatMap((entry) =>
         typeof entry?.binding === "string" && entry.binding !== "" && !hasLocalDatabase(entry.binding, entry, env) ? [entry.binding] : [],
     );
 };
