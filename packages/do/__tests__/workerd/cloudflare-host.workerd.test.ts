@@ -92,7 +92,7 @@ const createCloudflareHost = (): ConformanceHost => {
         // this TCK run covers BOTH: the adapters' behaviour and the assembly
         // `createShardPlatform` performs. A wiring mistake in the root — the
         // wrong storage handle into `kv`, say — fails here, not in production.
-        directory: createShardDirectory(env.ECHO),
+        directory: createShardDirectory(env.ECHO as unknown as Parameters<typeof createShardDirectory>[0]),
         // `runSerialized` is `blockConcurrencyWhile`: the input gate, not the
         // SQL executor, is where this host keeps concurrent tasks apart. See
         // the `isolatesByDispatch` note on `ConformanceHost` for what that
