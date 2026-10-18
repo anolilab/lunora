@@ -340,6 +340,58 @@ describe("recordedModel through the production streaming seam", () => {
         expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 12, outputTokens: 5, totalTokens: 17 });
     });
 
+    it("resumes a crashed instance without replaying the turns it already completed", async () => {
+        expect.hasAssertions();
+
+        const executed: unknown[] = [];
+        const agent = defineAgent({
+            model: "test-model",
+            tools: {
+                lookupOrder: defineAgentTool({
+                    description: "Look up an order by id.",
+                    execute: (input) => {
+                        executed.push(input);
+
+                        return { status: "shipped" };
+                    },
+                    inputSchema: lookupSchema,
+                }),
+            },
+        });
+        const harness = agentHarness(agent, {});
+
+        // The first attempt completes turn 0 (a lookup) and crashes in turn 1.
+        await expect(
+            harness.run(
+                { input: "where is o_42?", threadKey: "t1" },
+                {
+                    instanceId: "wf-resume",
+                    model: recordedModel([
+                        { parts: [{ input: '{"id":"o_42"}', toolCallId: "c1", toolName: "lookupOrder", type: "tool-call" }, toolCalls(8, 6)] },
+                        { error: { after: 0, cause: new Error("upstream reset") }, parts: [stop()] },
+                    ]),
+                },
+            ),
+        ).rejects.toThrow("upstream reset");
+        expect(executed).toStrictEqual([{ id: "o_42" }]);
+
+        // The resumed attempt asks the provider only for the turn it has not completed.
+        const resumed = recordedModel([
+            {
+                parts: [{ id: "t1", type: "text-start" }, { delta: "It shipped.", id: "t1", type: "text-delta" }, { id: "t1", type: "text-end" }, stop(12, 3)],
+            },
+        ]);
+        const result = await harness.run({ input: "where is o_42?", threadKey: "t1" }, { instanceId: "wf-resume", model: resumed });
+
+        // Turn 0 and its lookup are memoized from the first attempt: the tool does not run again,
+        // and the answer lands as a new message rather than colliding with turn 0's row.
+        expect(result).toMatchObject({ stopped: "final", text: "It shipped.", turns: 2 });
+        expect(executed).toStrictEqual([{ id: "o_42" }]);
+        expect(resumed.doStreamCalls).toHaveLength(1);
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user", "assistant", "tool", "assistant"]);
+        expect(harness.messages("t1").at(-1)?.content).toBe("It shipped.");
+    });
+
     it("pauses mid-stream on a gate so a test can observe the partial text and then cancel", async () => {
         expect.hasAssertions();
 

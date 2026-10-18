@@ -538,8 +538,23 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
     // Steps and delivered waits share one list, so the journal reads in the order the run wrote them.
     const journal: unknown[] = [];
     const waits = new WaitRegistry(journal);
+    // One journal per instance id: a run that reuses an id resumes that instance, so
+    // the steps it already recorded are memoized rather than run again.
+    const journals = new Map<string, DurableStepJournal>();
 
-    const newJournal = (instanceId: string): DurableStepJournal => new DurableStepJournal(waits, instanceId, journal);
+    const journalFor = (instanceId: string): DurableStepJournal => {
+        const existing = journals.get(instanceId);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        const created = new DurableStepJournal(waits, instanceId, journal);
+
+        journals.set(instanceId, created);
+
+        return created;
+    };
 
     let runCount = 0;
 
@@ -569,7 +584,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
                 params,
                 paths: DEFAULT_AGENT_FUNCTION_PATHS,
                 run: runtime.run,
-                step: newJournal(instanceId),
+                step: journalFor(instanceId),
                 streamGenerate: createStreamGenerate(modelAgent, env),
             });
         }
@@ -585,7 +600,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             params,
             paths: DEFAULT_AGENT_FUNCTION_PATHS,
             run: runtime.run,
-            step: newJournal(instanceId),
+            step: journalFor(instanceId),
         });
     };
 
