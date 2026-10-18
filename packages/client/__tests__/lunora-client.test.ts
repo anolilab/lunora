@@ -5316,6 +5316,61 @@ describe("lunoraClient", () => {
                 client.close();
             });
 
+            it("ignores a refusal that answers for a socket since replaced, keeping the new socket's membership", async () => {
+                expect.assertions(2);
+
+                const held: { answer?: (response: Response) => void } = {};
+                const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+                    const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as Record<string, unknown>;
+
+                    if (body.connectionId === "ws-1") {
+                        return new Promise<Response>((resolve) => {
+                            held.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(Response.json({ ok: true }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const errors: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onError: (error) => errors.push(error),
+                    onEvent: () => undefined,
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                ackJoin(socket, "post:1");
+
+                await vi.waitFor(() => {
+                    if (held.answer === undefined) {
+                        throw new Error("the grant for ws-1 has not been posted yet");
+                    }
+                });
+
+                // The connection is replaced before the shard answers the old socket's grant.
+                socket.receive({ connectionId: "ws-2", subject: null, type: "identity" });
+                held.answer?.(Response.json({ ok: false }, { status: 403 }));
+
+                await new Promise((resolve) => {
+                    setImmediate(resolve);
+                });
+
+                const leavesSent = socket.sent
+                    .map((frame) => JSON.parse(frame) as Record<string, unknown>)
+                    .filter((frame) => frame["type"] === "whisper_unsubscribe");
+
+                expect(leavesSent).toStrictEqual([]);
+                expect(errors).toStrictEqual([]);
+
+                client.close();
+            });
+
             it("keeps a grant the shard failed transiently, and does not report it", async () => {
                 expect.assertions(3);
 

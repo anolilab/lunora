@@ -7103,7 +7103,7 @@ class LunoraClient {
             }
 
             this.postLiveControl(`/live/${stream}/control`, shardKey, { action: "subscribe", connectionId, stream, subscriptionId, topic }, (status) => {
-                this.refuseLiveGrant(shardKey, subscriptionId, status);
+                this.refuseLiveGrant(shardKey, subscriptionId, status, connectionId);
             });
         };
 
@@ -7204,14 +7204,16 @@ class LunoraClient {
 
     /**
      * Drop a live grant the shard refused for good, and tell its caller. A grant already released
-     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing.
+     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing. A refusal
+     * for a socket that has since been replaced is ignored too: the new socket posts the grant
+     * again and hears its own answer, and releasing now would strip the new socket's membership.
      */
-    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number): void {
+    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number, connectionId: string): void {
         const key = connectionKey(shardKey);
         const grants = this.liveSocketGrants.get(key);
         const grant = grants?.get(subscriptionId);
 
-        if (grants === undefined || grant === undefined) {
+        if (grants === undefined || grant === undefined || this.getConnection(shardKey)?.connectionId !== connectionId) {
             return;
         }
 
