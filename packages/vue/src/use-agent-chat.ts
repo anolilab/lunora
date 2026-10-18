@@ -188,9 +188,9 @@ interface UseAgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
-    /** The history, thread, or grants subscription's last error, or `undefined`. */
     /** Refuse a paused `requestSecretTool` call: the run resumes with a "declined" result. */
     declineSecret: (toolCallId: string) => Promise<void>;
+    /** The history, thread, or grants subscription's last error, or `undefined`. */
     error: ComputedRef<Error | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ComputedRef<ReadonlyArray<AgentChatMessage>>;
