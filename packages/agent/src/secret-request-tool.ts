@@ -191,6 +191,7 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
         const secret = await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.takeSecret), {
             claimant: context.idempotencyKey,
             consumerCallId: context.toolCallId,
+            instanceId: context.instanceId,
             threadKey: context.threadKey,
             toolCallId: secretRef,
         });
@@ -223,7 +224,11 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
     }
 
     await context.step.do(`secret:discard:${context.idempotencyKey}:${secretRef}`, async () => {
-        await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.discardSecret), { threadKey: context.threadKey, toolCallId: secretRef });
+        await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.discardSecret), {
+            instanceId: context.instanceId,
+            threadKey: context.threadKey,
+            toolCallId: secretRef,
+        });
     });
 
     if ("leaked" in consumed) {

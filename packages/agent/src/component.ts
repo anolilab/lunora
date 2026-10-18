@@ -1518,11 +1518,11 @@ export const agentComponent = (): AgentComponent => {
      */
     const agentTakeSecret = asInternal(
         mutation
-            .input({ claimant: v.string(), consumerCallId: v.string(), threadKey: v.string(), toolCallId: v.string() })
+            .input({ claimant: v.string(), consumerCallId: v.string(), instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() })
             .mutation(async ({ args, ctx: context }): Promise<string | undefined> => {
                 const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
 
-                if (request === undefined || (request["status"] !== "supplied" && request["status"] !== "consumed")) {
+                if (request?.["instanceId"] !== args.instanceId || (request["status"] !== "supplied" && request["status"] !== "consumed")) {
                     return undefined;
                 }
 
@@ -1537,13 +1537,16 @@ export const agentComponent = (): AgentComponent => {
     /**
      * Discard a secret value and mark its request `consumed`. INTERNAL and idempotent.
      * The consuming tool dispatches it only after a take succeeded, so a refused call
-     * cannot discard a value that another tool can still use.
+     * cannot discard a value that another tool can still use. It discards only for the
+     * instance that owns the request: a delayed discard from an older run must not
+     * discard the value a newer run was supplied under the same tool-call id.
      */
     const agentDiscardSecret = asInternal(
-        mutation.input({ threadKey: v.string(), toolCallId: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
+        mutation.input({ instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
             const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
 
-            if (request === undefined) {
+            // A row a later run reopened holds that run's value, which this run must not discard.
+            if (request?.["instanceId"] !== args.instanceId) {
                 return;
             }
 
