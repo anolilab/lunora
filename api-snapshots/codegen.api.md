@@ -291,6 +291,8 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
+    liveStreams?: boolean;
+    liveStreamsWithheld?: boolean;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
@@ -643,7 +645,7 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
+    name: "platform_live_stream_delivery_authorization" | "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
     remediation: string;
     target: string;
 }
@@ -1443,7 +1445,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, lazyFunctions, hasVectors, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -2541,6 +2543,7 @@ interface EmitShardOptions {
     hasRooms?: boolean;
     hasVectors?: boolean;
     lazyFunctions?: boolean;
+    liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     mutators?: ReadonlyArray<MutatorIR>;
     queues?: ReadonlyArray<QueueIR>;

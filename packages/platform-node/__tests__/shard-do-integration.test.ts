@@ -1,7 +1,9 @@
 import { ShardDO } from "@lunora/do";
 import { createSocketHost } from "@lunora/platform-cloudflare";
+import { createWorker } from "@lunora/runtime";
 import { describe, expect, it } from "vitest";
 
+import { createNodeShardNamespace } from "../src/node-shard-namespace";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
 import { createNodeShardState } from "../src/node-shard-state";
 
@@ -87,5 +89,63 @@ describe("shardDO on a Node-backed shard", () => {
             // no subscriptions at all.
             expect(listed[0]?.deserializeAttachment?.()).toStrictEqual(attachment);
         });
+    });
+});
+
+describe("queue consumer on a Node-backed worker", () => {
+    it("hands the consumer the live publisher and the host fetch, and the publish reaches the named shard", async () => {
+        expect.assertions(3);
+
+        const shardDos = new Map<string, TestShardDO>();
+        const publishedTo: string[] = [];
+        // The registry's `onFetch` is the per-shard request handler: each resolved
+        // shard is served by one real ShardDO, as the embedder composes it.
+        const registry = createNodeShardRegistry({
+            onFetch: (request, shard) => {
+                if (new URL(request.url).pathname === "/_lunora/live/publish") {
+                    publishedTo.push(shard.shardKey);
+                }
+
+                let shardDo = shardDos.get(shard.shardKey);
+
+                if (shardDo === undefined) {
+                    shardDo = new TestShardDO(createNodeShardState(shard) as never, {});
+                    shardDos.set(shard.shardKey, shardDo);
+                }
+
+                return shardDo.fetch(request);
+            },
+        });
+
+        try {
+            const hostFetch = (() => Promise.resolve(new Response("ran"))) as typeof fetch;
+            let consumerFetch: typeof fetch | undefined;
+            const worker = createWorker({
+                queue: async (_batch, _env, _context, _trigger, live, fetchImpl) => {
+                    consumerFetch = fetchImpl;
+                    await live.publish("orders", { id: 1 }, { shardKey: "tenant-42", stream: "orders" });
+                },
+                queueFetchImpl: hostFetch,
+                shardDO: createNodeShardNamespace(registry.directory),
+            });
+            const context = { passThroughOnException: () => undefined, waitUntil: () => undefined };
+
+            const { queue } = worker;
+
+            if (queue === undefined) {
+                throw new Error("createWorker returned no queue export");
+            }
+
+            await queue({ messages: [], queue: "orders" }, {}, context);
+
+            // ctx.live reached the shard the publish named, through the same
+            // ShardDO route an HTTP action's publish takes.
+            expect(publishedTo).toStrictEqual(["tenant-42"]);
+            // ctx.run's dispatcher is the host's fetch, not the global one.
+            expect(consumerFetch).toBe(hostFetch);
+            expect(shardDos.has("tenant-42")).toBe(true);
+        } finally {
+            registry.close();
+        }
     });
 });

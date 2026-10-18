@@ -32,6 +32,20 @@ type FeatureUsage = Record<CapabilityKey, boolean>;
 const CONTEXT_PROPERTY = "ctx";
 
 /**
+ * Names read through a literal key, `ctx["live"]`: the same property as `ctx.live`. A computed key is not a name the
+ * collector can know, so it is not recorded.
+ */
+const collectLiteralKeyReads = (sourceFile: SourceFile, reachesContext: (receiver: Node) => boolean, names: Set<string>): void => {
+    for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.ElementAccessExpression)) {
+        const key = access.getArgumentExpression();
+
+        if (reachesContext(access.getExpression()) && key !== undefined && (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key))) {
+            names.add(key.getLiteralValue());
+        }
+    }
+};
+
+/**
  * The set of `ctx` helper names the source reaches — a direct `ctx.PROPERTY`
  * access, or a destructuring of the property off the context (`const { kv } =
  * ctx`, `async ({ ctx: { kv } }) => …`).
@@ -93,6 +107,8 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
             names.add(access.getName());
         }
     }
+
+    collectLiteralKeyReads(sourceFile, reachesContext, names);
 
     for (const declaration of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
         const initializer = declaration.getInitializer();

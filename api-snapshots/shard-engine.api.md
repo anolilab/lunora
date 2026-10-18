@@ -1327,6 +1327,19 @@ interface LifecycleEvent {
 }
 ```
 
+### `LiveSocketControlCall` (interface)
+
+```ts
+interface LiveSocketControlCall {
+    action: unknown;
+    callerId: string;
+    connectionId: string;
+    identityExpiry?: number;
+    key: string;
+    subscriptionId: string;
+}
+```
+
 ### `MAIL_RETENTION` (const)
 
 ```ts
@@ -1528,6 +1541,8 @@ interface OrderKeyConstraints {
 class OwnerRelay extends RelayLink {
     constructor(host: RelayHost, ownerKey: string);
     forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
+    forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined>;
+    forwardLiveFrame(topic: string, key: string, frame: string): Promise<void>;
     onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     seedRelayShape(): Promise<"ok" | undefined | {
         code: string;
@@ -1552,7 +1567,7 @@ class OwnerRelay extends RelayLink {
 ### `OwnerRelayFrame` (type)
 
 ```ts
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 ```
 
 ### `PaginationOptions` (interface)
@@ -2243,10 +2258,12 @@ interface RelayHost {
         rowsPatch: ShapeRowOp[];
     };
     currentCdcEpoch: () => string | undefined;
+    deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
+    liveControl: (control: LiveSocketControlCall) => Promise<Response>;
     maskMetadata: () => MaskPoliciesResult;
     nextPokeId: () => string;
     readAttachment: (ws: ShardSocketLike) => SocketAttachment;
@@ -2920,6 +2937,7 @@ interface SocketAttachment {
     expiresAt?: number;
     identity?: Record<string, unknown>;
     ip?: string;
+    liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;
@@ -5752,6 +5770,26 @@ abstract class RelayLink {
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
+}
+```
+
+### `RelayLiveControl` (interface)
+
+```ts
+interface RelayLiveControl {
+    control: LiveSocketControlCall;
+    type: "relay_live_control";
+}
+```
+
+### `RelayLiveFrame` (interface)
+
+```ts
+interface RelayLiveFrame {
+    frame: string;
+    key: string;
+    topic: string;
+    type: "relay_live_frame";
 }
 ```
 

@@ -40,6 +40,7 @@ import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
 import type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     RelayFrame,
@@ -122,6 +123,8 @@ interface RelayHost {
     ) => { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; reset: boolean; rowsPatch: ShapeRowOp[] };
     /** The current CDC epoch (changelog timeline token); `undefined` when CDC is off. */
     currentCdcEpoch: () => string | undefined;
+    /** Deliver a live frame to the DO's local WebSocket members holding grant `key` on `topic`; returns how many it reached. */
+    deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     /** Deliver an already-serialized whisper frame to the DO's local `topic` members (the base whisper fan-out, used whether or not the relay tier is active). */
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     /** This DO's name (the shard key for an owner, the `…::relay::N` name for a relay), or `undefined` for an unnamed DO. */
@@ -135,6 +138,9 @@ interface RelayHost {
      * differently and silently miss every memo lookup.
      */
     getWebSockets: () => ShardSocketLike[];
+
+    /** Apply a forwarded live grant to the socket this DO holds for `connectionId`, or answer 404 when it holds none. */
+    liveControl: (control: LiveSocketControlCall) => Promise<Response>;
     /** This DO's live hibernatable sockets. */
 
     /** The schema's masked columns (codegen-emitted), for the gate's mask check. */
@@ -279,6 +285,14 @@ abstract class RelayLink {
 
                 this.host.deliverWhisperLocal(message.topic, message.frame, except);
                 await this.onWhisperFrame(message);
+
+                return noContent();
+            }
+            case "relay_live_control": {
+                return this.host.liveControl(message.control);
+            }
+            case "relay_live_frame": {
+                this.host.deliverLiveLocal(message.topic, message.key, message.frame);
 
                 return noContent();
             }
@@ -483,6 +497,9 @@ class OwnerRelay extends RelayLink {
     /** Active relay indices, hydrated once from `__lunora_relays` and cached for the synchronous forward path. */
     private relaySetCache: Set<number> | undefined;
 
+    /** Relay indices that have answered a grant, hydrated once from `__lunora_relay_grants`. See {@link OwnerRelay.liveGrantRelaySet}. */
+    private liveGrantRelayCache: Set<number> | undefined;
+
     /**
      * The shape registry, hydrated once per wake from `__lunora_relay_shapes` —
      * see {@link OwnerRelay.relayShapes} for why it is read back from SQLite
@@ -519,6 +536,71 @@ class OwnerRelay extends RelayLink {
             [...relays].map((index) =>
                 this.postRelayMessage(relayName(this.roleId.ownerKey, index), { exceptConnectionId, frame, topic, type: "relay_frame" }),
             ),
+        );
+    }
+
+    /**
+     * Forward a live grant the owner could not place on a local socket to every relay and return
+     * the first answer that is not a 404. A connection id lives on exactly one DO, so at most one
+     * relay applies it. The worker has already run `onSubscribe`; the relay repeats only the
+     * socket ownership and grant checks.
+     * ponytail: fans out to every relay on a miss; index connection id to relay if the cap grows.
+     * @returns the holding relay's response, or `undefined` when no relay holds the socket
+     */
+    public async forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined> {
+        if (!this.canAddressSiblings()) {
+            return undefined;
+        }
+
+        // An unsubscribe can only find its socket on a relay that has held a grant, so it skips
+        // the relays that never have. A subscribe fans out to every relay: it is how a first grant
+        // reaches the relay that will hold it.
+        // ponytail: a publish that lands while a relay's first subscribe is still in flight misses
+        // that relay, since it is recorded as a holder only once its answer returns.
+        const targets = control.action === "unsubscribe" ? this.liveGrantRelaySet() : this.ownerRelaySet();
+
+        if (targets.size === 0) {
+            return undefined;
+        }
+
+        const answers = await Promise.all(
+            [...targets].map(async (index) => {
+                return {
+                    index,
+                    response: await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" }),
+                };
+            }),
+        );
+        const holders = answers.filter(
+            (answer): answer is { index: number; response: Response } => answer.response !== undefined && answer.response.status !== 404,
+        );
+
+        for (const { index } of holders) {
+            this.recordLiveGrantRelay(index);
+        }
+
+        return holders[0]?.response;
+    }
+
+    /**
+     * Hand a server-published live frame to the relays that have answered a grant with a non-404,
+     * the only ones that can hold a grant to deliver to. Best-effort, like a whisper.
+     * ponytail: the set only shrinks when a relay detaches, so a relay that once held a grant keeps
+     * receiving publishes until then; per-grant tracking if that set is ever a measured cost.
+     */
+    public async forwardLiveFrame(topic: string, key: string, frame: string): Promise<void> {
+        if (!this.canAddressSiblings()) {
+            return;
+        }
+
+        const targets = this.liveGrantRelaySet();
+
+        if (targets.size === 0) {
+            return;
+        }
+
+        await Promise.all(
+            [...targets].map((index) => this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame, key, topic, type: "relay_live_frame" })),
         );
     }
 
@@ -995,6 +1077,7 @@ class OwnerRelay extends RelayLink {
     /** Ensure the reserved owner-side relay tables exist (both auto-hidden from the data browser by the `__lunora` prefix). Idempotent, and independent of `runShardMigrations` so the control channel never depends on migration ordering. */
     private ensureRelayTables(): void {
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
+        this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_grants (idx INTEGER PRIMARY KEY)");
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_binding (id INTEGER PRIMARY KEY, binding TEXT NOT NULL)");
         migrateRelayShapes(this.host.sql());
     }
@@ -1146,6 +1229,32 @@ class OwnerRelay extends RelayLink {
         return this.relaySetCache;
     }
 
+    /**
+     * The relays that have answered a forwarded grant with a non-404, so they may hold a live socket.
+     * Hydrated from `__lunora_relay_grants` like {@link OwnerRelay.ownerRelaySet}: an owner that
+     * hibernates would otherwise forget which relays hold grants and drop their live events.
+     */
+    private liveGrantRelaySet(): Set<number> {
+        if (this.liveGrantRelayCache === undefined) {
+            this.ensureRelayTables();
+            const rows = this.host.sql().exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relay_grants").toArray();
+
+            this.liveGrantRelayCache = new Set(rows.map((row) => Number(row.idx)));
+        }
+
+        return this.liveGrantRelayCache;
+    }
+
+    /** Record that relay `index` answered a grant, so live publishes reach it (idempotent, durable). */
+    private recordLiveGrantRelay(index: number): void {
+        const set = this.liveGrantRelaySet();
+
+        if (!set.has(index)) {
+            this.host.sql().exec("INSERT OR IGNORE INTO __lunora_relay_grants (idx) VALUES (?)", index);
+            set.add(index);
+        }
+    }
+
     /** Record a relay as active (idempotent), persisting it so the set survives the owner's hibernation. */
     private addRelayToSet(index: number): void {
         this.ensureRelayTables();
@@ -1166,6 +1275,10 @@ class OwnerRelay extends RelayLink {
         this.host.sql().exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
         const set = this.ownerRelaySet();
         set.delete(index);
+
+        // A detached relay has no sockets left, so it holds no grant either.
+        this.host.sql().exec("DELETE FROM __lunora_relay_grants WHERE idx = ?", index);
+        this.liveGrantRelaySet().delete(index);
 
         const { cohort, proxies } = this.relayShapes();
 

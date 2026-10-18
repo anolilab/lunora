@@ -16,8 +16,12 @@ import { contextPropertiesRead } from "./feature-usage";
 interface PlatformCodeSignals {
     /** A `defineContainer` call carrying an egress policy (`allowedHosts` / `deniedHosts` / `interceptHttps`). */
     containerEgressPolicy: boolean;
+    /** A `.deliveryAuthorization(...)` call on the app builder. Judged with `liveStreams`: the shard answers every live route 501 when both are present. */
+    deliveryAuthorization: boolean;
     /** A `.stream(handler, { durable: … })` registration — a persisted, socket-outliving stream run. */
     durableStreams: boolean;
+    /** A `ctx.live` read in a handler — the live publisher, which a target that withholds live streams never sets on the context. */
+    liveContext: boolean;
     /** A `defineLiveStream` call: a topic SSE stream the shard serves over its subscriber registry. */
     liveStreams: boolean;
     /** A `ctx.secrets` read — the Secrets Store facade, which needs a host binding. */
@@ -29,7 +33,10 @@ interface PlatformCodeSignals {
 }
 
 /** The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry. */
-const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
+const DECLARATION_SIGNALS: Readonly<Record<string, "deliveryAuthorization" | "liveStreams" | "typedWebSockets">> = {
+    // The app builder's method, not a declaration: it turns on the delivery
+    // authorization the shard answers live routes 501 under.
+    deliveryAuthorization: "deliveryAuthorization",
     defineLiveStream: "liveStreams",
     defineRoom: "typedWebSockets",
     defineWebSocket: "typedWebSockets",
@@ -152,7 +159,9 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
 const discoverPlatformSignals = (project: Project, lunoraDirectory: string): PlatformCodeSignals => {
     const signals: PlatformCodeSignals = {
         containerEgressPolicy: false,
+        deliveryAuthorization: false,
         durableStreams: false,
+        liveContext: false,
         liveStreams: false,
         secrets: false,
         typedWebSockets: false,
@@ -162,14 +171,17 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        if (!signals.secrets) {
+        if (!signals.secrets || !signals.liveContext) {
             // The sibling walk `discoverFeatureUsage` uses for the same job, not
             // a third copy of it: it resolves the handler's context by binding,
             // so `{ ctx: context }` and `{ ctx: { secrets } }` count as much as
             // `ctx.secrets`. Reads spelled any other way used to slip past this
             // gate into exactly the surface-that-throws-on-first-use the
-            // `secrets` rating exists to refuse.
-            signals.secrets = contextPropertiesRead(sourceFile).has("secrets");
+            // `secrets` rating exists to refuse. `ctx.live` gets the same treatment.
+            const contextReads = contextPropertiesRead(sourceFile);
+
+            signals.secrets = signals.secrets || contextReads.has("secrets");
+            signals.liveContext = signals.liveContext || contextReads.has("live");
         }
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {

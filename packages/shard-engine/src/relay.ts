@@ -293,17 +293,48 @@ interface RelayRoomVerdict {
     admitted: boolean;
 }
 
+/**
+ * A live subscribe/unsubscribe the owner could not place on a local socket, forwarded so the
+ * relay holding `connectionId` applies it. The owner has already run the worker's `onSubscribe`
+ * for the call, so the relay only repeats the socket ownership and grant checks.
+ */
+interface LiveSocketControlCall {
+    action: unknown;
+    callerId: string;
+    connectionId: string;
+    identityExpiry?: number;
+    key: string;
+    subscriptionId: string;
+}
+
+interface RelayLiveControl {
+    control: LiveSocketControlCall;
+    type: "relay_live_control";
+}
+
+/** A server-published live event the relay delivers to its WebSocket members holding the grant `key`. */
+interface RelayLiveFrame {
+    frame: string;
+    key: string;
+    topic: string;
+    type: "relay_live_frame";
+}
+
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame =
+    RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
 export type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     PromotionThresholds,
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayLiveControl,
+    RelayLiveFrame,
     RelayRoomEvent,
     RelayRoomVerdict,
     RelayShapePoke,
