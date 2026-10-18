@@ -22,7 +22,7 @@ const failingModel = (): MockLanguageModelV4 =>
             }),
     });
 
-const billedUsage = { inputTokens: 2, outputTokens: 1, totalTokens: 3 };
+const billedUsage = { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 };
 
 describe("the usage a failed model turn carries", () => {
     it("is attached to the error a non-streamed turn fails with", async () => {
@@ -98,10 +98,10 @@ describe("a provider error finish that reports only part of its usage", () => {
     };
 
     it.each([
-        ["only input usage", inputOnly],
-        ["only output usage", outputOnly],
-        ["no usage", undefined],
-    ])("a non-streamed turn fails with the provider failure when the finish reports %s", async (_label, usage) => {
+        ["only input usage", inputOnly, "partial"],
+        ["only output usage", outputOnly, "partial"],
+        ["no usage", undefined, "unavailable"],
+    ])("a non-streamed turn fails with the provider failure when the finish reports %s", async (_label, usage, status) => {
         expect.assertions(5);
 
         const model = new MockLanguageModelV4({
@@ -111,14 +111,14 @@ describe("a provider error finish that reports only part of its usage", () => {
 
         expectProviderFailure(failure);
 
-        expect(usageOfFailedTurn(failure) === undefined).toBe(usage === undefined);
+        expect(usageOfFailedTurn(failure)?.status).toBe(status);
     });
 
     it.each([
-        ["only input usage", inputOnly],
-        ["only output usage", outputOnly],
-        ["no usage", undefined],
-    ])("a streamed turn fails with the provider failure when the finish reports %s", async (_label, usage) => {
+        ["only input usage", inputOnly, "partial"],
+        ["only output usage", outputOnly, "partial"],
+        ["no usage", undefined, "unavailable"],
+    ])("a streamed turn fails with the provider failure when the finish reports %s", async (_label, usage, status) => {
         expect.assertions(5);
 
         const model = new MockLanguageModelV4({
@@ -131,6 +131,6 @@ describe("a provider error finish that reports only part of its usage", () => {
 
         expectProviderFailure(failure);
 
-        expect(usageOfFailedTurn(failure) === undefined).toBe(usage === undefined);
+        expect(usageOfFailedTurn(failure)?.status).toBe(status);
     });
 });

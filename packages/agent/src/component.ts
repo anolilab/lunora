@@ -41,7 +41,8 @@ const MAX_QUEUE_DEPTH = 5;
  * The token usage a thread row stores and its mutations accept. Every field is
  * optional: a row written before the cache and reasoning breakdowns existed carries
  * only the three totals, and it must keep reading and patching. Nothing is
- * backfilled, so an absent breakdown reads as absent, never as zero.
+ * backfilled, so an absent breakdown reads as absent, never as zero. The same holds
+ * for `status`, which a row written before it existed does not carry.
  */
 const USAGE_VALIDATOR = v.object({
     cacheReadTokens: v.optional(v.number()),
@@ -49,6 +50,7 @@ const USAGE_VALIDATOR = v.object({
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
     reasoningTokens: v.optional(v.number()),
+    status: v.optional(v.union(v.literal("complete"), v.literal("partial"), v.literal("unavailable"))),
     totalTokens: v.optional(v.number()),
 });
 

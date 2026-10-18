@@ -61,6 +61,30 @@ describe(createAgentGenerate, () => {
 
         const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
 
-        expect(result.usage).toStrictEqual({ cacheReadTokens: 4, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 });
+        expect(result.usage).toStrictEqual({ cacheReadTokens: 4, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, status: "complete", totalTokens: 15 });
+    });
+
+    it("reports a turn whose provider sent no usage as unavailable, not as an absent usage", async () => {
+        expect.assertions(1);
+
+        // The mock's default result carries no usage.
+        const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
+
+        expect(result.usage).toStrictEqual({ status: "unavailable" });
+    });
+
+    it("reports a turn that reported only its prompt as partial", async () => {
+        expect.assertions(1);
+
+        vi.mocked(generateText).mockResolvedValueOnce({
+            output: undefined,
+            text: "ok",
+            toolCalls: [],
+            usage: { inputTokens: 10, outputTokenDetails: {}, totalTokens: undefined },
+        } as never);
+
+        const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
+
+        expect(result.usage).toStrictEqual({ inputTokens: 10, status: "partial" });
     });
 });
