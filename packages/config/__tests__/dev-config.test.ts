@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { describeWithheld, devConfigBasename, sweepStaleDevConfigs, withheldBindings, writeDevConfig } from "../src/cloudflare/dev-config";
 
 describe(withheldBindings, () => {
+    it("reads a malformed artifacts value as no binding instead of throwing", () => {
+        expect.assertions(1);
+
+        expect(withheldBindings({ artifacts: { binding: "ARTIFACTS" } } as never, () => false)).toStrictEqual([]);
+    });
+
     it("withholds a declared ai binding when there is no Cloudflare login", () => {
         expect.assertions(1);
 

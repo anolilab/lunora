@@ -139,7 +139,11 @@ interface RemoteOnlyBindings {
  */
 const withheldBindings = (config: RemoteOnlyBindings | undefined, hasCredentials: () => boolean): WithheldBinding[] => {
     const ai = config?.ai;
-    const artifacts = (config?.artifacts ?? []).flatMap((entry) => (typeof entry?.binding === "string" ? [entry.binding] : []));
+    // A parsed config is untrusted: anything but an array here is the validator's to report, not a crash.
+    const declared: unknown = config?.artifacts;
+    const artifacts = (Array.isArray(declared) ? (declared as NonNullable<RemoteOnlyBindings["artifacts"]>) : []).flatMap((entry) =>
+        typeof entry?.binding === "string" ? [entry.binding] : [],
+    );
 
     if ((ai === undefined || ai === null) && artifacts.length === 0) {
         return [];
