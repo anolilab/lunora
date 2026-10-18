@@ -335,6 +335,8 @@ const setUpBinding = async (setup: BindingSetup, text: string): Promise<{ id: st
     return { id, text: applyModify(text, [...setup.path, setup.index, "id"], id) };
 };
 
+const nonEmpty = (value: string | undefined): string | undefined => (value === undefined || value === "" ? undefined : value);
+
 /** The generated copy a framework build points wrangler at, through `.wrangler/deploy/config.json`, instead of the source config. */
 const generatedConfigPath = (wranglerPath: string): string | undefined => {
     const redirect = join(dirname(wranglerPath), ".wrangler", "deploy", "config.json");
@@ -351,13 +353,29 @@ const generatedConfigPath = (wranglerPath: string): string | undefined => {
 
 /**
  * The build copied the placeholder into the generated config wrangler deploys, so a framework project
- * built before `lunora deploy` would ship it. The generated config is already resolved for its
- * environment, so its Hyperdrive array is the top-level one.
+ * built before `lunora deploy` would ship it. The generated config is already resolved for the one
+ * environment it was built for (`CLOUDFLARE_ENV`), so its Hyperdrive array is the top-level one, and
+ * an id is written only when that is the environment being deployed: another environment's id there
+ * would point a different Worker at this database. Otherwise it is left alone and says so.
  */
-const recordInGeneratedConfig = (wranglerPath: string, binding: string, id: string): void => {
+const recordInGeneratedConfig = (
+    wranglerPath: string,
+    binding: string,
+    id: string,
+    environments: { built: string | undefined; deployed: string | undefined },
+    logger: Logger,
+): void => {
     const generatedPath = generatedConfigPath(wranglerPath);
 
     if (generatedPath === undefined || generatedPath === wranglerPath) {
+        return;
+    }
+
+    if (environments.built !== environments.deployed) {
+        logger.warn(
+            `the build output ${generatedPath} was made for ${environments.built === undefined ? "the default environment" : `"${environments.built}"`}, not ${environments.deployed === undefined ? "the default environment" : `"${environments.deployed}"`}, so the "${binding}" Hyperdrive id was not written there. Build with CLOUDFLARE_ENV set to the environment you deploy, then deploy again.`,
+        );
+
         return;
     }
 
@@ -510,7 +528,13 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
             );
 
             writeFileSync(wranglerPath, text, "utf8");
-            recordInGeneratedConfig(wranglerPath, binding, id);
+            recordInGeneratedConfig(
+                wranglerPath,
+                binding,
+                id,
+                { built: nonEmpty(environment.CLOUDFLARE_ENV), deployed: options.wranglerEnvironment },
+                options.logger,
+            );
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             const message = `deploy blocked: the "${binding}" Hyperdrive config could not be set up: ${redact(reason, origins[position]?.origin)}`;

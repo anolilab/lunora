@@ -108,6 +108,65 @@ describe("hyperdrive on deploy", () => {
             expect((JSON.parse(readFileSync(generated, "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id).toBe("new-config-id");
         });
 
+        describe("the generated config of a framework build, for a named environment", () => {
+            const generatedBuild = (): string => {
+                const generated = join(root, "dist", "app", "wrangler.json");
+
+                mkdirSync(join(root, "dist", "app"), { recursive: true });
+                mkdirSync(join(root, ".wrangler", "deploy"), { recursive: true });
+                writeFileSync(generated, JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" }), "utf8");
+                writeFileSync(join(root, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/app/wrangler.json" }), "utf8");
+
+                return generated;
+            };
+            const idIn = (path: string): string | undefined => (JSON.parse(readFileSync(path, "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id;
+            const stagingConfig = {
+                env: { staging: { hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] } },
+                hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }],
+                name: "app",
+            };
+
+            it("is left alone when it was built for another environment than the one deployed, and says so", async () => {
+                expect.assertions(4);
+
+                writeWrangler(stagingConfig);
+
+                const generated = generatedBuild();
+                const { logger, messages } = recordingLogger();
+                const result = await provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: hyperdriveApi([]),
+                    logger,
+                    wranglerEnvironment: "staging",
+                });
+
+                expect(result).toBeUndefined();
+                expect(readWrangler().env?.staging?.hyperdrive?.[0]?.id).toBe("new-config-id");
+                // Built for the default environment: staging's id would point the default Worker at staging's database.
+                expect(idIn(generated)).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+                expect(messages.join(" ")).toContain("was made for the default environment");
+            });
+
+            it("receives the id when it was built for the environment deployed", async () => {
+                expect.assertions(2);
+
+                writeWrangler(stagingConfig);
+
+                const generated = generatedBuild();
+                const result = await provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, CLOUDFLARE_ENV: "staging", [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: hyperdriveApi([]),
+                    logger: recordingLogger().logger,
+                    wranglerEnvironment: "staging",
+                });
+
+                expect(result).toBeUndefined();
+                expect(idIn(generated)).toBe("new-config-id");
+            });
+        });
+
         it("reuses a config of the same name instead of creating a second one", async () => {
             expect.assertions(3);
 
