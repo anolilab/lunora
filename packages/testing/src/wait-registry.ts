@@ -19,6 +19,12 @@ class WaitRegistry {
 
     private readonly delivered = new Map<string, unknown>();
 
+    /**
+     * Keys whose latest wait timed out. A delivery while one is set is late, so it is
+     * dropped rather than held: the run's next wait on the name starts a fresh generation.
+     */
+    private readonly expired = new Set<string>();
+
     private readonly pending = new Map<string, { reject: (error: Error) => void; resolve: (payload: unknown) => void }>();
 
     private readonly reached = new Map<string, ReachListener[]>();
@@ -34,6 +40,7 @@ class WaitRegistry {
         const count = (this.started.get(key) ?? 0) + 1;
 
         this.started.set(key, count);
+        this.expired.delete(key);
 
         if (this.delivered.has(key)) {
             const early = this.delivered.get(key);
@@ -78,7 +85,9 @@ class WaitRegistry {
         const waiting = this.pending.get(key);
 
         if (waiting === undefined) {
-            this.delivered.set(key, payload);
+            if (!this.expired.has(key)) {
+                this.delivered.set(key, payload);
+            }
 
             return;
         }
@@ -96,6 +105,7 @@ class WaitRegistry {
         }
 
         this.pending.delete(key);
+        this.expired.add(key);
 
         const error = new Error(`agentHarness: wait "${name}" timed out`);
 
