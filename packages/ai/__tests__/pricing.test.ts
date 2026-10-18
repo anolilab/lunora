@@ -116,6 +116,36 @@ describe("estimateModelCost", () => {
         expect(estimateModelCost("", { inputTokens: 1000 })).toBeUndefined();
     });
 
+    it("bills cache reads at the cache rate when the price lists one", () => {
+        expect.assertions(1);
+
+        // 1000 input tokens, 400 of them cache reads: 600 at $1/M, 400 at $0.1/M.
+        const cost = estimateModelCost("chat", { cacheReadTokens: 400, inputTokens: 1000 }, { chat: { cacheRead: 0.1, input: 1 } });
+
+        expect(cost).toBeCloseTo((600 * 1 + 400 * 0.1) / 1_000_000, 12);
+    });
+
+    it("bills cache writes at the input rate when the price lists no write rate", () => {
+        expect.assertions(1);
+
+        const cost = estimateModelCost("chat", { cacheWriteTokens: 200, inputTokens: 1000 }, { chat: { cacheRead: 0.1, input: 1 } });
+
+        expect(cost).toBeCloseTo(1000 / 1_000_000, 12);
+    });
+
+    it("never prices cache tokens on top of the input total", () => {
+        expect.assertions(2);
+
+        // 400 of the 1000 input tokens are cached. With no cache rate listed the
+        // cost is the plain 1000-token input cost, not 1400.
+        // gpt-4o-mini is $0.15 per million input tokens.
+        const plain = (1000 * 0.15) / 1_000_000;
+
+        expect(estimateModelCost("gpt-4o-mini", { cacheReadTokens: 400, inputTokens: 1000 })).toBeCloseTo(plain, 12);
+        // Cache counts beyond the total are clamped to it rather than billed twice.
+        expect(estimateModelCost("gpt-4o-mini", { cacheReadTokens: 5000, inputTokens: 1000 })).toBeCloseTo(plain, 12);
+    });
+
     it("ships a table that is small on purpose", () => {
         expect.assertions(1);
 

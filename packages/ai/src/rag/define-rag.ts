@@ -620,7 +620,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const { embedding, providerMetadata, usage } = await ai.embed({ model: resolvedModel, value: text });
 
                 assertDimensionsFit(embedding.length, resolvedModel);
-                recordUsage(modelIdOf(resolvedModel), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, span, metrics);
+                recordUsage(modelIdOf(resolvedModel), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, span, metrics, {
+                    expectsOutput: false,
+                });
 
                 rememberEmbedding(text, embedding);
 
@@ -700,7 +702,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const ai = await loadAi();
                 const { embeddings, providerMetadata, usage } = await ai.embedMany({ model, values: pending });
 
-                recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics);
+                recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics, {
+                    expectsOutput: false,
+                });
 
                 if (embeddings.length !== pending.length) {
                     return batch;

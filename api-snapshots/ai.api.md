@@ -183,6 +183,8 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ```ts
 interface ModelPrice {
+    cacheRead?: number;
+    cacheWrite?: number;
     input?: number;
     output?: number;
     perImage?: number;
@@ -193,6 +195,8 @@ interface ModelPrice {
 
 ```ts
 interface ModelUsage {
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
 }
