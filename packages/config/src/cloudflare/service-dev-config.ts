@@ -12,19 +12,21 @@
  * sibling copy whose `build.cwd` is absolute — resolved against the service's
  * folder, which is what a standalone `wrangler dev` there would have used.
  *
- * A logged-out session also needs the `ai` binding left out of every service that
+ * A logged-out session also needs the `ai` and `artifacts` bindings left out of every service that
  * declares one (see `dev-config.ts`), so such a service gets a copy too.
  */
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import { applyModify } from "../jsonc-edit";
 import { hasCloudflareCredentials } from "./credentials";
-import { withheldWorkersAi, writeDevConfig } from "./dev-config";
+import type { WithheldBinding } from "./dev-config";
+import { withheldBindings, writeDevConfig } from "./dev-config";
 import { readWranglerJsonc } from "./wrangler-path";
 
 /** The slice of a service's wrangler config this reads. */
 interface ServiceConfigShape {
     ai?: { binding?: string } | null;
+    artifacts?: ReadonlyArray<{ binding?: string } | null | undefined> | null;
     build?: { command?: unknown; cwd?: unknown };
 }
 
@@ -33,8 +35,8 @@ interface ServiceDevConfigs {
     /** Unlinks every copy written. Idempotent, never throws — a no-op when none was. */
     cleanup: () => void;
     configPaths: string[];
-    /** The `ai` binding names left out of a service copy for lack of Cloudflare credentials, for the dev warning. */
-    withheld: string[];
+    /** The remote-only bindings (`ai`, `artifacts`) left out of a service copy for lack of Cloudflare credentials, for the dev warning. */
+    withheld: WithheldBinding[];
 }
 
 interface ServiceMaterializeOptions {
@@ -48,25 +50,28 @@ interface ServiceMaterializeOptions {
  * The config `wrangler dev` should run for one service: the service's own file,
  * or a copy beside it when the service needs a change. A copy is needed when its
  * `build.command` has a relative (or no) `build.cwd`, or when it declares an `ai`
- * binding a logged-out session must leave out. Beside it, not in a temp dir, so the
+ * or `artifacts` binding a logged-out session must leave out. Beside it, not in a temp dir, so the
  * copy's other relative paths (`main`, `assets`, `migrations_dir`, …) still resolve
  * against the service's folder.
  */
-const materializeOne = (wranglerPath: string, options: ServiceMaterializeOptions): { cleanup?: () => void; configPath: string; withheld?: string } => {
+const materializeOne = (
+    wranglerPath: string,
+    options: ServiceMaterializeOptions,
+): { cleanup?: () => void; configPath: string; withheld: WithheldBinding[] } => {
     const { parsed, text } = readWranglerJsonc<ServiceConfigShape>(wranglerPath);
     const build = parsed?.build;
-    const withheld = withheldWorkersAi(parsed?.ai, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
+    const withheld = withheldBindings(parsed, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
     const needsBuildCwd = typeof build?.command === "string" && build.command !== "" && !(typeof build.cwd === "string" && isAbsolute(build.cwd));
 
-    if (!needsBuildCwd && withheld === undefined) {
-        return { configPath: wranglerPath };
+    if (!needsBuildCwd && withheld.length === 0) {
+        return { configPath: wranglerPath, withheld };
     }
 
     const directory = dirname(wranglerPath);
     let contents = text;
 
-    if (withheld !== undefined) {
-        contents = applyModify(contents, ["ai"], undefined);
+    for (const { kind } of withheld) {
+        contents = applyModify(contents, [kind], undefined);
     }
 
     if (needsBuildCwd) {
@@ -93,7 +98,7 @@ const materializeServiceDevConfigs = (wranglerPaths: ReadonlyArray<string>, opti
             }
         },
         configPaths: resolved.map((entry) => entry.configPath),
-        withheld: resolved.flatMap((entry) => (entry.withheld === undefined ? [] : [entry.withheld])),
+        withheld: resolved.flatMap((entry) => entry.withheld),
     };
 };
 

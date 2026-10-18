@@ -94,11 +94,13 @@ Lunora has **config-level** support only. Nothing reads the binding at runtime.
 - **`CAPABILITY_SOURCES` in `infer-bindings.ts`.** One entry gives import
   detection, the `Capabilities` type, merging and the hint text. The
   "hint (un-mintable)" vs "self-describing" split is documented at `:86-92`.
-  Artifacts stays on the hint side on purpose: it is remote-only (a logged-out
-  `wrangler dev` dies at "Failed to start the remote proxy session"), and a
-  namespace made implicitly is unrestricted. `lunora deploy` does create a
-  missing namespace in the schema's jurisdiction for a binding the user added,
-  when `CLOUDFLARE_API_TOKEN` is set.
+  Artifacts has since moved to the written side. Reconcile writes
+  `{ binding: "ARTIFACTS", namespace: <worker name> }` for a Cloudflare target. It is
+  remote-only (a logged-out `wrangler dev` dies at "Failed to start the remote proxy
+  session"), so a logged-out dev session leaves it out like `ai`
+  (`withheldBindings` in `dev-config.ts`). A schema that pins a jurisdiction gets its
+  namespace created in that jurisdiction by `lunora deploy`, which refuses to go on when it
+  can't check or create it, because a namespace made by the first repo is unrestricted.
 - **`binding-manifest.ts` / `validate-bindings.ts` already handle `artifacts`.**
   Don't add a second validation path. Extend these. Uncommitted work in this
   checkout (2026-10-02) threads the schema's jurisdiction into

@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
+import type { WithheldBinding } from "@lunora/config/cloudflare";
 import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
@@ -82,7 +83,7 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
  * where wrangler would otherwise run the service's `build.command` (see
  * `materializeServiceDevConfigs`). `cleanup` unlinks those copies.
  */
-const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: string[] } => {
+const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: WithheldBinding[] } => {
     const paths = [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))];
     const { cleanup, configPaths, withheld } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths, { projectRoot: cwd });
 

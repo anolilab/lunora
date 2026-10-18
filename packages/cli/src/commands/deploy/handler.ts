@@ -773,29 +773,40 @@ const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof c
     const failures: string[] = [];
 
     for (const check of checks) {
-        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
-
-        if (check.verdict === "unchecked") {
-            logger.warn(line);
-        } else if (check.verdict === "ok") {
+        if (check.verdict === "ok") {
             // Said, not silent: a dry run or a build is where the operator learns a real deploy will create it.
             if (check.changesAccount === true) {
-                logger.info(line);
+                logger.info(check.message);
             }
-        } else {
-            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
-            logger.error(line);
-            failures.push(line);
+
+            continue;
         }
+
+        const line = describeArtifactsFailure(check);
+
+        // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
+        logger.error(line);
+        failures.push(line);
     }
 
     return failures;
 };
 
 /**
+ * One refused namespace check as a line. An unchecked namespace stops the deploy too: the first
+ * repo create() would make it unrestricted, and nothing afterwards can say whether it already was.
+ */
+const describeArtifactsFailure = (check: Awaited<ReturnType<typeof checkArtifactsJurisdiction>>): string => {
+    const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+    return check.verdict === "unchecked" ? `${line} The deploy stops until it can be checked, as a namespace made by the first repo is unrestricted.` : line;
+};
+
+/**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
- * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
- * Warns, and lets the deploy go on, when the lookup cannot be made. Returns the
+ * schema's `.jurisdiction("…")`, or one that does not exist yet and cannot be created
+ * (plan 460 D). Also stops when the lookup cannot be made at all: nothing else would
+ * say whether the first repo create() makes an unrestricted namespace. Returns the
  * error that stops the deploy, if any.
  */
 const checkArtifactsNamespaces = async (

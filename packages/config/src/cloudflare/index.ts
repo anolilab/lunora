@@ -26,7 +26,8 @@ export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-fl
 export type { CloudflareCredentialProbe } from "./credentials";
 export { hasCloudflareCredentials } from "./credentials";
 export type { DevConfigKind } from "./dev-config";
-export { describeWithheldWorkersAi, withheldWorkersAi } from "./dev-config";
+export type { WithheldBinding } from "./dev-config";
+export { describeWithheld, withheldBindings } from "./dev-config";
 export type { LocalHyperdrive } from "./local-hyperdrive";
 export { startLocalHyperdrive } from "./local-hyperdrive";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";

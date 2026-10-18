@@ -425,16 +425,26 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
-    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
-        expect.assertions(3);
+    it("writes an ARTIFACTS binding whose namespace is the Worker's name, once, pinned or not", () => {
+        expect.assertions(5);
 
-        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
-        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
 
-        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
-        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
-        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(first.added).toContain("ARTIFACTS (Cloudflare Artifacts)");
+        expect(readConfig().artifacts).toStrictEqual([{ binding: "ARTIFACTS", namespace: "lunora-app" }]);
+        expect(first.warnings.join(" ")).not.toMatch(/"artifacts" binding/u);
+        // The namespace's residency is settled at deploy, which creates it in the schema's jurisdiction or stops.
+        expect(first.warnings.join(" ")).not.toContain("jurisdiction");
+        expect(reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true })).added).toStrictEqual([]);
+    });
+
+    it("writes no ARTIFACTS binding for a non-Cloudflare target, and says what to add", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }), { target: "node" });
+
         expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
     });
 
     describe("an existing artifacts binding", () => {

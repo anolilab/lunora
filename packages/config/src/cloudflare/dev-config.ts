@@ -1,6 +1,6 @@
 /**
  * The temp wrangler configs `lunora dev` writes, and the one rule that decides
- * when they drop the `ai` binding.
+ * when they drop the `ai` and `artifacts` bindings.
  *
  * Importing `@lunora/ai` makes the binding reconcile write `"ai"` into
  * `wrangler.jsonc`. Workers AI has no local emulation, so `wrangler dev` and the
@@ -120,22 +120,50 @@ const writeDevConfig = (directory: string, kind: DevConfigKind, contents: string
     return { cleanup: createCleanup(configPath), configPath };
 };
 
+/** A remote-only binding a logged-out dev session leaves out: which kind it is, and the name the app gave it. */
+interface WithheldBinding {
+    binding: string;
+    kind: "ai" | "artifacts";
+}
+
+/** The slice of a worker config the rule reads. */
+interface RemoteOnlyBindings {
+    ai?: { binding?: string } | null;
+    artifacts?: ReadonlyArray<{ binding?: string } | null | undefined> | null;
+}
+
 /**
- * The binding name to withhold from a logged-out dev session, or `undefined` to keep
- * it. The credential probe runs only when an `ai` binding is declared at all.
+ * The bindings to withhold from a logged-out dev session. Workers AI and Artifacts have no
+ * local simulator, so each opens a remote proxy session at boot that fails without a login and
+ * takes the dev server down. The credential probe runs only when one of them is declared.
  */
-const withheldWorkersAi = (ai: { binding?: string } | null | undefined, hasCredentials: () => boolean): string | undefined => {
-    if (ai === undefined || ai === null || hasCredentials()) {
-        return undefined;
+const withheldBindings = (config: RemoteOnlyBindings | undefined, hasCredentials: () => boolean): WithheldBinding[] => {
+    const ai = config?.ai;
+    const artifacts = (config?.artifacts ?? []).flatMap((entry) => (typeof entry?.binding === "string" ? [entry.binding] : []));
+
+    if ((ai === undefined || ai === null) && artifacts.length === 0) {
+        return [];
     }
 
-    return typeof ai.binding === "string" ? ai.binding : "AI";
+    if (hasCredentials()) {
+        return [];
+    }
+
+    return [
+        ...(ai === undefined || ai === null ? [] : [{ binding: typeof ai.binding === "string" ? ai.binding : "AI", kind: "ai" as const }]),
+        ...artifacts.map((binding) => {
+            return { binding, kind: "artifacts" as const };
+        }),
+    ];
 };
 
-/** The one dev warning for a withheld Workers AI binding, shared by `lunora dev` and `@lunora/vite`. */
-const describeWithheldWorkersAi = (binding: string): string =>
-    `Workers AI is off in this dev session (${binding} binding left out): no Cloudflare login found, and Workers AI only runs remotely. ` +
-    "`@cf/…` models will throw; AI SDK models and `LUNORA_AI_PROXY_URL` slugs still work. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on.";
+/** The one dev warning for a withheld binding, shared by `lunora dev` and `@lunora/vite`. */
+const describeWithheld = ({ binding, kind }: WithheldBinding): string =>
+    kind === "ai"
+        ? `Workers AI is off in this dev session (${binding} binding left out): no Cloudflare login found, and Workers AI only runs remotely. ` +
+          "`@cf/…` models will throw; AI SDK models and `LUNORA_AI_PROXY_URL` slugs still work. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on."
+        : `Artifacts is off in this dev session (${binding} binding left out): no Cloudflare login found, and Artifacts only runs remotely. ` +
+          "`ctx.artifacts` will throw. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on.";
 
-export type { DevConfigKind };
-export { createCleanup, describeWithheldWorkersAi, devConfigBasename, noopCleanup, STALE_DEV_CONFIG, sweepStaleDevConfigs, withheldWorkersAi, writeDevConfig };
+export type { DevConfigKind, WithheldBinding };
+export { createCleanup, describeWithheld, devConfigBasename, noopCleanup, STALE_DEV_CONFIG, sweepStaleDevConfigs, withheldBindings, writeDevConfig };

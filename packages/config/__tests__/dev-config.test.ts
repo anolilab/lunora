@@ -4,29 +4,38 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { describeWithheldWorkersAi, devConfigBasename, sweepStaleDevConfigs, withheldWorkersAi, writeDevConfig } from "../src/cloudflare/dev-config";
+import { describeWithheld, devConfigBasename, sweepStaleDevConfigs, withheldBindings, writeDevConfig } from "../src/cloudflare/dev-config";
 
-describe("withheldWorkersAi", () => {
+describe(withheldBindings, () => {
     it("withholds a declared ai binding when there is no Cloudflare login", () => {
         expect.assertions(1);
 
-        expect(withheldWorkersAi({ binding: "AI" }, () => false)).toBe("AI");
+        expect(withheldBindings({ ai: { binding: "AI" } }, () => false)).toStrictEqual([{ binding: "AI", kind: "ai" }]);
     });
 
     it("names the binding the app declared", () => {
         expect.assertions(1);
 
-        expect(withheldWorkersAi({ binding: "MY_AI" }, () => false)).toBe("MY_AI");
+        expect(withheldBindings({ ai: { binding: "MY_AI" } }, () => false)).toStrictEqual([{ binding: "MY_AI", kind: "ai" }]);
     });
 
-    it("keeps the binding when there is a login", () => {
+    it("withholds every declared artifacts binding, remote-only like ai", () => {
         expect.assertions(1);
 
-        expect(withheldWorkersAi({ binding: "AI" }, () => true)).toBeUndefined();
+        expect(withheldBindings({ artifacts: [{ binding: "ARTIFACTS" }, { binding: "MIRROR" }] }, () => false)).toStrictEqual([
+            { binding: "ARTIFACTS", kind: "artifacts" },
+            { binding: "MIRROR", kind: "artifacts" },
+        ]);
     });
 
-    it("never probes credentials when no ai binding is declared", () => {
-        expect.assertions(3);
+    it("keeps every binding when there is a login", () => {
+        expect.assertions(1);
+
+        expect(withheldBindings({ ai: { binding: "AI" }, artifacts: [{ binding: "ARTIFACTS" }] }, () => true)).toStrictEqual([]);
+    });
+
+    it("never probes credentials when neither binding is declared", () => {
+        expect.assertions(4);
 
         let probed = false;
         const probe = (): boolean => {
@@ -35,26 +44,28 @@ describe("withheldWorkersAi", () => {
             return false;
         };
 
-        expect(withheldWorkersAi(undefined, probe)).toBeUndefined();
-        expect(withheldWorkersAi(null, probe)).toBeUndefined();
+        expect(withheldBindings(undefined, probe)).toStrictEqual([]);
+        expect(withheldBindings({ ai: null, artifacts: [] }, probe)).toStrictEqual([]);
+        expect(withheldBindings({}, probe)).toStrictEqual([]);
         expect(probed).toBe(false);
     });
 
     it("falls back to AI when the declared binding has no name", () => {
         expect.assertions(1);
 
-        expect(withheldWorkersAi({}, () => false)).toBe("AI");
+        expect(withheldBindings({ ai: {} }, () => false)).toStrictEqual([{ binding: "AI", kind: "ai" }]);
     });
 });
 
-describe("describeWithheldWorkersAi", () => {
+describe(describeWithheld, () => {
     it("names the binding and the login that turns it back on", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        const message = describeWithheldWorkersAi("AI");
+        const message = describeWithheld({ binding: "AI", kind: "ai" });
 
         expect(message).toContain("AI binding left out");
         expect(message).toContain("wrangler login");
+        expect(describeWithheld({ binding: "ARTIFACTS", kind: "artifacts" })).toContain("Artifacts is off");
     });
 });
 

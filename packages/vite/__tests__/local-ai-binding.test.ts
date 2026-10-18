@@ -5,6 +5,7 @@ import localAiBinding from "../src/local-ai-binding";
 
 interface WorkerConfig {
     ai?: { binding?: string } | null;
+    artifacts?: { binding?: string }[] | null;
     name?: string;
 }
 
@@ -46,6 +47,34 @@ describe("localAiBinding", () => {
         expect(worker).toStrictEqual({ name: "app" });
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toContain("wrangler login");
+    });
+
+    it("drops the artifacts binding from a dev worker when Cloudflare is logged out, and says what stops working", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const options = {};
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        const worker = resolveWorker(options, { artifacts: [{ binding: "ARTIFACTS" }], name: "app" });
+        const warnings = warn.mock.calls.map((call) => String(call[0]));
+
+        expect(worker).toStrictEqual({ name: "app" });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain("ctx.artifacts");
+    });
+
+    it("keeps the artifacts binding for a build, whose output is the deploy config", () => {
+        expect.assertions(1);
+
+        const options = {};
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "build");
+
+        expect(resolveWorker(options, { artifacts: [{ binding: "ARTIFACTS" }] })).toStrictEqual({ artifacts: [{ binding: "ARTIFACTS" }] });
     });
 
     it("keeps the binding when Cloudflare is logged in", () => {

@@ -758,21 +758,22 @@ describe("lunora deploy", () => {
                 ).toBe(true);
             });
 
-            it("warns and deploys when there is no API token to check with", async () => {
-                expect.assertions(3);
+            it("stops before wrangler when there is no API token to check the namespace with", async () => {
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
                 vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
 
-                const { logger, warns } = silentLogger();
+                const { errors, logger } = silentLogger();
                 const recording = createRecordingSpawner();
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
 
-                expect(result.code).toBe(0);
-                expect(recording.calls).toHaveLength(1);
-                expect(warns.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toContain("The deploy stops until it can be checked");
+                expect(errors.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
                     true,
                 );
+                expect(recording.calls).toHaveLength(0);
             });
         });
 

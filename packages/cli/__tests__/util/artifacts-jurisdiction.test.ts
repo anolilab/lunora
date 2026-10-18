@@ -207,7 +207,7 @@ describe(checkArtifactsJurisdiction, () => {
         const result = await check(fetchImpl, "eu", {});
 
         expect(result.verdict).toBe("unchecked");
-        expect(result.fix).toContain("CLOUDFLARE_API_TOKEN (with Artifacts read access)");
+        expect(result.fix).toContain("CLOUDFLARE_API_TOKEN (with Artifacts edit access");
         expect(fetchImpl).not.toHaveBeenCalled();
     });
 
@@ -219,7 +219,7 @@ describe(checkArtifactsJurisdiction, () => {
         );
 
         await expect(check(refused)).resolves.toStrictEqual({
-            fix: "Give CLOUDFLARE_API_TOKEN Artifacts read access on account acc.",
+            fix: "Give CLOUDFLARE_API_TOKEN Artifacts edit access on account acc.",
             message: `the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) could not be read (HTTP ${String(status)}).`,
             verdict: "unchecked",
         });

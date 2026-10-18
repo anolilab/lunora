@@ -170,7 +170,7 @@ interface ViteRemotePlan {
     configPath?: string;
     enabled: boolean;
     reason?: string;
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 

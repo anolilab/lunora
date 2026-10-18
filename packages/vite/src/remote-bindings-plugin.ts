@@ -16,7 +16,8 @@
  * `buildEnd`/`closeBundle` hooks), so it never leaks past the dev session.
  */
 import { lunoraLine, readProjectRemotePreference } from "@lunora/config";
-import { describeWithheldWorkersAi, materializeDevWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
+import type { WithheldBinding } from "@lunora/config/cloudflare";
+import { describeWithheld, materializeDevWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import type { CloudflarePluginOptions } from "./types";
@@ -41,8 +42,8 @@ interface ViteRemotePlan {
     enabled: boolean;
     /** Why remote mode didn't take effect despite being requested, for logging. */
     reason?: string;
-    /** `ai` bindings left out for lack of Cloudflare credentials, for the dev warning. */
-    withheld: string[];
+    /** Remote-only bindings (`ai`, `artifacts`) left out for lack of Cloudflare credentials, for the dev warning. */
+    withheld: WithheldBinding[];
 }
 
 /** Inputs to the Vite remote-binding decision — injectable so tests don't touch the env/fs. */
@@ -189,7 +190,7 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
 
             for (const binding of plan.withheld) {
                 // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.
-                console.warn(lunoraLine(describeWithheldWorkersAi(binding)));
+                console.warn(lunoraLine(describeWithheld(binding)));
             }
 
             if (options === undefined) {

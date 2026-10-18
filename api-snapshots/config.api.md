@@ -2174,7 +2174,7 @@ interface MaterializeDevResult {
     configPath?: string;
     reason?: string;
     remoteBindings: RemoteBindingPlan[];
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 
@@ -2336,6 +2336,7 @@ interface RemoteWranglerShape {
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     analytics?: BindingEntry | null;
+    artifacts?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: {
@@ -2353,7 +2354,7 @@ interface RemoteWranglerShape {
 interface ServiceDevConfigs {
     cleanup: () => void;
     configPaths: string[];
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 
@@ -2385,6 +2386,15 @@ const WRANGLER_FILES: readonly [
     "wrangler.jsonc",
     "wrangler.json"
 ];
+```
+
+### `WithheldBinding` (interface)
+
+```ts
+interface WithheldBinding {
+    binding: string;
+    kind: "ai" | "artifacts";
+}
 ```
 
 ### `WranglerCacheShape` (interface)
@@ -2769,10 +2779,10 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
-### `describeWithheldWorkersAi` (const)
+### `describeWithheld` (const)
 
 ```ts
-const describeWithheldWorkersAi: (binding: string) => string;
+const describeWithheld: ({ binding, kind }: WithheldBinding) => string;
 ```
 
 ### `detectCloudflareCliConfig` (const)
@@ -2931,12 +2941,10 @@ const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string)
 const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => WranglerConfig;
 ```
 
-### `withheldWorkersAi` (const)
+### `withheldBindings` (const)
 
 ```ts
-const withheldWorkersAi: (ai: {
-    binding?: string;
-} | null | undefined, hasCredentials: () => boolean) => string | undefined;
+const withheldBindings: (config: RemoteOnlyBindings | undefined, hasCredentials: () => boolean) => WithheldBinding[];
 ```
 
 ### `wranglerCodegenInputs` (const)
@@ -3376,6 +3384,19 @@ interface ReconcileLogger {
 
 ```ts
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
+```
+
+### `RemoteOnlyBindings` (interface)
+
+```ts
+interface RemoteOnlyBindings {
+    ai?: {
+        binding?: string;
+    } | null;
+    artifacts?: ReadonlyArray<{
+        binding?: string;
+    } | null | undefined> | null;
+}
 ```
 
 ### `ServiceMaterializeOptions` (interface)

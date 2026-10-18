@@ -362,12 +362,12 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 materializeDev: () => {
-                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 
             expect(plan.remote.enabled).toBe(false);
-            expect(plan.remote.withheld).toStrictEqual(["AI"]);
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
             expect(plan.wrangler.args).toContain("--config");
             expect(plan.wrangler.args).toContain(localConfig);
         });
@@ -383,7 +383,7 @@ describe("lunora dev", () => {
                 materializeDev: () => {
                     materialized = true;
 
-                    return { cleanup: () => {}, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 

@@ -175,7 +175,7 @@ const checkArtifactsJurisdiction = async (options: ArtifactsJurisdictionOptions)
 
     if (token === undefined || accountId === undefined) {
         return {
-            fix: "Set CLOUDFLARE_API_TOKEN (with Artifacts read access) and CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc) to check it.",
+            fix: "Set CLOUDFLARE_API_TOKEN (with Artifacts edit access, which creating a missing namespace needs) and CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc) to check it.",
             message: `the jurisdiction of ${subject} was not checked against the schema's "${jurisdiction}".`,
             verdict: "unchecked",
         };
@@ -206,7 +206,7 @@ const checkArtifactsJurisdiction = async (options: ArtifactsJurisdictionOptions)
         const denied = outcome.status === 401 || outcome.status === 403;
 
         return {
-            ...(denied ? { fix: `Give CLOUDFLARE_API_TOKEN Artifacts read access on account ${accountId}.` } : {}),
+            ...(denied ? { fix: `Give CLOUDFLARE_API_TOKEN Artifacts edit access on account ${accountId}.` } : {}),
             message: `the jurisdiction of ${subject} could not be read (HTTP ${String(outcome.status)}).`,
             verdict: "unchecked",
         };
