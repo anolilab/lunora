@@ -43,6 +43,8 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     run: `${AGENT_MODULE}:agentRun`,
     setState: `${AGENT_MODULE}:agentSetState`,
     state: `${AGENT_MODULE}:agentState`,
+    takeSecret: `${AGENT_MODULE}:agentTakeSecret`,
+    discardSecret: `${AGENT_MODULE}:agentDiscardSecret`,
 };
 
 /**

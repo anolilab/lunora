@@ -1,10 +1,12 @@
 import { LunoraError } from "@lunora/errors";
+import type { SecretValueHost } from "@lunora/platform";
+import { SecretValueTooLargeError } from "@lunora/platform";
 import type { DatabaseWriter, SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
-import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
+import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, asInternal, definedColumns } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 import type { EnsureThreadOutcome } from "./types";
@@ -103,7 +105,7 @@ const agentExtension: SchemaExtension<
              * `"approved"`/`"rejected"` on the tool result once resolved. Optional
              * so ordinary messages (and pre-existing rows) are unaffected.
              */
-            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -325,6 +327,80 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
 };
 
 /**
+ * The secret store the secret mutations reach through the generated ctx. Codegen
+ * weaves `agentSecrets` onto the ctx only for a target that can hold a value,
+ * in an app that imports `requestSecretTool`; any other host refuses here, before
+ * a value is accepted, rather than crashing on an undefined field.
+ */
+const secretStoreOf = (context: unknown): SecretValueHost => {
+    const { agentSecrets } = context as { agentSecrets?: SecretValueHost };
+
+    if (agentSecrets === undefined) {
+        throw new LunoraError("NOT_IMPLEMENTED", "@lunora/agent: this deployment target cannot hold a human-supplied secret value");
+    }
+
+    return agentSecrets;
+};
+
+/**
+ * The owner gate for the human-facing secret mutations, deliberately stricter
+ * than `readableThread`: an ownerless thread is readable by anyone who
+ * knows its key, and it must NOT be allowed to take a credential. Requires a
+ * verified identity that equals the thread's stored owner.
+ */
+const ownedSecretThread = (thread: Record<string, unknown> | null, auth: { userId?: string | null }): Record<string, unknown> => {
+    const userId = auth.userId ?? undefined;
+
+    if (thread === null || userId === undefined || thread["owner"] !== userId) {
+        throw new LunoraError("FORBIDDEN", "@lunora/agent: only the thread's owner can supply or decline a secret on it");
+    }
+
+    return thread;
+};
+
+/**
+ * The pending `awaiting_secret` marker row for `toolCallId`, keyed off the
+ * thread's own stored instance. A marker the loop has retired (timeout, a
+ * decision already taken, or a double submit) is a CONFLICT, so a late supply
+ * stores nothing.
+ */
+const pendingSecretMarker = async (database: QueueDatabase, thread: Record<string, unknown>, toolCallId: string): Promise<Record<string, unknown>> => {
+    const { instanceId, key: threadKey } = thread as { instanceId?: unknown; key: string };
+    const marker =
+        typeof instanceId === "string"
+            ? await database
+                  .query(MESSAGES_TABLE)
+                  .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:secret:${toolCallId}`))
+                  .first()
+            : undefined;
+
+    if (marker?.["status"] !== "awaiting_secret") {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+    }
+
+    return marker;
+};
+
+/**
+ * The thread's agent `sendEvent` handle plus its running instance: the path that
+ * wakes a paused secret wait.
+ */
+const secretWaitHandle = (
+    context: unknown,
+    thread: Record<string, unknown>,
+): { instanceId: string; sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void> } => {
+    const { instanceId } = thread;
+    const { agents } = context as { agents?: Record<string, { sendEvent?: (id: string, event: { payload: unknown; type: string }) => Promise<void> }> };
+    const handle = agents?.[thread["agent"] as string];
+
+    if (typeof instanceId !== "string" || typeof handle?.sendEvent !== "function") {
+        throw new LunoraError("INTERNAL", `@lunora/agent: no ctx.agents["${String(thread["agent"])}"] producer to deliver the secret — run codegen/dev`);
+    }
+
+    return { instanceId, sendEvent: handle.sendEvent };
+};
+
+/**
  * Park a run behind the one currently in flight (`onConcurrentRun: "queue"`).
  *
  * Three properties make this safe, and all three come from the DO executing one
@@ -486,7 +562,9 @@ export interface AgentComponent {
         agentApprovalGranted: AgentRegisteredFunction;
         agentApprovalGrants: AgentRegisteredFunction;
         agentCompleteRun: AgentRegisteredFunction;
+        agentDeclineSecret: AgentRegisteredFunction;
         agentDeleteMessage: AgentRegisteredFunction;
+        agentDiscardSecret: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
         agentEpisodeRecall: AgentRegisteredFunction;
         agentEpisodeUpsert: AgentRegisteredFunction;
@@ -500,6 +578,8 @@ export interface AgentComponent {
         agentRun: AgentRegisteredFunction;
         agentSetState: AgentRegisteredFunction;
         agentState: AgentRegisteredFunction;
+        agentSupplySecret: AgentRegisteredFunction;
+        agentTakeSecret: AgentRegisteredFunction;
         agentThread: AgentRegisteredFunction;
     };
 }
@@ -629,7 +709,7 @@ export const agentComponent = (): AgentComponent => {
             content: v.string(),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
-            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -1158,6 +1238,102 @@ export const agentComponent = (): AgentComponent => {
         });
 
     /**
+     * Deliver a human-supplied secret to the paused `requestSecretTool` call. The
+     * value is written to the secret store and only its opaque ref travels in the
+     * wake-up event, so it never reaches the workflow journal, a message row or
+     * this mutation's return (`{ resolved: true }`, which the shard's idempotency
+     * row persists). PUBLIC and OWNER-GATED, fail closed (see
+     * {@link ownedSecretThread}). The plaintext transits this mutation's arguments:
+     * the arg is named `secret` so request-log redaction masks it.
+     */
+    const agentSupplySecret = mutation
+        .input({ secret: v.string(), threadKey: v.string(), toolCallId: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
+            const thread = ownedSecretThread(
+                await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first(),
+                context.auth,
+            );
+            const store = secretStoreOf(context);
+            const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
+            const handle = secretWaitHandle(context, thread);
+
+            let ref: string;
+
+            try {
+                ref = await store.put(args.secret, { scope: args.threadKey, ttlMs: AGENT_SECRET_TTL_MS });
+            } catch (error: unknown) {
+                if (error instanceof SecretValueTooLargeError) {
+                    throw new LunoraError("PAYLOAD_TOO_LARGE", error.message);
+                }
+
+                throw error;
+            }
+
+            // Retire the marker in this same mutation, so a second submit is a
+            // CONFLICT rather than a second stored value.
+            await context.db.delete(marker["_id"] as never);
+
+            try {
+                await handle.sendEvent(handle.instanceId, { payload: { ref }, type: `agent-secret:${args.toolCallId}` });
+            } catch (error: unknown) {
+                // The wake-up never landed, so nothing will consume the value.
+                await store.discard(ref);
+
+                throw error;
+            }
+
+            return { resolved: true };
+        });
+
+    /**
+     * Refuse a human-facing secret request: the paused call resumes with a
+     * deterministic "declined" tool result instead of waiting out its timeout.
+     * PUBLIC and OWNER-GATED like {@link agentSupplySecret}.
+     */
+    const agentDeclineSecret = mutation
+        .input({ threadKey: v.string(), toolCallId: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
+            const thread = ownedSecretThread(
+                await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first(),
+                context.auth,
+            );
+            const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
+            const handle = secretWaitHandle(context, thread);
+
+            await context.db.delete(marker["_id"] as never);
+            await handle.sendEvent(handle.instanceId, { payload: { declined: true }, type: `agent-secret:${args.toolCallId}` });
+
+            return { resolved: true };
+        });
+
+    /**
+     * Read a supplied secret for the consuming tool's claimant. INTERNAL: only a
+     * tool step dispatches it, with `claimant` set to its durable step name, so a
+     * client cannot spoof a claimant. The first take binds the ref; a null result
+     * means expired, unknown, already bound to another claimant, or the wrong thread.
+     */
+    const agentTakeSecret = asInternal(
+        mutation
+            .input({ claimant: v.string(), ref: v.string(), threadKey: v.string() })
+            .mutation(({ args, ctx: context }): Promise<string | undefined> =>
+                secretStoreOf(context).take(args.ref, { claimant: args.claimant, scope: args.threadKey }),
+            ),
+    );
+
+    /** Discard a secret value once the consuming tool has used it. INTERNAL and idempotent. */
+    const agentDiscardSecret = asInternal(
+        mutation.input({ ref: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
+            await secretStoreOf(context).discard(args.ref);
+        }),
+    );
+
+    /**
      * Whether a thread-scoped approval grant exists for `toolName` on this thread.
      * INTERNAL: the loop reads it from inside a tool's approval-gate step, so the
      * gate's replay-stable decision is memoized with the read itself. Not owner-
@@ -1384,7 +1560,11 @@ export const agentComponent = (): AgentComponent => {
             agentRun,
             agentSetState: asInternal(agentSetState),
             agentState,
+            agentSupplySecret,
+            agentTakeSecret,
             agentThread,
+            agentDeclineSecret,
+            agentDiscardSecret,
         },
     };
 };

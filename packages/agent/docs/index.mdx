@@ -254,6 +254,78 @@ never be answered at all. Size `approvalTimeout` to your on-call reality, and do
 not assume an approval raised before a long weekend is still waiting on
 Monday.
 
+## Human-supplied secrets (`requestSecretTool`)
+
+A tool that needs a credential the model does not have (an API key, a token)
+asks the person for it with `requestSecretTool`. The run pauses on
+`awaiting_secret` exactly as it does for an approval, and resumes once the owner
+calls `agents:agentSupplySecret` (the value) or `agents:agentDeclineSecret`.
+A consuming tool reads the value with `withSecret`:
+
+```ts
+import { defineAgent, defineAgentTool, requestSecretTool, withSecret } from "@lunora/agent";
+import { jsonSchema } from "ai";
+
+export const billing = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: {
+        requestKey: requestSecretTool({ description: "Ask the user for their payment API key." }),
+        charge: defineAgentTool({
+            description: "Charge the card with the stored key.",
+            execute: (input, context) =>
+                withSecret(context, input.secretRef, async (apiKey) => {
+                    const response = await fetch("https://payments.example/charge", { headers: { authorization: `Bearer ${apiKey}` } });
+
+                    return { status: response.status };
+                }),
+            inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }),
+        }),
+    },
+});
+```
+
+The model receives only `{ "secretRef": "…" }` from the request and passes that
+ref to the consuming tool. Nothing else it sees, and nothing in the thread, holds
+the value. `withSecret` takes the value inside its own durable step, returns only
+what the callback returns, and then discards the value as a second step.
+
+**Guarantees.** The value is absent from the message rows, the workflow journal,
+the wake-up event, the supply mutation's return and the request log's redacted
+arguments. A consuming call claims the value under its own step name: a retry of
+that step re-reads it, and any other call gets "no longer available". The
+consuming tool fails once, deterministically, with no retry, if the value has
+expired. Supplying is owner-only and fails closed: an anonymous caller, and any
+caller on an ownerless thread, is refused, because an ownerless thread is readable
+by anyone who knows its key. A second supply, or a supply after the wait has timed
+out, is a `CONFLICT` and stores nothing.
+
+**Limits you must design for.**
+
+- **The plaintext transits the supply mutation's arguments.** The argument is
+  named `secret` so the request log masks it. Anything else that records mutation
+  arguments in transit would see it too.
+- **Offline queueing persists the value.** `@lunora/client` writes a queued
+  mutation's arguments to IndexedDB or AsyncStorage when the device is offline.
+  Until a per-mutation online-only option exists, the global `persistence: false`
+  is the only opt-out, and it applies to everything. Do not ship a supply UI on
+  top of an offline-capable client yet.
+- **Point-in-time recovery can bring a discarded value back** for the database's
+  recovery window (30 days). Discard removes the value from the store, not from
+  backups.
+- **"One use" means one claimant, not one read.** The value stays readable by the
+  call that first took it until it is discarded or expires. A tool that hands the
+  ref to another call is handing over the credential. Within one call, read each
+  ref once: `withSecret` names its durable steps by call and ref, so a second read
+  of the same ref returns the first read's result. A call that needs two secrets
+  passes two refs.
+- **Never return, log or throw the value from `use`.** `traceToolExecution`
+  records a tool's input and output, and a thrown error reaches the tool row.
+- **Only shards on a target that rates `secretValues` native can hold a value**
+  (Cloudflare today). Elsewhere the supply mutation refuses with `NOT_IMPLEMENTED`.
+- The value expires 15 minutes after it is supplied. That covers the gap to the
+  model's next turn, not a long pause, so the consuming call has to follow soon
+  after the supply.
+
 ## Client hooks
 
 Every framework adapter ships two hooks over the same live subscription. The
@@ -1141,6 +1213,12 @@ expect(harness.dispatches).toContainEqual({ args: { city: "Berlin" }, path: "wea
 `finalTurn(text, extra?)` and `toolCallTurn(id, name, input, text?)` build turn
 scripts; `harness.thread(key)` reads the persisted thread record; provide `functions`
 runtime stubs to back the functions your tools dispatch to.
+
+A run that pauses for a human (an approval or a `requestSecretTool` request) stops
+at its wait. Resolve it with `harness.awaitWait("secret:call_1")` to reach the
+pause, then `harness.deliver(name, payload)` or `harness.expire(name)`. The secret
+store is `harness.secrets`, and `harness.journalEntries()` is what to assert a
+supplied value never reached.
 
 ### Recorded model streams
 

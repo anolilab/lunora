@@ -2534,6 +2534,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/server':
         specifier: workspace:*
         version: link:../server

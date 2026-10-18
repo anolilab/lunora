@@ -8,7 +8,7 @@ export interface StoredMessage {
     messageKey: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     stepName?: string;
     threadKey: string;
     toolCallId?: string;
