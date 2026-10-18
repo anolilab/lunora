@@ -122,6 +122,44 @@ describe("useAgentToolEvents", () => {
         ]);
     });
 
+    it("lists a pending secret request (awaiting-secret) until the server retires its marker", async () => {
+        expect.hasAssertions();
+
+        const { client, emit } = buildClient();
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={() => {}}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(MESSAGES_REF, [
+                {
+                    content: 'Awaiting a secret for tool "requestKey".',
+                    role: "tool",
+                    seq: 4,
+                    status: "awaiting_secret",
+                    toolCallId: "c3",
+                    toolName: "requestKey",
+                },
+            ]);
+        });
+
+        expect(readEvents()).toStrictEqual([{ seq: 4, toolCallId: "c3", toolName: "requestKey", type: "awaiting-secret" }]);
+
+        // Supply and decline both delete the marker, so the next history push drops it.
+        await act(async () => {
+            emit(MESSAGES_REF, []);
+        });
+
+        expect(readEvents()).toStrictEqual([]);
+    });
+
     it("surfaces live progress events for the thread and ignores token deltas + other threads", async () => {
         expect.hasAssertions();
 

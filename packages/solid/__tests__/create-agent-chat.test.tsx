@@ -23,6 +23,9 @@ const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
 const GRANTS_REF = "agents:agentApprovalGrants";
 const REVOKE_REF = "agents:agentRevokeApprovalGrant";
+const SUPPLY_REF = "agents:agentSupplySecret";
+const DECLINE_REF = "agents:agentDeclineSecret";
+const SECRET = "sk-live-4242-do-not-log";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:liveEvents";
@@ -31,9 +34,11 @@ const buildApi = (): CreateAgentChatApi =>
     ({
         agents: {
             agentApprovalGrants: makeRef(GRANTS_REF),
+            agentDeclineSecret: makeRef(DECLINE_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
             agentRevokeApprovalGrant: makeRef(REVOKE_REF),
+            agentSupplySecret: makeRef(SUPPLY_REF),
             agentThread: makeRef(THREAD_REF),
         },
     }) as unknown as CreateAgentChatApi;
@@ -311,6 +316,65 @@ describe(createAgentChat, () => {
         await latest?.cancel();
 
         expect(fake.mutationCalls).toContainEqual({ args: { instanceId: "wf-1", threadKey: "t1" }, functionPath: CANCEL_REF });
+    });
+
+    it("supplySecret sends the value through agentSupplySecret with onlineOnly, and keeps no copy", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        await latest?.supplySecret("call-1", SECRET);
+
+        // The secret rides in the args only; the options are exactly the online-only flag.
+        expect(fake.mutationCalls).toStrictEqual([
+            { args: { secret: SECRET, threadKey: "t1", toolCallId: "call-1" }, functionPath: SUPPLY_REF, options: { onlineOnly: true } },
+        ]);
+        expect(document.body.textContent).not.toContain(SECRET);
+    });
+
+    it("supplySecret rethrows the original failure, so the value is not echoed into the error", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+        const failure = new Error("connection is not live");
+
+        fake.setMutationThrow(failure);
+
+        await expect(latest?.supplySecret("call-1", SECRET)).rejects.toBe(failure);
+    });
+
+    it("declineSecret sends agentDeclineSecret for the tool call, carrying no value", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        await latest?.declineSecret("call-1");
+
+        expect(fake.mutationCalls).toContainEqual({ args: { threadKey: "t1", toolCallId: "call-1" }, functionPath: DECLINE_REF });
     });
 
     it("approve rejects when there is no in-flight run to resolve", async () => {
