@@ -318,21 +318,25 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `D` (const)
-
-Re-exported from `@lunora/ai` — signature tracked in that section.
-
 ### `LunoraAi` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `M` (interface)
+### `USAGE_ATTRIBUTE` (const)
 
-Re-exported from `@lunora/ai` — signature tracked in that section.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `a` (interface)
+### `UsageCounts` (interface)
 
-Re-exported from `@lunora/ai` — signature tracked in that section.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `UsageStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `breakdownCount` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `createAi` (const)
 
@@ -346,7 +350,11 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `l` (const)
+### `tokenCount` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `usageStatus` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

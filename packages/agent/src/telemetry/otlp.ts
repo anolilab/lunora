@@ -1,10 +1,10 @@
-import { estimateModelCost } from "@lunora/ai/create";
+import { estimateModelCost, USAGE_ATTRIBUTE, usageStatus } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf, usageStatus } from "./common";
+import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 /** Spans per OTLP export before an early flush. */
@@ -276,12 +276,12 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
         pushAttribute(attributes, "lunora.usage.status", status);
         // Cache and reasoning counts are subsets of the input and output totals; each is
         // emitted only when reported, so an absent bucket is never a counted zero.
-        pushAttribute(attributes, "gen_ai.usage.input_tokens", usage?.inputTokens);
-        pushAttribute(attributes, "gen_ai.usage.output_tokens", usage?.outputTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.inputTokens, usage?.inputTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.outputTokens, usage?.outputTokens);
         pushAttribute(attributes, "gen_ai.usage.total_tokens", usage?.totalTokens);
-        pushAttribute(attributes, "gen_ai.usage.cache_read.input_tokens", usage?.cacheReadTokens);
-        pushAttribute(attributes, "gen_ai.usage.cache_creation.input_tokens", usage?.cacheWriteTokens);
-        pushAttribute(attributes, "gen_ai.usage.reasoning.output_tokens", usage?.reasoningTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheReadTokens, usage?.cacheReadTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheWriteTokens, usage?.cacheWriteTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.reasoningTokens, usage?.reasoningTokens);
 
         // Cloudflare AI Gateway telemetry — additive, only present when the
         // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
