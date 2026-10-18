@@ -803,7 +803,7 @@ const reportArtifactsChecks = (
                 logger.info(check.message);
             }
         } else if (check.verdict === "unchecked" && mode === "preview") {
-            logger.warn(`dry run: ${check.message} A real deploy stops here.`);
+            logger.warn(`dry run: ${check.message}${check.fix === undefined ? "" : ` ${check.fix}`} A real deploy stops here.`);
         } else {
             const line = describeArtifactsFailure(check);
 
