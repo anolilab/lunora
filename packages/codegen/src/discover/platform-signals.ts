@@ -2,7 +2,7 @@ import type { CallExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
-import { chainRootOf, listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
+import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -215,9 +215,9 @@ const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined
 
 /** True when `call` is `<app builder>.deliveryAuthorization(…)`. A bare call of that name, or a method on any other object, is not. */
 const isDeliveryAuthorizationCall = (sourceFile: SourceFile, call: CallExpression): boolean => {
-    const callee = call.getExpression();
+    const access = memberAccessOf(call.getExpression());
 
-    return Node.isPropertyAccessExpression(callee) && callee.getName() === "deliveryAuthorization" && isAppBuilderReceiver(sourceFile, callee.getExpression());
+    return access?.member === "deliveryAuthorization" && isAppBuilderReceiver(sourceFile, access.object);
 };
 
 /** The option keys that make each signal call a declaration. */

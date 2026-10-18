@@ -154,6 +154,15 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(true);
     });
 
+    it("flags a bracket-form `.deliveryAuthorization(...)` call on the app builder", () => {
+        expect.assertions(1);
+
+        // The method is public, so the literal bracket form reaches it too.
+        write("worker.ts", `const app = defineApp();\n\nexport const worker = app["deliveryAuthorization"](() => undefined);\n`);
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
     it("flags a delivery-authorization builder call as deliveryAuthorization", () => {
         expect.assertions(1);
 
