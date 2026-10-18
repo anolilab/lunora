@@ -134,6 +134,30 @@ describe("connectWebSocket", () => {
         expect(lastSocket().url).toBe("/socket/chat");
     });
 
+    it("contains a throwing onMessage as a route handler failure", () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const client = makeClient();
+
+        client.connectWebSocket("/chat", {
+            onMessage: () => {
+                throw new Error("boom");
+            },
+        });
+
+        const socket = lastSocket();
+
+        socket.fire("open");
+
+        expect(() => {
+            socket.fire("message", { data: JSON.stringify({ data: encodeWire({ text: "hi" }), type: "message" }) });
+        }).not.toThrow();
+        expect(error).toHaveBeenCalledWith("[lunora] socket route handler threw", expect.any(Error));
+
+        error.mockRestore();
+    });
+
     it("keeps the host of a protocol-relative socket url", () => {
         expect.assertions(1);
 

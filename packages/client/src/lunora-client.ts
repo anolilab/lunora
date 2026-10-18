@@ -2217,7 +2217,9 @@ class LunoraClient {
                     // backs off instead of reconnecting at the initial delay
                     // forever.
                     channel.resetBackoff();
-                    handlers.onMessage(decodeWire(frame.data) as Message);
+                    notify(() => {
+                        handlers.onMessage(decodeWire(frame.data) as Message);
+                    });
                 }
             },
             onOpen: () => {
