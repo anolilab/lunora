@@ -52,15 +52,47 @@ describe("createSensitiveScope", () => {
         expect(createSensitiveScope([SECRET]).text(`charged with ${SECRET} ok`)).toBe(`charged with ${SENSITIVE_ARG_MASK} ok`);
     });
 
-    it("masks a value shorter than the substring threshold only when it is the whole text", () => {
-        expect.assertions(3);
+    it("masks a short value as a whole token in free text, and leaves it inside a longer token alone", () => {
+        expect.assertions(4);
 
-        // Three characters: inside other text it is left alone, so `ok!` inside `look!` survives.
-        const scope = createSensitiveScope(["ok!"]);
+        const scope = createSensitiveScope(["123"]);
 
-        expect(scope.text("look!")).toBe("look!");
-        expect(scope.text("ok!")).toBe(SENSITIVE_ARG_MASK);
-        expect(scope.text("the ok! flag")).toBe("the ok! flag");
+        expect(scope.text("invalid code 123")).toBe(`invalid code ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("invalid code 1234")).toBe("invalid code 1234");
+        expect(scope.text("ref a123b")).toBe("ref a123b");
+        expect(scope.text("ok!")).toBe("ok!");
+    });
+
+    it("masks a short value of one or two characters only when it is the whole text", () => {
+        expect.assertions(2);
+
+        // A numeric leaf of a marked object (`{ count: 3 }` collects "3") must not erase every standalone digit.
+        const scope = createSensitiveScope(["3", "42"]);
+
+        expect(scope.text("retry 3 of 42")).toBe("retry 3 of 42");
+        expect(scope.text("42")).toBe(SENSITIVE_ARG_MASK);
+    });
+
+    it("masks a short value embedded in an error message, a log line and a span attribute", async () => {
+        expect.assertions(4);
+
+        const scope = createSensitiveScope(["123"]);
+        const { recorded, trace } = setupTracer({ scope });
+
+        await expect(
+            trace("charge", () => {
+                throw new Error("invalid code 123");
+            }),
+        ).rejects.toThrow("invalid code 123");
+
+        expect(recorded[0]?.error?.message).toBe(`invalid code ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("charged 123 units")).toBe(`charged ${SENSITIVE_ARG_MASK} units`);
+
+        const { collected, handle } = createSpanCollector(ids, false, scope);
+
+        handle.setAttribute("note", "code 123 rejected");
+
+        expect(collected.attributes).toEqual({ note: `code ${SENSITIVE_ARG_MASK} rejected` });
     });
 
     it("masks a value of exactly the substring threshold inside other text", () => {
