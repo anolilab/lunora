@@ -4,6 +4,8 @@ export type { EvaluationAttributeValue, EvaluationMetrics, EvaluationSpanHandle,
 export { evaluationAttributes, recordEvaluation } from "./evaluation-telemetry";
 export type { ArtifactsFake } from "./fake-artifacts";
 export { createArtifactsFake } from "./fake-artifacts";
+export type { FakeSecretValues } from "./fake-secret-values";
+export { createFakeSecretValues } from "./fake-secret-values";
 export type {
     FakeNotifyControls,
     FakeQueueControls,
