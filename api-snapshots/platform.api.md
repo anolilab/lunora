@@ -963,6 +963,7 @@ interface ConformanceHost {
     advanceClock?: (ms: number) => void;
     awaitAlarmFired?: (target: number) => Promise<void>;
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+    capabilities?: PlatformCapabilities;
     cleanup?: () => void;
     createSocket?: () => unknown;
     cronTicks?: (functionPath: string) => number;
