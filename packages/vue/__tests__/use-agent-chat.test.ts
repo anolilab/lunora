@@ -19,6 +19,8 @@ const makeStreamRef = (reference: string): FunctionReference<"stream", { key: st
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:liveEvents";
@@ -26,8 +28,10 @@ const STREAM_REF = "chat:liveEvents";
 const buildApi = (): UseAgentChatApi =>
     ({
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
             agentThread: makeRef(THREAD_REF),
         },
     }) as unknown as UseAgentChatApi;
@@ -58,7 +62,11 @@ describe(useAgentChat, () => {
         )!;
 
         // Both the history and thread channels open on setup.
-        expect(fake.subscribeCalls.map((call) => call.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([MESSAGES_REF, THREAD_REF]);
+        expect(fake.subscribeCalls.map((call) => call.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            GRANTS_REF,
+            MESSAGES_REF,
+            THREAD_REF,
+        ]);
         expect(chat.messages.value).toStrictEqual([]);
         expect(chat.status.value).toBeUndefined();
         // No stream reference supplied — streamingText stays empty (no stream opens).
@@ -329,6 +337,69 @@ describe(useAgentChat, () => {
         )!;
 
         await expect(chat.approve("call-1")).rejects.toThrow("no in-flight run");
+
+        scope.stop();
+    });
+
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult =>
+                useAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" }),
+            ),
+        )!;
+
+        fake.push(THREAD_REF, { key: "t1" }, { instanceId: "wf-1", status: "awaiting_input" });
+
+        await chat.approveForThread("call-1", "ok for this thread");
+
+        expect(fake.mutationSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
+            { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            undefined,
+        );
+
+        scope.stop();
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult =>
+                useAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" }),
+            ),
+        )!;
+
+        expect(chat.approvalGrants.value).toStrictEqual([]);
+
+        fake.push(GRANTS_REF, { key: "t1" }, [
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        expect(chat.approvalGrants.value).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await chat.revokeGrant("sendEmail");
+
+        expect(fake.mutationSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: REVOKE_REF }),
+            { threadKey: "t1", toolName: "sendEmail" },
+            undefined,
+        );
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        fake.push(GRANTS_REF, { key: "t1" }, [{ createdAt: 2, toolName: "refund" }]);
+
+        expect(chat.approvalGrants.value).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
 
         scope.stop();
     });
