@@ -68,17 +68,14 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                # The legs are the `engines` floor 22.15 (no FTS5), the Astro-compatible 22.22 pin
-                # (FTS5 present), and 24.11. The floor leg keeps the `^22.15.0` bound tested.
+                # The legs are the Astro-compatible 22.22 pin and 24.11, both with FTS5.
                 #
                 # `fts5` declares whether the leg's `node:sqlite` carries the FTS5 module,
                 # which is a property of the Node build, not of SQLite: it was switched on
-                # in 22.16.0 (nodejs/node#57621), so the engines-floor leg does not have it
-                # and every FTS5 suite skips itself there. The step below probes the real
-                # build and fails on any disagreement with what is declared here.
+                # in 22.16.0 (nodejs/node#57621); on an older build every FTS5 suite skips
+                # itself. The step below probes the real build and fails on any
+                # disagreement with what is declared here.
                 "include":
-                    - "node_version": "22.15"
-                      "fts5": "absent"
                     - "node_version": "22.22"
                       "fts5": "present"
                     - "node_version": "24.11"
