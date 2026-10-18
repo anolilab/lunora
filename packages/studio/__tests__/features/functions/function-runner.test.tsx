@@ -452,3 +452,75 @@ describe("functionRunner — v.bigint() / v.bytes() values", () => {
         });
     });
 });
+
+describe("functionRunner with a v.sensitive argument", () => {
+    const SECRET = "hunter2-the-real-secret";
+
+    // `value` is the secret here on purpose: the masking keys on the marker, not the name.
+    const VAULT_FUNCTIONS: FunctionDescriptor[] = [
+        {
+            args: [
+                { kind: "string", name: "label", optional: false },
+                { kind: "string", name: "value", optional: false, sensitive: true },
+            ],
+            kind: "mutation",
+            path: "vault:store",
+        },
+    ];
+
+    const typeArgs = (text: string): void => {
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: text } });
+    };
+
+    it("keeps the sensitive value out of run history and out of a failed run's message", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            mutation: () => {
+                throw new Error(`rejected ${SECRET}`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={VAULT_FUNCTIONS} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ label: "primary", value: SECRET }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        expect(screen.getByTestId("fn-history").textContent).not.toContain(SECRET);
+        expect(screen.getByTestId("error").textContent).not.toContain(SECRET);
+        expect(screen.getByTestId("error").textContent).toContain("«sensitive»");
+    });
+
+    it("does not reload a sensitive run's args from history, and says why", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            mutation: () => {
+                return { ok: true };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={VAULT_FUNCTIONS} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ label: "primary", value: SECRET }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        typeArgs("{}");
+        fireEvent.click(screen.getByTestId("fn-history-load-0"));
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe("{}");
+        expect(screen.getByTestId("error").textContent).toContain("Re-enter the sensitive values");
+    });
+});

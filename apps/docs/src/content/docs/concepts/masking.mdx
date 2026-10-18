@@ -107,6 +107,22 @@ mask({
   a `count` whose `where` references a masked column throws.
 - **A throwing `MaskFn` redacts to `null`.** It never leaks the raw value.
 
+## Sensitive arguments
+
+Masking covers what a procedure _returns_. A value a caller _sends_ (a password,
+an API key a person typed in) is marked on the argument itself with
+`v.sensitive(...)`:
+
+```ts
+const storeKey = mutation.input({ label: v.string(), apiKey: v.sensitive(v.string()) });
+```
+
+The marker follows the value, not the name. The request log and the Studio run
+history keep `«sensitive»` in its place, the validation error does not echo it,
+the JSON Schema marks it `writeOnly`, and the generated client never queues the
+call offline. The name carries no weight: `value` is protected exactly as
+`apiKey` is.
+
 ## Tooling
 
 - **Studio**: the [data browser](/docs/packages/studio#database) shows a "Mask

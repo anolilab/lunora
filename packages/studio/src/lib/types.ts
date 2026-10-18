@@ -14,6 +14,8 @@ export interface FunctionArgumentDescriptor {
     name: string;
     /** True when the arg is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the arg is marked `v.sensitive`: its value is never kept in run history. */
+    sensitive?: true;
     /** Target table for an `id` arg (`v.id("table")`). */
     table?: string;
 }
