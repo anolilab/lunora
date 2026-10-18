@@ -136,10 +136,18 @@ describe("planRemoteBindings", () => {
         expect(plans[0]).toMatchObject({ binding: "DB", kind: "D1", path: [1] });
     });
 
+    it("leaves an id-less KV namespace out of the remote plan, since there is no deployed one to proxy to", () => {
+        expect.assertions(1);
+
+        const plans = planRemoteBindings({ kv_namespaces: [{ binding: "KV" }, { binding: "CACHE", id: "abc" }] });
+
+        expect(plans.map((plan) => plan.binding)).toStrictEqual(["CACHE"]);
+    });
+
     it("labels a binding with no name by its index so logging stays meaningful", () => {
         expect.assertions(1);
 
-        const plans = planRemoteBindings({ kv_namespaces: [{}] });
+        const plans = planRemoteBindings({ kv_namespaces: [{ id: "abc" }] });
 
         expect(plans[0]?.binding).toBe("#0");
     });

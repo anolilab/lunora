@@ -83,6 +83,16 @@ describe("index", () => {
             expect(functions.includes('import * as lunora_messages_0 from "../messages.js"')).toBe(!expected);
         });
 
+        it("starts the local Hyperdrive database for a project that brings its own Cloudflare plugin too", () => {
+            expect.assertions(2);
+
+            const bringYourOwn = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false }).map((plugin) => plugin.name);
+            const lunorasOwn = lunora({ overlay: false, projectRoot: workdir, validateWrangler: false }).map((plugin) => plugin.name);
+
+            expect(bringYourOwn.filter((name) => name === "lunora:local-hyperdrive")).toHaveLength(1);
+            expect(lunorasOwn.filter((name) => name === "lunora:local-hyperdrive")).toHaveLength(1);
+        });
+
         it("returns an array of plugins including the lunora internals and cloudflare", async () => {
             expect.hasAssertions();
 

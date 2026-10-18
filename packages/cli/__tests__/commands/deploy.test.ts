@@ -506,6 +506,113 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("hyperdrive config", () => {
+            const withPlaceholder = (extra: Record<string, unknown> = {}): void => {
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        hyperdrive: [{ binding: "HYPERDRIVE", id: "<replace-with-hyperdrive-create-id>" }],
+                        ...extra,
+                    }),
+                    "utf8",
+                );
+            };
+            const hyperdriveApi = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+                    }
+
+                    return Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+                vi.unstubAllGlobals();
+            });
+
+            it("creates the config only once nothing else can refuse the deploy, and before wrangler runs", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: recording.spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(recording.calls).toHaveLength(1);
+                expect((parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id).toBe(
+                    "created-id",
+                );
+            });
+
+            it("stops a real deploy at the pre-deploy checks, before anything is built or shipped, when the connection string is missing", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.error).toContain("deploy blocked");
+                expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+                expect(recording.calls).toHaveLength(0);
+                // Stopped by the early check itself, not left to the last step after a "dry run" warning.
+                expect(warns.join(" ")).not.toContain("dry run");
+            });
+
+            it("creates nothing when a later precheck refuses the deploy", async () => {
+                expect.assertions(3);
+
+                // A D1 binding still carrying its placeholder id stops the deploy in the pre-deploy checks.
+                withPlaceholder({ d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "x" }] });
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).not.toBe(0);
+                expect(posts).toStrictEqual([]);
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain("<replace-with-hyperdrive-create-id>");
+            });
+        });
+
         describe("artifacts namespace jurisdiction", () => {
             /** `VALID_WRANGLER` binding one Artifacts namespace, over the fixture schema pinned to `eu`. */
             const seedPinnedArtifacts = (): void => {
@@ -546,6 +653,109 @@ describe("lunora deploy", () => {
                 // Pretty mode prints no returned error, so the refusal must reach the logger.
                 expect(errors.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS)'))).toBe(true);
                 expect(recording.calls).toHaveLength(0);
+            });
+
+            /** A fetch where the namespace is absent until a POST creates it; `posts` records the creations. */
+            const absentUntilCreated = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+
+                        return Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true });
+                    }
+
+                    return posts.length > 0
+                        ? Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true })
+                        : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            it("creates a missing pinned namespace once, even when two bindings name it", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        artifacts: [
+                            { binding: "ARTIFACTS", namespace: "repos" },
+                            { binding: "MIRROR", namespace: "repos" },
+                        ],
+                    }),
+                    "utf8",
+                );
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
+            });
+
+            it("creates nothing on a --temporary deploy, whose Worker goes to an account that would never see the namespace", async () => {
+                expect.assertions(2);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                    temporary: true,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(result.error).toContain("does not exist");
+            });
+
+            it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const { infos, logger } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(result.error).toBeUndefined();
+                // Said, so the operator learns from the dry run that a real deploy will create it.
+                expect(
+                    infos.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS) does not exist yet; it will be created')),
+                ).toBe(true);
             });
 
             it("warns and deploys when there is no API token to check with", async () => {

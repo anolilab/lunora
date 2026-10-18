@@ -94,6 +94,11 @@ Lunora has **config-level** support only. Nothing reads the binding at runtime.
 - **`CAPABILITY_SOURCES` in `infer-bindings.ts`.** One entry gives import
   detection, the `Capabilities` type, merging and the hint text. The
   "hint (un-mintable)" vs "self-describing" split is documented at `:86-92`.
+  Artifacts stays on the hint side on purpose: it is remote-only (a logged-out
+  `wrangler dev` dies at "Failed to start the remote proxy session"), and a
+  namespace made implicitly is unrestricted. `lunora deploy` does create a
+  missing namespace in the schema's jurisdiction for a binding the user added,
+  when `CLOUDFLARE_API_TOKEN` is set.
 - **`binding-manifest.ts` / `validate-bindings.ts` already handle `artifacts`.**
   Don't add a second validation path. Extend these. Uncommitted work in this
   checkout (2026-10-02) threads the schema's jurisdiction into

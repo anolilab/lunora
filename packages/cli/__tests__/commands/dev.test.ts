@@ -964,6 +964,32 @@ describe("lunora dev", () => {
             expect(stopped).toBe(0);
         });
 
+        it("starts no embedded Hyperdrive Postgres for a celld-target session, which has no Hyperdrive binding", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    return { exited: Promise.resolve(0), stop: async () => {} };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+            });
+
+            expect(start).not.toHaveBeenCalled();
+        });
+
         it("stops the celld session when the worker is killed", async () => {
             expect.assertions(1);
 
@@ -1303,6 +1329,72 @@ describe("lunora dev", () => {
 
             // The remote disposer ran on the (clean) exit path.
             expect(cleaned).toBe(true);
+        });
+
+        it("starts the embedded Hyperdrive Postgres for the session and stops it when the worker exits", async () => {
+            expect.assertions(3);
+
+            const events: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: async ({ projectRoot }) => {
+                    events.push(`start ${projectRoot}`);
+
+                    return {
+                        bindings: ["HYPERDRIVE"],
+                        stop: async () => {
+                            events.push("stop");
+                        },
+                    };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    events.push("worker");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(events[0]).toBe(`start ${workdir}`);
+            expect(events).toContain("worker");
+            // Stopped after the worker that dials it.
+            expect(events.at(-1)).toBe("stop");
+        });
+
+        it("still starts the embedded Hyperdrive Postgres under --remote, which never proxies Hyperdrive", async () => {
+            expect.assertions(1);
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    return { cleanup: () => {}, configPath: join(workdir, "wrangler.remote.jsonc"), remoteBindings: [], withheld: [] };
+                },
+                remote: true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(start).toHaveBeenCalledTimes(1);
         });
 
         it("still unlinks the remote temp config when startup throws", async () => {

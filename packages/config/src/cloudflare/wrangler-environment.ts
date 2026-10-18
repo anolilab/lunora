@@ -34,6 +34,10 @@ import type { WranglerConfig } from "./wrangler-config";
  * ("not automatically inherited from the top level environment", checked
  * 2026-10-03).
  *
+ * `hyperdrive` is read through `notInheritable(...)` by wrangler 4.149.0's config
+ * normaliser (checked 2026-10-18): an environment needs its own entry, and a top-level
+ * one does not count for it.
+ *
  * `k2` (K2 producer bindings, wrangler >= 4.145.0, which Lunora tracks but does
  * not model) is read through `notInheritable(...)` by wrangler's config
  * normaliser, and its config-schema description says "This field must be
@@ -48,6 +52,7 @@ const NON_INHERITABLE_KEYS: ReadonlyArray<keyof WranglerConfig> = [
     "containers",
     "d1_databases",
     "durable_objects",
+    "hyperdrive",
     "k2",
     "kv_namespaces",
     "queues",

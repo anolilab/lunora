@@ -661,11 +661,11 @@ describe("wrangler-validator", () => {
             expect(validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production").valid).toBe(true);
         });
 
-        // kv_namespaces — NON-inheritable, hint-only (warns on a missing id,
-        // doesn't error): env.production's OWN (id-less) entry must be what
-        // gets validated — the top level's entry (which DOES have an id) must
-        // not silently paper over it.
-        it("kv_namespaces: env.production's own id-less entry warns, even though the top level's has an id", () => {
+        // kv_namespaces — NON-inheritable: env.production's OWN entry must be what
+        // gets validated — the top level's (valid) entry must not silently paper
+        // over it. An id-less entry is fine (wrangler creates the namespace on
+        // deploy), so the proof is an entry with no binding.
+        it("kv_namespaces: env.production's own entry is validated, even though the top level's is complete", () => {
             expect.assertions(2);
 
             const wrangler = topLevel();
@@ -673,17 +673,14 @@ describe("wrangler-validator", () => {
             wrangler.env = {
                 production: {
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                    kv_namespaces: [{ binding: "CACHE" }],
+                    kv_namespaces: [{ id: "abc123" }],
                 },
             };
 
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
-            // Still valid (kv_namespaces is a hint, not a hard error) — but the
-            // warning must fire, proving the merged view used env.production's
-            // id-less entry rather than the top level's complete one.
-            expect(report.valid).toBe(true);
-            expect(report.warnings.some((line) => line.toLowerCase().includes("kv") && line.includes("id"))).toBe(true);
+            expect(report.valid).toBe(false);
+            expect(report.errors.join(" ")).toContain('must have a non-empty "binding"');
         });
 
         // r2_buckets — NON-inheritable, self-describing (shape-only, no remote
@@ -801,15 +798,15 @@ describe("wrangler-validator", () => {
             wrangler.env = {
                 production: {
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                    // `hyperdrive` is a real WranglerConfig key with no verified
+                    // `pipelines` is a real WranglerConfig key with no verified
                     // entry in either NON_INHERITABLE_KEYS or INHERITABLE_KEYS.
-                    hyperdrive: [{ binding: "HYPERDRIVE", id: "env-only-id" }],
+                    pipelines: [{ binding: "EVENTS", stream: "env-only-stream" }],
                 },
             };
 
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
-            expect(report.warnings.some((line) => line.includes("hyperdrive") && line.includes("TOP-LEVEL value only"))).toBe(true);
+            expect(report.warnings.some((line) => line.includes("pipelines") && line.includes("TOP-LEVEL value only"))).toBe(true);
             // Exactly one such warning, not one per unverified key.
             expect(report.warnings.filter((line) => line.includes("TOP-LEVEL value only"))).toHaveLength(1);
         });
@@ -3108,7 +3105,7 @@ export const schema = defineSchema({
             };
         };
 
-        it("accepts a well-formed kv_namespaces binding; warns on a missing id; errors on a missing binding", () => {
+        it("accepts a well-formed kv_namespaces binding, with or without an id; errors on a missing binding", () => {
             expect.assertions(4);
 
             const valid = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE", id: "abc123" }] }));
@@ -3117,8 +3114,9 @@ export const schema = defineSchema({
 
             const missingId = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE" }] }));
 
+            // Wrangler creates a namespace declared without an id on the first deploy.
             expect(missingId.valid).toBe(true);
-            expect(missingId.warnings.join(" ")).toMatch(/wrangler kv namespace create/u);
+            expect(missingId.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
 
             const missingBinding = validateWranglerConfig(validBase({ kv_namespaces: [{ id: "abc123" }] }));
 

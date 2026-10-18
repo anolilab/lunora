@@ -87,6 +87,9 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-pgvector": "catalog:sql",
+        "@electric-sql/pglite-socket": "catalog:sql",
         "@types/dockerode": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -97,9 +100,21 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@electric-sql/pglite": "^0.5.8",
+        "@electric-sql/pglite-pgvector": "^0.0.9",
+        "@electric-sql/pglite-socket": "^0.2.11",
         "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0"
     },
     "peerDependenciesMeta": {
+        "@electric-sql/pglite": {
+            "optional": true
+        },
+        "@electric-sql/pglite-pgvector": {
+            "optional": true
+        },
+        "@electric-sql/pglite-socket": {
+            "optional": true
+        },
         "@lunora/studio": {
             "optional": true
         }

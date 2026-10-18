@@ -3387,6 +3387,15 @@ importers:
         specifier: catalog:tooling
         version: 28.0.0
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: catalog:sql
+        version: 0.5.8
+      '@electric-sql/pglite-pgvector':
+        specifier: catalog:sql
+        version: 0.0.9(@electric-sql/pglite@0.5.8)
+      '@electric-sql/pglite-socket':
+        specifier: catalog:sql
+        version: 0.2.11(@electric-sql/pglite-age@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pg_hashids@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pg_ivm@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pg_textsearch@0.0.10(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pg_uuidv7@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pgtap@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite-pgvector@0.0.9(@electric-sql/pglite@0.5.8))(@electric-sql/pglite@0.5.8)
       '@types/dockerode':
         specifier: catalog:types
         version: 4.0.1
