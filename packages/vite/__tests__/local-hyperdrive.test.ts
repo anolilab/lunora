@@ -349,7 +349,7 @@ describe(localHyperdrive, () => {
         await replacement;
 
         expect(start).toHaveBeenCalledTimes(2);
-        expect(console.info).toHaveBeenCalledWith(expect.stringContaining("DB2"));
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("DB2"));
     });
 
     it("calls off the stop countdown as soon as a replacement config starts resolving, even if it takes longer than the countdown", async () => {
