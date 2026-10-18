@@ -914,6 +914,7 @@ describe("reconcileWranglerBindings", () => {
     it.each([
         ["KV", { usesKv: true }, '"vars": { "KV": "x" }', "kv_namespaces"],
         ["HYPERDRIVE", { usesHyperdrive: true }, '"vars": { "HYPERDRIVE": "x" }', "hyperdrive"],
+        ["ARTIFACTS", { usesArtifacts: true }, '"vars": { "ARTIFACTS": "x" }', "artifacts"],
     ])("leaves the config alone and warns when the name %s is already bound by another section", (name, inferred, bound, key) => {
         expect.assertions(3);
 
