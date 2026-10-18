@@ -38,6 +38,17 @@ const usageOf = (input: number, output: number): GenerateResult["usage"] => {
     };
 };
 
+/**
+ * A V4 usage carrying exactly the counts given. An omitted field stays `undefined`
+ * (unreported), never 0, so a test can tell an absent bucket from a counted zero.
+ */
+const reportedUsage = (counts: { cacheRead?: number; cacheWrite?: number; input?: number; output?: number; reasoning?: number }): GenerateResult["usage"] => {
+    return {
+        inputTokens: { cacheRead: counts.cacheRead, cacheWrite: counts.cacheWrite, noCache: undefined, total: counts.input },
+        outputTokens: { reasoning: counts.reasoning, text: undefined, total: counts.output },
+    };
+};
+
 /** Wrap the integration under test in the `telemetry` option `generateText`/`streamText` accept. */
 const withTelemetry = (integration: Telemetry): { integrations: Telemetry[]; isEnabled: true } => {
     return { integrations: [integration], isEnabled: true };
@@ -125,4 +136,4 @@ const settle = async (): Promise<void> => {
 };
 
 export type { GenerateResult };
-export { drain, generatingModel, settle, STOP, streamingModel, usageOf, withTelemetry };
+export { drain, generatingModel, reportedUsage, settle, STOP, streamingModel, usageOf, withTelemetry };
