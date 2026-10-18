@@ -578,7 +578,18 @@ export interface LunoraClientOptions {
      * {@link LunoraClientOptions.persistence}.
      */
     queryCache?: QueryCacheAdapter | false;
+
     reconnect?: ReconnectOptions;
+
+    /**
+     * Deadline (ms) for one HTTP RPC round trip (`query`, `mutation`, a replayed
+     * write), covering the response body as well as the connection. A request
+     * that stalls past it fails with a retryable `TransportError` — and a durable
+     * write is re-queued under the same `mutationId` — instead of freezing every
+     * write queued behind it on the shard. `action` is exempt: it may legitimately
+     * run for longer. Defaults to 30000 (30s); set to `0` (or negative) to disable.
+     */
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
 

@@ -5,6 +5,14 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
+ * Default deadline (ms) for one HTTP RPC round trip — see
+ * `LunoraClientOptions.rpcTimeoutMs`. Generous for a mutation (which commits in
+ * milliseconds) yet short enough that a stalled request cannot hold a shard's
+ * whole write chain for minutes.
+ */
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+/**
  * How often the HTTP polling fallback re-runs the live queries on a shard whose
  * socket will not open. Five seconds trades freshness against load deliberately:
  * a poll re-runs every subscribed query against the origin with no CDC cursor to
@@ -90,6 +98,7 @@ export {
     DEFAULT_HEARTBEAT_INTERVAL_MS,
     DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS,
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
+    DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,

@@ -87,6 +87,7 @@ import {
     DEFAULT_HEARTBEAT_INTERVAL_MS,
     DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS,
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
+    DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
@@ -136,6 +137,7 @@ import {
     unparseableResponseError,
     utf8ByteLength,
 } from "./replay";
+import withinRpcDeadline from "./rpc-deadline";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
@@ -554,6 +556,8 @@ class LunoraClient {
     private readonly connectTimeoutMs: number;
     /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link LunoraClientOptions.heartbeatIntervalMs}. */
     private readonly heartbeatIntervalMs: number;
+    /** Deadline (ms) for one HTTP RPC round trip; `0` disables it. See {@link LunoraClientOptions.rpcTimeoutMs}. */
+    private readonly rpcTimeoutMs: number;
     /** The socket-lifecycle inputs, built once after the constructor assigns them (none is reassigned later). */
     private readonly managedSocketOptions: ManagedSocketOptions;
 
@@ -1037,6 +1041,7 @@ class LunoraClient {
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+        this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
         this.managedSocketOptions = {
             connectTimeoutMs: this.connectTimeoutMs,
             heartbeatIntervalMs: this.heartbeatIntervalMs,
@@ -2705,6 +2710,7 @@ class LunoraClient {
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
             attachBookmark: true,
             captureBookmark: true,
+            unbounded: true,
         })) as ReturnOf<F>;
     }
 
@@ -6051,23 +6057,38 @@ class LunoraClient {
             onCommitCursor?: (commitCursor: number | undefined) => void;
             /** Invoked on a successful response with the server's echoed custom-mutator watermark (if any). */
             onMutationAck?: (lastMutationId: number | undefined) => void;
+            /** Exempts the call from {@link LunoraClientOptions.rpcTimeoutMs} (an action may legitimately run long). */
+            unbounded?: boolean;
         } = {},
     ): Promise<unknown> {
-        if (!this.fetchImpl) {
+        const { fetchImpl } = this;
+
+        if (!fetchImpl) {
             throw new TransportError("LunoraClient: no `fetch` implementation available");
         }
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
         const sentToken = flags.authToken === undefined ? this.authToken : flags.authToken;
+        const requestBody = JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey });
 
-        const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
-            // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
-            // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
-            // encodes byte-identically, so a pre-codec server still interops.
-            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey }),
-            headers,
-            method: "POST",
-        });
+        // The deadline covers the body read as well as the connection: a stalled
+        // response holds the shard's whole write chain just as a stalled connect does.
+        const { body, readable, response } = await withinRpcDeadline<{ body: RpcEnvelopeBody; readable: boolean; response: Response }>(
+            flags.unbounded ? 0 : this.rpcTimeoutMs,
+            undefined,
+            async (signal) => {
+                // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
+                // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
+                // encodes byte-identically, so a pre-codec server still interops.
+                const reply = await fetchImpl(joinUrl(this.url, RPC_PATH), { body: requestBody, headers, method: "POST", signal });
+
+                try {
+                    return { body: await reply.json(), readable: true, response: reply };
+                } catch {
+                    return { body: undefined as unknown as RpcEnvelopeBody, readable: false, response: reply };
+                }
+            },
+        );
 
         if (flags.captureBookmark) {
             const value = response.headers.get("x-d1-bookmark");
@@ -6077,11 +6098,7 @@ class LunoraClient {
             }
         }
 
-        let body: RpcEnvelopeBody;
-
-        try {
-            body = await response.json();
-        } catch {
+        if (!readable) {
             // Not a Lunora envelope at all — an edge's HTML page, a captive
             // portal, a truncated body. The HTTP status is the only verdict
             // there is, and `unparseableResponseError` is where the outbox's
@@ -9111,29 +9128,57 @@ class LunoraClient {
             return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
+        const { fetchImpl } = this;
         let response: Response;
+        let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] } | undefined;
 
         try {
-            response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
-                body,
-                // No shard key: a batch's entries may target several shards, and
-                // one outbound `x-lunora-min-seq` cannot state a requirement for
-                // all of them. Writes go to the owner regardless, so omitting it
-                // costs nothing — the per-entry cursors are recorded on the way
-                // back out (`settleReplaySuccess`).
-                //
-                // One request, one identity: every write in the chunk passed the
-                // replay gate against the same one, so the first stamped write
-                // speaks for all of them (an unstamped legacy write has none).
-                headers: this.rpcRequestHeaders({
-                    attachBookmark: true,
-                    authToken,
-                    ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
-                }),
-                method: "POST",
-            });
-        } catch {
-            // Transport failure (offline mid-flush) — nothing committed; retry all.
+            // The deadline covers the body read too: a batch that stalls mid-body
+            // would otherwise hold this shard's replay chain, and every write
+            // behind it, open for as long as the platform lets the request live.
+            ({ payload, response } = await withinRpcDeadline(this.rpcTimeoutMs, undefined, async (signal) => {
+                const reply = await fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                    body,
+                    // No shard key: a batch's entries may target several shards, and
+                    // one outbound `x-lunora-min-seq` cannot state a requirement for
+                    // all of them. Writes go to the owner regardless, so omitting it
+                    // costs nothing — the per-entry cursors are recorded on the way
+                    // back out (`settleReplaySuccess`).
+                    //
+                    // One request, one identity: every write in the chunk passed the
+                    // replay gate against the same one, so the first stamped write
+                    // speaks for all of them (an unstamped legacy write has none).
+                    headers: this.rpcRequestHeaders({
+                        attachBookmark: true,
+                        authToken,
+                        ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
+                    }),
+                    method: "POST",
+                    signal,
+                });
+
+                // The body cap the client measured against is not the one that counts —
+                // the header framing rides along, and a proxy may impose its own. A `413`
+                // is a verdict on the REQUEST, not on the writes inside it, so it is not
+                // read as a batch reply here (see the halving below).
+                if (reply.status === 413 && items.length > 1) {
+                    return { payload: undefined, response: reply };
+                }
+
+                try {
+                    return { payload: await reply.json(), response: reply };
+                } catch {
+                    return { payload: undefined, response: reply };
+                }
+            }));
+        } catch (error) {
+            // Transport failure (offline mid-flush, or the exchange timed out) —
+            // nothing is known to have committed; retry all. A timeout happened over
+            // a socket that is still open, so no reconnect will re-flush: schedule one.
+            if (error instanceof TransportError) {
+                this.noteReplayRetryDelay(shardKey, error, authToken);
+            }
+
             return { requeue: items, stop: true };
         }
 
@@ -9143,22 +9188,16 @@ class LunoraClient {
             this.bookmark.set(bookmark);
         }
 
-        // The body cap the client measured against is not the one that counts —
-        // the header framing rides along, and a proxy may impose its own. A `413`
-        // is a verdict on the REQUEST, not on the writes inside it, so halve and
-        // retry; only a lone write that is itself over the cap falls through to
+        // A `413` is a verdict on the REQUEST, not on the writes inside it, so halve
+        // and retry; only a lone write that is itself over the cap falls through to
         // the terminal envelope below (replaying it can never succeed).
         if (response.status === 413 && items.length > 1) {
             return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
-        let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] };
-
         const retryAfterHeader = response.headers.get("retry-after");
 
-        try {
-            payload = await response.json();
-        } catch {
+        if (payload === undefined) {
             // Not a Lunora envelope at all (an edge's HTML page) — classified by
             // HTTP status, since re-queuing every such reply unconditionally
             // parks a chunk the edge REFUSED at the head of the outbox forever.
