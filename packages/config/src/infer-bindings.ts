@@ -79,13 +79,13 @@ const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 
 // Provisioning behaviour per capability (see plans 027/028/031/032/035/036):
-//   kv          → kv_namespaces             → hint (un-mintable namespace id)
-//   hyperdrive  → hyperdrive                → hint (un-mintable remote id)
+//   kv          → kv_namespaces             → written without an id (wrangler creates the namespace on deploy)
+//   hyperdrive  → hyperdrive                → written with a placeholder id (`lunora deploy` creates the config from a connection string)
 //   browser     → browser                   → self-describing (binding name only)
 //   images      → images                    → self-describing (binding name only)
 //   analytics   → analytics_engine_datasets → self-describing (dataset == binding name)
 //   pipelines   → pipelines                 → hint (un-mintable remote pipeline name)
-//   artifacts   → artifacts                 → hint (the namespace's jurisdiction is fixed at creation, so never auto-written)
+//   artifacts   → artifacts                 → hint (remote-only in dev, and the namespace's jurisdiction is fixed at creation, so never auto-written)
 //   aiSearch    → ai_search_namespaces      → self-describing (namespace "default" always exists; wrangler creates a missing one)
 //   analyticsSql → analytics                → self-describing (binding name only; wrangler >= 4.145.0)
 
@@ -302,8 +302,8 @@ interface InferredBindings {
     /**
      * `ctx.artifacts` is read or `@lunora/bindings/artifacts` value-imported.
      * Hint-only: the first repo `create()` against a missing namespace creates it
-     * UNRESTRICTED, and a namespace's jurisdiction can never change after that,
-     * so Lunora never writes the binding for you.
+     * UNRESTRICTED and a namespace's jurisdiction can never change after that, and
+     * the binding is remote-only in dev, so Lunora never writes it for you.
      */
     usesArtifacts: boolean;
     /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
@@ -314,11 +314,11 @@ interface InferredBindings {
     usesCimdWorkers: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
-    /** `@lunora/hyperdrive` is imported or `ctx.sql` read (binding needs an un-mintable remote `id`; hint-only). */
+    /** `@lunora/hyperdrive` is imported or `ctx.sql` read (reconcile writes `{ binding: "HYPERDRIVE" }` with a placeholder `id`; `lunora deploy` swaps in the created config's). */
     usesHyperdrive: boolean;
     /** `@lunora/bindings/images` is imported or `ctx.images` read → self-describing `images` binding (auto-writeable). */
     usesImages: boolean;
-    /** `@lunora/bindings/kv` is imported or `ctx.kv` read (namespace binding name + id are user-defined; hint-only). */
+    /** `@lunora/bindings/kv` is imported or `ctx.kv` read (reconcile writes `{ binding: "KV" }` without an id and wrangler creates the namespace on deploy, unless the schema pins a jurisdiction). */
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). No `ctx.mail` helper exists, so only the import counts. */
     usesMail: boolean;
@@ -576,16 +576,18 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
             capabilities.usesAnalyticsSql,
             `analytics (${usageOf("analyticsSql")}) — self-describing { binding: ANALYTICS_SQL }; needs wrangler >= 4.145.0, and is remote-only, so \`lunora dev\` queries the account's live analytics`,
         ],
-        // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
-        // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
-        // as hints — never an auto-write — exactly like R2's user-defined bucket name.
+        // Hint bindings: each needs a remote resource Lunora can't fabricate (a
+        // Pipelines pipeline name), so they surface as hints — never an
+        // auto-write — exactly like R2's user-defined bucket name.
         [
             capabilities.usesKv,
-            `hint: ${usageOf("kv")}; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned`,
+            schema.jurisdiction === undefined
+                ? `kv_namespaces (${usageOf("kv")}) — { binding: KV } with no id; wrangler creates the namespace on the first deploy`
+                : `hint: ${usageOf("kv")} and the schema pins "${schema.jurisdiction}"; create the namespace with --jurisdiction ${schema.jurisdiction} and add a kv_namespaces binding ({ binding, id })`,
         ],
         [
             capabilities.usesHyperdrive,
-            `hint: ${usageOf("hyperdrive")}; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned`,
+            `hyperdrive (${usageOf("hyperdrive")}) — { binding: HYPERDRIVE } with a placeholder id; dev uses an embedded Postgres and \`lunora deploy\` creates the config`,
         ],
         [
             capabilities.usesPipelines,

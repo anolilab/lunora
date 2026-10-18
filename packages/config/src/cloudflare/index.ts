@@ -30,7 +30,7 @@ export { describeWithheldWorkersAi, withheldWorkersAi } from "./dev-config";
 export type { LocalHyperdrive } from "./local-hyperdrive";
 export { startLocalHyperdrive } from "./local-hyperdrive";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
-export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
+export { collectExportGaps, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";

@@ -15,8 +15,12 @@ const namespaceApi = (jurisdiction: string) =>
         }),
     );
 
-const check = async (fetchImpl: typeof globalThis.fetch, jurisdiction: "eu" | "fedramp" | "us" = "eu", environment: Record<string, string> = credentials) =>
-    checkArtifactsJurisdiction({ binding: "ARTIFACTS", environment, fetch: fetchImpl, jurisdiction, namespace: "repos" });
+const check = async (
+    fetchImpl: typeof globalThis.fetch,
+    jurisdiction: "eu" | "fedramp" | "us" = "eu",
+    environment: Record<string, string> = credentials,
+    create = false,
+) => checkArtifactsJurisdiction({ binding: "ARTIFACTS", create, environment, fetch: fetchImpl, jurisdiction, namespace: "repos" });
 
 describe(checkArtifactsJurisdiction, () => {
     it("reads the namespace from the account-scoped endpoint with the bearer token", async () => {
@@ -69,6 +73,35 @@ describe(checkArtifactsJurisdiction, () => {
             fix: 'Create it before the first repo: POST https://api.cloudflare.com/client/v4/accounts/acc/artifacts/namespaces with body { "namespace": "repos", "jurisdiction": "eu" }.',
             verdict: "missing",
         });
+    });
+
+    it("creates nothing unless asked to, so doctor and a dry run stay read-only", async () => {
+        expect.assertions(2);
+
+        const api = vi.fn<typeof globalThis.fetch>(async () =>
+            Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 }),
+        );
+
+        await expect(check(api)).resolves.toMatchObject({ message: expect.stringContaining("does not exist, and the first repo"), verdict: "missing" });
+        expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    });
+
+    it("creates a missing namespace in the schema's jurisdiction before any repo can make it unrestricted", async () => {
+        expect.assertions(4);
+
+        const api = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+            init?.method === "POST"
+                ? Response.json({ errors: [], result: { jurisdiction: "eu", namespace: "repos" }, success: true })
+                : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 }),
+        );
+
+        await expect(check(api, "eu", credentials, true)).resolves.toMatchObject({ verdict: "ok" });
+
+        const post = api.mock.calls.find(([, init]) => init?.method === "POST");
+
+        expect(api).toHaveBeenCalledTimes(2);
+        expect(post?.[0]).toBe("https://api.cloudflare.com/client/v4/accounts/acc/artifacts/namespaces");
+        expect(post?.[1]?.body).toBe(JSON.stringify({ jurisdiction: "eu", namespace: "repos" }));
     });
 
     it("does not call the API without credentials, and says how to enable the check", async () => {

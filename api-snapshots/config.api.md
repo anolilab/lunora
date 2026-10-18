@@ -2046,6 +2046,21 @@ interface ExportGap {
 const GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
 ```
 
+### `HYPERDRIVE_PLACEHOLDER_ID` (const)
+
+```ts
+const HYPERDRIVE_PLACEHOLDER_ID = "<replace-with-hyperdrive-create-id>";
+```
+
+### `LocalHyperdrive` (interface)
+
+```ts
+interface LocalHyperdrive {
+    bindings: string[];
+    stop: () => Promise<void>;
+}
+```
+
 ### `ManifestConfigShape` (interface)
 
 ```ts
@@ -2880,6 +2895,12 @@ const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
 ```
 
+### `startLocalHyperdrive` (const)
+
+```ts
+const startLocalHyperdrive: (options: StartLocalHyperdriveOptions) => Promise<LocalHyperdrive | undefined>;
+```
+
 ### `validateWrangler` (const)
 
 ```ts
@@ -3330,6 +3351,17 @@ type GlobalBackend = "d1" | "hyperdrive";
 type InferredQueue = QueueIR;
 ```
 
+### `PgliteRuntime` (interface)
+
+```ts
+interface PgliteRuntime {
+    createServer: (dataDirectory: string) => Promise<{
+        connectionString: string;
+        stop: () => Promise<void>;
+    }>;
+}
+```
+
 ### `ReconcileLogger` (interface)
 
 ```ts
@@ -3350,6 +3382,17 @@ type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
 ```ts
 interface ServiceMaterializeOptions {
     hasCredentials?: () => boolean;
+    projectRoot: string;
+}
+```
+
+### `StartLocalHyperdriveOptions` (interface)
+
+```ts
+interface StartLocalHyperdriveOptions {
+    env?: NodeJS.ProcessEnv;
+    load?: () => Promise<PgliteRuntime | undefined>;
+    onWarning?: (message: string) => void;
     projectRoot: string;
 }
 ```

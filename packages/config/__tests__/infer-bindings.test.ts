@@ -715,8 +715,8 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
     // NOT import-driven (it ships from @lunora/bindings/pipelines, reached via
     // ctx.pipelines) and is covered by its own test below.
     it.each([
-        ["@lunora/bindings/kv", "usesKv", /hint: @lunora\/bindings\/kv/u],
-        ["@lunora/hyperdrive", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
+        ["@lunora/bindings/kv", "usesKv", /kv_namespaces \(@lunora\/bindings\/kv/u],
+        ["@lunora/hyperdrive", "usesHyperdrive", /hyperdrive \(@lunora\/hyperdrive/u],
         ["@lunora/browser", "usesBrowser", /browser \(@lunora\/browser/u],
         ["@lunora/bindings/images", "usesImages", /images \(@lunora\/bindings\/images/u],
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
@@ -1027,11 +1027,11 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
     // only the pipelines/r2sql/aiSearch/artifacts rows read `ctx`, and the rest
     // built green and threw on first use.
     it.each([
-        ["kv", "usesKv", /hint: @lunora\/bindings\/kv/u],
+        ["kv", "usesKv", /kv_namespaces \(@lunora\/bindings\/kv/u],
         ["images", "usesImages", /images \(@lunora\/bindings\/images/u],
         ["analytics", "usesAnalytics", /analytics_engine_datasets/u],
         ["browser", "usesBrowser", /browser \(@lunora\/browser/u],
-        ["sql", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
+        ["sql", "usesHyperdrive", /hyperdrive \(@lunora\/hyperdrive/u],
     ] as const)("infers a bare ctx.%s read with no import", async (property, flag, signalRe) => {
         expect.assertions(2);
 

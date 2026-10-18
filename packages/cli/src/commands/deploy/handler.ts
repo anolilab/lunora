@@ -52,6 +52,7 @@ import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
+import { provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -619,6 +620,12 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     // nightly cron. See `snapshotWranglerConfig`.
     await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env, options.discoveryCache);
 
+    const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target);
+
+    if (hyperdriveError !== undefined) {
+        return { error: hyperdriveError, target, validation: empty };
+    }
+
     const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
@@ -756,6 +763,7 @@ const checkArtifactsNamespaces = async (
     environment: string | undefined,
     logger: Logger,
     cache: DiscoveryCache | undefined,
+    create: boolean,
 ): Promise<string | undefined> => {
     const parsed = target === "cloudflare" && wranglerPath !== undefined ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
 
@@ -775,7 +783,7 @@ const checkArtifactsNamespaces = async (
     }
 
     const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
-    const checks = await Promise.all(entries.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, jurisdiction })));
+    const checks = await Promise.all(entries.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, create, jurisdiction })));
     const failures: string[] = [];
 
     for (const check of checks) {
@@ -815,11 +823,19 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const { validation } = pipeline;
     const driver = resolveDeployDriver(pipeline.target);
 
-    // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
-    // reports what a real deploy would refuse.
+    // The Artifacts lookup runs on `--dry-run` too: a dry run reports what a real
+    // deploy would refuse. Only a real deploy creates a missing namespace.
     const preflightError =
         validateMigrateDeployPreflight(options) ??
-        (await checkArtifactsNamespaces(cwd, validation.wranglerPath, pipeline.target, options.env, options.logger, options.discoveryCache));
+        (await checkArtifactsNamespaces(
+            cwd,
+            validation.wranglerPath,
+            pipeline.target,
+            options.env,
+            options.logger,
+            options.discoveryCache,
+            options.dryRun !== true,
+        ));
 
     if (preflightError !== undefined) {
         return abortResult(preflightError);

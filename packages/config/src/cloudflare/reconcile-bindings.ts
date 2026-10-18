@@ -48,6 +48,13 @@ import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-sh
 const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 
 /**
+ * The `id` reconcile writes on a Hyperdrive binding it adds, and the one the `hyperdrive`
+ * registry item ships: wrangler requires a string, and `lunora dev` serves the binding from an
+ * embedded Postgres whatever it is. `lunora deploy` swaps in a real id.
+ */
+const HYPERDRIVE_PLACEHOLDER_ID = "<replace-with-hyperdrive-create-id>";
+
+/**
  * A container/workflow that is declared (so codegen emits its class) but the
  * worker entry never re-exports — the one wiring step the generators can't always
  * do for the developer. wrangler rejects a `class_name` the deployed worker
@@ -227,6 +234,45 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
     const nextD1 = [...d1Bindings, { binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: databaseName }];
 
     return { added: ["DB (D1)"], text: applyModify(text, ["d1_databases"], nextD1) };
+};
+
+/**
+ * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
+ * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
+ * the default, Cloudflare.
+ */
+const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
+
+/**
+ * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
+ * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
+ * Hyperdrive config from the connection string it is given. Pure.
+ */
+const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || (parsed.hyperdrive?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    return {
+        added: ["HYPERDRIVE (Hyperdrive, created on deploy)"],
+        text: applyModify(text, ["hyperdrive"], [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]),
+    };
+};
+
+/**
+ * Add an id-less `KV` namespace binding when the project binds none. Wrangler
+ * creates the namespace on the first deploy and writes its id back, so nothing
+ * here mints it. A project that already binds a namespace (under any name) is
+ * left alone: `createKv()` is handed whichever binding the app chose. Not run
+ * for a jurisdiction-pinned schema: a namespace wrangler creates is unrestricted
+ * and cannot be moved, so that app creates it itself. Pure.
+ */
+const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**
@@ -846,7 +892,7 @@ const reconcileWranglerBindings = (
     }
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
-    const warnings = collectWarnings(inferred, projectRoot, parsed);
+    const warnings = collectWarnings(inferred, projectRoot, parsed, target);
 
     // See the doc comment above: auto-provisioning has no env-scoped write
     // path, so a `--env <name>` deploy is told plainly rather than silently
@@ -915,11 +961,16 @@ const reconcileWranglerBindings = (
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
-    // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
-    // remote id and only surface as warnings (see collectWarnings).
+    // kv is written without a remote id (wrangler creates the namespace on
+    // deploy) and hyperdrive with a placeholder id that deploy replaces once it
+    // has a connection string; both only for a Cloudflare target. Pipelines and
+    // artifacts stay hints: pipelines carries an un-mintable remote resource, and
+    // artifacts is remote-only in dev with a jurisdiction fixed at creation.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
+        { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
+        { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
         {
             enabled: inferred.usesAiSearch,
@@ -1107,4 +1158,4 @@ const reconcileWranglerBindings = (
 };
 
 export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, reconcileWranglerBindings };
+export { collectExportGaps, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };

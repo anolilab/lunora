@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import type { DurableObjectSpec } from "../src/worker-entry";
 
@@ -880,17 +880,39 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than writes a kv_namespaces binding when @lunora/bindings/kv is used (the namespace id can't be minted)", () => {
-        expect.assertions(2);
+    it("writes a KV namespace binding without an id, once, so wrangler creates the namespace on deploy", () => {
+        expect.assertions(4);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
 
-        expect(result.warnings.join(" ")).toMatch(/kv_namespaces/u);
-        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(first.added).toContain("KV (Workers KV, created on deploy)");
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
+        expect(first.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesKv: true })).added).toStrictEqual([]);
     });
 
-    it("does not warn about kv when a kv_namespaces binding already exists", () => {
-        expect.assertions(1);
+    it.each(["node", "celld"])("writes no KV or Hyperdrive binding for the %s target, and says what to add instead", (target) => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target });
+
+        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
+    });
+
+    it("keeps the hint for a jurisdiction-pinned schema, because a namespace wrangler creates is unrestricted", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "eu", usesKv: true }));
+
+        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(result.added).not.toContain("KV (Workers KV, created on deploy)");
+        expect(result.warnings.join(" ")).toMatch(/--jurisdiction eu/u);
+    });
+
+    it("leaves a project's own kv_namespaces binding alone and writes no second one", () => {
+        expect.assertions(2);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -908,19 +930,22 @@ describe("reconcileWranglerBindings", () => {
         const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "CACHE", id: "abc123" }]);
     });
 
-    it("warns rather than writes a hyperdrive binding when @lunora/hyperdrive is used (the id can't be minted)", () => {
-        expect.assertions(2);
+    it("writes a HYPERDRIVE binding with a placeholder id, once, so dev works and deploy has something to replace", () => {
+        expect.assertions(4);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
 
-        expect(result.warnings.join(" ")).toMatch(/hyperdrive/u);
-        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(first.added).toContain("HYPERDRIVE (Hyperdrive, created on deploy)");
+        expect(readConfig().hyperdrive).toStrictEqual([{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]);
+        expect(first.warnings.join(" ")).not.toMatch(/hyperdrive/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true })).added).toStrictEqual([]);
     });
 
     it("does not warn about hyperdrive when a hyperdrive binding already exists", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -938,6 +963,7 @@ describe("reconcileWranglerBindings", () => {
         const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/hyperdrive is used/u);
+        expect(readConfig().hyperdrive).toStrictEqual([{ binding: "PG", id: "real-hyperdrive-id" }]);
     });
 
     describe("voice agents", () => {

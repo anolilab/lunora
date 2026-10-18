@@ -4,9 +4,9 @@
  *
  * A namespace's jurisdiction is set when it is created and never changes, and
  * the first repo `create()` against a missing namespace creates it
- * unrestricted. So for a `.jurisdiction("…")` schema the namespace must already
- * exist with exactly that jurisdiction: a different one, or `unrestricted`, puts
- * the repos outside the residency the app promises.
+ * unrestricted. So for a `.jurisdiction("…")` schema the namespace must exist
+ * with exactly that jurisdiction: a missing one is created here when asked to, and a different
+ * one, or `unrestricted`, puts the repos outside the residency the app promises.
  *
  * `GET /accounts/{account_id}/artifacts/namespaces/{namespace}` answers with
  * `{ created_at, jurisdiction, namespace, repo_count, updated_at }` in the usual
@@ -24,7 +24,7 @@ import { resolveCloudflareCredentials } from "./cloudflare-credentials";
 const REQUEST_TIMEOUT_MS = 5000;
 
 /**
- * `missing` and `mismatch` are residency violations a deploy refuses;
+ * `missing` (not there, and creating it failed) and `mismatch` are residency violations a deploy refuses;
  * `unchecked` means the lookup could not be made (no credentials, refused, or
  * no answer) and is only a warning — a deploy authenticated through
  * `wrangler login` has no API token to make it with.
@@ -40,6 +40,8 @@ interface ArtifactsJurisdictionOptions {
     accountId?: unknown;
     /** The wrangler binding name, for the messages. */
     binding: string;
+    /** Create a missing namespace in the schema's jurisdiction. Off for a read-only caller (`lunora doctor`, a dry run). */
+    create?: boolean;
     environment?: CloudflareEnvironment;
     fetch?: typeof globalThis.fetch;
     /** The schema's `.jurisdiction("…")`. */
@@ -50,6 +52,38 @@ interface ArtifactsJurisdictionOptions {
 /** The create call for a namespace in `jurisdiction` — wrangler has no `artifacts namespaces create`. */
 const createCall = (accountId: string, namespace: string, jurisdiction: string): string =>
     `POST https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces with body { "namespace": "${namespace}", "jurisdiction": "${jurisdiction}" }`;
+
+/**
+ * Create the namespace in the schema's jurisdiction. Done here because the first
+ * repo `create()` would make it unrestricted, which cannot be changed afterwards.
+ */
+const createNamespace = async (options: ArtifactsJurisdictionOptions, accountId: string, apiToken: string): Promise<boolean> => {
+    const { jurisdiction, namespace } = options;
+    const outcome = await cloudflareRestRequest({
+        accountId,
+        apiToken,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        init: { body: JSON.stringify({ jurisdiction, namespace }), method: "POST", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        path: "/artifacts/namespaces",
+    }).catch((): undefined => undefined);
+
+    return outcome?.ok === true;
+};
+
+/** The namespace is absent: create it in the schema's jurisdiction when asked to, or say how to. */
+const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: string, token: string, subject: string): Promise<ArtifactsJurisdictionCheck> => {
+    const { jurisdiction, namespace } = options;
+
+    if (options.create === true && (await createNamespace(options, accountId, token))) {
+        return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
+    }
+
+    return {
+        fix: `Create it before the first repo: ${createCall(accountId, namespace, jurisdiction)}.`,
+        message: `${subject} does not exist${options.create === true ? " and could not be created" : ""}, and the first repo create() would make it unrestricted — the schema pins data to "${jurisdiction}".`,
+        verdict: "missing",
+    };
+};
 
 /** Look the namespace up and compare its jurisdiction with the schema's. Never throws. */
 const checkArtifactsJurisdiction = async (options: ArtifactsJurisdictionOptions): Promise<ArtifactsJurisdictionCheck> => {
@@ -83,11 +117,7 @@ const checkArtifactsJurisdiction = async (options: ArtifactsJurisdictionOptions)
     }
 
     if (!outcome.ok && outcome.status === 404) {
-        return {
-            fix: `Create it before the first repo: ${createCall(accountId, namespace, jurisdiction)}.`,
-            message: `${subject} does not exist, and the first repo create() would make it unrestricted — the schema pins data to "${jurisdiction}".`,
-            verdict: "missing",
-        };
+        return createMissing(options, accountId, token, subject);
     }
 
     if (!outcome.ok) {
