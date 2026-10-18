@@ -174,6 +174,25 @@ const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/
 /** Locks this process holds, so a second starter here sees a live owner instead of a pid it takes for stale. */
 const heldHere = new Set<string>();
 
+/** Remove every lock this process still holds. Synchronous, so it can run from an `exit` handler. */
+const releaseHeldLocks = (): void => {
+    for (const lockPath of heldHere) {
+        rmSync(lockPath, { force: true });
+    }
+
+    heldHere.clear();
+};
+
+let exitHookInstalled = false;
+
+/** A process that quits (`q`, Ctrl+C, SIGTERM) before the databases' grace period ends would leave its locks behind. */
+const installExitHook = (): void => {
+    if (!exitHookInstalled) {
+        exitHookInstalled = true;
+        process.once("exit", releaseHeldLocks);
+    }
+};
+
 /** What a lock file names. `pid` is -1 unless `kind` is `"pid"`. */
 interface LockHolder {
     kind: "garbage" | "gone" | "pid" | "unreadable";
@@ -207,6 +226,7 @@ const publishLock = (mine: string, lockPath: string): DirectoryLock | undefined 
     }
 
     heldHere.add(lockPath);
+    installExitHook();
 
     return {
         release: () => {
@@ -298,6 +318,9 @@ const lockDirectory = (lockPath: string): DirectoryLock => {
 };
 
 /** The real PGlite, or `undefined` when either package is not installed. */
+/** A module-not-found error that names one of the PGlite packages. */
+const PGLITE_PACKAGE = /@electric-sql\/pglite/u;
+
 const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
     try {
         const [{ PGlite }, { PGLiteSocketServer }] = await Promise.all([import("@electric-sql/pglite"), import("@electric-sql/pglite-socket")]);
@@ -308,10 +331,57 @@ const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
         );
 
         return { createServer: async (dataDirectory) => serveDatabase({ PGlite, PGLiteSocketServer, vector }, dataDirectory) };
-    } catch {
-        return undefined;
+    } catch (error) {
+        // Only a package that isn't installed reads as missing; an installed one that throws on import keeps its error.
+        const { code, message } = error as { code?: string; message?: string };
+
+        if ((code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") && PGLITE_PACKAGE.test(message ?? "")) {
+            return undefined;
+        }
+
+        throw error;
     }
 };
+
+/** Load the embedded Postgres, keeping the reason when an installed package throws instead of rethrowing it. */
+const tryLoad = async (load: () => Promise<PgliteRuntime | undefined>): Promise<{ failure?: string; runtime?: PgliteRuntime }> => {
+    try {
+        return { runtime: await load() };
+    } catch (error) {
+        return { failure: error instanceof Error ? error.message : String(error) };
+    }
+};
+
+/** Start one database under `lock`; the lock is released when the start fails, or when the database stops. */
+const startServer = async (
+    runtime: PgliteRuntime,
+    directory: string,
+    lock: { release: () => void },
+): Promise<{ connectionString: string; stop: () => Promise<void> }> => {
+    try {
+        const server = await runtime.createServer(directory);
+
+        return {
+            connectionString: server.connectionString,
+            stop: async () => {
+                try {
+                    await server.stop();
+                } finally {
+                    lock.release();
+                }
+            },
+        };
+    } catch (error) {
+        lock.release();
+
+        throw error;
+    }
+};
+
+/** The embedded Postgres is installed but threw while loading: say why, instead of asking for an install. */
+const loadFailureWarning = (bindings: ReadonlyArray<string>, reason: string): string =>
+    `Hyperdrive binding ${bindings.map((binding) => `"${binding}"`).join(", ")}: the embedded Postgres is installed but failed to load (${reason}), so \`ctx.sql\` will fail to connect in dev. ` +
+    `Set ${variableFor(bindings[0] ?? "<BINDING>")} to use a database of your own.`;
 
 /** Why the bindings get no embedded database: MySQL needs a local MySQL of the developer's own, otherwise PGlite isn't installed. */
 const noDatabaseWarning = (bindings: ReadonlyArray<string>, mysql: boolean): string => {
@@ -357,10 +427,10 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
         await Promise.allSettled(stopping.map(async (server) => server.stop()));
     };
     const mysql = isMysqlOnly(options.projectRoot);
-    const runtime = mysql ? undefined : await (options.load ?? loadPglite)();
+    const { failure: loadFailure, runtime } = mysql ? { failure: undefined, runtime: undefined } : await tryLoad(options.load ?? loadPglite);
 
     if (runtime === undefined) {
-        options.onWarning?.(noDatabaseWarning(bindings, mysql));
+        options.onWarning?.(loadFailure === undefined ? noDatabaseWarning(bindings, mysql) : loadFailureWarning(bindings, loadFailure));
 
         for (const binding of bindings) {
             makeUnavailable(binding);
@@ -386,27 +456,12 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
                 continue;
             }
 
-            try {
-                // Sequential: two engines booting at once contend for the same WASM instantiation.
-                // eslint-disable-next-line no-await-in-loop
-                const server = await runtime.createServer(directory);
+            // Sequential: two engines booting at once contend for the same WASM instantiation.
+            // eslint-disable-next-line no-await-in-loop
+            const server = await startServer(runtime, directory, lock);
 
-                started.push({
-                    binding,
-                    stop: async () => {
-                        try {
-                            await server.stop();
-                        } finally {
-                            lock.release();
-                        }
-                    },
-                });
-                env[variableFor(binding)] = server.connectionString;
-            } catch (error) {
-                lock.release();
-
-                throw error;
-            }
+            started.push({ binding, stop: server.stop });
+            env[variableFor(binding)] = server.connectionString;
         }
     } catch (error) {
         options.onWarning?.(`Could not start the embedded Postgres for Hyperdrive: ${error instanceof Error ? error.message : String(error)}`);
@@ -425,4 +480,4 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 };
 
 export type { LocalHyperdrive, PgliteParts, PgliteRuntime, StartLocalHyperdriveOptions };
-export { bindingsNeedingDatabase, serveDatabase, startLocalHyperdrive };
+export { bindingsNeedingDatabase, releaseHeldLocks, serveDatabase, startLocalHyperdrive };

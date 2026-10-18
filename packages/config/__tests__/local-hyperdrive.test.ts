@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PgliteParts, PgliteRuntime } from "../src/cloudflare/local-hyperdrive";
-import { bindingsNeedingDatabase, serveDatabase, startLocalHyperdrive } from "../src/cloudflare/local-hyperdrive";
+import { bindingsNeedingDatabase, releaseHeldLocks, serveDatabase, startLocalHyperdrive } from "../src/cloudflare/local-hyperdrive";
 
 const VAR = "CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_";
 const UNAVAILABLE = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
@@ -175,6 +175,45 @@ describe("local hyperdrive", () => {
             await local?.stop();
 
             expect(env).toStrictEqual({});
+        });
+
+        it("reports an installed package that throws on load as that, with its reason, not as missing", async () => {
+            expect.assertions(4);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const env: NodeJS.ProcessEnv = {};
+            const warnings: string[] = [];
+            const local = await startLocalHyperdrive({
+                env,
+                load: async () => {
+                    throw new Error("WebAssembly.instantiate failed");
+                },
+                onWarning: (line) => warnings.push(line),
+                projectRoot: root,
+            });
+
+            expect(warnings.join(" ")).toContain("installed but failed to load (WebAssembly.instantiate failed)");
+            expect(warnings.join(" ")).not.toContain("pnpm add");
+            expect(env[`${VAR}DB`]).toBe(UNAVAILABLE);
+            expect(local?.bindings).toStrictEqual([]);
+        });
+
+        it("removes the locks this process still holds when it exits", async () => {
+            expect.assertions(2);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const lock = join(root, ".wrangler", "state", "lunora-pglite", "DB.lock");
+            const { runtime } = fakeRuntime();
+
+            await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
+
+            expect(existsSync(lock)).toBe(true);
+
+            releaseHeldLocks();
+
+            expect(existsSync(lock)).toBe(false);
         });
 
         it("rolls back the servers already started when a later one fails", async () => {
