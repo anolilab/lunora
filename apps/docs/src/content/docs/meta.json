@@ -16,6 +16,7 @@
         "concepts/function-context",
         "concepts/realtime",
         "concepts/live-streams",
+        "concepts/choosing-a-data-channel",
         "concepts/reactors",
         "concepts/offline-first",
         "concepts/local-first",

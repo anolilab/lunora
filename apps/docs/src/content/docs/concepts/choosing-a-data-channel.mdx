@@ -1,0 +1,126 @@
+---
+title: Choosing a data channel
+description: Live query, stream, live topic, whisper, room or socket? Which one to use for which job.
+related:
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/live-streams
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/http-endpoints
+    - to: /docs/concepts/rest-api
+---
+
+Lunora gives a client several ways to receive data and several ways to send it.
+They are not interchangeable: each fits one kind of data. Start from what you are
+sending, not from the transport.
+
+## The short version
+
+| You want to send or receive                                    | Use                                                       | Transport           | Typed from the server?                   |
+| -------------------------------------------------------------- | --------------------------------------------------------- | ------------------- | ---------------------------------------- |
+| Rows that stay fresh as data changes                           | `useQuery` on a `query`                                   | WebSocket           | Yes, through `api.*`                     |
+| A write                                                        | `useMutation` on a `mutation`                             | Client call         | Yes, through `api.*`                     |
+| Side effects, third-party calls                                | `useAction` on an `action`                                | Client call         | Yes, through `api.*`                     |
+| Chunks of one long call, such as a model's tokens              | `query.stream()` read with `useStream`                    | WebSocket           | Yes, through `api.*`                     |
+| Chunks of one HTTP request                                     | `httpRoute.get(path).stream()` read with `useHttpStream`  | HTTP (SSE framing)  | Partly                                   |
+| A server-published event that is not a row                     | `defineLiveStream` with `useLiveTopic` and its siblings   | SSE, one connection | No: topic is a string, payload `unknown` |
+| An ephemeral message a _client_ sends to other clients         | Whispers (`client.whisper`, `onWhisper` to authorize)     | WebSocket           | No                                       |
+| A typed room with server-side join, message and leave handlers | `defineRoom` and `client.connectRoom`                     | WebSocket           | Message validated by `v`                 |
+| A dedicated socket at your own URL path                        | `defineWebSocket` and `client.connectWebSocket(path)`     | WebSocket           | Server side only                         |
+| Who is online                                                  | Presence (a heartbeat mutation plus a live `listPresent`) | WebSocket           | Yes, through `api.*`                     |
+| Access for a client that does not speak the Lunora protocol    | HTTP endpoints and the REST API                           | HTTP                | No                                       |
+
+## Rows or events?
+
+The question that settles most choices is whether the thing the client needs is a
+**row** or an **event**.
+
+- **A row, or anything you can compute with a query:** use a live query. It is
+  typed, it runs under the caller's identity so `rls()` and `ctx.auth` apply, and
+  it keeps working across shards and Durable Objects. A `useQuery` re-renders when
+  a mutation changes the rows it read, with no publishing step to forget.
+- **An event with no query behind it:** "a comment was posted", "the build
+  finished", "your export is ready". There is nothing to re-run, so use a
+  [live topic](/docs/concepts/live-streams): the server publishes, and the browser
+  follows several topics over one SSE connection.
+
+If you can tell the two apart only with effort, use the live query. It is the
+typed, authorized, cross-shard path; a live topic is the escape hatch for events.
+
+## Live topics, whispers and rooms
+
+These three all push "an arbitrary event", and they differ in who sends and over
+what.
+
+|            | Sender                                  | Transport | Authorization                                          |
+| ---------- | --------------------------------------- | --------- | ------------------------------------------------------ |
+| Live topic | The server (`ctx.live.publish`)         | SSE       | `onSubscribe` per topic; default-deny                  |
+| Whisper    | A client                                | WebSocket | `onWhisper`; with none registered, every topic is open |
+| Room       | A client, through a server-side handler | WebSocket | The `onWhisper` seam plus the socket's identity        |
+
+Reach for a whisper for cursors and typing indicators: it never touches SQLite or
+the change log. Reach for a room when the server should react to joins and
+messages. A live topic is for the case where the **server** decides something
+happened and a browser that only holds an SSE connection should hear about it.
+
+## Streams
+
+Both stream kinds deliver the chunks of one call, not shared state.
+
+- **`query.stream()`** runs over the WebSocket and is read with `useStream`.
+  Declare it `durable` and a dropped connection re-attaches to the same run
+  instead of failing with `STREAM_DISCONNECTED`.
+- **`httpRoute.get(path).stream()`** runs on an HTTP route and is read with
+  `useHttpStream`. A chunk wrapped in `sseEvent` carries an id, and the client
+  replays it as `Last-Event-ID` to resume after a drop.
+
+## Write a row, then tell the page
+
+The most common event is "this write happened, and a page that is not running that
+query should know". A mutation cannot publish, because `ctx.live` exists only on
+actions, HTTP actions, queue consumers and scheduled actions. Publishing is a
+non-deterministic fan-out, and a mutation can retry or roll back.
+
+Schedule the publish from the mutation. A `ctx.scheduler.runAfter(0, …)` inside a
+mutation is held back until the transaction commits, so a rolled-back write sends
+no event.
+
+```ts
+import { internal } from "@/lunora/_generated/internal";
+import { internalAction, mutation, v } from "@/lunora/_generated/server";
+
+export const addComment = mutation.input({ postId: v.id("posts"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    const commentId = await ctx.db.insert("comments", args);
+
+    await ctx.scheduler.runAfter(0, internal.events.commentAdded, { postId: args.postId, commentId });
+});
+
+export const commentAdded = internalAction.input({ postId: v.id("posts"), commentId: v.id("comments") }).action(async ({ ctx, args }) => {
+    await ctx.live?.publish(`post:${args.postId}`, { event: "comment_added", commentId: args.commentId }, { stream: "posts" });
+});
+```
+
+If the page already shows the comments through a `useQuery`, you do not need the
+event at all: the query updates by itself. Publish only for pages that follow a
+post without that query.
+
+## Things to know before you rely on a live topic
+
+- **At least once.** A retried action publishes again, so a subscriber can see the
+  same event twice. Put an id in the payload and ignore repeats.
+- **Shard-local.** A publish reaches the subscribers connected to the shard it
+  names, and a scheduled or action publish reaches the shard it runs on (the
+  `shardKey` the job was scheduled with, or the default shard). There is no
+  fan-out across Durable Objects.
+- **Sharded apps.** The scheduled action publishes on the shard it runs on, which
+  may not be the shard your subscribers connected to. In an app that uses
+  `.shardBy(...)`, check [Live topic streams](/docs/concepts/live-streams) for which
+  shard a scheduled job runs on before you rely on this pattern.
+- **Untyped.** The topic is a string and the payload is `unknown`. Validate the
+  payload where you use it.
+- **You mount the routes.** `defineLiveStream` returns handlers; you mount them on
+  your HTTP router.
+- **Stock React Native `fetch` does not stream**, so events do not arrive without
+  a streaming `fetch` such as `expo/fetch`.
+
+See [Live topic streams](/docs/concepts/live-streams) for the full reference,
+including authorization defaults and platform support.
