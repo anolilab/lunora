@@ -46,6 +46,8 @@ use crate::wire::WireValue;
 pub const CODE_OFFLINE_QUEUE_OVERFLOW: &str = "OFFLINE_QUEUE_OVERFLOW";
 /// The write's precondition no longer held when the flush reached it.
 pub const CODE_OFFLINE_PRECONDITION_FAILED: &str = "OFFLINE_PRECONDITION_FAILED";
+/// An online-only write was refused because the connection is not live. Nothing was queued.
+pub const CODE_OFFLINE_NOT_QUEUED: &str = "OFFLINE_NOT_QUEUED";
 /// The write was queued under a different identity than the one now in effect.
 pub const CODE_OFFLINE_IDENTITY_CHANGED: &str = "OFFLINE_IDENTITY_CHANGED";
 /// The write's args cannot be wire-encoded, so it can never replay.

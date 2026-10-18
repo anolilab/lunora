@@ -15,8 +15,8 @@ use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscript
 use crate::key::stable_wire_key;
 use crate::offline::{
     random_id, replay_identity_verdict, same_shard, Discarded, Precondition, QueuedMutation, ReplayVerdict, SettledHandler, AUTH_REPLAY_ERROR_CODES,
-    CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES,
-    MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
+    CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE,
+    CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -122,6 +122,12 @@ pub struct SubmitOptions {
     /// Re-evaluated just before a QUEUED write replays; `false` drops it rather
     /// than replaying a write that can only fail.
     pub precondition: Option<Precondition>,
+    /// Never queued, persisted or replayed. Where a normal write would be queued,
+    /// `submit` fails with `CODE_OFFLINE_NOT_QUEUED` before any optimistic layer
+    /// is installed, so the arguments never reach the queue or the persistence
+    /// adapter. It does not wait for a queue flush or queue behind pending writes,
+    /// so it may overtake them. For a credential or a one-time token.
+    pub online_only: bool,
     /// Reports the eventual verdict on a queued write.
     pub on_settled: Option<SettledHandler>,
 }
@@ -135,6 +141,7 @@ impl SubmitOptions {
             mutation_id: None,
             on_settled: None,
             optimistic: None,
+            online_only: false,
             optimistic_queries: Vec::new(),
             precondition: None,
             shard_key: None,
@@ -194,8 +201,19 @@ impl Client {
         }
 
         let write_id = options.mutation_id.clone().unwrap_or_else(random_id);
-        let layers = self.apply_optimistic(&options);
         let queue_it = self.send.is_none() && (self.was_ever_connected || self.offline_queue.queue_before_first_connect);
+
+        // Refused before anything is installed, so no overlay outlives the call.
+        if queue_it && options.online_only {
+            let message = format!(
+                "'{}' is online-only and the connection is not live, so it was not queued",
+                options.function_path
+            );
+
+            return Err(ClientError::Api(Box::new(coded(CODE_OFFLINE_NOT_QUEUED, &message))));
+        }
+
+        let layers = self.apply_optimistic(&options);
 
         if queue_it {
             self.enqueue_write(options, write_id.clone(), layers);
