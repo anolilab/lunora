@@ -10,6 +10,7 @@
  * tells the shard to drop the subscriber, so it is not optional plumbing.
  */
 
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -327,21 +328,25 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     const { port } = server.address() as AddressInfo;
 
     return {
-        close: () =>
-            new Promise<void>((resolve, reject) => {
-                // Upgraded sockets are not HTTP connections, so `closeAllConnections` does not reach them.
-                for (const ws of webSockets.clients) {
-                    ws.terminate();
-                }
+        close: async () => {
+            // Each socket's close event is what starts the shard's close handler, so `close` settles only after
+            // every one has fired: a caller that then closes the registry finds those handlers already tracked.
+            const socketsClosed = [...webSockets.clients].map(async (ws) => once(ws, "close"));
 
-                for (const socket of pendingUpgrades) {
-                    socket.destroy();
-                }
+            // Upgraded sockets are not HTTP connections, so `closeAllConnections` does not reach them.
+            for (const ws of webSockets.clients) {
+                ws.terminate();
+            }
 
-                // A pending upgrade's fetch may never settle, so its raw socket is destroyed rather than waited for.
+            // A pending upgrade's fetch may never settle, so its raw socket is destroyed rather than waited for.
+            for (const socket of pendingUpgrades) {
+                socket.destroy();
+            }
 
-                webSockets.close();
-                server.closeAllConnections();
+            webSockets.close();
+            server.closeAllConnections();
+
+            await new Promise<void>((resolve, reject) => {
                 server.close((error) => {
                     if (error === undefined) {
                         resolve();
@@ -349,7 +354,9 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                         reject(error);
                     }
                 });
-            }),
+            });
+            await Promise.all(socketsClosed);
+        },
         origin: `http://${urlHost(host)}:${String(port)}`,
     };
 };

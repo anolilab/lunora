@@ -175,6 +175,62 @@ describe("node websocket upgrades", () => {
         expect(client.readyState).toBe(WebSocket.CLOSED);
     });
 
+    it("disposes a shard only after a route's close handler settles on shutdown", async () => {
+        expect.assertions(2);
+
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("tenant-42");
+        const shardDo = new TestShardDO(createNodeShardState(shard) as never, {});
+        const outcome: string[] = [];
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        // The close handler is held at a gate, so it is still running when the registry is closed.
+        bindShardSockets(shardDo, {
+            onClose: (handler) => {
+                shard.inbound.onClose(async (...args) => {
+                    await gate;
+
+                    try {
+                        // A read against the shard's database throws once the registry has disposed it.
+                        await shard.kv.get("probe");
+                        await handler(...args);
+                        outcome.push("ok");
+                    } catch (error) {
+                        outcome.push(String(error));
+                    }
+                });
+            },
+            onMessage: (handler) => {
+                shard.inbound.onMessage(handler);
+            },
+        });
+
+        const server = await createNodeHttpServer({ fetch: async (request) => shardDo.fetch(request) });
+        const client = new WebSocket(socketUrl(server, "/chat"));
+
+        await new Promise<void>((resolve, reject) => {
+            client.addEventListener("open", () => {
+                resolve();
+            });
+            client.addEventListener("error", () => {
+                reject(new Error("the handshake failed"));
+            });
+        });
+        await waitFor(() => shardDo.pushToSockets("ready") > 0);
+
+        await server.close();
+        registry.close();
+        release();
+
+        await waitFor(() => outcome.length > 0);
+
+        expect(outcome).toStrictEqual(["ok"]);
+        expect(shardDo.calls.some((call) => call.functionPath === "sockets:chat" && call.args["kind"] === "close")).toBe(true);
+    });
+
     it("sends a shard frame out to the connected client", async () => {
         expect.assertions(1);
 

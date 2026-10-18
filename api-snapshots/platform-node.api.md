@@ -304,6 +304,7 @@ interface NodeShardState {
 
 ```ts
 interface NodeSocketHost {
+    drain: () => Promise<void> | undefined;
     onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
     onMessage: (handler: (socket: NodeServerEnd, data: string | ArrayBuffer) => void) => void;
     readFrames: (handle: SocketHandle) => string[];

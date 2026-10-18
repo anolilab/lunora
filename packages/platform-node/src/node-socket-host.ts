@@ -87,6 +87,12 @@ const isWeakKey = (value: unknown): value is object => (typeof value === "object
  * from inside a test.
  */
 export interface NodeSocketHost {
+    /**
+     * Wait for every close handler still running, including ones they start. `undefined` when none are,
+     * so a caller can dispose synchronously.
+     */
+    drain: () => Promise<void> | undefined;
+
     /** Deliver a connection's close to `handler`, which calls `webSocketClose`. One handler per host. */
     onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
 
@@ -274,6 +280,11 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         message?: (socket: NodeServerEnd, data: string | ArrayBuffer) => void;
     } = {};
 
+    // Close handlers still running, so a registry disposing this host can wait for them.
+    const pendingCloses = new Set<Promise<void>>();
+
+    const drain = (): Promise<void> | undefined => (pendingCloses.size === 0 ? undefined : Promise.all(pendingCloses).then(() => drain()));
+
     const hub = {
         close: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => {
             const handled = listeners.close?.(socket, code, reason, wasClean);
@@ -286,9 +297,14 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
                 }
             };
 
-            Promise.resolve(handled)
+            const settled: Promise<void> = Promise.resolve(handled)
                 .then(release, release)
-                .catch(() => undefined);
+                .catch(() => undefined)
+                .finally(() => {
+                    pendingCloses.delete(settled);
+                });
+
+            pendingCloses.add(settled);
         },
         message: (socket: NodeServerEnd, data: string | ArrayBuffer) => {
             listeners.message?.(socket, data);
@@ -401,6 +417,7 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
     };
 
     return {
+        drain,
         onClose: (handler) => {
             listeners.close = handler;
         },

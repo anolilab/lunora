@@ -215,7 +215,7 @@ export interface NodeShardRegistry {
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<string, { dispose: () => void; shard: NodeShard }>();
+    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; shard: NodeShard }>();
 
     /**
      * Keys known to exist, whether or not their shard is currently live.
@@ -272,7 +272,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, shard });
         known.add(key);
 
         return shard;
@@ -295,7 +295,14 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     return {
         close: () => {
             for (const entry of live.values()) {
-                entry.dispose();
+                // A route's close handler may still be writing; the database is disposed only once it settles.
+                const pending = entry.drain();
+
+                if (pending === undefined) {
+                    entry.dispose();
+                } else {
+                    pending.finally(entry.dispose).catch(() => undefined);
+                }
             }
 
             live.clear();
