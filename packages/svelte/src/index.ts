@@ -38,6 +38,8 @@ export { getLunoraClient, setLunoraClient } from "./context";
 export type { FlagValue } from "./flag";
 export { flag, flags } from "./flag";
 export { hydratePreloaded } from "./hydrate-preloaded";
+export type { LiveTopicState } from "./live-topic";
+export { liveTopic } from "./live-topic";
 export type { MutationHandle } from "./mutation";
 export { mutation } from "./mutation";
 export type { MutatorHandle, MutatorHandleStore, MutatorTransaction } from "./mutator";

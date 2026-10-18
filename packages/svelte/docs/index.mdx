@@ -58,8 +58,8 @@ required to build or use it.
 
 The table above lists the core handful. The package also exports the live
 stores covered under [Additional stores](#additional-stores): `subscription`,
-`paginatedQuery`, `infiniteQuery`, `presence`, `rateLimit`, `auth`, and
-`connectionStatus`.
+`paginatedQuery`, `infiniteQuery`, `presence`, `liveTopic`, `rateLimit`, `auth`,
+and `connectionStatus`.
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
@@ -385,6 +385,29 @@ are `api.*` references. The handle is `{ present, sessionId, setData, teardown }
 </script>
 
 {#each $present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
+```
+
+### `liveTopic(options)`
+
+Follows one topic on the connection shared by its URL. The readable holds
+`{ lastEvent, error }`: the last payload delivered on the topic, and the shard's
+refusal of the subscription. Nothing opens until the first subscriber, and the
+subscription closes when the last one leaves, so there is no `teardown()`.
+
+`options` is a plain object or a `Readable` of one. A new topic or connection
+option resubscribes; a new `onEvent` or `onError` is read at call time and does
+not.
+
+```svelte
+<script lang="ts">
+    import { liveTopic } from "@lunora/svelte";
+
+    export let postId: string;
+
+    const comments = liveTopic({ url: "/live/posts/connect", topic: `comments:${postId}` });
+</script>
+
+{#if $comments.lastEvent !== undefined}<p>New comment</p>{/if}
 ```
 
 ### `rateLimit(config, options?)`
