@@ -554,14 +554,12 @@ describe("withSecret — the consuming step", () => {
             SecretUnavailableError,
         );
     });
-});
 
-describe("withSecret — a result that carries the secret", () => {
-    it("refuses to journal a callback result that echoes the secret, and fails the call", async () => {
-        expect.assertions(2);
+    it("refuses to journal a callback result that echoes the secret, discards the value, and fails the call", async () => {
+        expect.assertions(3);
 
-        const { host, take, discard } = secretHost();
-        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "call_1", SECRET);
         const journalled: unknown[] = [];
         const step = {
             do: async (_name: string, callback: () => Promise<unknown>) => {
@@ -571,14 +569,8 @@ describe("withSecret — a result that carries the secret", () => {
 
                 return output;
             },
-        };
-        const context = {
-            idempotencyKey: "tool:echo:call_1",
-            run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) =>
-                Promise.resolve(reference["__lunoraRef"] === "agents:agentTakeSecret" ? take(args) : discard(args)),
-            step,
-            threadKey: "thread-1",
-        } as unknown as AgentToolContext;
+        } as unknown as AgentStepLike;
+        const context = consumerContext(host, step, [], "tool:charge:call_2", "call_2");
 
         await expect(
             withSecret(context, ref, (secret) => {
@@ -586,6 +578,11 @@ describe("withSecret — a result that carries the secret", () => {
             }),
         ).rejects.toThrow("withSecret's callback returned the secret");
         expect(JSON.stringify(journalled)).not.toContain(SECRET);
+
+        // The credential is no longer needed once the call is refused, so it is not left until its TTL.
+        await expect(withSecret(consumerContext(host, new WaitJournal(), [], "tool:charge:call_2", "call_2"), ref, () => "again")).rejects.toBeInstanceOf(
+            SecretUnavailableError,
+        );
     });
 });
 
