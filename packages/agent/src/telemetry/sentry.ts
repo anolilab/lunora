@@ -1,7 +1,7 @@
 import type { Telemetry } from "ai";
 
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeUsage, toolInputOf } from "./common";
+import { contentText, readField, summarizeUsage, toolInputOf, usageStatus } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 const stringOr = (value: unknown, fallback: string): string => (typeof value === "string" && value.length > 0 ? value : fallback);
@@ -115,10 +115,20 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
             // the moment `doStream` hands the stream back.
             const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
 
-            if (usage) {
-                attributes["gen_ai.usage.input_tokens"] = usage.inputTokens;
-                attributes["gen_ai.usage.output_tokens"] = usage.outputTokens;
-                attributes["gen_ai.usage.total_tokens"] = usage.totalTokens;
+            attributes["lunora.usage.status"] = usageStatus(usage);
+
+            // Breakdowns are subsets of the totals, emitted only when reported.
+            for (const [key, name] of [
+                ["inputTokens", "gen_ai.usage.input_tokens"],
+                ["outputTokens", "gen_ai.usage.output_tokens"],
+                ["totalTokens", "gen_ai.usage.total_tokens"],
+                ["cacheReadTokens", "gen_ai.usage.cache_read.input_tokens"],
+                ["cacheWriteTokens", "gen_ai.usage.cache_creation.input_tokens"],
+                ["reasoningTokens", "gen_ai.usage.reasoning.output_tokens"],
+            ] as const) {
+                if (usage?.[key] !== undefined) {
+                    attributes[name] = usage[key];
+                }
             }
 
             if (recordOutputs) {
