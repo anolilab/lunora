@@ -1305,6 +1305,72 @@ describe("lunora dev", () => {
             expect(cleaned).toBe(true);
         });
 
+        it("starts the embedded Hyperdrive Postgres for the session and stops it when the worker exits", async () => {
+            expect.assertions(3);
+
+            const events: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: async ({ projectRoot }) => {
+                    events.push(`start ${projectRoot}`);
+
+                    return {
+                        bindings: ["HYPERDRIVE"],
+                        stop: async () => {
+                            events.push("stop");
+                        },
+                    };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    events.push("worker");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(events[0]).toBe(`start ${workdir}`);
+            expect(events).toContain("worker");
+            // Stopped after the worker that dials it.
+            expect(events.at(-1)).toBe("stop");
+        });
+
+        it("still starts the embedded Hyperdrive Postgres under --remote, which never proxies Hyperdrive", async () => {
+            expect.assertions(1);
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    return { cleanup: () => {}, configPath: join(workdir, "wrangler.remote.jsonc"), remoteBindings: [], withheld: [] };
+                },
+                remote: true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(start).toHaveBeenCalledTimes(1);
+        });
+
         it("still unlinks the remote temp config when startup throws", async () => {
             expect.assertions(2);
 

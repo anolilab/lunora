@@ -8,6 +8,7 @@ import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 
 import type { ContainerLogStreamHandle } from "@lunora/config";
 import { discoverContainerInfo, formatLunoraEvent, streamContainerLogs } from "@lunora/config";
+import type { LocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import forEachLine from "../../util/line-stream";
@@ -149,6 +150,8 @@ interface Teardown {
     codegen?: CodegenWatcherHandle;
     /** Disposer for the dev container log stream (stops polling Docker + detaches). */
     containerLogs?: ContainerLogStreamHandle;
+    /** The embedded Postgres behind a Hyperdrive binding, stopped once the worker that dials it is gone. */
+    hyperdrive?: LocalHyperdrive;
     /** Cancels the worker readiness probe, so it stops with the server instead of on its own timeout. */
     readyProbe?: AbortController;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
@@ -221,6 +224,7 @@ const teardown = async (handles: Teardown): Promise<void> => {
     await handles.codegen?.close().catch(() => undefined);
     handles.containerLogs?.close();
     await handles.studio?.close().catch(() => undefined);
+    await handles.hyperdrive?.stop().catch(() => undefined);
     // Unlink the generated remote wrangler config last; the disposer is itself
     // idempotent + swallows errors, but guard the call site too for safety.
     try {

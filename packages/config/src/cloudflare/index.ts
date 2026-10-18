@@ -27,6 +27,8 @@ export type { CloudflareCredentialProbe } from "./credentials";
 export { hasCloudflareCredentials } from "./credentials";
 export type { DevConfigKind } from "./dev-config";
 export { describeWithheldWorkersAi, withheldWorkersAi } from "./dev-config";
+export type { LocalHyperdrive } from "./local-hyperdrive";
+export { startLocalHyperdrive } from "./local-hyperdrive";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

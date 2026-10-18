@@ -27,7 +27,8 @@ import {
     secretSourcesFromBindings,
     updateDevServerState,
 } from "@lunora/config";
-import { describeWithheldWorkersAi, resolveRemoteEnabled, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import type { LocalHyperdrive } from "@lunora/config/cloudflare";
+import { describeWithheldWorkersAi, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -419,6 +420,29 @@ const startPlannedWorker = async (
 };
 
 /**
+ * The embedded Postgres behind a Hyperdrive binding that has no local database,
+ * for the session's lifetime. Also under `--remote`: Hyperdrive has no remote
+ * mode here, so wrangler still dials a local database for it.
+ */
+const startEmbeddedHyperdrive = async (options: DevCommandOptions, cwd: string, logger: Logger): Promise<LocalHyperdrive | undefined> => {
+    const hyperdrive = await (options.startHyperdrive ?? startLocalHyperdrive)({
+        onWarning: (message) => {
+            logger.warn(message);
+        },
+        projectRoot: cwd,
+    });
+
+    if (hyperdrive !== undefined) {
+        logger.info(
+            // eslint-disable-next-line no-secrets/no-secrets -- an environment variable name with a placeholder, not a credential
+            `Hyperdrive ${hyperdrive.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite. Set CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> to use your own.`,
+        );
+    }
+
+    return hyperdrive;
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
@@ -525,6 +549,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             // the sidecar, so the handoff rides on it.
             plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
+
+        // After the incumbent check, so a second `lunora dev` never opens a second
+        // database on the same data directory.
+        handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
 
         await offerDevVariablesScaffold(options, cwd, discoveryCache);
 

@@ -16,6 +16,7 @@ import devVariablesPlugin from "./dev-variables-plugin";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import localAiBinding from "./local-ai-binding";
+import localHyperdrive from "./local-hyperdrive";
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { remoteBindingsPlugin } from "./remote-bindings-plugin";
@@ -230,7 +231,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // hint instead of a bare, file-less `runner-worker` TypeError.
         plugins.push(
             ...withoutDevWhen(
-                [localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }), ...withWorkerStartupHint(cloudflare(cloudflareOptions))],
+                [
+                    localHyperdrive({ projectRoot: resolved.projectRoot }),
+                    localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }),
+                    ...withWorkerStartupHint(cloudflare(cloudflareOptions)),
+                ],
                 onCelld,
             ),
         );
