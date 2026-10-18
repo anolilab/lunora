@@ -237,7 +237,6 @@ describe("shardDO socket routes", () => {
         const open = new FakeSocket({
             connectionId: "a",
             socketFunction: "sockets:old",
-            socketFunction: "sockets:chat",
             socketPath: "/chat",
             subs: {},
             whispers: [CHAT_TOPIC],

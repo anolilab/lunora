@@ -29,7 +29,7 @@ interface DiscoveredFunction {
     output?: ValidatorIR;
     returnType: string;
     /** A `defineWebSocket` route: its literal path and auth requirement (see `socketRouteOf`). */
-    socket?: { auth: boolean; path: string };
+    socket?: { auth: boolean; origin?: string; path: string };
     visibility: "internal" | "public";
     x402?: { price?: number | string };
 }
