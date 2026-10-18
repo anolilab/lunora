@@ -595,7 +595,9 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         ],
         [
             capabilities.usesArtifacts,
-            `artifacts (${usageOf("artifacts")}) — { binding: ARTIFACTS, namespace }${schema.jurisdiction === undefined ? "" : `; \`lunora deploy\` creates the namespace in "${schema.jurisdiction}" or stops`}`,
+            schema.jurisdiction === undefined
+                ? `artifacts (${usageOf("artifacts")}) — { binding: ARTIFACTS, namespace }`
+                : `hint: ${usageOf("artifacts")}; the schema pins data to "${schema.jurisdiction}", so create the namespace in that jurisdiction first and add { binding: ARTIFACTS, namespace } yourself — \`lunora deploy\` then checks it (a first create() in dev would make it unrestricted)`,
         ],
         [
             capabilities.usesX402Charge,
