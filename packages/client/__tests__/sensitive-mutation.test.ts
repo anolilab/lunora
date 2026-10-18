@@ -24,15 +24,6 @@ const plainRef = (reference: string): FunctionReference => {
     return { __lunoraRef: reference };
 };
 
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-        });
-    }
-};
-
 interface MockSocket {
     open: () => void;
     triggerClose: () => void;
@@ -123,15 +114,11 @@ describe("sensitive mutation", () => {
 
         client.subscribe(plainRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
         sockets.at(-1)?.triggerClose();
-        await settle();
 
         // No `onlineOnly` on the call: the client forces it, so the write is refused
         // rather than queued the way a normal mutation is.
         await expect(client.mutation(sensitiveRef("agents:supply"), { value: SECRET })).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
-
-        await settle();
 
         expect(server.bodies.join("")).not.toContain(SECRET);
         expect(append).not.toHaveBeenCalled();
@@ -152,7 +139,6 @@ describe("sensitive mutation", () => {
 
         client.subscribe(plainRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
 
         await expect(client.mutation(sensitiveRef("agents:supply"), { value: SECRET })).resolves.toStrictEqual({ ok: true });
 
@@ -171,7 +157,6 @@ describe("sensitive mutation", () => {
 
         client.subscribe(plainRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
 
         // The option is typed away for a sensitive reference; this proves the runtime
         // refusal for a caller that bypasses the types.
