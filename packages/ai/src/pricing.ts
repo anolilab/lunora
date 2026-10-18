@@ -23,6 +23,10 @@
 
 /** What one model costs. Token models price per **one million** tokens; image models price per generated image. */
 interface ModelPrice {
+    /** Price per million input tokens read from the provider's cache. Omit to bill cache reads at `input`. */
+    cacheRead?: number;
+    /** Price per million input tokens written to the provider's cache. Omit to bill cache writes at `input`. */
+    cacheWrite?: number;
     /** Price per million input (prompt) tokens. Token-billed models only. */
     input?: number;
     /** Price per million output (completion) tokens. Omit for an embedding model. */
@@ -31,14 +35,19 @@ interface ModelPrice {
     perImage?: number;
 }
 
-/** Token counts to price. Either may be absent. */
+/** Token counts to price. Any may be absent. The cache counts are subsets of `inputTokens`. */
 interface ModelUsage {
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
 }
 
 /** Tokens per unit of the price table. */
 const TOKENS_PER_UNIT = 1_000_000;
+
+/** A finite count clamped at 0; an absent or non-numeric count is 0. */
+const nonNegative = (value: number | undefined): number => (value !== undefined && Number.isFinite(value) ? Math.max(0, value) : 0);
 
 /** A trailing `-YYYY-MM-DD` release stamp, e.g. `gpt-5-2025-08-07`. */
 const DATED_MODEL_ID = /^(.*)-\d{4}-\d{2}-\d{2}$/u;
@@ -156,14 +165,25 @@ const estimateModelCost = (modelId: string | undefined, usage: ModelUsage, price
     // Clamped at 0, not merely checked for finiteness: a provider that reports a
     // negative token count would otherwise stamp a NEGATIVE `gen_ai.usage.cost`
     // on the span, which subtracts from every total that span rolls into.
-    const inputTokens = Number.isFinite(usage.inputTokens) ? Math.max(0, usage.inputTokens as number) : 0;
-    const outputTokens = Number.isFinite(usage.outputTokens) ? Math.max(0, usage.outputTokens as number) : 0;
+    const inputTokens = nonNegative(usage.inputTokens);
+    const outputTokens = nonNegative(usage.outputTokens);
 
     if (inputTokens <= 0 && outputTokens <= 0) {
         return undefined;
     }
 
-    const cost = (inputTokens * (price.input ?? 0) + outputTokens * (price.output ?? 0)) / TOKENS_PER_UNIT;
+    // Cache tokens are already inside `inputTokens`, so they are priced as the
+    // difference from the input rate rather than split out of the total. With no
+    // cache rate listed the difference is zero and the cost is the plain input cost.
+    const cacheReadTokens = Math.min(nonNegative(usage.cacheReadTokens), inputTokens);
+    const cacheWriteTokens = Math.min(nonNegative(usage.cacheWriteTokens), inputTokens - cacheReadTokens);
+    const inputRate = price.input ?? 0;
+    const cost =
+        (inputTokens * inputRate +
+            cacheReadTokens * ((price.cacheRead ?? inputRate) - inputRate) +
+            cacheWriteTokens * ((price.cacheWrite ?? inputRate) - inputRate) +
+            outputTokens * (price.output ?? 0)) /
+        TOKENS_PER_UNIT;
 
     return Number.isFinite(cost) ? cost : undefined;
 };

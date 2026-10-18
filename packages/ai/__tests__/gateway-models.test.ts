@@ -258,6 +258,7 @@ describe("usage telemetry", () => {
                     "gen_ai.usage.input_tokens": 1000,
                     "gen_ai.usage.output_tokens": 500,
                     "lunora.usage.cost.source": "estimated",
+                    "lunora.usage.status": "complete",
                 },
                 name: "ai.generate",
                 settled: "ok",

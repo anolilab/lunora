@@ -5,17 +5,35 @@ import type { AiMetrics, AiSpan } from "./types";
  * The slice of a finished call's result that usage accounting reads. Structural
  * rather than the spec's `LanguageModelV4Usage` so a provider that omits a
  * token bucket (they are all optional in practice) never trips a property read.
+ *
+ * The totals already include their breakdowns: `inputTokens.total` covers the
+ * cache-read and cache-write tokens, and `outputTokens.total` covers reasoning.
+ * The breakdowns are reported alongside, never added on top.
  */
 interface CallOutcome {
     providerMetadata?: unknown;
     usage?: {
-        inputTokens?: { total?: unknown };
-        outputTokens?: { total?: unknown };
+        inputTokens?: { cacheRead?: unknown; cacheWrite?: unknown; total?: unknown };
+        outputTokens?: { reasoning?: unknown; total?: unknown };
     };
 }
 
+/**
+ * Whether a call's token report is whole. `complete`: every total the call should
+ * carry was reported. `partial`: some were, not all. `unavailable`: none were.
+ * Only a complete call is priced by estimate; a partial one would understate.
+ */
+type UsageStatus = "complete" | "partial" | "unavailable";
+
 /** A finite, non-negative token count, or `undefined`. */
 const tokenCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
+
+/** A breakdown count that is reported and non-zero, or `undefined`. */
+const positiveCount = (value: unknown): number | undefined => {
+    const count = tokenCount(value);
+
+    return count === undefined || count === 0 ? undefined : count;
+};
 
 /**
  * Read a call's dollar cost from AI SDK `providerMetadata`, defensively. AI
@@ -55,24 +73,58 @@ const modelIdOf = (model: unknown): string | undefined => {
  * through. A provider-reported (gateway) cost always wins over an estimate, and
  * the source is stamped next to it so a dashboard never presents a derived
  * number as a measured one.
+ *
+ * Every span carries `lunora.usage.status`. Each token bucket is emitted only when
+ * the provider reported it, so an absent bucket is never a counted zero. Cache and
+ * reasoning counts are subsets of the input and output totals. `expectsOutput` is
+ * `false` for an embedding call, which has no output bucket to report.
  */
-const recordUsage = (modelId: string | undefined, outcome: CallOutcome, span: AiSpan | undefined, metrics: AiMetrics | undefined): void => {
+const recordUsage = (
+    modelId: string | undefined,
+    outcome: CallOutcome,
+    span: AiSpan | undefined,
+    metrics: AiMetrics | undefined,
+    { expectsOutput = true }: { expectsOutput?: boolean } = {},
+): void => {
     const inputTokens = tokenCount(outcome.usage?.inputTokens?.total);
     const outputTokens = tokenCount(outcome.usage?.outputTokens?.total);
+    // A breakdown reported as 0 is dropped: the AI SDK fills 0 in for details a provider
+    // never sent, so it cannot be told from absence and adds nothing to a sum anyway.
+    const cacheReadTokens = positiveCount(outcome.usage?.inputTokens?.cacheRead);
+    const cacheWriteTokens = positiveCount(outcome.usage?.inputTokens?.cacheWrite);
+    const reasoningTokens = positiveCount(outcome.usage?.outputTokens?.reasoning);
+    const complete = inputTokens !== undefined && (!expectsOutput || outputTokens !== undefined);
+    const anyReported = [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens].some((count) => count !== undefined);
+    let status: UsageStatus = "unavailable";
+
+    if (complete) {
+        status = "complete";
+    } else if (anyReported) {
+        status = "partial";
+    }
+
     const reported = reportedCostOf(outcome.providerMetadata);
-    const cost = reported ?? estimateModelCost(modelId, { inputTokens, outputTokens });
+    // An estimate is priced only from a complete report: a partial one would understate the call.
+    const cost = reported ?? (status === "complete" ? estimateModelCost(modelId, { cacheReadTokens, cacheWriteTokens, inputTokens, outputTokens }) : undefined);
     const costSource = reported === undefined ? "estimated" : "provider";
     // `"unknown"` keeps an unnamed model's series grouped rather than dropped.
     const modelAttributes = { "gen_ai.request.model": modelId ?? "unknown" };
 
-    if (inputTokens !== undefined) {
-        span?.setAttribute("gen_ai.usage.input_tokens", inputTokens);
-        metrics?.count("gen_ai.usage.input_tokens", inputTokens, modelAttributes);
-    }
+    span?.setAttribute("lunora.usage.status", status);
 
-    if (outputTokens !== undefined) {
-        span?.setAttribute("gen_ai.usage.output_tokens", outputTokens);
-        metrics?.count("gen_ai.usage.output_tokens", outputTokens, modelAttributes);
+    const buckets: [string, number | undefined][] = [
+        ["gen_ai.usage.input_tokens", inputTokens],
+        ["gen_ai.usage.output_tokens", outputTokens],
+        ["gen_ai.usage.cache_read.input_tokens", cacheReadTokens],
+        ["gen_ai.usage.cache_creation.input_tokens", cacheWriteTokens],
+        ["gen_ai.usage.reasoning.output_tokens", reasoningTokens],
+    ];
+
+    for (const [name, value] of buckets) {
+        if (value !== undefined) {
+            span?.setAttribute(name, value);
+            metrics?.count(name, value, modelAttributes);
+        }
     }
 
     if (cost !== undefined) {
