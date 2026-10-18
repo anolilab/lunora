@@ -145,6 +145,25 @@ const isProcessAlive = (pid: number): boolean => {
 /** What taking a data directory's lock came to: the release to call on stop, or the process that holds it. */
 type DirectoryLock = { holder: number } | { release: () => void };
 
+/**
+ * Whether the project's only SQL driver is `mysql2`: then the embedded Postgres cannot back its
+ * Hyperdrive binding, and the developer needs a local MySQL of their own. A project with a Postgres
+ * driver (`pg`, `postgres`), or none that can be read, is assumed to want Postgres.
+ */
+const isMysqlOnly = (projectRoot: string): boolean => {
+    try {
+        const manifest = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as {
+            dependencies?: Record<string, unknown>;
+            devDependencies?: Record<string, unknown>;
+        };
+        const names = new Set([...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.devDependencies ?? {})]);
+
+        return names.has("mysql2") && !names.has("pg") && !names.has("postgres");
+    } catch {
+        return false;
+    }
+};
+
 /** An address nothing listens on: port 1 refuses the connection at once. */
 const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
 
@@ -290,6 +309,16 @@ const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
     }
 };
 
+/** Why the bindings get no embedded database: MySQL needs a local MySQL of the developer's own, otherwise PGlite isn't installed. */
+const noDatabaseWarning = (bindings: ReadonlyArray<string>, mysql: boolean): string => {
+    const names = bindings.map((binding) => `"${binding}"`).join(", ");
+    const variable = variableFor(bindings[0] ?? "<BINDING>");
+
+    return mysql
+        ? `Hyperdrive binding ${names}: this project's SQL driver is mysql2, and the embedded database speaks PostgreSQL, so \`ctx.sql\` will fail to connect in dev. Set ${variable} to a local MySQL connection string.`
+        : `Hyperdrive binding ${names} has no local database, so \`ctx.sql\` will fail to connect in dev. Run \`${INSTALL_HINT}\` for an embedded Postgres, or set ${variable}.`;
+};
+
 /**
  * Start a PGlite for every Hyperdrive binding with no local database, and point
  * wrangler at it through its environment variable. Resolves `undefined` when
@@ -323,13 +352,12 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 
         await Promise.allSettled(stopping.map(async (server) => server.stop()));
     };
-    const runtime = await (options.load ?? loadPglite)();
+    const mysql = isMysqlOnly(options.projectRoot);
+    const runtime = mysql ? undefined : await (options.load ?? loadPglite)();
 
     if (runtime === undefined) {
-        options.onWarning?.(
-            `Hyperdrive binding ${bindings.map((binding) => `"${binding}"`).join(", ")} has no local database, so \`ctx.sql\` will fail to connect in dev. ` +
-                `Run \`${INSTALL_HINT}\` for an embedded Postgres, or set ${variableFor(bindings[0] ?? "<BINDING>")}.`,
-        );
+        options.onWarning?.(noDatabaseWarning(bindings, mysql));
+
         for (const binding of bindings) {
             makeUnavailable(binding);
         }

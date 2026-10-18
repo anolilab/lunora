@@ -75,7 +75,7 @@ Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` an
     pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
     ```
 
-    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding.
+    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets a warning and must set that variable to a local MySQL of its own.
 
 - **On deploy**, set the origin's connection string and a token that may edit Hyperdrive (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):
 

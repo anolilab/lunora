@@ -81,7 +81,8 @@ placeholder `id`.
 
     To use your own database instead, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`
     (the last part is the binding name) or `localConnectionString` on the binding. Neither is
-    overridden.
+    overridden. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets
+    a warning and must set that variable to a local MySQL of its own.
 
 - **On deploy**, set the origin's connection string and a token that may edit Hyperdrive
   (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):

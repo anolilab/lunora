@@ -326,6 +326,28 @@ describe("local hyperdrive", () => {
             expect(existsSync(join(root, ".wrangler", "state", "lunora-pglite", "DB.lock"))).toBe(false);
         });
 
+        it.each([
+            ["mysql2 alone", { mysql2: "^3" }, true],
+            ["mysql2 beside pg", { mysql2: "^3", pg: "^8" }, false],
+            ["postgres.js", { postgres: "^3" }, false],
+        ])("does not serve an embedded Postgres to a project whose driver is %s only when it is MySQL", async (_label, dependencies, mysqlOnly) => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+            writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies }), "utf8");
+
+            const { directories, runtime } = fakeRuntime();
+            const env: NodeJS.ProcessEnv = {};
+            const warnings: string[] = [];
+            const local = await startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root });
+
+            expect(directories.length === 0).toBe(mysqlOnly);
+            expect(env[`${VAR}DB`] === UNAVAILABLE).toBe(mysqlOnly);
+            expect(warnings.join(" ").includes("mysql2")).toBe(mysqlOnly);
+
+            await local?.stop();
+        });
+
         it("keeps a binding name from leaving the state directory", async () => {
             expect.assertions(3);
 
