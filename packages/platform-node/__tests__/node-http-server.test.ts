@@ -286,6 +286,65 @@ describe("createNodeHttpServer", () => {
             expect(received()).toContain("413");
         });
 
+        it("keeps a keep-alive socket whose refused body had already fully arrived", async () => {
+            expect.hasAssertions();
+
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+            try {
+                let release: () => void = () => undefined;
+                const gate = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                const server = await listen(async (request) => {
+                    if (request.method === "GET") {
+                        return new Response("second");
+                    }
+
+                    const reader = request.body?.getReader();
+
+                    await reader?.read();
+                    // The cancel comes only after the whole body has reached the server.
+                    await gate;
+                    await reader?.cancel();
+
+                    return new Response("too large", { status: 413 });
+                });
+                const socket = connect({ host: "127.0.0.1", port: Number(new URL(server.origin).port) });
+                let received = "";
+
+                socket.on("data", (data: Buffer) => {
+                    received += data.toString();
+                });
+                socket.on("error", () => undefined);
+                await once(socket, "connect");
+                socket.write(Buffer.concat([Buffer.from("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 131072\r\n\r\n"), Buffer.alloc(131_072)]));
+
+                for (let tick = 0; tick < 50; tick += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- let the loopback deliver the whole body before the cancel
+                    await new Promise((resolve) => {
+                        setImmediate(resolve);
+                    });
+                }
+
+                release();
+                await vi.waitFor(() => {
+                    expect(received).toContain("413");
+                });
+
+                // Past the drain's time ceiling, the same connection still serves the next request.
+                await vi.advanceTimersByTimeAsync(60_000);
+                socket.write("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+                await vi.waitFor(() => {
+                    expect(received).toContain("second");
+                });
+
+                socket.destroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it("cuts off a stalled upload after the time ceiling, once the 413 is out", async () => {
             expect.hasAssertions();
 

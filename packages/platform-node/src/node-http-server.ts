@@ -54,12 +54,22 @@ const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): Readab
                 return;
             }
 
+            // The whole body has already arrived: nothing is left to drain, and the keep-alive socket stays usable.
+            if (incoming.complete) {
+                return;
+            }
+
             // The body is read and dropped only up to a byte or time ceiling. Hitting one marks the drain over, and the socket is
             // destroyed once the 413 has finished, so the response is never cut short. A body that ends first keeps its socket.
             let drained = 0;
             let overCeiling = false;
 
             const ceilingHit = (): void => {
+                // A body that finished arriving meanwhile has nothing left to cut off.
+                if (incoming.complete) {
+                    return;
+                }
+
                 overCeiling = true;
 
                 if (outgoing.writableFinished) {
@@ -67,15 +77,17 @@ const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): Readab
                 }
             };
             const timer = setTimeout(ceilingHit, REFUSED_BODY_DRAIN_MS);
+            const stopTimer = (): void => {
+                clearTimeout(timer);
+            };
 
             outgoing.once("finish", () => {
                 if (overCeiling) {
                     incoming.destroy();
                 }
             });
-            incoming.once("close", () => {
-                clearTimeout(timer);
-            });
+            incoming.once("end", stopTimer);
+            incoming.once("close", stopTimer);
 
             incoming.removeAllListeners("readable");
             incoming.on("readable", () => {
