@@ -384,7 +384,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `artifacts-jurisdiction-mismatch`  | fail  | A bound Artifacts namespace sits in another jurisdiction than the schema's `.jurisdiction()`.             |
 | `artifacts-jurisdiction-ok`        | pass  | A bound Artifacts namespace is in the schema's jurisdiction.                                              |
 | `artifacts-jurisdiction-unchecked` | warn  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so a namespace's jurisdiction was not read.   |
-| `artifacts-namespace-missing`      | fail  | A bound Artifacts namespace does not exist, so its first repo would create it unrestricted.               |
+| `artifacts-namespace-missing`      | fail  | Not reported by doctor: a missing namespace passes, since `lunora deploy` creates it.                     |
 | `cf-config-present`                | warn  | A Cloudflare CLI `cloudflare.config.*` is in the project root (Lunora never updates it).                  |
 | `cimd-fetch-not-strictly-public`   | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag.                  |
 | `cli-shadowed`                     | warn  | The running `lunora` is not the project's own install.                                                    |
