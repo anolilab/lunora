@@ -28,8 +28,8 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    /** Approval lifecycle marker on a human-in-the-loop tool message. */
-    status?: "approved" | "awaiting_approval" | "rejected";
+    /** Approval or secret-request lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
     toolName?: string;
@@ -86,6 +86,12 @@ type AgentApprovalReference = FunctionReference<
     { resolved: boolean }
 >;
 
+/** The `agents:agentSupplySecret` reference — stores a person's value for a paused `requestSecretTool` call. */
+type AgentSupplySecretReference = FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
+/** The `agents:agentDeclineSecret` reference — refuses a paused `requestSecretTool` call. */
+type AgentDeclineSecretReference = FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
 
@@ -116,9 +122,11 @@ type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, Ag
 interface CreateAgentChatApi {
     agents: {
         agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference;
         agentResolveApproval: AgentApprovalReference;
         agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -181,6 +189,8 @@ interface CreateAgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** Refuse a paused `requestSecretTool` call: the run resumes with a "declined" result. */
+    declineSecret: (toolCallId: string) => Promise<void>;
     /** The history, thread, or grants subscription's last error, or `undefined`. */
     error: Accessor<Error | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
@@ -196,6 +206,14 @@ interface CreateAgentChatResult {
 
     /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: Accessor<string>;
+
+    /**
+     * Give a paused `requestSecretTool` call its value. Always sent online-only: the
+     * value is never queued, persisted or replayed, and the call rejects with
+     * `OFFLINE_NOT_QUEUED` while the connection is down. The primitive keeps no copy;
+     * a failure rethrows the original error.
+     */
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 
 /**
@@ -210,7 +228,7 @@ const EMPTY_GRANTS: ReadonlyArray<AgentApprovalGrant> = [];
 
 /**
  * A first-class agent chat surface: live durable history + in-flight token
- * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * streaming + the send / approve / reject / secret / cancel writes, keyed by `threadKey` —
  * the Solid counterpart to React's `useAgentChat`, re-expressed with signals.
  *
  * It composes the existing primitives rather than adding transport:
@@ -272,6 +290,8 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
     const cancelMutation = createMutation(cancelReference ?? NO_MUTATION_REF);
     const approvalMutation = createMutation(api.agents.agentResolveApproval);
     const revokeMutation = createMutation(api.agents.agentRevokeApprovalGrant);
+    const supplySecretMutation = createMutation(api.agents.agentSupplySecret);
+    const declineSecretMutation = createMutation(api.agents.agentDeclineSecret);
 
     const [optimistic, setOptimistic] = createSignal<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — primitive-instance local.
@@ -394,6 +414,14 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         await revokeMutation.mutate({ threadKey: resolveMaybe(threadKey), toolName });
     };
 
+    const supplySecret = async (toolCallId: string, secret: string): Promise<void> => {
+        await supplySecretMutation.mutate({ secret, threadKey: resolveMaybe(threadKey), toolCallId }, { onlineOnly: true });
+    };
+
+    const declineSecret = async (toolCallId: string): Promise<void> => {
+        await declineSecretMutation.mutate({ threadKey: resolveMaybe(threadKey), toolCallId });
+    };
+
     const cancel = async (): Promise<void> => {
         const instanceId = thread()?.instanceId;
 
@@ -410,6 +438,7 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         approve,
         approveForThread,
         cancel,
+        declineSecret,
         error: subscriptionError,
         messages,
         reject,
@@ -417,6 +446,7 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         send,
         status,
         streamingText,
+        supplySecret,
     };
 };
 

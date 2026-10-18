@@ -27,8 +27,8 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    /** Approval lifecycle marker on a human-in-the-loop tool message. */
-    status?: "approved" | "awaiting_approval" | "rejected";
+    /** Approval or secret-request lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
     toolName?: string;
@@ -85,6 +85,12 @@ type AgentApprovalReference = FunctionReference<
     { resolved: boolean }
 >;
 
+/** The `agents:agentSupplySecret` reference — stores a person's value for a paused `requestSecretTool` call. */
+type AgentSupplySecretReference = FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
+/** The `agents:agentDeclineSecret` reference — refuses a paused `requestSecretTool` call. */
+type AgentDeclineSecretReference = FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
 
@@ -115,9 +121,11 @@ type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, Ag
 interface UseAgentChatApi {
     agents: {
         agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference;
         agentResolveApproval: AgentApprovalReference;
         agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -181,6 +189,8 @@ interface UseAgentChatResult {
      */
     cancel: () => Promise<void>;
     /** The history, thread, or grants subscription's last error, or `undefined`. */
+    /** Refuse a paused `requestSecretTool` call: the run resumes with a "declined" result. */
+    declineSecret: (toolCallId: string) => Promise<void>;
     error: ComputedRef<Error | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ComputedRef<ReadonlyArray<AgentChatMessage>>;
@@ -195,6 +205,14 @@ interface UseAgentChatResult {
 
     /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: ComputedRef<string>;
+
+    /**
+     * Give a paused `requestSecretTool` call its value. Always sent online-only: the
+     * value is never queued, persisted or replayed, and the call rejects with
+     * `OFFLINE_NOT_QUEUED` while the connection is down. The composable keeps no copy;
+     * a failure rethrows the original error.
+     */
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 
 /**
@@ -209,7 +227,7 @@ const EMPTY_GRANTS: ReadonlyArray<AgentApprovalGrant> = [];
 
 /**
  * A first-class agent chat surface: live durable history + in-flight token
- * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * streaming + the send / approve / reject / secret / cancel writes, keyed by `threadKey` —
  * the Vue counterpart to React's `useAgentChat`, re-expressed with refs.
  *
  * It composes the existing primitives rather than adding transport:
@@ -271,6 +289,8 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const cancelMutation = useMutation(cancelReference ?? NO_MUTATION_REF);
     const approvalMutation = useMutation(api.agents.agentResolveApproval);
     const revokeMutation = useMutation(api.agents.agentRevokeApprovalGrant);
+    const supplySecretMutation = useMutation(api.agents.agentSupplySecret);
+    const declineSecretMutation = useMutation(api.agents.agentDeclineSecret);
 
     const optimistic = ref<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — composable-instance local.
@@ -385,6 +405,14 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         await revokeMutation.mutate({ threadKey: toValue(threadKey), toolName });
     };
 
+    const supplySecret = async (toolCallId: string, secret: string): Promise<void> => {
+        await supplySecretMutation.mutate({ secret, threadKey: toValue(threadKey), toolCallId }, { onlineOnly: true });
+    };
+
+    const declineSecret = async (toolCallId: string): Promise<void> => {
+        await declineSecretMutation.mutate({ threadKey: toValue(threadKey), toolCallId });
+    };
+
     const cancel = async (): Promise<void> => {
         const instanceId = thread.value?.instanceId;
 
@@ -401,6 +429,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         approve,
         approveForThread,
         cancel,
+        declineSecret,
         error: subscriptionError,
         messages,
         reject,
@@ -408,6 +437,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         send,
         status,
         streamingText,
+        supplySecret,
     };
 };
 
