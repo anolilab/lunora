@@ -102,6 +102,14 @@ const routed = filterSink(
 - Enriched values are normalized and redacted the same way logged fields are. An
   enricher that throws leaves the event unchanged.
 
+### Vendor presets
+
+`axiomMetricsSink({ domain, token, dataset })` sends `ctx.metrics` measurements
+to Axiom over OTLP/HTTP, with the Bearer token and the metrics dataset header
+filled in. It implements `onMetric` only: Axiom's OTLP page states the encoding
+for metrics and nothing for traces or logs, so no other signal is sent. Combine
+it with `combineSinks` next to the sinks you already use.
+
 ### `otlpSink`
 
 ```ts

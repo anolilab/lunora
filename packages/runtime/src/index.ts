@@ -113,6 +113,8 @@ export type {
     TraceSamplingConfig,
 } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
+export type { AxiomMetricsSinkOptions } from "./observability-presets";
+export { axiomMetricsSink } from "./observability-presets";
 export type { SinkEnricher, SinkEvent, SinkRouteOptions, SinkSignalKind } from "./observability-routing";
 export { enrichSink, filterSink } from "./observability-routing";
 export type {
