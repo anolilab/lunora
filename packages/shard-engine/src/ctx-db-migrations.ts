@@ -359,6 +359,27 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
 };
 
 /**
+ * Drop a rank companion whose `__sort_k<i>__` columns no longer match the declared
+ * `sortBy`. `CREATE TABLE IF NOT EXISTS` never reshapes a table that exists, so a
+ * `sortBy` that gained a key would leave the companion without the column its
+ * rebuild INSERTs into, and every write to the source table would fail with "no
+ * such column". The companion is derived data: its rebuild marker keys on the sort
+ * fields, so the changed `sortBy` that got us here also rebuilds it on its next
+ * touch. Dropping the table takes its btree index with it.
+ */
+const dropRankCompanionIfColumnsChanged = (sql: SqlExec, rankTable: string, sortColumns: ReadonlyArray<string>): void => {
+    const held = runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(rankTable)})`)
+        .toArray()
+        .map((column) => column.name)
+        .filter((name) => name.startsWith("__sort_k"));
+
+    // An absent table reports no columns, so there is nothing to drop.
+    if (held.length > 0 && (held.length !== sortColumns.length || held.some((name, i) => name !== sortColumns[i]))) {
+        runDrizzle(sql, dsql`DROP TABLE ${dsql.identifier(rankTable)}`);
+    }
+};
+
+/**
  * Create the rank companion tables + their sorted btree index for a table's
  * `rankIndex` declarations. One row per source row keyed by `__id__`; the index
  * on `(__partition__, __sort_k0__, …, __id__)` answers `rank()` in O(log n).
@@ -373,6 +394,8 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
         const columnDdls = sortColumns.map((column) => dsql`${dsql.identifier(column)} BLOB`);
         const columnPart = columnDdls.length > 0 ? dsql`, ${dsql.join(columnDdls, dsql`, `)}` : dsql``;
+
+        dropRankCompanionIfColumnsChanged(sql, rankTable, sortColumns);
 
         runDrizzle(
             sql,
@@ -392,7 +415,11 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
 
         const btreeName = `${tableName}__rank_${index.name}__btree`;
 
-        runDrizzle(sql, createIndexSql(btreeName, rankTable, dsql.join(orderedColumns, dsql`, `), false));
+        const btreeColumns = dsql.join(orderedColumns, dsql`, `);
+
+        // A flipped sort direction changes the btree's column list under the same name.
+        dropIndexIfShapeChanged(sql, btreeName, rankTable, btreeColumns, false, []);
+        runDrizzle(sql, createIndexSql(btreeName, rankTable, btreeColumns, false));
     }
 };
 
