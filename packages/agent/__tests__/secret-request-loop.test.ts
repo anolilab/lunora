@@ -21,8 +21,8 @@ const OWNER = "user-a";
 /** The agent's default `approvalTimeout`: the request's deadline, which the wait outlasts by the grace. */
 const DEADLINE_MS = 3 * 24 * 60 * 60 * 1000;
 const WAIT_GRACE_MS = 60 * 1000;
-/** The value's lifetime in the store (`AGENT_SECRET_TTL_MS`), past which a take refuses. */
-const VALUE_TTL_MS = 15 * 60 * 1000;
+/** Past the value's lifetime: it is takeable until the request's deadline plus the grace, within the store's ceiling. */
+const PAST_VALUE_LIFETIME_MS = DEADLINE_MS + WAIT_GRACE_MS + 1;
 
 /**
  * Durable-step double for the secret wait: a pre-delivered event resolves the
@@ -391,7 +391,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         await pauseAt(agent, journal, runtime, generate);
         await host.supply("call_1", SECRET);
-        host.advanceClock(VALUE_TTL_MS + 1);
+        host.advanceClock(PAST_VALUE_LIFETIME_MS);
 
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 

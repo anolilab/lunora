@@ -41,17 +41,21 @@ const fakeAgents = (fail?: Error): Caller => {
  * reference store. `afterPut` runs once the host has accepted a value, which is
  * where a test injects the deadline passing or a concurrent settle.
  */
-const spyStore = (afterPut?: () => void): { discarded: string[]; puts: string[]; store: SecretValueHost } => {
-    const { secretValues } = createReferenceHost();
+const spyStore = (
+    afterPut?: () => void,
+    reference: ReturnType<typeof createReferenceHost> = createReferenceHost(),
+): { advanceClock: (ms: number) => void; discarded: string[]; puts: string[]; store: SecretValueHost } => {
+    const { secretValues, advanceClock } = reference;
 
-    if (secretValues === undefined) {
-        throw new Error("the reference host must provide a secret store");
+    if (secretValues === undefined || advanceClock === undefined) {
+        throw new Error("the reference host must provide a secret store and a clock");
     }
 
     const puts: string[] = [];
     const discarded: string[] = [];
 
     return {
+        advanceClock,
         discarded,
         puts,
         store: {
@@ -82,7 +86,13 @@ const call = async (fn: unknown, context: unknown, args: Record<string, unknown>
  * `call_1` whose consumer is `charge`. The request row and the marker are written
  * the way the loop writes them.
  */
-const stagedThread = async (owner: string | undefined, store?: SecretValueHost, caller: Caller = fakeAgents(), label?: string) => {
+const stagedThread = async (
+    owner: string | undefined,
+    store?: SecretValueHost,
+    caller: Caller = fakeAgents(),
+    label?: string,
+    deadlineMs: number = DEADLINE_MS,
+) => {
     const { functions } = agentComponent();
     const { database, rows } = fakeDatabase();
     const ctx = { agentSecrets: store, agents: caller.agents, auth: { userId: owner }, db: database };
@@ -90,7 +100,7 @@ const stagedThread = async (owner: string | undefined, store?: SecretValueHost, 
     await call(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", ...(owner === undefined ? {} : { owner }) });
     await call(functions.agentOpenSecretRequest, ctx, {
         consumerTool: "charge",
-        expiresAt: Date.now() + DEADLINE_MS,
+        expiresAt: Date.now() + deadlineMs,
         instanceId: "wf-1",
         ...(label === undefined ? {} : { label }),
         threadKey: "t-1",
@@ -123,6 +133,48 @@ const requestRow = (rows: ReadonlyMap<string, ReadonlyArray<Record<string, unkno
     return row;
 };
 
+const take = (functions: ReturnType<typeof agentComponent>["functions"], ctx: unknown, args: Record<string, unknown>): Promise<unknown> =>
+    call(functions.agentTakeSecret, ctx, args);
+
+/**
+ * Runs a mutation the way the host does: its database writes are one transaction, so a
+ * throw restores every row the mutation touched. The secret store sits outside that
+ * transaction and is not restored, which is exactly the split the supply path has to handle.
+ */
+const inTransaction = async (rows: ReturnType<typeof fakeDatabase>["rows"], run: () => Promise<unknown>): Promise<unknown> => {
+    const before = structuredClone(rows);
+
+    try {
+        return await run();
+    } catch (error: unknown) {
+        rows.clear();
+
+        for (const [table, content] of before) {
+            rows.set(table, content);
+        }
+
+        throw error;
+    }
+};
+
+/** Agents whose wake-up is delivered and then fails to acknowledge, as a dropped response would. */
+const ackLostAgents = (): Caller => {
+    const sent: Caller["sent"] = [];
+
+    return {
+        agents: {
+            support: {
+                sendEvent: async (id, event) => {
+                    sent.push({ event, id });
+
+                    throw new Error("ack lost after delivery");
+                },
+            },
+        },
+        sent,
+    };
+};
+
 /** A promise the test settles on demand, so an interleaving is held at a known point. */
 const deferred = (): { promise: Promise<void>; resolve: () => void } => {
     let settle: () => void = () => undefined;
@@ -138,8 +190,8 @@ const deferred = (): { promise: Promise<void>; resolve: () => void } => {
     };
 };
 
-const take = (functions: ReturnType<typeof agentComponent>["functions"], ctx: unknown, args: Record<string, unknown>): Promise<unknown> =>
-    call(functions.agentTakeSecret, ctx, args);
+/** Long enough that the 15-minute store TTL is not the bound on the value's lifetime. */
+const LONG_DEADLINE_MS = 60 * 60 * 1000;
 
 describe("secret request component", () => {
     beforeEach(() => {
@@ -306,24 +358,53 @@ describe("secret request component", () => {
             expect(requestRow(rows)["status"]).toBe("pending");
         });
 
-        it("discards the stored value when the wake-up never lands, then rethrows", async () => {
-            expect.assertions(3);
+        it("keeps the committed supply when the wake-up was delivered but its acknowledgement failed", async () => {
+            expect.assertions(4);
 
             const { store, discarded } = spyStore();
-            const { ctx, functions } = await stagedThread("user-a", store, fakeAgents(new Error("dispatch down")));
+            const caller = ackLostAgents();
+            const { ctx, functions, rows } = await stagedThread("user-a", store, caller);
 
-            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toThrow("dispatch down");
-            expect(discarded).toHaveLength(1);
+            await expect(
+                inTransaction(rows, () => call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })),
+            ).resolves.toStrictEqual({ resolved: true });
+            expect(caller.sent).toHaveLength(1);
+            expect(discarded).toStrictEqual([]);
+            await expect(
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBe(SECRET);
+        });
 
-            const [ref] = discarded;
+        it("keeps the supply when the wake-up never landed, and honours it once the wait times out", async () => {
+            expect.assertions(4);
 
-            await expect(store.take(ref as string, { claimant: "tool:charge:call_2", scope: "t-1" })).resolves.toBeUndefined();
+            const reference = createReferenceHost();
+            const { advanceClock, store, discarded } = spyStore(undefined, reference);
+            const { ctx, functions, rows } = await stagedThread("user-a", store, fakeAgents(new Error("dispatch down")), undefined, LONG_DEADLINE_MS);
+
+            await expect(
+                inTransaction(rows, () => call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })),
+            ).resolves.toStrictEqual({
+                resolved: true,
+            });
+
+            // Past the 15-minute default: the wait only ends at the request's deadline, so the value must still be there then.
+            advanceClock(30 * 60 * 1000);
+
+            await expect(call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                status: "supplied",
+            });
+            await expect(
+                take(functions, ctx, { instanceId: "wf-1", claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "t-1", toolCallId: "call_1" }),
+            ).resolves.toBe(SECRET);
+            expect(discarded).toStrictEqual([]);
         });
 
         it("refuses a supply that a newer run reopened during the store write, discards its value, and leaves the newer request pending", async () => {
             expect.assertions(4);
 
-            const { discarded, store } = spyStore();
+            const reference = createReferenceHost();
+            const { discarded, store } = spyStore(undefined, reference);
             const storing = deferred();
             const storeStarted = deferred();
             const gatedStore: SecretValueHost = {

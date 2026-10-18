@@ -6,7 +6,7 @@ import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
-import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, asInternal, definedColumns } from "./component-shared";
+import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, asInternal, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 import type { EnsureThreadOutcome } from "./types";
@@ -454,6 +454,13 @@ const secretRequestOf = async (database: QueueDatabase, threadKey: string, toolC
 
     return request ?? undefined;
 };
+
+/**
+ * How long a supplied value must stay takeable: until the wait it may be waking has
+ * ended, which is the request deadline plus the wait's grace. The store clamps the
+ * result to its own ceiling, so a deadline beyond that ceiling still loses the value.
+ */
+const secretValueTtlMs = (expiresAt: number, now: number): number => Math.max(AGENT_SECRET_TTL_MS, expiresAt + SECRET_WAIT_GRACE_MS - now);
 
 /**
  * The request row, which must still be open for an answer: pending and before its
@@ -1378,7 +1385,7 @@ export const agentComponent = (): AgentComponent => {
             let ref: string;
 
             try {
-                ref = await store.put(args.secret, { scope: args.threadKey, ttlMs: AGENT_SECRET_TTL_MS });
+                ref = await store.put(args.secret, { scope: args.threadKey, ttlMs: secretValueTtlMs(checked["expiresAt"] as number, Date.now()) });
             } catch (error: unknown) {
                 if (error instanceof SecretValueTooLargeError) {
                     throw new LunoraError("PAYLOAD_TOO_LARGE", error.message);
@@ -1400,12 +1407,18 @@ export const agentComponent = (): AgentComponent => {
                 await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
                 // Retire the marker in this same mutation, so the UI stops offering the form.
                 await context.db.delete(marker["_id"] as never);
-                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
             } catch (error: unknown) {
-                // Nothing will consume the value: the row never moved or the wake never landed.
+                // The row did not move to `supplied`, so nothing will consume the value.
                 await store.discard(ref);
 
                 throw error;
+            }
+
+            try {
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
+            } catch {
+                // Deliberately not rethrown: the supply is committed, and the wait settles at its
+                // deadline and honours it. The cost is that a lost wake resumes the run late.
             }
 
             return { resolved: true };
