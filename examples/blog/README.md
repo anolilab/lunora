@@ -35,7 +35,7 @@ pnpm install
 pnpm --filter @lunora-example/blog dev
 ```
 
-The dev server listens on <http://localhost:5175>.
+The dev server listens on the port it prints (<http://localhost:5175> in the main checkout).
 
 ## Key snippets
 

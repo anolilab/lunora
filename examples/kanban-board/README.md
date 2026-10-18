@@ -40,7 +40,7 @@ pnpm install
 pnpm --filter @lunora-example/kanban-board dev
 ```
 
-Vite + Wrangler in Miniflare; open <http://localhost:5173> in two windows and
+Vite + Wrangler in Miniflare; open the URL the dev server prints (<http://localhost:5173> in the main checkout) in two windows and
 drag a card in one.
 
 ## Key snippets

@@ -5,6 +5,10 @@ import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 
+import { devPortsFor, shiftedPort } from "../../shared/dev-ports";
+
+const ports = devPortsFor(process.env);
+
 /**
  * Tells the SSR loader which origin to call Lunora on.
  *
@@ -22,7 +26,7 @@ const ssrOrigin = (): Plugin => ({
 
         // `--port` is merged into the config before plugin `config` hooks run,
         // so this is the port the server will actually bind.
-        const port = userConfig.server?.port ?? 5173;
+        const port = userConfig.server?.port ?? ports.playground;
 
         return { define: { "import.meta.env.VITE_LUNORA_URL": JSON.stringify(`http://localhost:${port}`) } };
     },
@@ -45,7 +49,18 @@ const ssrOrigin = (): Plugin => ({
  * everything else to the TanStack Start SSR handler.
  */
 export default defineConfig({
-    plugins: [cloudflare({ inspectorPort: 9233, viteEnvironment: { name: "ssr" } }), tanstackStart(), react(), lunora({ cloudflare: false }), ssrOrigin()],
+    plugins: [
+        cloudflare({ inspectorPort: shiftedPort(9233, ports), viteEnvironment: { name: "ssr" } }),
+        tanstackStart(),
+        react(),
+        lunora({ cloudflare: false }),
+        ssrOrigin(),
+    ],
+    server: {
+        // Pinned, and strict, so the SSR origin above never disagrees with the port the server binds.
+        port: ports.playground,
+        strictPort: true,
+    },
     resolve: {
         // Vite 8 resolves tsconfig paths natively.
         tsconfigPaths: true,
