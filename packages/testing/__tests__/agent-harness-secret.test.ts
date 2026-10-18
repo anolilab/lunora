@@ -109,6 +109,36 @@ describe("agentHarness — requestSecretTool", () => {
     });
 });
 
+describe("agentHarness — journal order", () => {
+    it("lists a step recorded after a delivered wait after that wait, in write order", async () => {
+        expect.assertions(2);
+
+        const harness = agentHarness(billingAgent([]), {
+            script: [toolCallTurn("call_1", "requestKey", {}), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+        });
+
+        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+
+        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.supply("thread-1", "call_1", SECRET);
+
+        await expect(run).resolves.toMatchObject({ stopped: "final" });
+
+        // The write order: the request step, the wait it parks on, then the steps that run after the delivery.
+        expect(harness.journalEntries().map((entry) => `${(entry as { kind: string }).kind}:${(entry as { name: string }).name}`)).toStrictEqual([
+            "step:llm:turn:0",
+            "step:secret:request:call_1",
+            "wait:secret:call_1",
+            "step:secret:settle:call_1",
+            "step:llm:turn:1",
+            "step:secret:consume:tool:charge:call_2:call_1",
+            "step:secret:discard:tool:charge:call_2:call_1",
+            "step:tool:charge:call_2",
+            "step:llm:turn:2",
+        ]);
+    });
+});
+
 describe("agentHarness — concurrent runs", () => {
     it("keeps two runs that wait on the same event name apart", async () => {
         expect.assertions(3);

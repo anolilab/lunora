@@ -143,10 +143,10 @@ interface AgentHarness {
     expire: (instanceId: string, name: string) => void;
 
     /**
-     * Every journal entry the runs have written, in order: each memoized step
-     * output (`{ kind: "step", name, output }`) and each delivered wait payload
-     * (`{ kind: "wait", name, type, payload }`). A test asserts a secret is absent
-     * from this, as it must be from the durable journal.
+     * Every journal entry the runs have written, in the order they were written:
+     * each completed step's output (`{ kind: "step", name, output }`) and each
+     * delivered wait payload (`{ kind: "wait", name, type, payload }`). A test
+     * asserts a secret is absent from this, as it must be from the durable journal.
      */
     journalEntries: () => unknown[];
 
@@ -209,6 +209,7 @@ class DurableStepJournal implements AgentStepLike {
     public constructor(
         private readonly waits: WaitRegistry,
         private readonly instanceId: string,
+        private readonly journal: unknown[],
     ) {}
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
@@ -223,6 +224,7 @@ class DurableStepJournal implements AgentStepLike {
         const output = await callback();
 
         this.entries.set(name, { output });
+        this.journal.push({ kind: "step", name, output });
 
         return output;
     }
@@ -231,13 +233,6 @@ class DurableStepJournal implements AgentStepLike {
         const payload = await this.waits.wait(this.instanceId, name, options.type);
 
         return { payload: payload as Readonly<T>, type: options.type };
-    }
-
-    /** The memoized step outputs, as the durable journal persists them. */
-    public steps(): { kind: "step"; name: string; output: unknown }[] {
-        return [...this.entries].map(([name, entry]) => {
-            return { kind: "step" as const, name, output: entry.output };
-        });
     }
 }
 
@@ -540,16 +535,11 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
     const env = options.env ?? { LUNORA_TEST: true };
     const secrets = options.secrets ?? createFakeSecretValues();
     const runtime = createRuntime(options.functions ?? {}, secrets);
-    const waits = new WaitRegistry();
-    const journals: DurableStepJournal[] = [];
+    // Steps and delivered waits share one list, so the journal reads in the order the run wrote them.
+    const journal: unknown[] = [];
+    const waits = new WaitRegistry(journal);
 
-    const newJournal = (instanceId: string): DurableStepJournal => {
-        const journal = new DurableStepJournal(waits, instanceId);
-
-        journals.push(journal);
-
-        return journal;
-    };
+    const newJournal = (instanceId: string): DurableStepJournal => new DurableStepJournal(waits, instanceId, journal);
 
     let runCount = 0;
 
@@ -615,12 +605,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         expire: (instanceId: string, name: string) => {
             waits.expire(instanceId, name);
         },
-        journalEntries: (): unknown[] => [
-            ...journals.flatMap((journal) => journal.steps()),
-            ...waits.records.map((record) => {
-                return { kind: "wait", ...record };
-            }),
-        ],
+        journalEntries: (): unknown[] => [...journal],
         messages: (threadKey: string): AgentMessageRow[] =>
             [...runtime.messages.values()]
                 .filter((message) => message.threadKey === threadKey)
