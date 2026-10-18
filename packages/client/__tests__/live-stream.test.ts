@@ -644,6 +644,53 @@ describe("connectLiveStream", () => {
         live.close();
     });
 
+    it("does not send a control call that was queued behind one close() cancelled", async () => {
+        expect.assertions(1);
+
+        const controls: ControlCall[] = [];
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                return Promise.resolve(new FakeStream("c1").response);
+            }
+
+            const body = init?.body;
+
+            controls.push((typeof body === "string" ? JSON.parse(body) : {}) as ControlCall);
+
+            // Held until the signal aborts, as a real fetch is.
+            return new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("aborted", "AbortError"));
+                });
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+
+        await live.ready;
+
+        const release = live.subscribe({ id: "s1", topic: "feed" });
+
+        await vi.waitFor(() => {
+            if (controls.length === 0) {
+                throw new Error("subscribe not sent yet");
+            }
+        });
+
+        // The unsubscribe queues behind the stalled subscribe; close() cancels that subscribe.
+        release();
+        live.close();
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(controls.map((call) => call.action)).toEqual(["subscribe"]);
+    });
+
     it("generates an id that skips one a caller already holds", async () => {
         expect.assertions(2);
 

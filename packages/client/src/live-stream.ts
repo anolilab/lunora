@@ -234,7 +234,9 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     /** Queue a control call behind the previous one for the same subscription id. */
     const control = (subscriptionId: string, body: Record<string, unknown>): Promise<number | undefined> => {
         const previous = controlChains.get(subscriptionId) ?? Promise.resolve();
-        const run = previous.then(() => postControl(body));
+        // A call still queued when `close()` runs is dropped: `close()` only cancels the request already in flight.
+        // A call still queued when `close()` runs is dropped: `close()` only cancels the request already in flight.
+        const run = previous.then(() => (isClosed() ? undefined : postControl(body)));
         const tail = run.then(
             () => undefined,
             () => undefined,
