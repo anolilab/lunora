@@ -71,6 +71,7 @@ import type {
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget, vectorizeDimensionDiagnostics } from "./platform-target";
+import { findProjectConfigFile } from "./project-config-path";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
@@ -263,7 +264,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // consulted by nothing, so e.g. a durable stream on `target: "node"` emitted
     // its full surface and silently behaved as ephemeral, and a declared cron
     // built green on a host where no runtime dispatches one.
-    const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
+    const codeSignals = discoverPlatformSignals(project, lunoraDirectory, findProjectConfigFile(projectRoot));
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
     const usage = discoverFeatureUsage(project, lunoraDirectory);
 

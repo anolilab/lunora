@@ -203,7 +203,7 @@ const declarationSignal = (sourceFile: SourceFile, call: CallExpression): keyof 
 
 /**
  * Discover the AST-only platform signals in one pass over the `lunora/`
- * source set.
+ * source set, plus the project's `lunora.config.*` for the app hook.
  *
  * `durableStreams` matches any `stream(...)` call — the bare `stream({ … })`
  * form and the builder terminal `.stream(handler, { durable: true })` alike —
@@ -220,7 +220,7 @@ const declarationSignal = (sourceFile: SourceFile, call: CallExpression): keyof 
  * feature does not run the declaration without it — it fails — so a missed
  * declaration is worse than an over-reported one.
  */
-const discoverPlatformSignals = (project: Project, lunoraDirectory: string): PlatformCodeSignals => {
+const discoverPlatformSignals = (project: Project, lunoraDirectory: string, projectConfigFile?: string): PlatformCodeSignals => {
     const signals: PlatformCodeSignals = {
         containerEgressPolicy: false,
         deliveryAuthorization: false,
@@ -255,6 +255,17 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
         if (Object.values(signals).every(Boolean)) {
             break;
         }
+    }
+
+    // The `app` hook lives in `lunora.config.*` at the project root, outside
+    // `lunora/`, so the walk above never reaches it. Only the builder call is
+    // read here: the name-only declarations are a `lunora/` concern.
+    if (!signals.deliveryAuthorization && projectConfigFile !== undefined) {
+        const configFile = project.getSourceFile(projectConfigFile) ?? project.addSourceFileAtPath(projectConfigFile);
+
+        signals.deliveryAuthorization = configFile
+            .getDescendantsOfKind(SyntaxKind.CallExpression)
+            .some((call) => isDeliveryAuthorizationCall(configFile, call));
     }
 
     return signals;

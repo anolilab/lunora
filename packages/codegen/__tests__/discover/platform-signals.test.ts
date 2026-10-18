@@ -56,15 +56,21 @@ describe("discoverPlatformSignals", () => {
         expect(signals().typedWebSockets).toBe(true);
     });
 
-    it("flags a `.deliveryAuthorization(...)` call on the app builder", () => {
-        expect.assertions(1);
+    it("flags a `.deliveryAuthorization(...)` call in the lunora.config.* app hook", () => {
+        expect.assertions(2);
 
-        write(
-            "app.ts",
-            `export const lunoraConfig = { app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined) };\n`,
+        // The hook lives at the project root, outside `lunora/`, so the config
+        // file is handed in explicitly rather than found by the walk.
+        const configFile = join(workdir, "lunora.config.ts");
+
+        writeFileSync(
+            configFile,
+            `export default {\n    target: "node",\n    app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined),\n};\n`,
+            "utf8",
         );
 
-        expect(signals().deliveryAuthorization).toBe(true);
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(true);
+        expect(signals().deliveryAuthorization).toBe(false);
     });
 
     it("flags `.deliveryAuthorization(...)` chained directly from the defineApp() factory, or on a local bound to it", () => {

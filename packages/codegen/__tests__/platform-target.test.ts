@@ -813,15 +813,19 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     it("withholds the .deliveryAuthorization() builder on node and celld, and keeps it on cloudflare", () => {
         expect.assertions(9);
 
-        // A call in `lunora/` is the signal. The builder method is emitted whether
-        // or not the app calls it, so node and celld withhold it even when no
-        // diagnostic is raised for an app that never uses it (checked below).
-        write(
-            "delivery.ts",
-            `export const lunoraConfig = { app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined) };\n`,
-        );
+        // The real shape: the hook sits in `lunora.config.*` at the project root,
+        // outside `lunora/`. The builder method is emitted whether or not the app
+        // calls it, so node and celld withhold it even when no diagnostic is raised
+        // for an app that never uses it (checked below).
+        const configWith = (target: string): void => {
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default {\n    target: "${target}",\n    app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined),\n};\n`,
+                "utf8",
+            );
+        };
 
-        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+        configWith("node");
         const node = codegen();
 
         expect(node.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
@@ -830,13 +834,13 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(node.generated.app).not.toContain("public deliveryAuthorization(");
         expect(node.generated.app).not.toContain("deliveryAuthorization: this.deliveryAuthorizationSelector");
 
-        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+        configWith("celld");
         const celld = codegen();
 
         expect(celld.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(celld.generated.app).not.toContain("public deliveryAuthorization(");
 
-        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+        configWith("cloudflare");
         const cloudflare = codegen();
 
         expect(cloudflare.platformDiagnostics).toStrictEqual([]);
@@ -864,7 +868,10 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         // The method is target-keyed, so the surface is withheld for every app on
         // a host that cannot back it. But an app that never calls it has nothing to
-        // be told: silence there matches every other unused capability.
+        // be told: silence there matches every other unused capability. The config
+        // carries an `app` hook that makes no such call, so the config-file scan is
+        // exercised and still finds nothing.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default {\n    target: "node",\n    app: (app: unknown) => app,\n};\n`, "utf8");
         const result = codegen();
 
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).not.toContain("platform_unsupported_feature");
