@@ -16,6 +16,7 @@ import {
     PINNED_PORT_BASES,
     resolveDevPorts,
     shiftedPort,
+    staleDevOrigin,
 } from "../../../shared/dev-ports";
 
 const OFFSET_RANGE = 2999;
@@ -205,5 +206,24 @@ describe("findCheckoutRoot", () => {
         const bare = tempRepo();
 
         expect(findCheckoutRoot(bare)).toBeUndefined();
+    });
+});
+
+describe("staleDevOrigin", () => {
+    const origin = (value: string, quote = ""): string => `LUNORA_ORIGIN_URL=${quote}${value}${quote}`;
+
+    it("reports a loopback origin on another port, quoted or bare", () => {
+        expect.hasAssertions();
+        expect(staleDevOrigin(`${origin("http://localhost:5173", '"')}\n`, 7309)).toBe("http://localhost:5173");
+        expect(staleDevOrigin(`A=1\n${origin("http://127.0.0.1:5173")} # dev\n`, 7309)).toBe("http://127.0.0.1:5173");
+    });
+
+    it("stays silent when the port matches, the host is remote, or the variable is absent or commented out", () => {
+        expect.hasAssertions();
+        expect(staleDevOrigin(origin("http://localhost:7309", '"'), 7309)).toBeUndefined();
+        expect(staleDevOrigin(origin("https://app.example.com", '"'), 7309)).toBeUndefined();
+        expect(staleDevOrigin("AUTH_URL=http://localhost:5173", 7309)).toBeUndefined();
+        expect(staleDevOrigin(`# ${origin("http://localhost:5173")}`, 7309)).toBeUndefined();
+        expect(staleDevOrigin("LUNORA_ORIGIN_URL=", 7309)).toBeUndefined();
     });
 });
