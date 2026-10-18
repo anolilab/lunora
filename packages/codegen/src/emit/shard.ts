@@ -77,9 +77,6 @@ interface EmitShardOptions {
     /** The project declares at least one `defineRoom` — wires the `LUNORA_ROOMS` topic→path resolution in the `roomHandlerPath` override. */
     hasRooms?: boolean;
 
-    /** The project declares at least one `defineWebSocket` route — wires the `LUNORA_SOCKETS` path→registration resolution in the `socketRoute` override. */
-    hasSockets?: boolean;
-
     /**
      * The target can hold a human-supplied secret value AND the app imports
      * `requestSecretTool`. Wires `agentSecrets` onto the ctx alongside `agents`; with
@@ -89,6 +86,9 @@ interface EmitShardOptions {
 
     /** A function declares a `v.sensitive` argument — wires the `sensitiveArgNames` override so the request log masks it. */
     hasSensitiveArgs?: boolean;
+
+    /** The project declares at least one `defineWebSocket` route — wires the `LUNORA_SOCKETS` path→registration resolution in the `socketRoute` override. */
+    hasSockets?: boolean;
 
     /**
      * The target platform supports a vector store. `false` withholds the whole
