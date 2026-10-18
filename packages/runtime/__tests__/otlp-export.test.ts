@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OTLP_GZIP_THRESHOLD, otlpSend } from "../src/otlp-export";
+import type { ObservabilityEvent } from "../src/observability";
+import { OTLP_GZIP_THRESHOLD, otlpSend, otlpTraceBody } from "../src/otlp-export";
 
 /** Pull the request headers off a recorded `fetch` call. */
 const headersOf = (init: RequestInit): Record<string, string> => (init.headers ?? {}) as Record<string, string>;
@@ -94,5 +95,31 @@ describe("otlpSend gzip threshold", () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(headersOf((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1])["content-encoding"]).toBeUndefined();
+    });
+});
+
+describe("otlpTraceBody error internal context", () => {
+    const failed = (internal?: Record<string, unknown>): ObservabilityEvent => {return {
+        durationMs: 3,
+        error: { code: "INTERNAL", message: "boom", status: 500, ...(internal === undefined ? {} : { internal }) },
+        functionPath: "orders:place",
+        ok: false,
+        traceFlags: 1,
+        traceId: "0af7651916cd43dd8448eb211c80319c",
+    }};
+
+    it("exports the redacted internal context on the exception event for the operator's collector", () => {
+        expect.assertions(2);
+
+        const body = JSON.stringify(otlpTraceBody(failed({ region: "eu-west-replica" }), 1_000_000));
+
+        expect(body).toContain("lunora.error.internal");
+        expect(body).toContain("eu-west-replica");
+    });
+
+    it("adds no internal attribute when the event carries none", () => {
+        expect.assertions(1);
+
+        expect(JSON.stringify(otlpTraceBody(failed(), 1_000_000))).not.toContain("lunora.error.internal");
     });
 });

@@ -89,7 +89,9 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
  * eight `sdks/*` ports narrow the slot this way and are held to
  * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
  */
-const errorEnvelopeOf = (body: unknown): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string } | undefined => {
+const errorEnvelopeOf = (
+    body: unknown,
+): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string; why?: string } | undefined => {
     const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
 
     return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
@@ -148,7 +150,14 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
 };
 
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
-const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): LunoraClientError => {
+const reconstructError = (errorBody: {
+    code?: string;
+    data?: unknown;
+    docsUrl?: string;
+    hint?: string | string[];
+    message?: string;
+    why?: string;
+}): LunoraClientError => {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;
@@ -171,6 +180,10 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
 
     if (errorBody.docsUrl !== undefined) {
         error.docsUrl = errorBody.docsUrl;
+    }
+
+    if (errorBody.why !== undefined) {
+        error.why = errorBody.why;
     }
 
     return error;
@@ -221,7 +234,7 @@ const slotError = (inner: { error?: unknown }): LunoraClientError => {
  * forward-compat/unknown server codes assignable without losing autocomplete on
  * the known `LunoraErrorCode` union.
  */
-type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[] };
+type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[]; why?: string };
 
 export {
     buildStreamError,

@@ -263,6 +263,52 @@ describe("observabilitySink", () => {
             await expect(response.text()).resolves.not.toContain("stack");
         });
 
+        it("forwards the shard's internal context to the sink, redacted, and never to the client", async () => {
+            expect.assertions(5);
+
+            const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+            const { events, sink } = collectEvents();
+            const detail = {
+                code: "CONFLICT",
+                internal: { password: `${SENTINEL}-pw`, region: SENTINEL },
+                message: "stale",
+                name: "LunoraError",
+            };
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async () =>
+                            Response.json(
+                                { error: { code: "CONFLICT", message: "stale" } },
+                                { headers: { "x-lunora-error-detail": encodeURIComponent(JSON.stringify(detail)) }, status: 409 },
+                            ),
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ observability: sink, shardDO: namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:send" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+            const sinkInternal = events[0]!.error?.internal;
+
+            // The sink gets the context, with the credential-named field masked.
+            expect(sinkInternal).toMatchObject({ region: SENTINEL });
+            expect(sinkInternal?.password).not.toBe(`${SENTINEL}-pw`);
+            // The client gets neither the header nor the value in the body.
+            expect(response.headers.get("x-lunora-error-detail")).toBeNull();
+            expect(JSON.stringify([...response.headers])).not.toContain(SENTINEL);
+            await expect(response.text()).resolves.not.toContain(SENTINEL);
+        });
+
         it("reports ok=false with the thrown error when the fetch throws", async () => {
             expect.assertions(6);
 
@@ -375,5 +421,37 @@ describe("observabilitySink", () => {
 
             expect(response.status).toBe(200);
         });
+    });
+});
+
+describe("observabilitySink: error.internal reaches sinks, redacted", () => {
+    it("hands a sink the internal context with secret-shaped values masked", () => {
+        expect.assertions(3);
+
+        const { events, sink } = collectEvents();
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: { code: "INTERNAL", internal: { password: "not-a-real-credential", region: "eu-west-replica" }, message: "boom", status: 500 }, // gitleaks:allow -- test fixture, not a credential
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        expect(events).toHaveLength(1);
+        // A plain operator value passes through untouched...
+        expect(events[0]?.error?.internal).toMatchObject({ region: "eu-west-replica" });
+        // ...and a credential-named field is masked before the sink sees it.
+        expect(events[0]?.error?.internal?.password).not.toBe("not-a-real-credential"); // gitleaks:allow -- test fixture, not a credential
+    });
+
+    it("leaves an event without internal untouched", () => {
+        expect.assertions(1);
+
+        const { events, sink } = collectEvents();
+        const event: ObservabilityEvent = { durationMs: 1, error: { code: "CONFLICT", message: "stale", status: 409 }, functionPath: "x:y", ok: false };
+
+        emitRpcEvent(sink, event);
+
+        expect(events[0]).toBe(event);
     });
 });

@@ -23,6 +23,12 @@ const MAX_STACK_LENGTH = 8192;
 export interface ErrorDetail {
     /** The `LunoraError` taxonomy code, when the thrown value carries one. */
     code?: string;
+    /**
+     * The operator-only `internal` context of a `LunoraError`, when it is JSON-safe.
+     * Attached by the shard only on the detail header (see {@link describeInternal}),
+     * never by {@link describeError}, so it cannot leak into a log-event `error`.
+     */
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;
@@ -42,6 +48,34 @@ export const describeError = (error: unknown): ErrorDetail => {
         name: error.name,
         ...(error.stack === undefined ? {} : { stack: error.stack.slice(0, MAX_STACK_LENGTH) }),
     };
+};
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The operator-only `internal` context of a thrown `Error` (a `LunoraError`'s), for the
+ * detail header alone. `undefined` unless it is a plain object that survives
+ * `JSON.stringify`: a bigint or a cycle would otherwise throw inside the header encode,
+ * failing the very response the detail describes.
+ */
+export const describeInternal = (error: unknown): Record<string, unknown> | undefined => {
+    if (!(error instanceof Error)) {
+        return undefined;
+    }
+
+    const { internal } = error as { internal?: unknown };
+
+    if (!isPlainRecord(internal)) {
+        return undefined;
+    }
+
+    try {
+        JSON.stringify(internal);
+
+        return internal;
+    } catch {
+        return undefined;
+    }
 };
 
 /**
@@ -80,8 +114,8 @@ const TRUNCATED_MESSAGE_LENGTH = 1024;
 
 /**
  * Header-safe (ASCII) encoding of an {@link ErrorDetail}, at most
- * {@link MAX_ENCODED_LENGTH} characters: over it, the stack is dropped and the
- * message and name truncated, which always fits.
+ * {@link MAX_ENCODED_LENGTH} characters: over it, the stack and `internal` are dropped
+ * and the message and name truncated, which always fits.
  */
 export const encodeErrorDetail = (detail: ErrorDetail): string => {
     const encoded = encodeURIComponent(JSON.stringify(detail));
@@ -108,7 +142,14 @@ export const decodeErrorDetail = (value: null | string | undefined): ErrorDetail
     try {
         const parsed = JSON.parse(decodeURIComponent(value)) as Partial<ErrorDetail> | null;
 
-        return typeof parsed?.message === "string" && typeof parsed.name === "string" ? (parsed as ErrorDetail) : undefined;
+        if (typeof parsed?.message !== "string" || typeof parsed.name !== "string") {
+            return undefined;
+        }
+
+        // A non-object `internal` is malformed: drop it, keep the rest of the detail.
+        const { internal, ...rest } = parsed as ErrorDetail;
+
+        return isPlainRecord(internal) ? { ...rest, internal } : rest;
     } catch {
         return undefined;
     }

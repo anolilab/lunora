@@ -13,6 +13,8 @@
  */
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
+import { redactArgs } from "@lunora/observability";
+
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
@@ -37,6 +39,13 @@ export interface ObservabilityEvent {
      */
     error?: {
         code: string;
+
+        /**
+         * Operator-only context from the thrown `LunoraError`'s `internal`. Sinks only:
+         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactArgs`
+         * before a sink sees it.
+         */
+        internal?: Record<string, unknown>;
         message: string;
         name?: string;
         stack?: string;
@@ -312,7 +321,15 @@ export const emitRpcEvent = (
     }
 
     try {
-        sink.onRpc(event, context);
+        // The one place `error.internal` is redacted on its way to a sink: every RPC event
+        // (single-shard, batch, fan-out, worker-side) passes through here.
+        const internal = event.error?.internal;
+        const outgoing =
+            event.error === undefined || internal === undefined
+                ? event
+                : { ...event, error: { ...event.error, internal: redactArgs(internal) as Record<string, unknown> } };
+
+        sink.onRpc(outgoing, context);
     } catch {
         // Swallow — a buggy sink must not break user-facing dispatch. We
         // deliberately do not console.error here either: in a Workers runtime

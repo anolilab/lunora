@@ -265,7 +265,14 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import type { ErrorDetail } from "../../../shared/error-detail";
-import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import {
+    describeError,
+    describeInternal,
+    encodeErrorDetail,
+    ERROR_DETAIL_HEADER,
+    findLoggedError,
+    WANT_ERROR_DETAIL_HEADER,
+} from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
@@ -8564,7 +8571,11 @@ abstract class ShardDO {
             // The body is redacted for the client; the worker that asked gets the
             // real error (stack included) for its `onRpc` sinks, and strips it.
             if (request.headers.get(WANT_ERROR_DETAIL_HEADER) === "1") {
-                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail(describeError(error)));
+                // `internal` is attached HERE and nowhere else: `describeError` also feeds
+                // the log-event `error`, which the client-visible log surfaces would read.
+                const internal = describeInternal(error);
+
+                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail({ ...describeError(error), ...(internal === undefined ? {} : { internal }) }));
             }
 
             return errorResponse;

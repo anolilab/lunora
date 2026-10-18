@@ -21,6 +21,7 @@ export interface LunoraErrorLike extends Error {
     status: number;
     /** Wire brand that distinguishes real `LunoraError`s from foreign errors. */
     type: "VisulimaError";
+    why?: string;
 }
 
 /**

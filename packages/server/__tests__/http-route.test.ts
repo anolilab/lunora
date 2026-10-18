@@ -14,6 +14,26 @@ const dispatch = async (route: LunoraRouteHandler, method: string, path: string,
     return app.fetch(request, { __lunoraCtx: context });
 };
 
+describe("httpRoute error response", () => {
+    it("keeps a LunoraError's operator-only internal context out of the response", async () => {
+        expect.assertions(4);
+
+        const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+        const route = httpRoute.get("/api/fail").handler(() => {
+            throw new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" });
+        });
+
+        const response = await dispatch(route, "GET", "/api/fail", new Request("https://x/api/fail"));
+        const text = await response.text();
+
+        // This envelope is `{ code, error }` (it carries neither hint nor why today).
+        expect(response.status).toBe(409);
+        expect(JSON.parse(text)).toStrictEqual({ code: "CONFLICT", error: "stale" });
+        expect(text).not.toContain(SENTINEL);
+        expect(JSON.stringify([...response.headers])).not.toContain(SENTINEL);
+    });
+});
+
 describe("httpRoute terminal shape", () => {
     it("yields a hono handler mountable on httpRouter", async () => {
         expect.assertions(2);

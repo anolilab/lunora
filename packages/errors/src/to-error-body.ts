@@ -17,6 +17,8 @@ export interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    /** Short human explanation of the cause (a sibling of `hint`). Only on a non-redacted body. */
+    why?: string;
 }
 
 export interface ToErrorBodyOptions {
@@ -71,6 +73,12 @@ export const toErrorBody = (error: unknown, options: ToErrorBodyOptions = {}): T
             body.docsUrl = error.docsUrl;
         }
 
+        if (error.why !== undefined) {
+            body.why = error.why;
+        }
+
+        // `internal` is deliberately never copied: it is operator-only context for
+        // observability sinks, and this function is the single client-facing seam.
         return { body, redacted: false, status: error.status };
     }
 

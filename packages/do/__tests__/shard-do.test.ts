@@ -1,5 +1,6 @@
 import { serialize } from "node:v8";
 
+import { LunoraError } from "@lunora/errors";
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -1980,5 +1981,87 @@ describe("shardDO subscription delta push", () => {
 
         expect(sentDeltaLines).toHaveLength(expectedLines.length);
         expect(sentDeltaLines).toEqual(expectedLines);
+    });
+});
+
+describe("shardDO operator-only error.internal never reaches a client", () => {
+    // Distinctive sentinel: a client must never see it, in any transport's bytes.
+    const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+    const failure = (): LunoraError => new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" });
+
+    it("keeps internal out of the HTTP RPC body and headers, and hands it only to a worker that asked", async () => {
+        expect.assertions(4);
+
+        const shard = new TestShard(createFakeState(), {});
+
+        shard.handleRpc = async () => {
+            throw failure();
+        };
+
+        const rpc = (headers: Record<string, string>) =>
+            shard.fetch(
+                new Request("https://shard.internal/rpc", { body: JSON.stringify({ args: {}, functionPath: "orders:place" }), headers, method: "POST" }),
+            );
+
+        const unasked = await rpc({});
+        const asked = await rpc({ "x-lunora-want-error-detail": "1" });
+
+        await expect(unasked.text()).resolves.not.toContain(SENTINEL);
+        // The header is worker-only plumbing: it may carry the context, but only to the asking worker.
+        expect(unasked.headers.get("x-lunora-error-detail")).toBeNull();
+        expect(asked.headers.get("x-lunora-error-detail")).toContain(encodeURIComponent(SENTINEL));
+        await expect(asked.text()).resolves.not.toContain(SENTINEL);
+    });
+
+    it("keeps internal out of the admin RPC response (reserved `__lunora_admin__:*` path)", async () => {
+        expect.assertions(2);
+
+        const shard = new TestShard(createFakeState(), { LUNORA_ADMIN_TOKEN: "metrics-fixture-admin" });
+
+        // Admin reads are served by a private dispatcher ahead of `handleRpc`; make the
+        // wildcard admin read throw so the failure travels the real admin response path.
+        (shard as unknown as { readAdminWildcardOp: () => never }).readAdminWildcardOp = () => {
+            throw failure();
+        };
+
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "__lunora_admin__:getLogs" }),
+                headers: { authorization: "Bearer metrics-fixture-admin", "content-type": "application/json" }, // gitleaks:allow -- test fixture, not a credential
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(409);
+        await expect(response.text()).resolves.not.toContain(SENTINEL);
+    });
+
+    it("keeps internal out of the WebSocket error frame of a failed subscription", async () => {
+        expect.assertions(3);
+
+        class ThrowingSubShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override stub that always throws; it never reads the instance
+            protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+                await Promise.resolve();
+
+                throw failure();
+            }
+        }
+
+        const shard = new ThrowingSubShard(createFakeState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { roomId: "lobby" }, functionPath: "cursors:listCursors", table: "cursors" },
+            type: "subscribe",
+        });
+
+        const frames = ws.sent.join("\n");
+
+        expect(ws.sent.some((line) => (JSON.parse(line) as { type: string }).type === "error")).toBe(true);
+        expect(frames).toContain("stale");
+        expect(frames).not.toContain(SENTINEL);
     });
 });
