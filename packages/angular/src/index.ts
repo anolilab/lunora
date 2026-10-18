@@ -10,7 +10,7 @@ export type {
     AgentTokenDelta,
 } from "./agent";
 export { agent } from "./agent";
-export type { AgentChatApi, AgentChatOptions, AgentChatResult, AgentTokenStreamReference } from "./agent-chat";
+export type { AgentApprovalGrant, AgentChatApi, AgentChatOptions, AgentChatResult, AgentTokenStreamReference } from "./agent-chat";
 export { agentChat } from "./agent-chat";
 export type { AgentStateApi, AgentStateOptions, AgentStateResult } from "./agent-state";
 export { agentState } from "./agent-state";

@@ -4,6 +4,7 @@ export { createAction, createActionForClient } from "./create-action";
 export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentOptions, CreateAgentResult } from "./create-agent";
 export { createAgent } from "./create-agent";
 export type {
+    AgentApprovalGrant,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,
