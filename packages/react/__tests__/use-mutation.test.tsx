@@ -2,7 +2,8 @@ import type { FunctionReference } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
 import { onlineManager, QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, Ref } from "react";
+import { createRef, useImperativeHandle } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -19,6 +20,31 @@ const makeRef = (ref: string): FunctionReference => {
 
 /** A reference to a function with a `v.sensitive` argument, as codegen emits it. */
 const makeSensitiveRef = (ref: string): FunctionReference => ({ __lunoraRef: ref, sensitive: true }) as FunctionReference;
+
+interface WriterHandle {
+    send: () => Promise<unknown>;
+}
+
+/** Mounts `useMutation(reference)` and exposes one write of `apiKey` through its ref, so a test can start and await it. */
+const MutationWriter = ({
+    apiKey,
+    options,
+    reference,
+    ref,
+}: {
+    apiKey: string;
+    options?: { onlineOnly?: boolean };
+    ref: Ref<WriterHandle>;
+    reference: FunctionReference;
+}): ReactElement => {
+    const { mutate } = useMutation(reference);
+
+    useImperativeHandle(ref, () => {
+        return { send: () => mutate({ apiKey }, options) };
+    }, [apiKey, mutate, options]);
+
+    return <div />;
+};
 
 interface HarnessProps {
     onCall: (call: () => Promise<unknown>, pending: () => boolean) => void;
@@ -379,19 +405,11 @@ describe("useMutation", () => {
                 throw new TypeError("Failed to fetch");
             });
             const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket([]) });
-            let sendCall: (() => Promise<unknown>) | undefined;
-
-            const Writer = (): ReactElement => {
-                const { mutate } = useMutation(reference);
-
-                sendCall = () => mutate({ apiKey: "sk_live_secret" }, options);
-
-                return <div />;
-            };
+            const handle = createRef<WriterHandle>();
 
             render(
                 <LunoraProvider client={client}>
-                    <Writer />
+                    <MutationWriter apiKey="sk_live_secret" options={options} ref={handle} reference={reference} />
                 </LunoraProvider>,
             );
 
@@ -402,7 +420,7 @@ describe("useMutation", () => {
                     let attempt: Promise<unknown> = Promise.resolve();
 
                     act(() => {
-                        attempt = sendCall?.() ?? Promise.resolve();
+                        attempt = handle.current?.send() ?? Promise.resolve();
                     });
 
                     return attempt;
@@ -445,22 +463,15 @@ describe("useMutation", () => {
 
                 mock.mutation.mockResolvedValue({ ok: true });
 
-                let send: () => Promise<unknown> = async () => undefined;
-                const Writer = (): ReactElement => {
-                    const { mutate } = useMutation(reference);
-
-                    send = () => mutate({ apiKey: "sk-test-1234" });
-
-                    return <div />;
-                };
+                const handle = createRef<WriterHandle>();
                 const view = render(
                     <LunoraProvider client={mock.asClient} queryClient={queryClient}>
-                        <Writer />
+                        <MutationWriter apiKey="sk-test-1234" ref={handle} reference={reference} />
                     </LunoraProvider>,
                 );
 
                 await act(async () => {
-                    await send();
+                    await handle.current?.send();
                 });
                 view.unmount();
 
