@@ -134,6 +134,55 @@ describe("shardDO on a Node-backed shard", () => {
     });
 });
 
+const SECRET = "hunter2-the-real-secret";
+
+/**
+ * The same `ShardDO` the Cloudflare host runs, with one argument `value` marked as
+ * `v.sensitive` by the function registry the generated subclass would consult.
+ */
+class SensitiveNodeShardDO extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- a dispatch stub has no instance state to reach for
+    public override handleRpc(functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> {
+        return Promise.resolve({ functionPath, label: args["label"] });
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: the marked names are fixed per path
+    protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
+        return functionPath.startsWith("vault:") ? new Set(["value"]) : new Set();
+    }
+}
+
+describe("a v.sensitive argument on a Node-backed shard", () => {
+    it("masks the marked value in the request log row of a shard that targets node", async () => {
+        expect.assertions(3);
+
+        const registry = createNodeShardRegistry();
+
+        try {
+            const state = createNodeShardState(registry.shardFor("tenant-42"));
+            const shardDo = new SensitiveNodeShardDO(state as never, {});
+
+            const response = await shardDo.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: { label: "primary", value: SECRET }, functionPath: "vault:store" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            const rows = (state.storage.sql as unknown as { exec: (query: string) => { toArray: () => { args: string | null }[] } })
+                .exec("SELECT args FROM __lunora_reqlog__")
+                .toArray();
+
+            expect(response.status).toBe(200);
+            expect(rows).toHaveLength(1);
+            expect(JSON.stringify(rows)).not.toContain(SECRET);
+        } finally {
+            registry.close();
+        }
+    });
+});
+
 describe("queue consumer on a Node-backed worker", () => {
     it("hands the consumer the live publisher and the host fetch, and the publish reaches the named shard", async () => {
         expect.assertions(3);

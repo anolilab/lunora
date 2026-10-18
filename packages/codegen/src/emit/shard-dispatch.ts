@@ -110,7 +110,20 @@ const dispatchRunSource = (lazyFunctions: boolean): string => {
         .replaceAll("registered.handler", "loadedFunction.handler");
 };
 
-const DISPATCH_METHODS_TEMPLATE = `        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown> {
+const DISPATCH_METHODS_TEMPLATE = `        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown> {
+            // A dispatch that did not come through the shard's \`/rpc\` (a scheduled call,
+            // a lifecycle hook, an admin run) has no scope of its own, so it opens one here
+            // and releases it when the handler settles.
+            if (sensitive === undefined) {
+                const own = this.openSensitiveScope(functionPath, args);
+
+                try {
+                    return await this.handleRpc(functionPath, args, headroom, scope, bookmarks, own);
+                } finally {
+                    own.clear();
+                }
+            }
+
 __PREPARE_FUNCTION__            const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via \`ctx.run*\`
@@ -137,7 +150,7 @@ __PREPARE_FUNCTION__            const registered = LUNORA_FUNCTIONS[functionPath
             // our dep set — and ours out of theirs. A dispatch with no scope (a
             // mutation, an action, a cache-less shard) builds unbound hooks that
             // stamp no deps.
-            const ctx = this.buildCtx({ bookmarks, functionPath, headroom, scope, trusted: registered.lifecycle === "init" });
+            const ctx = this.buildCtx({ bookmarks, functionPath, headroom, scope, sensitive, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing, so its dispatch runs
             // under \`runMutationTransaction\` — the ONE place that opens the span,

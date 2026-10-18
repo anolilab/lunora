@@ -30,6 +30,7 @@ export type {
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
+    SensitiveScope,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,

@@ -136,6 +136,7 @@ const flushDeferredDeletes = () => undefined;
 class TestShard {
   constructor(system) { this.system = system; this.preparations = 0; this.handlerCalls = 0; this.restores = 0; }
   captureRequestScope() { return {}; }
+  openSensitiveScope() { return { clear() {} }; }
   async prepareFunction(functionPath) {
     this.preparations += 1;
     if (!this.system) throw new Error("private procedure module evaluated");

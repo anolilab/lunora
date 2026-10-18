@@ -2741,6 +2741,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SensitiveScope` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3451,6 +3455,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `NO_SENSITIVE_SCOPE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `QueryInsightBucket` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3516,6 +3524,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `SecurityFindingLevel` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SensitiveScope` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3600,6 +3612,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `createMetrics` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `createSensitiveScope` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3748,6 +3764,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `resolveTraceAnchor` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `sensitiveValues` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 

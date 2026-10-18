@@ -321,15 +321,24 @@ const maskSensitiveArgs = (args: Record<string, unknown>, sensitive: ReadonlySet
     return Object.fromEntries(Object.entries(args).map(([name, value]) => [name, sensitive.has(name) ? SENSITIVE_ARG_MASK : value]));
 };
 
-/** How deep {@link sensitiveStrings} walks a marked argument's object tree. */
+/** How deep the scrub walks a marked argument's object tree, or a field's nested containers. */
 const MAX_SENSITIVE_DEPTH = 8;
 
 /**
- * The string leaves of the named arguments of one dispatch: the values a free-text
- * sink (an error message) must not echo back. A handler's own thrown message can
- * quote the argument it rejected, and no key-name rule catches that.
+ * The shortest marked value replaced INSIDE free text. A one- to three-character
+ * value (a digit, a flag, `ok`) occurs by chance in ordinary text, and replacing it
+ * corrupts the line it sits in. Such a value is still masked when it is the whole
+ * text of a message or field, so a short secret never reaches a sink unmasked.
  */
-const sensitiveStrings = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
+
+/**
+ * The text forms of the named arguments of one dispatch: the string leaves of each
+ * marked value, the decimal form of a number or boolean, and the JSON form of an
+ * object. A free-text sink (an error message, a span attribute) must not echo any of
+ * them back, and no key-name rule catches a handler quoting the argument it rejected.
+ */
+const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
     const found: string[] = [];
     const visit = (value: unknown, depth: number): void => {
         if (typeof value === "string") {
@@ -340,9 +349,17 @@ const sensitiveStrings = (args: Record<string, unknown>, sensitive: ReadonlySet<
             return;
         }
 
+        if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+            found.push(String(value));
+
+            return;
+        }
+
         if (depth > MAX_SENSITIVE_DEPTH || typeof value !== "object" || value === null) {
             return;
         }
+
+        found.push(stringifyFieldValue(value));
 
         for (const child of Object.values(value)) {
             visit(child, depth + 1);
@@ -359,19 +376,128 @@ const sensitiveStrings = (args: Record<string, unknown>, sensitive: ReadonlySet<
 };
 
 /**
- * Replace every occurrence of a sensitive value in free text with
- * {@link SENSITIVE_ARG_MASK}. Longest first, so a value that contains another is
- * masked whole.
+ * Replace each sensitive value found in free text with {@link SENSITIVE_ARG_MASK}.
+ * A whole-text match is masked at any length; inside longer text only values of
+ * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more are replaced. Longest
+ * first, so a value that contains another is masked whole.
  */
 const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {
+    if (secrets.includes(text)) {
+        return SENSITIVE_ARG_MASK;
+    }
+
     let scrubbed = text;
 
     for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
-        scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
+        if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
+            scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
+        }
     }
 
     return scrubbed;
 };
+
+/**
+ * Scrub a structured value (a field, an attribute, a log argument) of the same
+ * sensitive values. Returns the original reference when nothing matched, so a
+ * caller can tell untouched data from a copy and an unmarked sibling keeps its
+ * identity.
+ */
+const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: number): unknown => {
+    if (typeof value === "string") {
+        return scrubSensitiveText(value, secrets);
+    }
+
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        return secrets.includes(String(value)) ? SENSITIVE_ARG_MASK : value;
+    }
+
+    if (value instanceof Error) {
+        const text = String(value);
+        const scrubbed = scrubSensitiveText(text, secrets);
+
+        return scrubbed === text ? value : scrubbed;
+    }
+
+    if (depth >= MAX_SENSITIVE_DEPTH || typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        const mapped = value.map((item) => scrubValue(item, secrets, depth + 1));
+
+        return mapped.some((item, index) => item !== value[index]) ? mapped : value;
+    }
+
+    let changed = false;
+    const out: Record<string, unknown> = {};
+
+    for (const [key, child] of Object.entries(value)) {
+        const scrubbed = scrubValue(child, secrets, depth + 1);
+
+        changed ||= scrubbed !== child;
+        out[key] = scrubbed;
+    }
+
+    return changed ? out : value;
+};
+
+/**
+ * The sensitive values of ONE invocation, handed by value to everything that
+ * records on its behalf (ctx.log, ctx.trace, ctx.span, ctx.fetch, ctx.metrics and
+ * the dispatch's root span). It is the only place the values live: a scope is
+ * built when the dispatch starts and {@link SensitiveScope.clear}ed when it
+ * settles, after which it scrubs nothing. Nothing reads it from shared state, so
+ * two concurrent dispatches on one shard each scrub only their own values.
+ */
+interface SensitiveScope {
+    /**
+     * Admit more values into the invocation: a composed call runs inside the
+     * caller's invocation, so its own marked arguments are scrubbed from here on.
+     * A no-op once the scope is cleared.
+     */
+    add: (values: ReadonlyArray<string>) => void;
+    /** Forget the values. Called once the invocation's records are written. */
+    clear: () => void;
+    /** Scrub a field bag; `undefined` passes through. */
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    /** Scrub a free-text string. */
+    text: (text: string) => string;
+    /** Scrub one structured value. */
+    value: <T>(value: T) => T;
+}
+
+/**
+ * Build the scope for one invocation from the values of its marked arguments
+ * (see {@link sensitiveValues}). The array is copied, so the caller keeps no
+ * handle on the values it passed in.
+ */
+const createSensitiveScope = (values: ReadonlyArray<string>): SensitiveScope => {
+    let secrets: ReadonlyArray<string> = [...new Set(values)];
+    let cleared = false;
+
+    return {
+        add(more) {
+            if (!cleared && more.length > 0) {
+                secrets = [...new Set([...secrets, ...more])];
+            }
+        },
+        clear() {
+            cleared = true;
+            secrets = [];
+        },
+        fields: <T extends Record<string, unknown> | undefined>(bag: T): T =>
+            bag === undefined || secrets.length === 0 ? bag : (scrubValue(bag, secrets, 0) as T),
+        text: (text) => (secrets.length === 0 ? text : scrubSensitiveText(text, secrets)),
+        value: <T>(value: T): T => (secrets.length === 0 ? value : (scrubValue(value, secrets, 0) as T)),
+    };
+};
+
+/**
+ * The scope of an invocation with no marked arguments. Scrubs nothing, and admits
+ * nothing: it is shared by every such invocation, so `add` must not reach it.
+ */
+const NO_SENSITIVE_SCOPE: SensitiveScope = { ...createSensitiveScope([]), add: () => undefined };
 
 /**
  * SQL handles whose request-log table (and its back-filled columns) have already
@@ -1083,10 +1209,12 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
 
 export {
     appendRequestLogEntry,
+    createSensitiveScope,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
     maskSensitiveArgs,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
@@ -1095,9 +1223,8 @@ export {
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
-    scrubSensitiveText,
     SENSITIVE_ARG_MASK,
-    sensitiveStrings,
+    sensitiveValues,
 };
 export type {
     AppendRequestLogEntry,
@@ -1110,5 +1237,6 @@ export type {
     RequestLogResult,
     RequestLogWriteOptions,
     RequestOutcome,
+    SensitiveScope,
 };
 export { type ContextLogLevel } from "../../../shared/log-event";

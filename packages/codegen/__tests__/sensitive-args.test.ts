@@ -141,4 +141,23 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(without).not.toContain("sensitiveArgNames");
         expect(without).not.toContain("sensitiveArgumentNames");
     });
+
+    it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
+        expect.assertions(8);
+
+        const shard = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        // A record written on a dispatch's behalf is scrubbed only through the scope its
+        // maker receives, so each maker the generated `buildCtx` calls must get it.
+        expect(shard).toContain("this.makeLogger(logFunctionPath, observability, undefined, options.sensitive)");
+        expect(shard).toContain("this.makeDispatchSpan(traceAnchor, observability, options.sensitive)");
+        expect(shard).toContain("this.makeTracer(logFunctionPath, observability, traceAnchor, options.sensitive)");
+        expect(shard).toContain("this.makeMetrics(logFunctionPath, observability, options.sensitive)");
+        expect(shard).toContain("this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive)");
+        expect(shard).toContain("this.instrumentDb(createShardCtxDb(");
+        expect(shard).toContain("const own = this.openSensitiveScope(functionPath, args);");
+        // Every composed call admits its callee's marked arguments, and the untracked
+        // sub-query's fresh context inherits the scope the way it inherits the caller.
+        expect(shard.split("this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);")).toHaveLength(4);
+    });
 });
