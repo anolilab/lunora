@@ -432,7 +432,7 @@ const createGraphExtract =
     async ({ assistantText, env, model, userInput }) => {
         const ai = await loadAi();
         const { output } = await ai.generateText({
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             output: ai.Output.object({ schema: GRAPH_EXTRACTION_SCHEMA }),
             prompt: buildExtractionPrompt(userInput, assistantText),
         });
@@ -465,7 +465,7 @@ const createEpisodeExtract =
     async ({ assistantText, env, model, userInput }) => {
         const ai = await loadAi();
         const { text } = await ai.generateText({
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             prompt: buildEpisodePrompt(userInput, assistantText),
         });
 
@@ -500,7 +500,7 @@ const createCompact =
         const ai = await loadAi();
         const { text } = await ai.generateText({
             messages,
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             system: previousSummary === undefined ? COMPACTION_SYSTEM : `${COMPACTION_SYSTEM}${COMPACTION_MERGE_SYSTEM}`,
         });
 
