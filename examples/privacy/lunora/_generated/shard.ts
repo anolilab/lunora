@@ -1226,6 +1226,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                             : queryContext(),
                         kind,
                     );
+                };
             };
 
             // A query composed from a mutation or action runs on a QUERY view of

@@ -175,7 +175,11 @@ export const ERROR_CATALOG = {
      * was refused rather than queued. Nothing was persisted or replayed: to retry,
      * the caller issues the call again once the connection is back.
      */
-    OFFLINE_NOT_QUEUED: { status: 503, title: "Offline, write not queued" },
+    OFFLINE_NOT_QUEUED: {
+        hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), so it was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
+        status: 503,
+        title: "Offline, write not queued",
+    },
     /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
     IDENTITY_MISMATCH: {
         hint: [
