@@ -453,11 +453,11 @@ describe("useMutation", () => {
             }
         });
 
-        it("drops a sensitive call's arguments from the mutation cache once the hook unmounts, where a normal call keeps them", async () => {
+        it("drops an online-only call's arguments from the mutation cache, where an ordinary call keeps them", async () => {
             expect.hasAssertions();
 
             /** Run one write through the hook, unmount it, and hand back the cache that held the call. */
-            const writeAndUnmount = async (reference: FunctionReference): Promise<QueryClient> => {
+            const writeAndUnmount = async (reference: FunctionReference, options?: { onlineOnly?: boolean }): Promise<QueryClient> => {
                 const queryClient = new QueryClient();
                 const mock = createMockClient();
 
@@ -466,7 +466,7 @@ describe("useMutation", () => {
                 const handle = createRef<WriterHandle>();
                 const view = render(
                     <LunoraProvider client={mock.asClient} queryClient={queryClient}>
-                        <MutationWriter apiKey="sk-test-1234" ref={handle} reference={reference} />
+                        <MutationWriter apiKey="sk-test-1234" options={options} ref={handle} reference={reference} />
                     </LunoraProvider>,
                 );
 
@@ -478,15 +478,19 @@ describe("useMutation", () => {
                 return queryClient;
             };
 
-            const normal = await writeAndUnmount(makeRef("accounts:note"));
+            const ordinary = await writeAndUnmount(makeRef("accounts:note"));
             const sensitive = await writeAndUnmount(makeSensitiveRef("accounts:linkApiKey"));
+            const perCall = await writeAndUnmount(makeRef("accounts:note"), { onlineOnly: true });
 
             // Default garbage-collection time: the settled call, with its arguments, stays cached.
-            expect(normal.getMutationCache().getAll()).toHaveLength(1);
+            expect(ordinary.getMutationCache().getAll()).toHaveLength(1);
 
             await waitFor(() => {
                 expect(sensitive.getMutationCache().getAll()).toHaveLength(0);
             });
+
+            // A per-call online-only write on an ordinary reference leaves the cache once it settles.
+            expect(perCall.getMutationCache().getAll()).toHaveLength(0);
         });
 
         it("rejects an explicit online-only write on a normal reference instead of holding it until online", async () => {
