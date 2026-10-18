@@ -362,12 +362,12 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 materializeDev: () => {
-                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 
             expect(plan.remote.enabled).toBe(false);
-            expect(plan.remote.withheld).toStrictEqual(["AI"]);
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
             expect(plan.wrangler.args).toContain("--config");
             expect(plan.wrangler.args).toContain(localConfig);
         });
@@ -383,7 +383,7 @@ describe("lunora dev", () => {
                 materializeDev: () => {
                     materialized = true;
 
-                    return { cleanup: () => {}, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 
@@ -591,6 +591,32 @@ describe("lunora dev", () => {
             expect(args).toContain(service);
             // The sidecar's own config stays first, so wrangler keeps it as the primary Worker.
             expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
+        });
+
+        it("carries the Artifacts binding a service's sidecar session left out onto the plan, so the banner can say so", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({
+                cwd: workdir,
+                hasIpv6Loopback: () => true,
+                logger: silentLogger(),
+                materializeServiceConfigs: () => {
+                    return { cleanup: () => {}, configPaths: [], withheld: [{ binding: "ARTIFACTS", kind: "artifacts" }] };
+                },
+            });
+
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "ARTIFACTS", kind: "artifacts" }]);
         });
 
         it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {

@@ -707,27 +707,29 @@ describe("lunora deploy", () => {
                 expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
             });
 
-            it("creates nothing on a --temporary deploy, whose Worker goes to an account that would never see the namespace", async () => {
-                expect.assertions(2);
+            it("makes no lookup on a --temporary deploy, whose Worker goes to a throwaway account, and warns instead of stopping", async () => {
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
-                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
-                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
 
                 const { fetchStub, posts } = absentUntilCreated();
 
                 vi.stubGlobal("fetch", fetchStub);
 
+                const { logger, warns } = silentLogger();
                 const result = await runDeployCommand({
                     cwd: workdir,
-                    logger: silentLogger().logger,
+                    logger,
                     secretLister: noRemoteSecrets,
                     spawner: createRecordingSpawner().spawner,
                     temporary: true,
                 });
 
                 expect(posts).toStrictEqual([]);
-                expect(result.error).toContain("does not exist");
+                expect(fetchStub).not.toHaveBeenCalled();
+                expect(result.error).toBeUndefined();
+                expect(warns.some((message) => message.includes("--temporary deploys to a throwaway account") && message.includes('"repos"'))).toBe(true);
             });
 
             it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {
@@ -758,21 +760,44 @@ describe("lunora deploy", () => {
                 ).toBe(true);
             });
 
-            it("warns and deploys when there is no API token to check with", async () => {
-                expect.assertions(3);
+            it("lets a dry run through with a warning when there is no API token to check the namespace with, so a build needs none", async () => {
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
                 vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
 
-                const { logger, warns } = silentLogger();
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.error).toBeUndefined();
+                expect(errors).toStrictEqual([]);
+                expect(warns.some((message) => message.includes("dry run:") && message.includes("A real deploy stops here"))).toBe(true);
+                // Says what to set, not only that the real deploy will stop.
+                expect(warns.some((message) => message.includes("CLOUDFLARE_API_TOKEN"))).toBe(true);
+            });
+
+            it("stops before wrangler when there is no API token to check the namespace with", async () => {
+                expect.assertions(4);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+
+                const { errors, logger } = silentLogger();
                 const recording = createRecordingSpawner();
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
 
-                expect(result.code).toBe(0);
-                expect(recording.calls).toHaveLength(1);
-                expect(warns.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toContain("The deploy stops until it can be checked");
+                expect(errors.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
                     true,
                 );
+                expect(recording.calls).toHaveLength(0);
             });
         });
 

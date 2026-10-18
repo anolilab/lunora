@@ -757,32 +757,56 @@ const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | 
 
 /**
  * The first Artifacts check lets a missing namespace pass when a real deploy will create it, and a dry run or
- * build (which has the same outcome) reports that and goes on. Only a temporary deploy, which never creates
- * one, reports it as missing.
+ * build (which has the same outcome) reports that and goes on. A temporary deploy goes to a throwaway account
+ * that can neither be checked nor have a namespace created in it, so it only says so.
  */
-const artifactsModeFor = (options: Pick<DeployCommandOptions, "temporary">): ArtifactsCheckMode => (options.temporary === true ? "report" : "defer");
+const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): ArtifactsCheckMode => {
+    if (options.temporary === true) {
+        return "temporary";
+    }
+
+    return options.dryRun === true ? "preview" : "defer";
+};
 
 /**
- * How the Artifacts namespace check treats a namespace that does not exist yet: `report` refuses (a
- * dry run, a temporary deploy), `defer` lets it pass because `create` makes it later, just before the deploy.
+ * How the Artifacts namespace check treats a namespace that does not exist yet: `defer` lets it pass because
+ * `create` makes it later, just before the deploy; `preview` (a dry run) also lets it pass and only warns when
+ * it cannot be checked; `temporary` makes no lookup at all.
  */
-type ArtifactsCheckMode = "create" | "defer" | "report";
+type ArtifactsCheckMode = "create" | "defer" | "preview" | "temporary";
 
-/** Log each namespace check's outcome; returns the lines of the ones that stop the deploy. */
-const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof checkArtifactsJurisdiction>>>, logger: Logger): string[] => {
+/**
+ * One refused namespace check as a line. An unchecked namespace stops the deploy too: the first
+ * repo create() would make it unrestricted, and nothing afterwards can say whether it already was.
+ */
+const describeArtifactsFailure = (check: Awaited<ReturnType<typeof checkArtifactsJurisdiction>>): string => {
+    const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+    return check.verdict === "unchecked" ? `${line} The deploy stops until it can be checked, as a namespace made by the first repo is unrestricted.` : line;
+};
+
+/**
+ * Log each namespace check's outcome; returns the lines of the ones that stop the deploy. A dry run or build
+ * needs no token to bundle, so a namespace it cannot check is a warning there and stops a real deploy.
+ */
+const reportArtifactsChecks = (
+    checks: ReadonlyArray<Awaited<ReturnType<typeof checkArtifactsJurisdiction>>>,
+    logger: Logger,
+    mode: ArtifactsCheckMode,
+): string[] => {
     const failures: string[] = [];
 
     for (const check of checks) {
-        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
-
-        if (check.verdict === "unchecked") {
-            logger.warn(line);
-        } else if (check.verdict === "ok") {
+        if (check.verdict === "ok") {
             // Said, not silent: a dry run or a build is where the operator learns a real deploy will create it.
             if (check.changesAccount === true) {
-                logger.info(line);
+                logger.info(check.message);
             }
+        } else if (check.verdict === "unchecked" && mode === "preview") {
+            logger.warn(`dry run: ${check.message}${check.fix === undefined ? "" : ` ${check.fix}`} A real deploy stops here.`);
         } else {
+            const line = describeArtifactsFailure(check);
+
             // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
             logger.error(line);
             failures.push(line);
@@ -794,8 +818,9 @@ const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof c
 
 /**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
- * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
- * Warns, and lets the deploy go on, when the lookup cannot be made. Returns the
+ * schema's `.jurisdiction("…")`, or one that does not exist yet and cannot be created
+ * (plan 460 D). Also stops when the lookup cannot be made at all: nothing else would
+ * say whether the first repo create() makes an unrestricted namespace. Returns the
  * error that stops the deploy, if any.
  */
 const checkArtifactsNamespaces = async (
@@ -824,15 +849,26 @@ const checkArtifactsNamespaces = async (
         return undefined;
     }
 
-    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
     // One check per namespace: two bindings on a missing namespace would both see it absent and race to create it.
     const namespaces = [...new Map(entries.map((entry) => [entry.namespace, entry])).values()];
+
+    if (mode === "temporary") {
+        // The Worker goes to a throwaway account: a lookup in the real one says nothing about it, and --temporary
+        // works without the token a lookup needs. The namespace is made there on first use, in no jurisdiction.
+        logger.warn(
+            `--temporary deploys to a throwaway account, so the jurisdiction ("${jurisdiction}") of Artifacts namespace ${namespaces.map((entry) => `"${entry.namespace}"`).join(", ")} was not checked: it is created there on first use, in no jurisdiction.`,
+        );
+
+        return undefined;
+    }
+
+    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
     const checks = await Promise.all(
         namespaces.map(async (entry) =>
-            checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" }),
+            checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" || mode === "preview" }),
         ),
     );
-    const failures = reportArtifactsChecks(checks, logger);
+    const failures = reportArtifactsChecks(checks, logger, mode);
 
     return failures.length === 0 ? undefined : failures.join("\n");
 };

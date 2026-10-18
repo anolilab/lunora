@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
 import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
-import type { materializeDevWranglerConfig, materializeServiceDevConfigs, startLocalHyperdrive } from "@lunora/config/cloudflare";
+import type { materializeDevWranglerConfig, materializeServiceDevConfigs, startLocalHyperdrive, WithheldBinding } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -147,8 +147,8 @@ interface DevRemotePlan {
     enabled: boolean;
     /** Why remote mode didn't take effect despite being requested, for logging. */
     reason?: string;
-    /** `ai` bindings a session left out for lack of Cloudflare credentials, for the banner warning. */
-    withheld: string[];
+    /** Remote-only bindings (`ai`, `artifacts`) a session left out for lack of Cloudflare credentials, for the banner warning. */
+    withheld: WithheldBinding[];
 }
 
 interface DevCommandPlan {

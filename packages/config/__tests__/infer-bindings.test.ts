@@ -1230,7 +1230,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         }
     });
 
-    it("infers artifacts from a ctx.artifacts read as a hint, never naming a jurisdiction for an unpinned schema", async () => {
+    it("infers artifacts from a ctx.artifacts read, never naming a jurisdiction for an unpinned schema", async () => {
         expect.assertions(3);
 
         write("wrangler.jsonc", WRANGLER);
@@ -1242,11 +1242,13 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesArtifacts).toBe(true);
         expect(result.jurisdiction).toBeUndefined();
-        expect(result.signals.some((signal) => signal.startsWith('hint: ctx.artifacts is used; add an "artifacts" binding'))).toBe(true);
+        expect(result.signals.some((signal) => signal.startsWith("artifacts (") && !signal.includes("jurisdiction") && !signal.includes("lunora deploy"))).toBe(
+            true,
+        );
     });
 
-    it("tells a jurisdiction-pinned app to create the Artifacts namespace in that jurisdiction first", async () => {
-        expect.assertions(3);
+    it("tells a jurisdiction-pinned app to create its Artifacts namespace first, instead of saying a binding is written", async () => {
+        expect.assertions(4);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
@@ -1261,10 +1263,11 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesArtifacts).toBe(true);
         expect(result.jurisdiction).toBe("eu");
-        expect(hint).toContain('"jurisdiction": "eu"');
+        expect(hint?.startsWith("hint:")).toBe(true);
+        expect(hint).toContain('pins data to "eu", so create the namespace in that jurisdiction first');
     });
 
-    it("treats a fedramp-pinned app like eu or us: create the namespace in that jurisdiction first", async () => {
+    it("treats a fedramp-pinned app like eu or us: the namespace is created in that jurisdiction first", async () => {
         expect.assertions(2);
 
         write("wrangler.jsonc", WRANGLER);
@@ -1279,7 +1282,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
 
         expect(result.usesArtifacts).toBe(true);
-        expect(hint).toContain('"jurisdiction": "fedramp"');
+        expect(hint).toContain('pins data to "fedramp", so create the namespace in that jurisdiction first');
     });
 
     it("does not infer artifacts from a type-only import of its event payload", async () => {

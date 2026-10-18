@@ -1012,7 +1012,7 @@ interface DevRemotePlan {
     cleanup: () => void;
     enabled: boolean;
     reason?: string;
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 

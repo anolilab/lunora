@@ -864,7 +864,11 @@ const checkArtifactsJurisdictions = async (
 
     const results = await Promise.all(
         [...lookups.values()].map(async ({ label, ...lookup }) => {
-            return { check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction }), label };
+            // Read-only: a namespace that does not exist yet is not a failure, `lunora deploy` creates it in the jurisdiction.
+            return {
+                check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction, missingOk: true }),
+                label,
+            };
         }),
     );
 

@@ -71,7 +71,11 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
             inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0 && !writesBindings,
             '@lunora/hyperdrive is used but no hyperdrive binding exists; add one ({ binding: "HYPERDRIVE", id }) — on a Cloudflare target `lunora deploy` creates the Hyperdrive config from a connection string.',
         ],
-        [inferred.usesArtifacts && artifactsEntries.length === 0, artifactsBindingHint(inferred.jurisdiction)],
+        [
+            // Missing unless reconcile writes it, which it does not for a schema that pins a jurisdiction.
+            inferred.usesArtifacts && artifactsEntries.length === 0 && (!writesBindings || inferred.jurisdiction !== undefined),
+            artifactsBindingHint(inferred.jurisdiction),
+        ],
         [
             pipelinesBindingMissing,
             `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,

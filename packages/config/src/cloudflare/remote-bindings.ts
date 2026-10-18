@@ -28,7 +28,8 @@
  */
 import { applyModify } from "../jsonc-edit";
 import { hasCloudflareCredentials } from "./credentials";
-import { noopCleanup, withheldWorkersAi, writeDevConfig } from "./dev-config";
+import type { WithheldBinding } from "./dev-config";
+import { noopCleanup, withheldBindings, writeDevConfig } from "./dev-config";
 import { readManifest } from "./lunora-manifest";
 import { ownedServiceBindings } from "./reconcile-services";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -113,6 +114,7 @@ interface RemoteWranglerShape {
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     analytics?: BindingEntry | null;
+    artifacts?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -220,7 +222,7 @@ interface MaterializeDevResult {
     /** The bindings flipped to remote, for the dev banner. */
     remoteBindings: RemoteBindingPlan[];
     /** The `ai` binding name left out for lack of Cloudflare credentials, for the dev warning. */
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 
 /**
@@ -254,16 +256,20 @@ const materializeDevWranglerConfig = (options: MaterializeDevOptions): Materiali
     // same dev session, so remoting it would call the deployed Worker instead.
     const localServices = ownedServiceBindings(readManifest(options.projectRoot));
     const plans = options.remote ? planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding)) : [];
-    const withheldBinding = withheldWorkersAi(parsed.ai, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
-    const withheld = withheldBinding === undefined ? [] : [withheldBinding];
-    const remoteBindings = withheldBinding === undefined ? plans : plans.filter((plan) => plan.section !== "ai");
+    const withheld = withheldBindings(parsed, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
+    const remoteBindings = withheld.some(({ kind }) => kind === "ai") ? plans.filter((plan) => plan.section !== "ai") : plans;
 
     if (remoteBindings.length === 0 && withheld.length === 0) {
         return unchanged(options.remote ? "no remote-eligible bindings to proxy" : undefined);
     }
 
-    const withoutAi = withheld.length > 0 ? applyModify(text, ["ai"], undefined) : text;
-    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutAi, remoteBindings) : withoutAi;
+    let withoutWithheld = text;
+
+    for (const { kind } of withheld) {
+        withoutWithheld = applyModify(withoutWithheld, [kind], undefined);
+    }
+
+    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutWithheld, remoteBindings) : withoutWithheld;
     const written = writeDevConfig(options.projectRoot, "dev", contents);
 
     return { cleanup: written.cleanup, configPath: written.configPath, remoteBindings, withheld };

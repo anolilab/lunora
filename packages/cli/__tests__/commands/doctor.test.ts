@@ -1207,8 +1207,8 @@ describe("runDoctor", () => {
             return result.findings.filter((finding) => finding.code.startsWith("artifacts-"));
         };
 
-        it("passes a namespace in the schema's jurisdiction and fails one elsewhere or missing", async () => {
-            expect.assertions(1);
+        it("passes a namespace in the schema's jurisdiction and fails one elsewhere, and passes a missing one that deploy will create", async () => {
+            expect.assertions(2);
 
             const findings = await artifactsFindings(
                 {
@@ -1226,8 +1226,10 @@ describe("runDoctor", () => {
             expect(findings.map(({ code, level }) => [code, level])).toStrictEqual([
                 ["artifacts-jurisdiction-ok", "pass"],
                 ["artifacts-jurisdiction-mismatch", "fail"],
-                ["artifacts-namespace-missing", "fail"],
+                ["artifacts-jurisdiction-ok", "pass"],
             ]);
+            // Said, not hidden: `lunora deploy` makes it, so doctor has no manual step to ask for.
+            expect(findings.at(-1)?.message).toContain("does not exist yet; it will be created");
         });
 
         it("checks nothing for a schema without a jurisdiction", async () => {

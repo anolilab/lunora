@@ -5,6 +5,7 @@ import localAiBinding from "../src/local-ai-binding";
 
 interface WorkerConfig {
     ai?: { binding?: string } | null;
+    artifacts?: { binding?: string }[] | null;
     name?: string;
 }
 
@@ -46,6 +47,73 @@ describe("localAiBinding", () => {
         expect(worker).toStrictEqual({ name: "app" });
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toContain("wrangler login");
+    });
+
+    it("drops the artifacts binding from a dev worker when Cloudflare is logged out, and says what stops working", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const options = {};
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        const worker = resolveWorker(options, { artifacts: [{ binding: "ARTIFACTS" }], name: "app" });
+        const warnings = warn.mock.calls.map((call) => String(call[0]));
+
+        expect(worker).toStrictEqual({ name: "app" });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain("ctx.artifacts");
+    });
+
+    it("drops an artifacts binding the user's customizer returns even when the base config has an empty array", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const options = {
+            config: (): Partial<WorkerConfig> => {
+                return { artifacts: [{ binding: "REPOS" }] };
+            },
+        };
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        const worker = resolveWorker(options, { artifacts: [], name: "app" });
+
+        expect(worker.artifacts).toBeUndefined();
+        expect(worker.name).toBe("app");
+        expect(warn.mock.calls.map((call) => String(call[0])).join(" ")).toContain("REPOS");
+    });
+
+    it("reads a malformed artifacts value as no binding, for a dev server and for a build alike, instead of throwing", () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        for (const command of ["serve", "build"] as const) {
+            const options = {
+                config: (): Partial<WorkerConfig> => {
+                    return { artifacts: { binding: "REPOS" } as never };
+                },
+            };
+            const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+            runConfigHook(plugin, command);
+
+            expect(() => resolveWorker(options, { artifacts: { binding: "ARTIFACTS" } as never, name: "app" })).not.toThrow();
+        }
+    });
+
+    it("keeps the artifacts binding for a build, whose output is the deploy config", () => {
+        expect.assertions(1);
+
+        const options = {};
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "build");
+
+        expect(resolveWorker(options, { artifacts: [{ binding: "ARTIFACTS" }] })).toStrictEqual({ artifacts: [{ binding: "ARTIFACTS" }] });
     });
 
     it("keeps the binding when Cloudflare is logged in", () => {

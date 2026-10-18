@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
+import type { WithheldBinding } from "@lunora/config/cloudflare";
 import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
@@ -82,7 +83,7 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
  * where wrangler would otherwise run the service's `build.command` (see
  * `materializeServiceDevConfigs`). `cleanup` unlinks those copies.
  */
-const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: string[] } => {
+const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: WithheldBinding[] } => {
     const paths = [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))];
     const { cleanup, configPaths, withheld } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths, { projectRoot: cwd });
 
@@ -284,7 +285,7 @@ const planWorkerSidecar = (
     options: DevCommandOptions,
     cwd: string,
     manager: ReturnType<typeof detectPackageManager>,
-): { cleanup: () => void; sidecar: SpawnDescriptor & { tag: string } } => {
+): { cleanup: () => void; sidecar: SpawnDescriptor & { tag: string }; withheld: WithheldBinding[] } => {
     // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
     // `wrangler.jsonc` — check its own `dev.ip` first.
     const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
@@ -308,7 +309,7 @@ const planWorkerSidecar = (
     });
     const exec = toolchainExecArgs(manager, devCommand);
 
-    return { cleanup: services.cleanup, sidecar: { args: exec.args, command: exec.command, cwd, tag: "worker" } };
+    return { cleanup: services.cleanup, sidecar: { args: exec.args, command: exec.command, cwd, tag: "worker" }, withheld: services.withheld };
 };
 
 /**
@@ -382,7 +383,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             runsCodegenWatch: false,
             flavor,
             ipv4LoopbackForced: false,
-            remote: { bindings: [], cleanup: noopCleanup, enabled: options.remote === true, withheld: [] },
+            remote: { bindings: [], cleanup: noopCleanup, enabled: options.remote === true, withheld: worker?.withheld ?? [] },
             ...(worker ? { serviceConfigCleanup: worker.cleanup } : {}),
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,

@@ -28,7 +28,7 @@ import {
     updateDevServerState,
 } from "@lunora/config";
 import type { LocalHyperdrive } from "@lunora/config/cloudflare";
-import { describeWithheldWorkersAi, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { describeWithheld, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -86,13 +86,13 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
             logger.info(`  ➜  Remote:     ${plan.remote.bindings.join(", ")} → deployed worker`);
         } else if (plan.remote.reason !== undefined) {
             // No reason means the session still runs with a temp config (only
-            // `ai` was withheld), so "running fully local" would be wrong.
+            // a remote-only binding was withheld), so "running fully local" would be wrong.
             logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason}) — running fully local`);
         }
     }
 
     for (const binding of plan.remote.withheld) {
-        logger.warn(`  ➜  ${describeWithheldWorkersAi(binding)}`);
+        logger.warn(`  ➜  ${describeWithheld(binding)}`);
     }
 
     logger.info("");

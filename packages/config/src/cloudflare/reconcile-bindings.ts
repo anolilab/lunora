@@ -399,6 +399,30 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
 };
 
 /**
+ * Add the `ARTIFACTS` binding when the project binds no namespace, naming the namespace after the
+ * Worker. The namespace itself is created on first use. A logged-out dev session leaves the binding
+ * out, since Artifacts only runs remotely. Not run for a jurisdiction-pinned schema: the first
+ * `create()` against a missing namespace makes it unrestricted and its jurisdiction cannot change, and
+ * a logged-in dev session would make that call, so that app creates the namespace itself (the hint
+ * says how) and adds the binding, and `lunora deploy` then checks it. Pure.
+ */
+const reconcileArtifacts = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.artifacts?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "ARTIFACTS");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("artifacts", "ARTIFACTS", owner)] };
+    }
+
+    const namespace = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
+
+    return { added: ["ARTIFACTS (Cloudflare Artifacts)"], text: applyModify(text, ["artifacts"], [{ binding: "ARTIFACTS", namespace }]) };
+};
+
+/**
  * The array twin of {@link reconcileSelfDescribing}: add a self-describing
  * binding whose wrangler key holds a LIST, as a one-entry array, when the key
  * has no entry at all. Idempotent on ANY existing entry — an app that binds its
@@ -978,15 +1002,16 @@ const reconcileWranglerBindings = (
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
     // kv is written without a remote id (wrangler creates the namespace on
-    // deploy) and hyperdrive with a placeholder id that deploy replaces once it
-    // has a connection string; both only for a Cloudflare target. Pipelines and
-    // artifacts stay hints: pipelines carries an un-mintable remote resource, and
-    // artifacts is remote-only in dev with a jurisdiction fixed at creation.
+    // deploy), hyperdrive with a placeholder id that deploy replaces once it has
+    // a connection string, and artifacts with the Worker's name as its namespace;
+    // all only for a Cloudflare target. Pipelines stays a hint: it carries an
+    // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
         { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
+        { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
         {
             enabled: inferred.usesAiSearch,

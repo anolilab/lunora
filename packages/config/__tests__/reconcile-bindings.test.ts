@@ -425,16 +425,35 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
-    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
+    it("writes an ARTIFACTS binding whose namespace is the Worker's name, once", () => {
+        expect.assertions(4);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
+
+        expect(first.added).toContain("ARTIFACTS (Cloudflare Artifacts)");
+        expect(readConfig().artifacts).toStrictEqual([{ binding: "ARTIFACTS", namespace: "lunora-app" }]);
+        expect(first.warnings.join(" ")).not.toMatch(/"artifacts" binding/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).added).toStrictEqual([]);
+    });
+
+    it("writes no ARTIFACTS binding for a schema that pins a jurisdiction, and says to create the namespace first", () => {
         expect.assertions(3);
 
-        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
-        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+        // A logged-in dev session's first create() would make the namespace unrestricted, for good.
+        const result = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
 
-        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
-        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
-        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(result.added).not.toContain("ARTIFACTS (Cloudflare Artifacts)");
         expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toContain('pins data to "us"');
+    });
+
+    it("writes no ARTIFACTS binding for a non-Cloudflare target, and says what to add", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }), { target: "node" });
+
+        expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
     });
 
     describe("an existing artifacts binding", () => {
@@ -904,6 +923,7 @@ describe("reconcileWranglerBindings", () => {
     it.each([
         ["KV", { usesKv: true }, '"vars": { "KV": "x" }', "kv_namespaces"],
         ["HYPERDRIVE", { usesHyperdrive: true }, '"vars": { "HYPERDRIVE": "x" }', "hyperdrive"],
+        ["ARTIFACTS", { usesArtifacts: true }, '"vars": { "ARTIFACTS": "x" }', "artifacts"],
     ])("leaves the config alone and warns when the name %s is already bound by another section", (name, inferred, bound, key) => {
         expect.assertions(3);
 

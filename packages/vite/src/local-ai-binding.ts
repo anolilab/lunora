@@ -1,8 +1,8 @@
 /**
- * Keep `vite dev` booting when the `ai` binding can't be reached.
+ * Keep `vite dev` booting when the `ai` or `artifacts` binding can't be reached.
  *
  * Importing `@lunora/ai` makes `bindingsProvisionPlugin` write `"ai"` into
- * `wrangler.jsonc`, and Workers AI has no local emulation, so
+ * `wrangler.jsonc`, and Workers AI has no local emulation (nor does Artifacts), so
  * `@cloudflare/vite-plugin` opens a remote proxy session for it at boot. With no
  * Cloudflare login that session fails and the dev server dies, even for an app
  * whose models come from `LUNORA_AI_PROXY_URL` or an AI SDK provider. Here the
@@ -18,7 +18,7 @@
  * config, so the plugin below records the command first.
  */
 import { lunoraLine } from "@lunora/config/cli";
-import { describeWithheldWorkersAi, hasCloudflareCredentials, withheldWorkersAi } from "@lunora/config/cloudflare";
+import { describeWithheld, hasCloudflareCredentials, withheldBindings } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import type { CloudflarePluginOptions } from "./types";
@@ -26,6 +26,7 @@ import type { CloudflarePluginOptions } from "./types";
 /** The slice of a resolved worker config this module reads and edits. */
 interface WorkerConfigLike {
     ai?: { binding?: string } | null;
+    artifacts?: ReadonlyArray<{ binding?: string } | null | undefined> | null;
 }
 
 type Customizer = (config: WorkerConfigLike, ...rest: unknown[]) => Partial<WorkerConfigLike> | undefined;
@@ -36,6 +37,10 @@ interface LocalAiOptions {
     /** Project whose `.env` files the credential probe also reads. */
     projectRoot?: string;
 }
+
+/** The entries of an `artifacts` value, or none when it is not an array. */
+const listOf = (value: unknown): NonNullable<WorkerConfigLike["artifacts"]> =>
+    Array.isArray(value) ? (value as NonNullable<WorkerConfigLike["artifacts"]>) : [];
 
 /** Customizers this module already wrapped, so a second `config` pass doesn't nest them. */
 const wrapped = new WeakSet<object>();
@@ -65,16 +70,18 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
             // A copy: a plain-object customizer is the user's own object, and the
             // delete below must not stick to it for the rest of the process.
             const result = fromUser === undefined ? undefined : { ...fromUser };
-            const withheld = serving ? withheldWorkersAi(config.ai ?? result?.ai, hasCredentials) : undefined;
+            // Both sides count: an empty array on the base config must not hide a binding the customizer returns.
+            // Read only for a dev server, and only arrays: a malformed value is the config validator's to report.
+            const artifacts = serving ? [...listOf(config.artifacts), ...listOf(result?.artifacts)] : [];
+            const withheld = serving ? withheldBindings({ ai: config.ai ?? result?.ai, artifacts }, hasCredentials) : [];
 
-            if (withheld !== undefined) {
+            for (const entry of withheld) {
                 // In place by design: the plugin merges the returned object with `defu`,
                 // which keeps any key the base config still has.
-                // eslint-disable-next-line no-param-reassign
-                delete config.ai;
-                delete result?.ai;
+                Reflect.deleteProperty(config, entry.kind);
+                Reflect.deleteProperty(result ?? {}, entry.kind);
                 // eslint-disable-next-line no-console -- the dev server's logger isn't available while the Cloudflare plugin resolves its config.
-                console.warn(lunoraLine(describeWithheldWorkersAi(withheld)));
+                console.warn(lunoraLine(describeWithheld(entry)));
             }
 
             return result;

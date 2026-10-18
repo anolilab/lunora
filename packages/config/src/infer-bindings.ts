@@ -39,7 +39,6 @@ import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
-import artifactsBindingHint from "./artifacts-hint";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { escapeRegExp } from "./dev-variables-format";
@@ -85,7 +84,7 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 //   images      → images                    → self-describing (binding name only)
 //   analytics   → analytics_engine_datasets → self-describing (dataset == binding name)
 //   pipelines   → pipelines                 → hint (un-mintable remote pipeline name)
-//   artifacts   → artifacts                 → hint (remote-only in dev, and the namespace's jurisdiction is fixed at creation, so never auto-written)
+//   artifacts   → artifacts                 → written with the Worker's name as namespace (a logged-out dev session leaves it out; deploy creates a pinned one)
 //   aiSearch    → ai_search_namespaces      → self-describing (namespace "default" always exists; wrangler creates a missing one)
 //   analyticsSql → analytics                → self-describing (binding name only; wrangler >= 4.145.0)
 
@@ -301,9 +300,10 @@ interface InferredBindings {
 
     /**
      * `ctx.artifacts` is read or `@lunora/bindings/artifacts` value-imported.
-     * Hint-only: the first repo `create()` against a missing namespace creates it
-     * UNRESTRICTED and a namespace's jurisdiction can never change after that, and
-     * the binding is remote-only in dev, so Lunora never writes it for you.
+     * Reconcile writes the binding with the Worker's name as its namespace. The first repo
+     * `create()` against a missing namespace creates it UNRESTRICTED and the jurisdiction can
+     * never change after that, so `lunora deploy` creates a pinned schema's namespace in its
+     * jurisdiction, and stops when it can't.
      */
     usesArtifacts: boolean;
     /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
@@ -593,7 +593,12 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
             capabilities.usesPipelines,
             `hint: ${usageOf("pipelines")}; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned`,
         ],
-        [capabilities.usesArtifacts, `hint: ${artifactsBindingHint(schema.jurisdiction)}`],
+        [
+            capabilities.usesArtifacts,
+            schema.jurisdiction === undefined
+                ? `artifacts (${usageOf("artifacts")}) — { binding: ARTIFACTS, namespace }`
+                : `hint: ${usageOf("artifacts")}; the schema pins data to "${schema.jurisdiction}", so create the namespace in that jurisdiction first and add { binding: ARTIFACTS, namespace } yourself — \`lunora deploy\` then checks it (a first create() in dev would make it unrestricted)`,
+        ],
         [
             capabilities.usesX402Charge,
             "hint: @lunora/x402/charge is imported; set the recipient wallet address as a [vars] entry (the var name is yours to choose) and pass it to the charge config — the x402 facilitator settles USDC to that address",
