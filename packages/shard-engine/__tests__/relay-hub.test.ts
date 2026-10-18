@@ -1375,6 +1375,41 @@ describe("relay hub", () => {
         expect(records?.size).toBe(64);
     });
 
+    it("still refuses a late live control call whose record the cap evicted", async () => {
+        expect.assertions(1);
+
+        const liveControl = vi.fn<(control: unknown) => Promise<Response>>(() => Promise.resolve(new Response(undefined, { status: 200 })));
+        const member = memberOf({
+            doName: () => `${OWNER_KEY}::relay::0`,
+            env: () => {
+                return {};
+            },
+            getWebSockets: () => [],
+            liveControl,
+            readAttachment: () => {
+                return {};
+            },
+            shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
+            sql: () => database.sql,
+        } as unknown as RelayHost);
+        const control = (action: string, subscriptionId: string, seq: number): string =>
+            JSON.stringify({ control: { action, callerId: "u1", connectionId: "c1", key: "k1", seq, subscriptionId }, type: "relay_live_control" });
+
+        // A's unsubscribe lands first, then 64 other subscriptions' calls push A's record out.
+        await deliver(member, control("unsubscribe", "a", 100));
+
+        for (let index = 0; index < 64; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- applied in order, as the owner sends them
+            await deliver(member, control("unsubscribe", `s${String(index)}`, 101 + index));
+        }
+
+        // A's delayed subscribe, stamped before its unsubscribe, finally arrives.
+        const late = await deliver(member, control("subscribe", "a", 50));
+
+        expect(late.status).toBe(409);
+    });
+
     describe("relay announce", () => {
         const announcingRelay = (status: number): RelayMember => {
             const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };
