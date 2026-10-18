@@ -171,7 +171,9 @@ The two **write** tools take three more fields — `confirmed`, `actionDigest` a
 Results are returned as MCP `content` text: the function's return value JSON,
 or the JSON `null` literal for a void-returning mutation/action. Unknown tools
 and thrown errors come back as `isError` tool results (not rejections), so the
-calling model sees the failure as tool output.
+calling model sees the failure as tool output. An error result carries
+`{ code, message }` both as `structuredContent` and as one text block that begins
+with the code, for example `NOT_FOUND: unknown tool: x`.
 
 ### Write confirmation
 

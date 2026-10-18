@@ -1,5 +1,6 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
+import { errorFromThrown, errorResult } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
 
 /**
@@ -136,7 +137,7 @@ const agentToolDefinitions = (exposures: ReadonlyArray<McpAgentExposure>, allowA
         return [];
     }
 
-    const perAgent: ToolDefinition[] = exposures.map((exposure) => {
+    const perAgent: ToolDefinition[] = exposures.map((exposure): ToolDefinition => {
         return {
             annotations: {
                 destructiveHint: true,
@@ -197,10 +198,6 @@ const defaultWait = async (ms: number): Promise<void> => {
 
 const ok = (value: unknown): ToolResult => {
     return { content: [{ text: JSON.stringify(value, undefined, 2), type: "text" }] };
-};
-
-const fail = (text: string): ToolResult => {
-    return { content: [{ text, type: "text" }], isError: true };
 };
 
 /** Read a non-empty string field off an MCP `arguments` bag (else `undefined`). */
@@ -273,7 +270,7 @@ const callAgentStatus = async (client: LunoraClient, input: Record<string, unkno
     const threadKey = readString(input, "threadKey");
 
     if (threadKey === undefined) {
-        return fail('"threadKey" is required and must be a non-empty string');
+        return errorResult("BAD_REQUEST", '"threadKey" is required and must be a non-empty string');
     }
 
     const thread = await client.query(reference(AGENT_THREAD_PATH), { key: threadKey });
@@ -300,7 +297,7 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
     try {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
         if (options.allowAgents !== true) {
-            return fail(`tool "${name}" is disabled: agent tools are off. Enable them with the LUNORA_MCP_ALLOW_AGENTS env var.`);
+            return errorResult("FORBIDDEN", `tool "${name}" is disabled: agent tools are off. Enable them with the LUNORA_MCP_ALLOW_AGENTS env var.`);
         }
 
         if (name === AGENT_STATUS_TOOL_NAME) {
@@ -310,13 +307,13 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
         const exposure = options.exposures.find((candidate) => agentToolName(candidate) === name);
 
         if (exposure === undefined) {
-            return fail(`agent tool "${name}" is not exposed by this MCP server`);
+            return errorResult("NOT_FOUND", `agent tool "${name}" is not exposed by this MCP server`);
         }
 
         const prompt = readString(input, "prompt");
 
         if (prompt === undefined) {
-            return fail('"prompt" is required and must be a non-empty string');
+            return errorResult("BAD_REQUEST", '"prompt" is required and must be a non-empty string');
         }
 
         const threadKey = readString(input, "threadKey") ?? freshThreadKey();
@@ -354,9 +351,7 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
         // error — the caller resumes by polling with the threadKey.
         return ok({ hint: "call lunora_agent_status with this threadKey to poll for the answer", runId: id, status: "running", threadKey });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        return fail(message);
+        return errorFromThrown(error);
     }
 };
 

@@ -1,4 +1,5 @@
 import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
@@ -33,7 +34,7 @@ describe("observability tool definitions", () => {
         expect.assertions(3);
 
         expect(OBSERVABILITY_TOOL_DEFINITIONS.map((tool) => tool.name)).toStrictEqual(OBSERVABILITY_NAMES);
-        expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+        expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.annotations?.readOnlyHint)).toBe(true);
         // The MCP spec requires an output schema to be an object at the root.
         expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.outputSchema?.type === "object")).toBe(true);
     });
@@ -330,11 +331,11 @@ describe("the remaining reads", () => {
 
         const mock = mockClient();
 
-        mock.query.mockRejectedValueOnce(new Error("ADMIN_FORBIDDEN"));
+        mock.query.mockRejectedValueOnce(new LunoraError("ADMIN_FORBIDDEN", "the admin token was rejected"));
 
         const result = await callTool(mock.asClient, "lunora_get_logs", {}, false, true);
 
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("ADMIN_FORBIDDEN");
+        expect(result.structuredContent).toStrictEqual({ code: "ADMIN_FORBIDDEN", message: "the admin token was rejected" });
     });
 });

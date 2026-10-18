@@ -6,8 +6,10 @@
  * observability tools (`./observability-tools`). Keeping it here also keeps
  * `./observability-tools` off `./tools`, which would be an import cycle.
  */
+import { getCatalogEntry, isInternalCode, LunoraError } from "@lunora/errors";
+
 import { toBase64 } from "../../../shared/base64";
-import type { ToolResult } from "./tool-types";
+import type { ToolInputSchema, ToolResult } from "./tool-types";
 
 /**
  * `JSON.stringify` replacer for a decoded RPC result. `LunoraClient` decodes
@@ -74,9 +76,72 @@ const okStructured = (value: Record<string, unknown>): ToolResult => {
     return { ...ok(value), structuredContent: toJsonSafe(value) };
 };
 
-/** An error result: the message as tool output, per the MCP convention (never a rejection). */
-const errorResult = (message: string): ToolResult => {
-    return { content: [{ text: message, type: "text" }], isError: true };
+/**
+ * An error result: `isError: true`, carrying `{ code, message }` both as
+ * `structuredContent` and as one text block. Some clients render only the
+ * structured form and some only the text, so both always say the same thing.
+ *
+ * `code` is a Lunora catalog code where one fits (`NOT_FOUND`, `FORBIDDEN`,
+ * `BAD_REQUEST`, …) or a tool-specific code for the handshake refusals. The
+ * message must be safe to show a model: pass only text this package wrote, never
+ * a raw upstream error string (see {@link errorFromThrown}).
+ */
+const errorResult = (code: string, message: string): ToolResult => {
+    return {
+        content: [{ text: `${code}: ${message}`, type: "text" }],
+        isError: true,
+        structuredContent: { code, message },
+    };
 };
 
-export { errorResult, ok, okStructured };
+/** The one message a thrown error that is not a typed `LunoraError` is ever shown as. */
+const UNEXPECTED_ERROR_MESSAGE = "the tool call failed unexpectedly";
+
+/**
+ * The error result for a thrown value. The disclosure rule lives here, once, so
+ * no tool family can leak raw text.
+ *
+ * A `LunoraError` whose code the catalog marks `internal` shows only that
+ * code's catalog title. The server already redacts those on the wire, and the
+ * local copy must not undo it. Any other `LunoraError` shows its message: those
+ * are either written by this package (the argument and allowlist refusals a model
+ * needs to self-correct) or are the server's own public message for that code.
+ *
+ * Any other thrown value — a plain `Error`, a network failure, a string — is
+ * `INTERNAL` with a fixed message. Its `.message` is not a contract and may carry
+ * a URL, token or SQL fragment.
+ */
+const errorFromThrown = (error: unknown): ToolResult => {
+    if (error instanceof LunoraError) {
+        const { code } = error;
+
+        return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
+    }
+
+    return errorResult("INTERNAL", UNEXPECTED_ERROR_MESSAGE);
+};
+
+/** The JSON-Schema property for the `code` of an error result. */
+const ERROR_CODE_PROPERTY: Record<string, unknown> = { description: "Set on an error result: the machine-readable error code.", type: "string" };
+
+/** The JSON-Schema property for the `message` of an error result. */
+const ERROR_MESSAGE_PROPERTY: Record<string, unknown> = { description: "Set on an error result: a message that is safe to show.", type: "string" };
+
+/**
+ * A tool's `outputSchema`, widened to admit the `{ code, message }` object an
+ * error result carries.
+ *
+ * The MCP SDK client validates `structuredContent` against `outputSchema` even
+ * when `isError` is set, so a schema that requires the success fields would
+ * reject every failure of that tool. The error fields are added here and the
+ * top level requires nothing, so the schema no longer enforces the success
+ * fields. The typed helpers still produce them.
+ */
+const withErrorShape = (output: ToolInputSchema): ToolInputSchema => {
+    return {
+        properties: { code: ERROR_CODE_PROPERTY, message: ERROR_MESSAGE_PROPERTY, ...output.properties },
+        type: "object",
+    };
+};
+
+export { errorFromThrown, errorResult, ok, okStructured, withErrorShape };

@@ -32,7 +32,7 @@ const handlerFor = (server: Server, method: string): ((request: Record<string, u
 };
 
 const tool = (name: string, handle: McpTool["handle"]): McpTool => {
-    return { definition: { description: name, inputSchema: { properties: {}, type: "object" }, name }, handle };
+    return { definition: { annotations: { readOnlyHint: true }, description: name, inputSchema: { properties: {}, type: "object" }, name }, handle };
 };
 
 describe("createToolServer", () => {
@@ -110,7 +110,7 @@ describe("createToolServer", () => {
     });
 
     it("converts a thrown handler error into an error result", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const server = createToolServer({ name: "test", version: "1.0.0" }, [
             tool("boom", async () => {
@@ -120,8 +120,10 @@ describe("createToolServer", () => {
 
         const result = (await handlerFor(server, CallToolRequestSchema.shape.method.value)({ params: { name: "boom" } })) as CallToolResult;
 
+        // A plain Error is not a typed Lunora error, so its raw text stays out of the result.
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result.content)).toContain("handler exploded");
+        expect(result.structuredContent).toEqual({ code: "INTERNAL", message: "the tool call failed unexpectedly" });
+        expect(JSON.stringify(result.content)).not.toContain("handler exploded");
     });
 });
 
