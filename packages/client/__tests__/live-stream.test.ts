@@ -579,6 +579,71 @@ describe("connectLiveStream", () => {
         live.close();
     });
 
+    it("does not let a stale subscribe reply drop the connection after its subscription was released", async () => {
+        expect.assertions(1);
+
+        const streams: FakeStream[] = [];
+        const controls: ControlCall[] = [];
+        let holdFirstReply: ((response: Response) => void) | undefined;
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                const stream = new FakeStream(`c${String(streams.length + 1)}`);
+
+                streams.push(stream);
+
+                // A real fetch errors the body when its signal aborts; closing the stream stands in for that.
+                init?.signal?.addEventListener("abort", () => {
+                    stream.end();
+                });
+
+                return Promise.resolve(stream.response);
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            controls.push(call);
+
+            // The first subscribe's reply is held, so it lands after the id has been released and re-used.
+            if (controls.length === 1) {
+                return new Promise<Response>((resolve) => {
+                    holdFirstReply = resolve;
+                });
+            }
+
+            return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        await live.ready;
+
+        const release = live.subscribe({ id: "s1", topic: "feed" });
+
+        release();
+        live.subscribe({ id: "s1", topic: "feed" });
+
+        // The release and the re-subscribe queue behind the held reply, so only that reply is on the wire now.
+        await vi.waitFor(() => {
+            if (holdFirstReply === undefined) {
+                throw new Error("first subscribe not sent yet");
+            }
+        });
+
+        holdFirstReply(Response.json({ ok: false }, { status: 404 }));
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        expect(streams).toHaveLength(1);
+
+        live.close();
+    });
+
     it("generates an id that skips one a caller already holds", async () => {
         expect.assertions(2);
 

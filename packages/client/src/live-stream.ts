@@ -524,9 +524,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                             // A subscribe that never reached the shard, failed server-side, names a connection the shard
                             // no longer has, or was rejected for an expired credential is retried by reconnecting, which
                             // re-registers every active subscription. A reply for a connection that has since been replaced
-                            // needs no retry: the new connection registers it too.
+                            // needs no retry: the new connection registers it too. Nor does a reply for a subscription
+                            // that was released or re-registered meanwhile: a stale failure must not drop the live connection.
                             if (status === undefined || status === 401 || status === 404 || status >= 500) {
-                                if (sentOn === connectionId) {
+                                if (sentOn === connectionId && subscriptions.get(subscriptionId) === entry) {
                                     sentAborter?.abort();
                                 }
 
