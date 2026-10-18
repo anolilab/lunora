@@ -154,6 +154,40 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(true);
     });
 
+    it("flags a `.deliveryAuthorization(...)` call on a builder typed AppBuilder and passed in as a parameter", () => {
+        expect.assertions(1);
+
+        // The builder is not bound in this file, so the checker types it from
+        // the generated class.
+        mkdirSync(join(workdir, "_generated"));
+        writeFileSync(
+            join(workdir, "_generated", "app.ts"),
+            `export class AppBuilder<Env extends object> {\n    deliveryAuthorization(selector: (env: Env) => unknown): this {\n        return this;\n    }\n}\n`,
+            "utf8",
+        );
+        write(
+            "helper.ts",
+            `import type { AppBuilder } from "../_generated/app";\n\nexport const configure = (builder: AppBuilder<object>) => builder.deliveryAuthorization(() => undefined);\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
+    it("flags a `.deliveryAuthorization(...)` call on a builder imported from another file", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "_generated"));
+        writeFileSync(
+            join(workdir, "_generated", "app.ts"),
+            `export class AppBuilder<Env extends object> {\n    deliveryAuthorization(selector: (env: Env) => unknown): this {\n        return this;\n    }\n}\n`,
+            "utf8",
+        );
+        write("builder.ts", `import type { AppBuilder } from "../_generated/app";\n\nexport declare const app: AppBuilder<object>;\n`);
+        write("use.ts", `import { app } from "./builder";\n\nexport const verdict = app.deliveryAuthorization(() => undefined);\n`);
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
     it("flags a bracket-form `.deliveryAuthorization(...)` call on the app builder", () => {
         expect.assertions(1);
 

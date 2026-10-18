@@ -164,15 +164,25 @@ const isAppHookFunction = (node: Node | undefined): boolean => {
     return declared !== undefined && isNamedAppHook(node.getSourceFile(), declared);
 };
 
+/** The generated builder class (`emit-app.ts`). */
+const APP_BUILDER_CLASS = "AppBuilder";
+
 /**
- * True when `receiver` denotes the app builder: a chain rooted at `defineApp()`,
- * a local variable initialised from one, or the parameter of an `app` hook.
+ * True when `node` is typed as the generated `AppBuilder`, whatever its form:
+ * an import, a parameter, a `new`, a call result. Untyped values stay unmatched.
+ */
+const isAppBuilderType = (node: Node): boolean => node.getType().getSymbol()?.getName() === APP_BUILDER_CLASS;
+
+/**
+ * True when `receiver` denotes the app builder by name: a chain rooted at
+ * `defineApp()`, a local variable initialised from one, or the parameter of an
+ * `app` hook. Typed builders are matched at the call by {@link isAppBuilderType}.
  *
  * The root identifier is resolved the way the language resolves it: the
  * innermost enclosing scope that binds its name decides. A same-named object in
  * a sibling or nested scope is therefore never the builder, which the earlier
- * whole-file name lookup got wrong. Names bound nowhere in the file (imports,
- * globals) are not the builder.
+ * whole-file name lookup got wrong. A name bound nowhere in the file is not
+ * matched here.
  */
 const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined, seen: Set<string> = new Set()): boolean => {
     const root = chainRootOf(receiver);
@@ -217,7 +227,7 @@ const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined
 const isDeliveryAuthorizationCall = (sourceFile: SourceFile, call: CallExpression): boolean => {
     const access = memberAccessOf(call.getExpression());
 
-    return access?.member === "deliveryAuthorization" && isAppBuilderReceiver(sourceFile, access.object);
+    return access?.member === "deliveryAuthorization" && (isAppBuilderReceiver(sourceFile, access.object) || isAppBuilderType(access.object));
 };
 
 /** The option keys that make each signal call a declaration. */
