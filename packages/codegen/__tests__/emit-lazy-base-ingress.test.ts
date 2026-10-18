@@ -53,7 +53,7 @@ const writeGeneratedShard = (functions: ReadonlyArray<FunctionIR>): { entry: str
     writeFileSync(join(generatedDirectory, "shard.ts"), emitShard({ lazyFunctions: true, schema: { tables: [], vectorIndexes: [] } }));
 
     for (const [relativePath, source] of Object.entries(emitLazyFunctionModules(functionsOptions))) {
-        writeFileSync(join(generatedDirectory, relativePath), source);
+        writeFileSync(join(generatedDirectory, "fn", relativePath), source);
     }
 
     return { entry: join(generatedDirectory, "shard.ts"), output: join(projectRoot, "shard.mjs"), root: projectRoot };

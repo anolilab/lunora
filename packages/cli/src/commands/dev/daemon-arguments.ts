@@ -1,5 +1,6 @@
 /** The argv a detached daemon `lunora dev` re-invocation is started with (`--background`). */
-import resolveLazyFunctions from "../../util/lazy-functions";
+import { resolveLazyFunctions } from "@lunora/config";
+
 import type { DevOptions } from "./index";
 import { normalizeAllowMail } from "./tunnel";
 

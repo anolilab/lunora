@@ -31,23 +31,26 @@ class ShapeShard extends TestShard {
 
 const databases: ReturnType<typeof createSqliteExec>[] = [];
 
-const setup = async () => {
+const setup = async (withShapes = true) => {
     const database = createSqliteExec();
     databases.push(database);
     runShardMigrations(database.sql, messagesSchema, { cdc: true });
     let socket = new Socket();
     socket.attachment.connectionId = "retained-connection";
     const setAlarm = vi.fn<() => Promise<void>>(async () => {});
+    const getWebSockets = vi.fn<(tag?: string) => WebSocket[]>(() => [socket as unknown as WebSocket]);
     const state: ShardDOState = {
         acceptWebSocket() {},
-        getWebSockets: () => [socket as unknown as WebSocket],
+        getWebSockets,
         storage: { setAlarm, sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
     };
     const shard = new ShapeShard(state, {});
     const subscribeShape = (name: string) =>
         shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "shape_subscribe", id: name, shape: { name } }));
-    await subscribeShape("local");
-    await subscribeShape("global");
+    if (withShapes) {
+        await subscribeShape("local");
+        await subscribeShape("global");
+    }
     await shard.webSocketMessage(
         socket as unknown as WebSocket,
         JSON.stringify({ type: "subscribe", id: "ordinary", query: { functionPath: "messages:list", args: {} } }),
@@ -72,7 +75,7 @@ const setup = async () => {
                 body: JSON.stringify({ functionPath: "messages:write", args: {} }),
             }),
         );
-    return { authority, database, enable, setAlarm, shard, socket: () => socket, write };
+    return { authority, database, enable, getWebSockets, setAlarm, shard, socket: () => socket, write };
 };
 
 const refresh = async (test: Awaited<ReturnType<typeof setup>>, shard: ShapeShard): Promise<void> => {
@@ -87,6 +90,72 @@ describe("retained shapes when delivery authorization is enabled", () => {
         for (const database of databases.splice(0)) {
             database.close();
         }
+    });
+
+    it.each([
+        { hibernated: false, withShapes: false },
+        { hibernated: false, withShapes: true },
+        { hibernated: true, withShapes: false },
+        { hibernated: true, withShapes: true },
+    ])("stops scanning after a complete sweep with shapes=$withShapes and hibernated=$hibernated", async ({ hibernated, withShapes }) => {
+        expect.hasAssertions();
+
+        const test = await setup(withShapes);
+        const shard = test.enable(hibernated);
+
+        test.getWebSockets.mockClear();
+
+        await shard.alarm();
+
+        expect(test.getWebSockets).toHaveBeenCalledWith(undefined);
+        expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual([]);
+
+        test.getWebSockets.mockClear();
+
+        await shard.alarm();
+
+        const alarmScans = test.getWebSockets.mock.calls.length;
+
+        test.getWebSockets.mockClear();
+
+        shard.rows = ["after"];
+        await refresh(test, shard);
+
+        // Ordinary subscriptions still need one fan-out; retired shapes need none.
+        expect({ alarmScans, writeScans: test.getWebSockets.mock.calls.length }).toEqual({ alarmScans: 0, writeScans: 1 });
+        expect(test.socket().frames.findLast((frame) => frame.type === "data")).toMatchObject({ id: "ordinary", data: ["after"] });
+    });
+
+    it("retries an interrupted shape sweep before disabling further scans", async () => {
+        expect.hasAssertions();
+
+        const test = await setup();
+        const shard = test.enable(true);
+        // Complete room cleanup first so the failure belongs to the shape sweep.
+        await shard.webSocketMessage(test.socket() as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+        vi.spyOn(test.socket(), "deserializeAttachment").mockImplementationOnce(() => {
+            throw new Error("attachment read unavailable");
+        });
+
+        test.setAlarm.mockClear();
+
+        await shard.alarm();
+
+        expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual(["local", "global"]);
+        expect(test.setAlarm).toHaveBeenCalledTimes(1);
+
+        await shard.alarm();
+
+        expect(test.socket().attachment.shapes).toEqual({});
+        expect(readShapePokeCursor(test.database.sql, "retained-connection", "local")).toBeUndefined();
+        expect(readGlobalShapeSnapshot(test.database.sql, "retained-connection", "global")).toBeUndefined();
+
+        test.getWebSockets.mockClear();
+
+        await shard.alarm();
+
+        expect(test.getWebSockets).not.toHaveBeenCalled();
+        expect(shard.globalReads).toBe(0);
     });
 
     it.each([
@@ -189,6 +258,12 @@ describe("retained shapes when delivery authorization is enabled", () => {
         expect(readShapePokeCursor(test.database.sql, "retained-connection", "local")).toBeUndefined();
         expect(shard.globalReads).toBe(0);
         expect(test.setAlarm).not.toHaveBeenCalled();
+
+        test.getWebSockets.mockClear();
+
+        await shard.alarm();
+
+        expect(test.getWebSockets).not.toHaveBeenCalled();
     });
 
     it("keeps both shapes and global polling when the feature stays off", async () => {

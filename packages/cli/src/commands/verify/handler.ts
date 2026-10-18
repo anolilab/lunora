@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
@@ -16,7 +17,6 @@ import { detectPackageManager, execArgsFor } from "../../util/detect-package-man
 import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";

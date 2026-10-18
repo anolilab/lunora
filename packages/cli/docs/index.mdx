@@ -1081,9 +1081,13 @@ Worker instead of `http://localhost:8787`.
 Pass `--lazy-functions` or set `LUNORA_LAZY_FUNCTIONS` to `1` or `true` in the
 shell to enable per-module lazy imports. The environment setting applies to
 `codegen`, `dev`, `build`, `deploy`, `prepare`, and `verify`, including dev watch
-runs and Studio edits. Either opt-in enables lazy imports; a false flag value
-does not override an enabled environment setting. With neither enabled,
-generation stays eager.
+runs and Studio edits. `advisor` reads the environment setting only; it has no
+flag. Either opt-in enables lazy imports; a false flag value does not override an
+enabled environment setting. With neither enabled, generation stays eager.
+
+Lazy mode moves a module's top-level failures from deploy time to the first call
+that loads it: the upload check no longer evaluates procedure modules, so run your
+tests (or a smoke request per module) before shipping a lazy build.
 
 Runs codegen once and exits, the one-shot form of what `lunora dev` and the
 Vite plugin do in watch mode. It reads `lunora/schema.ts` plus your function

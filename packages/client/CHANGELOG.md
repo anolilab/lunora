@@ -1,3 +1,15 @@
+## @lunora/client [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.218...@lunora/client@1.0.0-alpha.219) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.222
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.212
+
 ## @lunora/client [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.217...@lunora/client@1.0.0-alpha.218) (2026-10-18)
 
 ### Features

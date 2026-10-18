@@ -109,7 +109,7 @@ describe("lazy function registry", () => {
         const options = { functions: [definition], lazyFunctions: true };
         const emitted = emitFunctions(options);
         const modules = emitLazyFunctionModules(options);
-        const module = modules["fn/lunora_posts_0.ts"] ?? "";
+        const module = modules["lunora_posts_0.ts"] ?? "";
 
         expect(emitted).not.toContain('import * as lunora_posts_0 from "../posts.js";');
         expect(emitted).toContain('"posts:premium": { args: {}, handler: unloadedFunctionHandler');
@@ -133,7 +133,7 @@ describe("lazy function registry", () => {
         const emitted = emitFunctions(options);
         const modules = emitLazyFunctionModules(options);
 
-        expect(Object.keys(modules)).toEqual(["fn/lunora_posts_0.ts"]);
+        expect(Object.keys(modules)).toEqual(["lunora_posts_0.ts"]);
         expect(emitted.match(/\(\) => import\("\.\/fn\/lunora_posts_0\.js"\)/gu)).toHaveLength(1);
         expect(emitted).toContain('topic: "room:chat"');
         expect(emitted).not.toContain("for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS))");
@@ -153,6 +153,17 @@ describe("lazy function registry", () => {
         expect(() => emitFunctions({ functions: [makeFunction("list", { filePath: injectedPath })], lazyFunctions: true })).toThrow(/unsafe file path/u);
     });
 
+    it("never evicts a failed module from the loader cache", () => {
+        expect.assertions(2);
+
+        // Node caches a module that threw, so an end-to-end run cannot tell a retry from a rethrow;
+        // pin the registry itself: a failed load stays in the cache and every call rethrows it.
+        const emitted = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
+
+        expect(emitted).not.toContain("loadedModules.delete(");
+        expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
+    });
+
     it("keeps eager output unchanged unless lazy mode is selected", () => {
         expect.assertions(3);
 
@@ -163,8 +174,8 @@ describe("lazy function registry", () => {
         expect(emitted).not.toContain("LUNORA_FUNCTION_MANIFEST");
     });
 
-    it("loads real handlers once, installs compiled validators, and retries a failed module import", async () => {
-        expect.assertions(24);
+    it("loads real handlers once, installs compiled validators, and keeps a failed module failed", async () => {
+        expect.assertions(25);
 
         const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-"));
         const generatedDirectory = join(projectRoot, "_generated");
@@ -182,8 +193,8 @@ describe("lazy function registry", () => {
         };
         const registrySource = emitFunctions(options);
         const lazyModules = emitLazyFunctionModules(options);
-        const shimSource = lazyModules["fn/lunora_posts_0.ts"];
-        const internalShimSource = lazyModules["fn/lunora_private_2.ts"];
+        const shimSource = lazyModules["lunora_posts_0.ts"];
+        const internalShimSource = lazyModules["lunora_private_2.ts"];
 
         try {
             if (shimSource === undefined || internalShimSource === undefined) {
@@ -259,6 +270,7 @@ export const hidden = { args: {}, kind: "query", handler() { return "hidden"; } 
             const runnerFile = join(projectRoot, "run-lazy-registry.mjs");
             writeFileSync(
                 runnerFile,
+                // eslint-disable-next-line no-secrets/no-secrets -- false positive: a generated runner script, not a credential.
                 `import { copyFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -279,9 +291,8 @@ try {
   internalDispatchCode = error.code;
 }
 const internalModuleEvaluations = state.privateModuleEvaluations;
-const coldEntry = registry.getLoadedFunction("posts:premium");
-const failed = await Promise.allSettled([registry.loadFunction("posts:premium"), registry.loadFunction("posts:premium")]);
 copyFileSync(config.shimPayloadFile, config.shimFile);
+const coldEntry = registry.getLoadedFunction("posts:premium");
 const first = registry.loadFunction("posts:premium");
 const second = registry.loadFunction("posts:premium");
 await moduleStarted;
@@ -299,6 +310,15 @@ const handlerResult = await loaded.handler({}, { name: "Ada" });
 const cachedEntry = await registry.loadFunction("posts:premium");
 const synchronousEntry = registry.getLoadedFunction("posts:premium");
 const sibling = registry.getLoadedFunction("posts:sibling");
+const brokenAttempts = [];
+for (let attempt = 0; attempt < 2; attempt += 1) {
+  try {
+    await registry.loadFunction("private:hidden");
+    brokenAttempts.push("loaded");
+  } catch (error) {
+    brokenAttempts.push(error.message);
+  }
+}
 
 process.stdout.write(JSON.stringify({
   cacheReusedEntry: cachedEntry === loaded,
@@ -307,7 +327,8 @@ process.stdout.write(JSON.stringify({
   siblingResult: sibling.handler(),
   coalescedEvaluations,
   finalEvaluations: state.evaluations,
-  failedLoadsRejected: failed.every((result) => result.status === "rejected"),
+  brokenAttempts,
+  brokenEvaluations: state.privateModuleEvaluations,
   handlerCalls: state.handlerCalls,
   handlerResult,
   internalDispatchCode,
@@ -342,10 +363,11 @@ Reflect.deleteProperty(globalThis, config.stateName);
                 { encoding: "utf8" },
             );
             const result = JSON.parse(output) as {
+                brokenAttempts: string[];
+                brokenEvaluations: number;
                 cacheReusedEntry: boolean;
                 coalescedEvaluations: number;
                 coldEntryMissing: boolean;
-                failedLoadsRejected: boolean;
                 finalEvaluations: number;
                 handlerCalls: number;
                 handlerResult: string;
@@ -364,7 +386,11 @@ Reflect.deleteProperty(globalThis, config.stateName);
                 synchronousEntry: boolean;
             };
 
-            expect(result.failedLoadsRejected).toBe(true);
+            expect(result.brokenAttempts).toStrictEqual([
+                "internal module must not be loaded by external dispatch",
+                "internal module must not be loaded by external dispatch",
+            ]);
+            expect(result.brokenEvaluations).toBe(1);
             expect(result.coalescedEvaluations).toBe(1);
             expect(result.finalEvaluations).toBe(1);
             expect(result.cacheReusedEntry).toBe(true);
@@ -377,7 +403,7 @@ Reflect.deleteProperty(globalThis, config.stateName);
             expect(result.internalDispatchCode).toBe("FUNCTION_NOT_FOUND");
             expect(result.parsed).toEqual({ name: "Ada" });
             expect(result.parseCalls).toBe(0);
-            expect(Object.keys(lazyModules)).toEqual(["fn/lunora_posts_0.ts", "fn/lunora_private_2.ts"]);
+            expect(Object.keys(lazyModules)).toEqual(["lunora_posts_0.ts", "lunora_private_2.ts"]);
             expect(registrySource).toContain('import * as lunora_mutators_1 from "../mutators.js";');
             expect(registrySource).toContain('"mutators:default": lunora_mutators_1.default as unknown as RegisteredLunoraFunction');
             expect(registrySource).toContain('"mutators:sameModule": lunora_mutators_1.sameModule as unknown as RegisteredLunoraFunction');

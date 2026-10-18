@@ -27,7 +27,7 @@ import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { detectAgentRules } from "@lunora/config";
+import { detectAgentRules, resolveLazyFunctions } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
     applyStudioAssetCache,
@@ -49,8 +49,6 @@ import {
     studioAssetsStamp,
     transportRejectionReason,
 } from "@lunora/config/studio-host";
-
-import resolveLazyFunctions from "./lazy-functions";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_lunora";

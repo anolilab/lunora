@@ -35,6 +35,7 @@ import {
     readLiveDevServerState,
     readProjectDependencyNames,
     readProjectManifest,
+    resolveLazyFunctions,
     resolveProjectTarget,
     targetRunsOwnDevServer,
     updateDevServerState,
@@ -45,7 +46,6 @@ import { detectPackageManager, execArgsFor } from "../../util/detect-package-man
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import { EXIT_CODE } from "../../util/exit-code";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";

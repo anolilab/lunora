@@ -60,6 +60,7 @@ import {
     emitVectors,
     emitWorkflows,
     emitWranglerCronTriggers,
+    LAZY_FUNCTION_DIRECTORY,
     queueAliasFindings,
 } from "./emit";
 import { emitServiceDeclarations } from "./emit/service-declarations";
@@ -81,7 +82,6 @@ import { buildSpecArtifacts } from "./spec-artifacts";
  * dot keeps it tucked away next to the schema it describes.
  */
 const SCHEMA_SNAPSHOT_FILENAME = ".lunora-schema.json";
-const FUNCTION_SHIM_PREFIX_RE = /^fn\//u;
 
 /**
  * Whether opt-in codegen timing is enabled. Gated on a truthy
@@ -243,7 +243,7 @@ const inferToFixpoint = (options: {
     apiPath: string;
     generatedFunctionsPath: string;
     internalPath: string;
-    lazyFunctions?: boolean;
+    lazyFunctions: boolean;
     lunoraDirectory: string;
     migrations: ReadonlyArray<MigrationIR>;
     project: Project;
@@ -260,7 +260,6 @@ const inferToFixpoint = (options: {
     functionsContent: string;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
     internalContent: string;
-    lazyFunctions: boolean;
     mutators: ReadonlyArray<MutatorIR>;
 } => {
     const {
@@ -289,7 +288,7 @@ const inferToFixpoint = (options: {
     // render the same return.
     const discover = () =>
         collectErasures(() => {
-            const functions = discoverFunctions(project, lunoraDirectory, { lazyFunctions: lazyFunctions === true });
+            const functions = discoverFunctions(project, lunoraDirectory, { lazyFunctions });
             const mutators = discoverMutators(project, lunoraDirectory);
 
             return { functions, httpRoutes: discoverHttpRoutes(project, lunoraDirectory), mutators };
@@ -318,13 +317,11 @@ const inferToFixpoint = (options: {
     for (let pass = 1; ; pass += 1) {
         // Recomputed each pass: the inference refines `functions`, and the emit must see that.
         const emittedFunctions = roomsSupported ? functions : functions.filter((definition) => definition.channel?.kind !== "room");
-        const lazyFunctionsForRegistry = lazyFunctions === true;
-
         const apiContent = emitApi({ agents, functions: emittedFunctions, httpRoutes, mutators, useUmbrella, workflows });
         const functionsOptions = {
             agents,
             functions: emittedFunctions,
-            lazyFunctions: lazyFunctionsForRegistry,
+            lazyFunctions,
             migrations,
             mutators,
             shapes,
@@ -335,18 +332,18 @@ const inferToFixpoint = (options: {
         const functionModulesContent = emitLazyFunctionModules(functionsOptions);
         const internalContent = emitInternalApi({ functions, useUmbrella });
 
+        const shimDirectory = join(lunoraDirectory, "_generated", LAZY_FUNCTION_DIRECTORY);
+        const rendered: [string, string][] = [
+            [apiPath, apiContent],
+            [internalPath, internalContent],
+            [generatedFunctionsPath, functionsContent],
+            ...Object.entries(functionModulesContent).map(([name, content]): [string, string] => [join(shimDirectory, name), content]),
+        ];
+
         // Converged, or out of budget — either way this render is the answer, and
         // the budget check sits HERE so the final pass's re-inference is never
         // computed and then discarded.
-        if (
-            pass >= MAX_INFERENCE_PASSES ||
-            (projectFileMatches(project, apiPath, apiContent) &&
-                projectFileMatches(project, internalPath, internalContent) &&
-                projectFileMatches(project, generatedFunctionsPath, functionsContent) &&
-                Object.entries(functionModulesContent).every(([path, content]) =>
-                    projectFileMatches(project, join(lunoraDirectory, "_generated", path), content),
-                ))
-        ) {
+        if (pass >= MAX_INFERENCE_PASSES || rendered.every(([path, content]) => projectFileMatches(project, path, content))) {
             return {
                 apiContent,
                 erased,
@@ -355,16 +352,12 @@ const inferToFixpoint = (options: {
                 functionsContent,
                 httpRoutes,
                 internalContent,
-                lazyFunctions: lazyFunctionsForRegistry,
                 mutators,
             };
         }
 
-        syncProjectFile(project, apiPath, apiContent);
-        syncProjectFile(project, internalPath, internalContent);
-        syncProjectFile(project, generatedFunctionsPath, functionsContent);
-        for (const [path, content] of Object.entries(functionModulesContent)) {
-            syncProjectFile(project, join(lunoraDirectory, "_generated", path), content);
+        for (const [path, content] of rendered) {
+            syncProjectFile(project, path, content);
         }
 
         ({
@@ -390,7 +383,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
-    const lazyFunctionsRequested = options.lazyFunctions === true;
+    const lazyFunctions = options.lazyFunctions === true;
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -498,12 +491,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Rooms ride hibernated shard sockets: a target that rejects `typedWebSockets` gets no room
     // surface. The gate has already reported the rejection as `platform_unsupported_feature`.
     const roomsSupported = platformGate.signals.typedWebSockets !== false;
-    const { apiContent, erased, functions, functionModulesContent, functionsContent, httpRoutes, internalContent, lazyFunctions, mutators } = inferToFixpoint({
+    const { apiContent, erased, functions, functionModulesContent, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
         apiPath,
         generatedFunctionsPath,
         internalPath,
-        lazyFunctions: lazyFunctionsRequested,
+        lazyFunctions,
         roomsSupported,
         lunoraDirectory,
         migrations,
@@ -876,9 +869,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             : undefined;
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
-    const lazyFunctionShimFiles = Object.fromEntries(
-        Object.entries(functionModulesContent).map(([path, content]) => [path.replace(FUNCTION_SHIM_PREFIX_RE, ""), content]),
-    );
 
     // The `_generated/` files this run emits, in write order. Which files those
     // are depends on the project (conditional features, `apiSpec`), so it is
@@ -894,7 +884,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
               { content: internalContent, kind: "always", name: "internal.ts" },
               { content: serverContent, kind: "always", name: "server.ts" },
               { content: functionsContent, kind: "always", name: "functions.ts" },
-              { files: lazyFunctionShimFiles, kind: "directory", name: "fn" },
+              { files: functionModulesContent, kind: "directory", name: LAZY_FUNCTION_DIRECTORY },
               { content: shardContent, kind: "always", name: "shard.ts" },
               { content: cronsContent, kind: "always", name: "crons.ts" },
               { content: vectorsContent, kind: "always", name: "vectors.ts" },

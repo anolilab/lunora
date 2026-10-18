@@ -964,8 +964,9 @@ export interface FanoutTopicStat {
 /**
  * Running fan-out counters for one delivery path since the DO instance woke,
  * mirroring `@lunora/do`'s `FanoutPathCounters`. `socketsIterated` is the
- * O(subscribers) loop cost; `socketsDelivered` is how many of those received a
- * frame. `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
+ * O(subscribers) loop cost; `socketsDelivered` counts successful frame handoffs
+ * to sockets. This does not confirm receipt by the client.
+ * `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
  * populated only for the asynchronous shape-poke path — they stay `0` for the
  * synchronous whisper broadcast.
  */

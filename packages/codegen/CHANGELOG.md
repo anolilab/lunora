@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.319...@lunora/codegen@1.0.0-alpha.320) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.222
+
 ## @lunora/codegen [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.318...@lunora/codegen@1.0.0-alpha.319) (2026-10-18)
 
 ### Features
