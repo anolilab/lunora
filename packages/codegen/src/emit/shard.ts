@@ -87,6 +87,9 @@ interface EmitShardOptions {
      */
     hasSecretValues?: boolean;
 
+    /** A function declares a `v.sensitive` argument — wires the `sensitiveArgNames` override so the request log masks it. */
+    hasSensitiveArgs?: boolean;
+
     /**
      * The target platform supports a vector store. `false` withholds the whole
      * Vectorize wiring — the `@lunora/bindings/vectors` imports, the
@@ -148,6 +151,7 @@ const emitShard = ({
     hasNotify = false,
     hasRooms = false,
     hasSecretValues = false,
+    hasSensitiveArgs = false,
     hasSockets = false,
     lazyFunctions = false,
     hasVectors = true,
@@ -406,6 +410,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
+        ...(hasSensitiveArgs ? [`import { sensitiveArgumentNames } from "${base.values}";`] : []),
         ``,
         `import schema from "../schema.js";`,
         // Local-first sync registries are pulled in alongside the function table
@@ -739,6 +744,23 @@ ${sourceBootstrap}${ttlBootstrap}        }
 `
         : "";
     const renderedPrepareFunctionOverride = prepareFunctionOverride === "" ? "\n\n" : `${prepareFunctionOverride}\n`;
+    // Only emitted when some function declares a `v.sensitive` argument, so projects
+    // without one keep their output byte-identical. The base class masks nothing.
+    const sensitiveArgsOverride = hasSensitiveArgs
+        ? `
+        protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
+            const registered = LUNORA_FUNCTIONS[functionPath];
+            const fromValidators = sensitiveArgumentNames(registered?.args ?? {});
+
+            if (registered?.sensitiveArgs === undefined) {
+                return fromValidators;
+            }
+
+            return new Set([...registered.sensitiveArgs, ...fromValidators]);
+        }
+
+`
+        : "";
     const dispatchRun = dispatchRunSource(lazyFunctions);
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
@@ -908,7 +930,7 @@ ${dispatchRun}
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {${constructorOverride}
-        private migrated = false;${renderedPrepareFunctionOverride}${shardDispatchMethods}
+        private migrated = false;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
 ${relationFanout.override}
 ${subscriptionMethods}
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
