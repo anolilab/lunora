@@ -129,6 +129,14 @@ retried forever, and every discard — including one the capacity cap evicts out
 a _restored_ queue, which has no caller left to tell — reaches the queue's
 `onSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`onlineOnly: true` to `mutation`. It is never queued, persisted or replayed:
+where a normal write would be queued, the Future fails at once with a
+`LunoraApiException` coded `offlineNotQueued` (`OFFLINE_NOT_QUEUED`), before any
+optimistic layer is applied, and its arguments never reach the persistence
+adapter. It does not wait for a flush or queue behind pending writes, so it may
+land before an older queued write to the same document.
+
 How a replay reads the reply is one rule for a lone write and a batch alike: a
 coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
 is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
