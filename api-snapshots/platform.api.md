@@ -707,8 +707,13 @@ interface SocketHost {
     getSockets: (tag?: string) => SocketHandle[];
     handleFor: (socket: unknown) => SocketHandle | undefined;
     idFor: (socket: SocketHandle) => string;
+    newPair: () => {
+        client: unknown;
+        server: unknown;
+    };
     removeTag?: (socket: SocketHandle, tag?: string) => void;
     setTag?: (socket: SocketHandle, tag: string) => void;
+    upgradeResponse: (client: unknown) => Response;
 }
 ```
 

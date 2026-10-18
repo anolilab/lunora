@@ -50,6 +50,8 @@ export interface NodeShardState {
     blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => unknown[];
     id: { name?: string };
+    /** Open a connection pair. Read by `@lunora/platform-cloudflare`'s socket host, which has no `WebSocketPair` here. */
+    openSocketPair: () => { client: unknown; server: unknown };
     storage: {
         delete: (key: string) => Promise<boolean>;
         deleteAlarm: () => Promise<void>;
@@ -64,6 +66,8 @@ export interface NodeShardState {
         };
         transaction: <T>(closure: () => Promise<T>) => Promise<T>;
     };
+    /** Build the upgrade response for a pair's client end. A Node `Response` cannot carry status 101, so this is a marker. */
+    upgradeResponse: (client: unknown) => Response;
     waitUntil: (promise: Promise<unknown>) => void;
 }
 
@@ -124,5 +128,42 @@ export const createNodeShardState = (shard: NodeShard): NodeShardState => {
         waitUntil: (promise) => {
             shard.shard.waitUntil?.(promise);
         },
+        openSocketPair: () => shard.sockets.newPair(),
+        upgradeResponse: (client) => shard.sockets.upgradeResponse(client),
     };
+};
+
+/** The two socket hooks a `ShardDO` runs on the Cloudflare runtime's behalf. */
+export interface ShardSocketHooks {
+    // Method syntax on purpose: a method's parameters are bivariant, so a `ShardDO` whose hooks take its own socket type is accepted.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style
+    webSocketClose(ws: unknown, code: number, reason: string, wasClean: boolean): unknown;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style
+    webSocketMessage(ws: unknown, message: string | ArrayBuffer): unknown;
+}
+
+/**
+ * Deliver a shard's inbound socket events. The Cloudflare runtime calls
+ * `webSocketMessage` and `webSocketClose` on the Durable Object for a hibernated
+ * socket. On Node nothing does, so the embedder calls this once per shard
+ * instance, at the same point it builds the shard.
+ */
+export const bindShardSockets = (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">): void => {
+    inbound.onMessage((socket, data) => {
+        // A handler error must not take the process down, and the Cloudflare runtime logs the same failure for a Durable Object.
+        Promise.resolve(shard.webSocketMessage(socket, data)).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- the frame is dropped, so the failure is only visible here
+            console.error("[lunora] webSocketMessage threw:", error);
+        });
+    });
+
+    inbound.onClose(async (socket, code, reason, wasClean) => {
+        // Awaited so the host releases the socket only after the hook has run.
+        try {
+            await shard.webSocketClose(socket, code, reason, wasClean);
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- the close has already happened; only the hook's failure is reported
+            console.error("[lunora] webSocketClose threw:", error);
+        }
+    });
 };

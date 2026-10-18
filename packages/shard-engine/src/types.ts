@@ -325,6 +325,15 @@ export interface SocketAttachment {
      */
     shapes?: Record<string, ShapeSubscriptionQuery>;
 
+    /**
+     * Set on a socket accepted for a `defineWebSocket` route: the URL path the
+     * route serves (e.g. `/chat`). Its presence marks a socket whose inbound
+     * frames are typed messages for that route rather than subscription
+     * envelopes, and it lets a hibernated socket that wakes on a frame resolve
+     * its handler + broadcast channel again without a per-connection registry.
+     * Absent on every ordinary subscription socket.
+     */
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
 
     /**

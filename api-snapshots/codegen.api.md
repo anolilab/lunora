@@ -361,7 +361,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
@@ -1445,7 +1445,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSockets, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -2541,6 +2541,7 @@ interface EmitShardOptions {
     hasFlags?: boolean;
     hasNotify?: boolean;
     hasRooms?: boolean;
+    hasSockets?: boolean;
     hasVectors?: boolean;
     lazyFunctions?: boolean;
     liveStreams?: boolean;

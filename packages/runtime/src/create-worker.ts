@@ -354,6 +354,22 @@ interface FunctionRegistryEntry {
      * callers pass the generated `LUNORA_FUNCTIONS` map without a cast.
      */
     kind: "action" | "mutation" | "query" | "stream";
+
+    /**
+     * The lifecycle moment a registration fires on, when it is a lifecycle hook,
+     * a `defineRoom` registration, or a `defineWebSocket` route. Present on the
+     * generated `LUNORA_FUNCTIONS` values (they are the live runtime objects);
+     * the worker reads `"socket"` entries to recognise a route's path as a
+     * WebSocket-upgrade endpoint rather than an unknown app route.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+
+    /**
+     * Set on a `defineWebSocket` route: the URL path it serves. The worker
+     * forwards an upgrade at this path to the shard Durable Object, which
+     * resolves the registration through its generated socket map.
+     */
+    socketPath?: string;
     visibility?: "internal" | "public";
 
     /**
@@ -2601,6 +2617,12 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
 };
 
 /**
+ * `Upgrade` is a case-insensitive token (RFC 9110 §7.8), so `WebSocket` and
+ * `websocket` name the same upgrade. Every socket path checks through here.
+ */
+const isWebSocketUpgrade = (request: Request): boolean => request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+
+/**
  * Clone an upgrade request's headers with EVERY client-supplied `x-lunora-*`
  * header stripped, then the server-minted identity trio re-set.
  *
@@ -4321,7 +4343,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
@@ -4426,7 +4448,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return new Response("Not found", { status: 404 });
         }
 
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             return new Response("Expected a WebSocket upgrade", { headers: { allow: "GET" }, status: 426 });
         }
 
@@ -5623,6 +5645,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     assertNoReservedRoutes(customRoutes);
 
+    // The declared `defineWebSocket` route paths, read off the generated
+    // `LUNORA_FUNCTIONS` registry the worker already carries. An upgrade at one
+    // of these paths is the SAME forward as `/_lunora/ws`: the shard DO resolves
+    // the route from the request path. Derived here (not threaded as a new
+    // option) so a route-free worker's construction is unchanged, and resolving
+    // it once keeps the per-request check a single Set lookup.
+    const socketRoutePaths = new Set(
+        Object.values(options.functions ?? {}).flatMap((registered) =>
+            registered.lifecycle === "socket" && typeof registered.socketPath === "string" ? [registered.socketPath] : [],
+        ),
+    );
+
     const internalRoutes: Record<string, InternalRoute> = {
         [STATUS_PATH]: (request) => {
             // Health probes are reads; anything else on this path is a scanner
@@ -5792,6 +5826,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (authResponse) {
             return authResponse;
+        }
+
+        // A declared `defineWebSocket` route upgrades and forwards to the shard
+        // DO, exactly like `/_lunora/ws` — the DO resolves the registration from
+        // the request path. Checked ahead of the custom HTTP routes so a custom
+        // handler at the same path never intercepts the upgrade, and ahead of the
+        // app router so a declared route wins over an SSR page. Only an actual
+        // upgrade is the route's: a plain GET or POST to the same path falls
+        // through to the router rather than failing with a 426. The handshake is
+        // always a GET (RFC 6455 §4.1), so a POST carrying the header is not one.
+        if (socketRoutePaths.has(url.pathname) && request.method === "GET" && isWebSocketUpgrade(request)) {
+            return handleWebSocketUpgrade(request, env, url);
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).

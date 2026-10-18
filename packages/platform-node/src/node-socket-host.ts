@@ -38,6 +38,8 @@ import { deserialize, serialize } from "node:v8";
 import type { SocketHandle, SocketHost } from "@lunora/platform";
 import type Database from "better-sqlite3";
 
+import type { NodeServerEnd } from "./node-socket-pair";
+import { createNodeSocketPair, NodeClientEnd, upgradeMarkerFor } from "./node-socket-pair";
 import { toArrayBuffer } from "./to-array-buffer";
 
 /** Internal record for one accepted (or restored) socket. */
@@ -85,6 +87,15 @@ const isWeakKey = (value: unknown): value is object => (typeof value === "object
  * from inside a test.
  */
 export interface NodeSocketHost {
+    /** Deliver a connection's close to `handler`, which calls `webSocketClose`. One handler per host. */
+    onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
+
+    /**
+     * Deliver a connection's inbound frames to `handler`. The handler is the
+     * shard that accepted the connection, so it calls `webSocketMessage`. One
+     * handler per host: a later call replaces the earlier one.
+     */
+    onMessage: (handler: (socket: NodeServerEnd, data: string | ArrayBuffer) => void) => void;
     /** Read back the frames sent to a socket, oldest first, text frames only. */
     readFrames: (handle: SocketHandle) => string[];
 
@@ -257,7 +268,42 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         return bindHandle(state, handle);
     };
 
+    // Inbound events are routed through these listeners, set by the shard that owns the connection.
+    const listeners: {
+        close?: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>;
+        message?: (socket: NodeServerEnd, data: string | ArrayBuffer) => void;
+    } = {};
+
+    const hub = {
+        close: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => {
+            const handled = listeners.close?.(socket, code, reason, wasClean);
+            // The registry drops the socket only after the shard's close handler settles, so the handler can still resolve it.
+            const release = (): void => {
+                const state = byRaw.get(socket);
+
+                if (state !== undefined) {
+                    deregister(state);
+                }
+            };
+
+            Promise.resolve(handled)
+                .then(release, release)
+                .catch(() => undefined);
+        },
+        message: (socket: NodeServerEnd, data: string | ArrayBuffer) => {
+            listeners.message?.(socket, data);
+        },
+    };
+
     const socket: SocketHost = {
+        newPair: () => createNodeSocketPair(hub),
+        upgradeResponse: (client) => {
+            if (!(client instanceof NodeClientEnd)) {
+                throw new TypeError("@lunora/platform-node: upgradeResponse called with a client end this host did not open");
+            }
+
+            return upgradeMarkerFor(client);
+        },
         accept: (raw, attachment, tags) => {
             if (!database.open) {
                 throw new Error("platform closed: cannot accept a socket");
@@ -355,6 +401,12 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
     };
 
     return {
+        onClose: (handler) => {
+            listeners.close = handler;
+        },
+        onMessage: (handler) => {
+            listeners.message = handler;
+        },
         readFrames: (handle) => (runtimeSockets.get(handleIds.get(handle) ?? "")?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id, attachment) => {
             const row = database.open ? selectRow.get(id) : undefined;

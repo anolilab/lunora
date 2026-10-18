@@ -13,6 +13,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
+
+import { WebSocketServer } from "ws";
+
+import { takeUpgradeClient } from "./node-socket-pair";
 
 /** A host as it appears in a URL: an IPv6 literal such as `::1` needs brackets, `[::1]`, or the origin is not a valid URL. */
 const urlHost = (host: string): string => (host.includes(":") && !host.startsWith("[") ? `[${host}]` : host);
@@ -172,6 +177,28 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
     outgoing.end();
 };
 
+/**
+ * Answer a refused upgrade with the response the worker chose: its status, its
+ * headers, and its body. The socket is closed afterwards, because a refused
+ * handshake has no connection to keep.
+ */
+const writeRefusal = async (response: Response, socket: Duplex): Promise<void> => {
+    const body = Buffer.from(await response.arrayBuffer());
+    const lines = [
+        `HTTP/1.1 ${String(response.status)} ${response.statusText || "Refused"}`,
+        "connection: close",
+        `content-length: ${String(body.byteLength)}`,
+    ];
+
+    response.headers.forEach((value, name) => {
+        if (name !== "content-length" && name !== "connection") {
+            lines.push(`${name}: ${value}`);
+        }
+    });
+
+    socket.end(Buffer.concat([Buffer.from(`${lines.join("\r\n")}\r\n\r\n`), body]));
+};
+
 /** Serve `options.fetch` over `node:http`. Resolves once the server is listening. */
 export const createNodeHttpServer = async (options: NodeHttpServerOptions): Promise<NodeHttpServer> => {
     const host = options.host ?? "127.0.0.1";
@@ -187,11 +214,15 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         );
     }
 
+    // `noServer`: the HTTP listener owns the upgrade, so the worker's own checks run before any handshake is written.
+    const webSockets = new WebSocketServer({ noServer: true });
     const server = createServer();
+    // The origin every request URL is built on, for plain requests and upgrades alike. The client's Host header is never read:
+    // the configured public origin, or else the bound address.
+    const requestOrigin = (): string => configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
 
     server.on("request", (incoming, outgoing) => {
-        // The origin every request URL is built on. The client's Host header is never read: the configured public origin, or else the bound address.
-        const origin = configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
+        const origin = requestOrigin();
         const abort = new AbortController();
 
         // A client that disconnects before the response is complete will never read it, so the handler's signal fires
@@ -231,6 +262,51 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             });
     });
 
+    const upgrade = async (incoming: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
+        // A client that drops the socket before the handshake completes gets no answer: abort the request so the shard stops.
+        const abort = new AbortController();
+        // The shard can accept the server end while `fetch` is still running a route's `onOpen`, so a close during the fetch is
+        // remembered and acted on once the client end is known.
+        // An object, not a `let`: the close fires during the awaited fetch, which control-flow narrowing cannot see.
+        const socketState = { closed: false };
+
+        socket.once("close", () => {
+            socketState.closed = true;
+            abort.abort();
+        });
+
+        const response = await options.fetch(toRequest(incoming, requestOrigin(), abort.signal));
+        const client = takeUpgradeClient(response);
+
+        if (client === undefined) {
+            // Not an accepted upgrade: the worker refused it (401, 403, 426, 404), so that response is the answer.
+            await writeRefusal(response, socket);
+
+            return;
+        }
+
+        // The shard has accepted the server end. If the socket has gone, or goes before the handshake does, the shard must hear the close.
+        if (socketState.closed) {
+            client.abandon();
+
+            return;
+        }
+
+        socket.once("close", () => {
+            client.abandon();
+        });
+
+        webSockets.handleUpgrade(incoming, socket, head, (ws) => {
+            client.attach(ws);
+        });
+    };
+
+    server.on("upgrade", (incoming, socket, head) => {
+        upgrade(incoming, socket, head).catch(() => {
+            socket.destroy();
+        });
+    });
+
     await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(options.port ?? 0, host, () => {
@@ -244,6 +320,12 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     return {
         close: () =>
             new Promise<void>((resolve, reject) => {
+                // Upgraded sockets are not HTTP connections, so `closeAllConnections` does not reach them.
+                for (const ws of webSockets.clients) {
+                    ws.terminate();
+                }
+
+                webSockets.close();
                 server.closeAllConnections();
                 server.close((error) => {
                     if (error === undefined) {

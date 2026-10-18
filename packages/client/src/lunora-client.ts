@@ -963,6 +963,12 @@ class LunoraClient {
     private readonly adminSocketTeardowns = new Set<() => void>();
 
     /**
+     * Per-channel hooks that drop a supplementary (route / scheduled) socket so it
+     * reconnects under the current credential. Run when the credential changes.
+     */
+    private readonly supplementaryBounces = new Set<() => void>();
+
+    /**
      * The in-flight offline-queue replay per shard (`connectionKey`), while one
      * is running. Two jobs:
      *
@@ -2143,6 +2149,108 @@ class LunoraClient {
     }
 
     /**
+     * Open a `defineWebSocket` route: a dedicated socket at the route's declared
+     * `path`, typed `send`/`onMessage` like a query's args/result. `path` is the
+     * exact path the server declared (`defineWebSocket({ path: "/chat", … })`).
+     *
+     * `Message` is the route's message type. Codegen does NOT yet infer it from
+     * the route's validator, so pass it explicitly (or rely on a route-typed
+     * wrapper in your app):
+     *
+     * ```ts
+     * const chat = client.connectWebSocket<{ text: string }>("/chat", {
+     *     onMessage: (message) => append(message.text),
+     * });
+     * chat.send({ text: "hello" });
+     * chat.close();
+     * ```
+     *
+     * The socket authenticates exactly like the shard socket: the browser's
+     * session cookie, or the `wsToken` credential (the same
+     * {@link setWsToken} / `?token=` scheme). A route declared `auth: true` on the
+     * server refuses a socket with no verified session. Reconnects with the
+     * client's configured backoff. `onMessage` receives what the route's server
+     * handler sent (via its `socket.send`/`socket.broadcast`), never the sender's
+     * own raw frame — the handler is authoritative. Returns a handle with `send`
+     * and `close`; a `send` while the socket is not open is dropped (the channel
+     * is transient, like a whisper).
+     */
+    public connectWebSocket<Message>(
+        path: string,
+        handlers: { onClose?: () => void; onMessage: (message: Message) => void; onOpen?: () => void },
+        options: { shardKey?: string } = {},
+    ): { close: () => void; send: (message: Message) => void } {
+        this.assertLeaderOwnedSurface("connectWebSocket");
+
+        if (this.WebSocketImpl === undefined || this.closed) {
+            return { close: () => undefined, send: () => undefined };
+        }
+
+        const notify = (callback: (() => void) | undefined): void => {
+            try {
+                callback?.();
+            } catch (error) {
+                // eslint-disable-next-line no-console -- a route callback throwing must not unwind into the host's event loop
+                console.error("[lunora] socket route handler threw", error);
+            }
+        };
+
+        const channel = this.openSupplementarySocket(this.supplementaryUrl(path), {
+            onClose: () => {
+                notify(handlers.onClose);
+            },
+            onMessage: (event: MessageEvent) => {
+                let frame: { data?: unknown; type?: string };
+
+                try {
+                    frame = JSON.parse(typeof event.data === "string" ? event.data : "") as { data?: unknown; type?: string };
+                } catch {
+                    // A non-JSON frame (the keepalive pong, for one) is dropped.
+                    return;
+                }
+
+                if (frame.type === "message") {
+                    // A payload frame is proof of a live, ACCEPTED socket —
+                    // reset the backoff so a rejected `auth: true` upgrade
+                    // backs off instead of reconnecting at the initial delay
+                    // forever.
+                    channel.resetBackoff();
+                    handlers.onMessage(decodeWire(frame.data) as Message);
+                }
+            },
+            onOpen: () => {
+                // An accepted upgrade is proof the route is reachable: restart the backoff here,
+                // so a route that stays quiet does not keep doubling its reconnect delay. A
+                // rejected upgrade never opens, so `auth: true` rejections still back off.
+                channel.resetBackoff();
+                notify(handlers.onOpen);
+            },
+            shardKey: options.shardKey,
+        });
+
+        return {
+            close: channel.close,
+            send: (message: Message) => {
+                // Encoding runs outside the send guard: an unencodable payload is the caller's
+                // error and must surface, not vanish as if the socket had dropped.
+                const payload = JSON.stringify(encodeCallArgs(message, `socket message for '${path}'`));
+                const socket = channel.socket();
+
+                if (socket === undefined) {
+                    return;
+                }
+
+                try {
+                    socket.send(payload);
+                } catch {
+                    // A send race against a closing socket is harmless — the close
+                    // handler tears the connection down and reconnects.
+                }
+            },
+        };
+    }
+
+    /**
      * Subscribe to token-expiry events: invoked whenever the server drops a
      * shard socket because the connection's credential lapsed (close code
      * `4001`). The client already reconnects automatically (re-resolving
@@ -2797,149 +2905,40 @@ class LunoraClient {
             return () => undefined;
         }
 
-        const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
-        const reconnect = createReconnect(this.reconnectOptions);
+        const channel = this.openSupplementarySocket(this.supplementaryUrl(SCHEDULED_WS_PATH), {
+            onMessage: (event: MessageEvent) => {
+                // `lastFrameAt` is stamped by `openManagedSocket` itself (its
+                // `message` listener) for every caller — nothing to do here
+                // beyond parsing.
+                let message: { records?: ScheduleRecord[]; type?: string };
 
-        // This subscription's own connection state — the identity-guard
-        // comparand `openManagedSocket` re-checks before every action, exactly
-        // like the shard socket's `ShardConnection`. Built on the same shared
-        // helper (plan 217's connect-timeout + heartbeat/watchdog, plan 231's
-        // identity guard) instead of a second, hand-rolled implementation
-        // (CLIENT-05).
-        const conn: ManagedSocketState = {
-            connectTimer: undefined,
-            heartbeatTimer: undefined,
-            lastFrameAt: 0,
-            socket: undefined,
-        };
+                try {
+                    message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+                } catch {
+                    // A non-JSON frame, and the ONLY thing this catch ever
+                    // meant. It used to wrap the decode and the consumer
+                    // callback as well, so a `decodeWire` throw on a
+                    // malformed tag — or anything `onJobs` itself raised —
+                    // was discarded under a comment about JSON, and the
+                    // operator's live job list silently stopped updating
+                    // with no error reported anywhere.
+                    return;
+                }
 
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let closed = false;
+                if (message.type === "jobs" && Array.isArray(message.records)) {
+                    // A payload frame is the proof of a live, ACCEPTED socket
+                    // that `open` alone never was: the upgrade succeeds before
+                    // the admin credential is checked, so resetting on `open`
+                    // made a rejected token reconnect at the initial delay
+                    // forever instead of backing off (mirrors the shard
+                    // socket's fix).
+                    channel.resetBackoff();
+                    onJobs(message.records.map((record) => decodeRecordArgs(record)));
+                }
+            },
+        });
 
-        /** Arm the next reconnect attempt, unless `unsubscribe()` — or `close()` — already ran. */
-        const scheduleReconnect = (): void => {
-            if (closed || this.closed) {
-                return;
-            }
-
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
-            timer = setTimeout(connect, reconnect.next());
-        };
-
-        const openWith = (token: string | undefined): void => {
-            if (closed || this.WebSocketImpl === undefined) {
-                return;
-            }
-
-            const url = token === undefined ? base : `${base}?token=${encodeURIComponent(token)}`;
-
-            openManagedSocket(conn, url, this.managedSocketOptions, {
-                onClose: () => {
-                    scheduleReconnect();
-                },
-                onMessage: (event: MessageEvent) => {
-                    // `lastFrameAt` is stamped by `openManagedSocket` itself
-                    // (its `message` listener) for every caller — nothing to
-                    // do here beyond parsing.
-                    let message: { records?: ScheduleRecord[]; type?: string };
-
-                    try {
-                        message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
-                    } catch {
-                        // A non-JSON frame, and the ONLY thing this catch ever
-                        // meant. It used to wrap the decode and the consumer
-                        // callback as well, so a `decodeWire` throw on a
-                        // malformed tag — or anything `onJobs` itself raised —
-                        // was discarded under a comment about JSON, and the
-                        // operator's live job list silently stopped updating
-                        // with no error reported anywhere.
-                        return;
-                    }
-
-                    if (message.type === "jobs" && Array.isArray(message.records)) {
-                        // A payload frame is the proof of a live, ACCEPTED
-                        // socket that `open` alone never was: the upgrade
-                        // succeeds before the admin credential is checked,
-                        // so resetting on `open` made a rejected token
-                        // reconnect at the initial delay forever instead of
-                        // backing off (mirrors the shard socket's fix).
-                        reconnect.reset();
-                        onJobs(message.records.map((record) => decodeRecordArgs(record)));
-                    }
-                },
-            });
-        };
-
-        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
-        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
-            let token: string | undefined;
-
-            try {
-                token = await provider();
-            } catch {
-                scheduleReconnect();
-
-                return;
-            }
-
-            openWith(token);
-        };
-
-        // Read `this.wsToken` at connect time (not once at subscribe time) so a
-        // post-subscribe `setWsToken()` rotation is picked up on the next
-        // reconnect attempt instead of looping forever with a stale token the
-        // admin gate rejects. A provider-shaped token is resolved fresh per
-        // attempt (re-minting the ephemeral admin sub-token); a provider failure
-        // re-arms the reconnect timer so a broken mint endpoint degrades to
-        // backoff retries.
-        const connect = (): void => {
-            if (closed || this.WebSocketImpl === undefined) {
-                return;
-            }
-
-            const { wsToken } = this;
-
-            if (typeof wsToken === "function") {
-                // `connectWithProvider` never rejects (its awaits are try/caught),
-                // so the fire-and-forget catch is belt-and-braces.
-                connectWithProvider(wsToken).catch(() => undefined);
-
-                return;
-            }
-
-            openWith(wsToken);
-        };
-
-        connect();
-
-        const teardown = (): void => {
-            closed = true;
-
-            if (timer !== undefined) {
-                clearTimeout(timer);
-                timer = undefined;
-            }
-
-            if (conn.connectTimer !== undefined) {
-                clearTimeout(conn.connectTimer);
-                conn.connectTimer = undefined;
-            }
-
-            stopHeartbeat(conn);
-
-            conn.socket?.close();
-            conn.socket = undefined;
-        };
-
-        // Registered so `close()` stops this socket too — its reconnect loop is
-        // driven by the closure-local `closed` flag above, which nothing outside
-        // the returned unsubscribe could ever set.
-        this.adminSocketTeardowns.add(teardown);
-
-        return () => {
-            this.adminSocketTeardowns.delete(teardown);
-            teardown();
-        };
+        return channel.close;
     }
 
     // --- Functions admin ----------------------------------------------------
@@ -4007,6 +4006,7 @@ class LunoraClient {
         }
 
         this.adminSocketTeardowns.clear();
+        this.supplementaryBounces.clear();
 
         // Rate-limit retry flushes are the one timer that outlives the socket
         // teardown above (they fire against an open connection, not a reconnect).
@@ -5672,24 +5672,200 @@ class LunoraClient {
         return conn;
     }
 
-    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
-        const params: string[] = [];
+    /**
+     * Open a managed WebSocket to a NON-shard endpoint and own its reconnect
+     * loop + teardown. Two callers share it — {@link subscribeScheduledJobs}'s
+     * admin socket and {@link connectWebSocket}'s `defineWebSocket` route — and
+     * they must share it rather than each hand-roll it: the connect-timeout +
+     * heartbeat/watchdog/identity-guard live in `openManagedSocket`, the backoff
+     * policy in `createReconnect`, and reading `wsToken` at connect time is what
+     * lets a post-connect `setWsToken()` rotation be picked up on the next
+     * reconnect attempt instead of looping with a stale token. Registered on
+     * {@link adminSocketTeardowns} so `close()` stops it too.
+     *
+     * `base` is the endpoint URL without `shard`/`token` params. `handlers`
+     * parses the frames and observes the lifecycle; `handlers.shardKey` routes
+     * the connection. The returned `resetBackoff` clears the reconnect backoff
+     * once a payload frame proves the socket live, and `socket` is the current
+     * transport (for a send), or `undefined` while it is not open.
+     */
+    private openSupplementarySocket(
+        base: string,
+        handlers: { onClose?: () => void; onMessage: (event: MessageEvent) => void; onOpen?: () => void; shardKey?: string },
+    ): { close: () => void; resetBackoff: () => void; socket: () => WebSocket | undefined } {
+        // The callers all check this before calling, but the helper stays
+        // self-contained: a no-op channel is the honest answer. A closed client
+        // has already run its teardown sweep, so a channel opened now would never be closed.
+        if (this.WebSocketImpl === undefined || this.closed) {
+            return { close: () => undefined, resetBackoff: () => undefined, socket: () => undefined };
+        }
+
+        const reconnect = createReconnect(this.reconnectOptions);
+
+        // This channel's own connection state — the identity-guard comparand
+        // `openManagedSocket` re-checks before every action, exactly like the
+        // shard socket's `ShardConnection`.
+        const conn: ManagedSocketState = { connectTimer: undefined, heartbeatTimer: undefined, lastFrameAt: 0, socket: undefined };
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let closed = false;
+
+        /** Arm the next reconnect attempt, unless `close()` — or the client's `close()` — already ran. */
+        const scheduleReconnect = (): void => {
+            if (closed || this.closed) {
+                return;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
+            timer = setTimeout(connect, reconnect.next());
+        };
+
+        const openWith = (token: string | undefined): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            openManagedSocket(conn, this.wsUrlFor(handlers.shardKey, token, base), this.managedSocketOptions, {
+                onClose: () => {
+                    scheduleReconnect();
+                    handlers.onClose?.();
+                },
+                onMessage: handlers.onMessage,
+                ...(handlers.onOpen === undefined ? {} : { onOpen: handlers.onOpen }),
+            });
+        };
+
+        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
+        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
+            const generation = this.wsTokenGeneration;
+            let token: string | undefined;
+
+            try {
+                token = await provider();
+            } catch {
+                scheduleReconnect();
+
+                return;
+            }
+
+            // The credential was replaced while this one was minted: it is superseded, so the
+            // channel must not open on it. Mint again under the current credential.
+            if (generation !== this.wsTokenGeneration) {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- re-enters `connect`, declared just below with `openWith` in scope
+                connect();
+
+                return;
+            }
+
+            openWith(token);
+        };
+
+        // Read `this.wsToken` at connect time (not once at open time) so a
+        // post-open `setWsToken()` rotation is picked up on the next reconnect
+        // attempt. A provider-shaped token is resolved fresh per attempt; a
+        // provider failure re-arms the reconnect timer so a broken mint
+        // endpoint degrades to backoff retries.
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            const { wsToken } = this;
+
+            if (typeof wsToken === "function") {
+                // `connectWithProvider` never rejects (its awaits are try/caught),
+                // so the fire-and-forget catch is belt-and-braces.
+                connectWithProvider(wsToken).catch(() => undefined);
+
+                return;
+            }
+
+            openWith(wsToken);
+        };
+
+        connect();
+
+        const teardown = (): void => {
+            closed = true;
+
+            if (timer !== undefined) {
+                clearTimeout(timer);
+                timer = undefined;
+            }
+
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
+            stopHeartbeat(conn);
+
+            conn.socket?.close();
+            conn.socket = undefined;
+        };
+
+        this.adminSocketTeardowns.add(teardown);
+
+        // Closing the live socket re-arms the reconnect (`onClose` → `scheduleReconnect`),
+        // which opens again under whatever credential is current.
+        const bounce = (): void => {
+            conn.socket?.close();
+        };
+
+        this.supplementaryBounces.add(bounce);
+
+        return {
+            close: () => {
+                teardown();
+                this.adminSocketTeardowns.delete(teardown);
+                this.supplementaryBounces.delete(bounce);
+            },
+            resetBackoff: () => {
+                reconnect.reset();
+            },
+            socket: () => conn.socket,
+        };
+    }
+
+    /**
+     * The URL a supplementary socket — route and scheduled — is reached on: the configured
+     * socket URL with its shard path replaced by `path`. The origin, any path prefix, and
+     * any query the configured URL carries are kept, so a custom `wsUrl` host or proxy
+     * applies to them too and the path never lands inside a query string.
+     */
+    private supplementaryUrl(path: string): string {
+        const url = new URL(this.wsUrl);
+        const prefix = url.pathname.endsWith(WS_PATH) ? url.pathname.slice(0, -WS_PATH.length) : url.pathname;
+
+        url.pathname = joinUrl(prefix, path);
+
+        return url.toString();
+    }
+
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined, base: string = this.wsUrl): string {
+        if (shardKey === undefined && token === undefined) {
+            return base;
+        }
+
+        // The server reads the first value of a repeated parameter, so a copy already on the configured URL would
+        // win over this connection's own. Set replaces it instead of appending after it.
+        const url = new URL(base);
+        const replaced = new Set<string>([...(shardKey === undefined ? [] : ["shard"]), ...(token === undefined ? [] : ["token"])]);
+        const kept = [...url.searchParams]
+            .filter(([name]) => !replaced.has(name))
+            .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
 
         if (shardKey !== undefined) {
-            params.push(`shard=${encodeURIComponent(shardKey)}`);
+            kept.push(`shard=${encodeURIComponent(shardKey)}`);
         }
 
         if (token !== undefined) {
-            params.push(`token=${encodeURIComponent(token)}`);
+            kept.push(`token=${encodeURIComponent(token)}`);
         }
 
-        if (params.length === 0) {
-            return this.wsUrl;
-        }
+        url.search = kept.join("&");
 
-        const separator = this.wsUrl.includes("?") ? "&" : "?";
-
-        return `${this.wsUrl}${separator}${params.join("&")}`;
+        return url.toString();
     }
 
     /**
@@ -8062,6 +8238,12 @@ class LunoraClient {
                     /* ignore */
                 }
             }
+        }
+
+        // Route and scheduled sockets carry the same identity, so they reconnect too:
+        // otherwise a signed-out user keeps receiving on them.
+        for (const bounce of this.supplementaryBounces) {
+            bounce();
         }
     }
 

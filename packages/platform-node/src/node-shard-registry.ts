@@ -54,6 +54,7 @@ import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHo
 
 import { createNodeShardKvStore } from "./node-kv-store";
 import { createNodeShardHost } from "./node-shard-host";
+import type { NodeSocketHost } from "./node-socket-host";
 import { createNodeSocketHost } from "./node-socket-host";
 
 /** Extension used for a file-backed shard's database. */
@@ -146,6 +147,12 @@ const shardKeyForFile = (directory: string, entry: string): string => {
 
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
+    /**
+     * Inbound socket events for this shard's registry. Bind the shard that owns
+     * the sockets here, so a frame or close reaches its `webSocketMessage` and
+     * `webSocketClose`. See `bindShardSockets`.
+     */
+    inbound: Pick<NodeSocketHost, "onClose" | "onMessage">;
     /** Durable key-value storage on this shard's database. */
     kv: ShardKvStore;
     /** Single-writer execution, local SQL, transactions, durable alarms. */
@@ -255,11 +262,14 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             shardKey: key,
         });
 
+        const socketHost = createNodeSocketHost(database);
+
         shard = {
+            inbound: socketHost,
             kv: createNodeShardKvStore(database),
             shard: host,
             shardKey: key,
-            sockets: createNodeSocketHost(database).socket,
+            sockets: socketHost.socket,
         };
 
         live.set(key, { dispose: disposeHost, shard });

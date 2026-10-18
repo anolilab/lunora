@@ -782,6 +782,8 @@ interface FunctionRegistryEntry {
     argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
         readonly price: number | string;

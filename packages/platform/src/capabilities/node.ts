@@ -61,7 +61,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         typedWebSockets: {
             level: "emulated",
-            note: "Rides the socket registry above: a route or room works while the process runs, but nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
+            note: "Rooms and defineWebSocket routes take real network clients: createNodeHttpServer completes the WebSocket handshake through the worker, and the embedder binds the shard with bindShardSockets so inbound frames and closes reach the shard. The socket registry is one process, so a route's broadcast does not fan out to another process, and nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
         },
         liveStreams: {
             level: "emulated",

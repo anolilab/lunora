@@ -1216,6 +1216,26 @@ describe("lunoraClient", () => {
             expect(wireFrames(socket)).toHaveLength(2);
         });
 
+        it("replaces a token already on the configured WebSocket URL instead of appending a second one", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "fresh",
+                wsUrl: "wss://app.example/_lunora/ws?token=stale",
+            });
+
+            client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
+
+            const { url } = latestSocket();
+
+            // The server reads the first value, so a stale copy left in front of the fresh one would win.
+            expect(url.match(/token=/gu)).toHaveLength(1);
+            expect(url).toContain("token=fresh");
+        });
+
         it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
             expect.assertions(2);
 

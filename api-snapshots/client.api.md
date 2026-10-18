@@ -490,6 +490,16 @@ class LunoraClient {
         close: () => void;
         send: (message: Message) => boolean;
     };
+    connectWebSocket<Message>(path: string, handlers: {
+        onClose?: () => void;
+        onMessage: (message: Message) => void;
+        onOpen?: () => void;
+    }, options?: {
+        shardKey?: string;
+    }): {
+        close: () => void;
+        send: (message: Message) => void;
+    };
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;

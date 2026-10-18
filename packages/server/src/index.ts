@@ -130,6 +130,15 @@ export type { ServiceBindingSpec, ServiceFetcher, ServiceRpc } from "./services"
 export { createServices } from "./services";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
+export type {
+    DefineWebSocketOptions,
+    RegisteredWebSocket,
+    WebSocketCloseHandler,
+    WebSocketHandle,
+    WebSocketMessageHandler,
+    WebSocketOpenHandler,
+} from "./socket";
+export { defineWebSocket } from "./socket";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {

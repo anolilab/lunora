@@ -214,6 +214,10 @@ describe("@lunora/platform contracts", () => {
         expect.assertions(1);
 
         const socketHost: SocketHost = {
+            newPair: () => {
+                return { client: {}, server: {} };
+            },
+            upgradeResponse: () => new Response(null, { status: 200 }),
             accept: () => {
                 return {
                     close: () => {},
