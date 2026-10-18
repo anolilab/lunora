@@ -1,3 +1,16 @@
+## @lunora/do [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.222...@lunora/do@1.0.0-alpha.223) (2026-10-18)
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+* **do:** stop scanning retired shapes after cleanup ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([487d2ab](https://github.com/anolilab/lunora/commit/487d2abec6ad50c9fce2074689e322de8c0891e5))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.147
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.136
+
 ## @lunora/do [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.221...@lunora/do@1.0.0-alpha.222) (2026-10-18)
 
 ### Features
