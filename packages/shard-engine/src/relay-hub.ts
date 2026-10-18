@@ -73,6 +73,13 @@ const DEFAULT_MAX_RELAYS = 8;
 const RELAY_LIVE_CONTROL_TIMEOUT_MS = 2000;
 
 /**
+ * How long a relay waits on its owner's answer to an attach. Every connect and shape subscribe on the relay awaits the shared attach, so an
+ * owner that never answers would stall them all; past this, the attach counts as failed and the next caller retries it.
+ * ponytail: one fixed ceiling, the same as the live-control one; tune it if a cold owner routinely takes longer.
+ */
+const RELAY_ATTACH_TIMEOUT_MS = 2000;
+
+/**
  * The identity the owner computes a relay-multicast shape delta under (plan 075
  * Phase 3). It is the empty (anonymous) identity, and it is **load-bearing for
  * RLS**: a shape may only be relay-multicast if the uniform gate has PROVEN its
@@ -1662,7 +1669,21 @@ class RelayMember extends RelayLink {
             const generation = this.announceGeneration;
 
             this.pendingAnnounce = (this.pendingDetach ?? Promise.resolve())
-                .then(async () => this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" }))
+                .then(async () => {
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    const deadline = new Promise<undefined>((resolve) => {
+                        timer = setTimeout(() => {
+                            resolve(undefined);
+                        }, RELAY_ATTACH_TIMEOUT_MS);
+                    });
+
+                    return Promise.race([
+                        this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" }),
+                        deadline,
+                    ]).finally(() => {
+                        clearTimeout(timer);
+                    });
+                })
                 .then((response) => {
                     const attached = response?.ok === true;
 

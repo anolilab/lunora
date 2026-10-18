@@ -1264,6 +1264,51 @@ describe("relay hub", () => {
             await expect(link.announce()).resolves.toBe(true);
         });
 
+        it("gives up on an attach the owner never answers, so later sockets are not held behind it", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    sent.push(frameType(init));
+
+                    return new Promise<Response>(() => {
+                        // The owner never answers.
+                    });
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            vi.useFakeTimers();
+
+            try {
+                const first = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(first).resolves.toBe(false);
+
+                // The next socket attaches afresh instead of waiting on the stalled one.
+                const second = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await second;
+
+                expect(sent).toStrictEqual(["relay_attach", "relay_attach"]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it("sends a drain's detach only after an attach already in flight has been answered", async () => {
             expect.assertions(2);
 
