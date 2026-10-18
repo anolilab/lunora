@@ -48,7 +48,7 @@ describe("agentHarness — requestSecretTool", () => {
         expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
         expect(harness.journalEntries()).toContainEqual(expect.objectContaining({ kind: "wait", name: "secret:call_1", payload: {} }));
         expect(harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret").map((dispatch) => dispatch.args)).toStrictEqual([
-            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: "wf-1", threadKey: "thread-1", toolCallId: "call_1" },
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: "run-1", threadKey: "thread-1", toolCallId: "call_1" },
         ]);
         expect(JSON.stringify([harness.messages("thread-1"), harness.dispatches, harness.journalEntries()])).not.toContain(SECRET);
     });
@@ -118,7 +118,7 @@ describe("agentHarness — journal order", () => {
         expect.assertions(2);
 
         const harness = agentHarness(billingAgent([]), {
-            script: [toolCallTurn("call_1", "requestKey", {}), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
         });
 
         const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
@@ -148,7 +148,7 @@ describe("agentHarness — concurrent runs", () => {
         expect.assertions(3);
 
         const harness = agentHarness(billingAgent([]), {});
-        const script = [toolCallTurn("call_1", "requestKey", {}), finalTurn("no key")];
+        const script = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")];
 
         const first = harness.run({ input: "charge my card", threadKey: "thread-a" }, { instanceId: "run-a", script });
         const second = harness.run({ input: "charge my card", threadKey: "thread-b" }, { instanceId: "run-b", script });
