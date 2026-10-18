@@ -60,6 +60,7 @@ const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceSt
     "errored",
     "paused",
     "queued",
+    "rollingBack",
     "running",
     "terminated",
     "unknown",

@@ -1307,10 +1307,11 @@ export type NullableTimestamp = null | number | string;
 // worker/REST code); the proxy already normalizes Cloudflare's snake_case.
 
 /** A workflow instance's lifecycle status. Mirrors Cloudflare's `InstanceStatus`. */
-export type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceStatus =
+    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 
 /** The lifecycle mutations the status endpoint accepts. */
-export type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 
 /** One row of the workflow-instances list. */
 export interface WorkflowInstanceSummary {

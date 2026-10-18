@@ -27,7 +27,8 @@ const artifactsBindingHint = (jurisdiction: SchemaInfo["jurisdiction"]): string 
     return (
         `ctx.artifacts is used and the schema pins data to "${jurisdiction}"; create the namespace in that jurisdiction BEFORE the first repo, ` +
         `with POST ${ARTIFACTS_NAMESPACES_ENDPOINT} and body { "namespace": "<name>", "jurisdiction": "${jurisdiction}" }, ` +
-        `then ${binding}. A namespace's jurisdiction cannot be changed, and one created implicitly by the first repo create() is unrestricted.`
+        `then ${binding}. A namespace's jurisdiction cannot be changed, and one created implicitly by the first repo create() is unrestricted. ` +
+        `With CLOUDFLARE_API_TOKEN set, \`lunora deploy\` creates a missing namespace in that jurisdiction for a binding you have added.`
     );
 };
 

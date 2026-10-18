@@ -42,6 +42,7 @@ const INSTANCE_STATUSES = {
     errored: true,
     paused: true,
     queued: true,
+    rollingBack: true,
     running: true,
     terminated: true,
     unknown: true,
@@ -183,8 +184,8 @@ const buildWorkflowsAdminRoutes = (
 
         const { action } = body;
 
-        if (action !== "pause" && action !== "resume" && action !== "terminate") {
-            throw new LunoraError("Workflows status action must be one of: pause, resume, terminate", { code: "BAD_REQUEST", status: 400 });
+        if (action !== "pause" && action !== "restart" && action !== "resume" && action !== "terminate") {
+            throw new LunoraError("Workflows status action must be one of: pause, restart, resume, terminate", { code: "BAD_REQUEST", status: 400 });
         }
 
         return Response.json(await client.setInstanceStatus({ action, instanceId: body.id, workflowName: body.name }));

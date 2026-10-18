@@ -85,6 +85,7 @@ const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteElig
 /** One binding object as it appears in any eligible section. */
 interface BindingEntry {
     binding?: string;
+    id?: unknown;
     remote?: boolean;
 }
 
@@ -138,6 +139,11 @@ const planArrayEntries = (
 
     for (const [index, entry] of entries.entries()) {
         if (entry === null || entry === undefined) {
+            continue;
+        }
+
+        // An id-less KV namespace is one wrangler has not created yet: there is no deployed one to proxy to.
+        if (section === "kv_namespaces" && (typeof entry.id !== "string" || entry.id === "")) {
             continue;
         }
 

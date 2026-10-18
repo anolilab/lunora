@@ -3,6 +3,7 @@ import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -11,19 +12,64 @@ import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 
 /** The status values offered as table filters (the common lifecycle states). */
-const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "paused", "waiting", "complete", "errored", "terminated"];
+const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "rollingBack", "paused", "waiting", "complete", "errored", "terminated"];
 
 /** The lifecycle mutations exposed as per-instance buttons (the REST `PATCH .../status` set). */
-const ACTIONS: WorkflowInstanceAction[] = ["pause", "resume", "terminate"];
+const ACTIONS: WorkflowInstanceAction[] = ["pause", "resume", "restart", "terminate"];
+
+interface InstanceActionsProps {
+    readonly busy: boolean;
+    readonly id: string;
+    readonly onAct: (action: WorkflowInstanceAction) => void;
+}
+
+/** The per-instance lifecycle buttons. Restart re-runs every step from the start (side-effecting steps run again), so it asks for confirmation first. */
+const InstanceActions = ({ busy, id, onAct }: InstanceActionsProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <>
+            {ACTIONS.map((action) =>
+                action === "restart" ? (
+                    <ConfirmButton
+                        confirmLabel={t("Restart?")}
+                        disabled={busy}
+                        key={action}
+                        onConfirm={() => {
+                            onAct(action);
+                        }}
+                        testId={`workflow-instance-${action}-${id}`}
+                    >
+                        {t(action)}
+                    </ConfirmButton>
+                ) : (
+                    <Button
+                        data-testid={`workflow-instance-${action}-${id}`}
+                        disabled={busy}
+                        key={action}
+                        onClick={() => {
+                            onAct(action);
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                    >
+                        {t(action)}
+                    </Button>
+                ),
+            )}
+        </>
+    );
+};
 
 interface WorkflowInstanceHistoryProps {
     /** Load one instance's full detail (steps). Defaults to `client.getWorkflowInstance`. */
     readonly loadDetail?: (args: { id: string; name: string }) => Promise<WorkflowInstanceDetail>;
     /** Load the instance list. Defaults to `client.listWorkflowInstances`. A custom loader makes the view read-only. */
     readonly loadInstances?: (args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>;
-    /** Force-hide the lifecycle (pause/resume/terminate) buttons even when a handler is available — an explicit override of the default capability gate. */
+    /** Force-hide the lifecycle (pause/resume/restart/terminate) buttons even when a handler is available — an explicit override of the default capability gate. */
     readonly readOnly?: boolean;
-    /** Pause/resume/terminate an instance. Defaults to `client.setWorkflowInstanceStatus`. */
+    /** Pause/resume/restart/terminate an instance. Defaults to `client.setWorkflowInstanceStatus`. */
     readonly runAction?: (args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>;
     /** The deployed Cloudflare workflow name to inspect (`workflows[].name`). */
     readonly workflowName: string;
@@ -54,7 +100,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * (`/_lunora/admin/workflows*`) — the cross-instance list and per-step timeline
  * the `Workflow` binding can't expose (it only reads a single instance's
  * top-level status). Filter by status, open an instance to see its step
- * timeline, and (when client-owned) pause / resume / terminate it.
+ * timeline, and (when client-owned) pause / resume / restart / terminate it.
  *
  * Requires the worker to be built with a `workflowsClient` (a Cloudflare account
  * id + API token); absent it, the list responds with `configured: false` (an
@@ -284,22 +330,17 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                                                 >
                                                     {t("Steps")}
                                                 </Button>
-                                                {actionImpl !== undefined &&
-                                                    ACTIONS.map((action) => (
-                                                        <Button
-                                                            data-testid={`workflow-instance-${action}-${instance.id}`}
-                                                            disabled={busyId === instance.id}
-                                                            key={action}
-                                                            onClick={() => {
-                                                                fireAndForget(act(instance.id, action));
-                                                            }}
-                                                            size="sm"
-                                                            type="button"
-                                                            variant="ghost"
-                                                        >
-                                                            {t(action)}
-                                                        </Button>
-                                                    ))}
+                                                {actionImpl !== undefined && (
+                                                    // Keyed by workflow so an armed restart confirmation never survives a workflow switch.
+                                                    <InstanceActions
+                                                        busy={busyId === instance.id}
+                                                        id={instance.id}
+                                                        key={workflowName}
+                                                        onAct={(action) => {
+                                                            fireAndForget(act(instance.id, action));
+                                                        }}
+                                                    />
+                                                )}
                                             </div>
                                         </TableCell>
                                     </TableRow>

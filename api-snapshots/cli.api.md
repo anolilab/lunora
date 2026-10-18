@@ -209,6 +209,7 @@ interface DevCommandOptions {
     remote?: boolean;
     startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
+    startHyperdrive?: typeof startLocalHyperdrive;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;

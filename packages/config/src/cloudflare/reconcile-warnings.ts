@@ -16,7 +16,7 @@ import type { WranglerShape } from "./wrangler-shape";
 
 /**
  * Collect hint-only binding warnings. Each carries a remote id/name Lunora
- * can't mint (a KV namespace id, a Hyperdrive id, a Pipelines pipeline name);
+ * can't mint (a Pipelines pipeline name);
  * like R2's user-defined bucket name they are warned, never auto-written, and
  * the warning is suppressed once the corresponding binding array is already
  * present so a wired-up project starts the dev server clean. Self-describing
@@ -28,7 +28,10 @@ const PIPELINES_BINDING = "PIPELINES";
 /** The Artifacts binding name codegen falls back to — `config.artifacts?.(env) ?? env.ARTIFACTS`. */
 const ARTIFACTS_BINDING = "ARTIFACTS";
 
-const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape, target?: string): string[] => {
+    // Reconcile writes the KV and Hyperdrive bindings itself, for a Cloudflare target with a config to write to.
+    const writesBindings = parsed !== undefined && (target === undefined || target === "cloudflare");
+
     // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
     // warning keys on the *binding name* (an app can wire several Flagship apps),
     // not array length, and carries the specific name + app_id remediation.
@@ -57,18 +60,22 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
 
     const rules: ReadonlyArray<[boolean, string]> = [
         [
-            inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
-            "@lunora/bindings/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
+            // Missing unless reconcile writes it, which it does not for a schema that pins a
+            // jurisdiction: a namespace wrangler creates is unrestricted.
+            inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0 && (!writesBindings || inferred.jurisdiction !== undefined),
+            inferred.jurisdiction === undefined
+                ? 'ctx.kv is used but no kv_namespaces binding exists; add one ({ binding: "KV" }) — wrangler creates the namespace on the first deploy.'
+                : `ctx.kv is used and the schema pins data to "${inferred.jurisdiction}"; run \`wrangler kv namespace create <name> --jurisdiction ${inferred.jurisdiction}\` and add a kv_namespaces entry ({ binding: "KV", id }) — a namespace wrangler creates on deploy is unrestricted.`,
         ],
         [
-            inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0,
-            "@lunora/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
+            inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0 && !writesBindings,
+            '@lunora/hyperdrive is used but no hyperdrive binding exists; add one ({ binding: "HYPERDRIVE", id }) — on a Cloudflare target `lunora deploy` creates the Hyperdrive config from a connection string.',
         ],
+        [inferred.usesArtifacts && artifactsEntries.length === 0, artifactsBindingHint(inferred.jurisdiction)],
         [
             pipelinesBindingMissing,
             `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
-        [inferred.usesArtifacts && artifactsEntries.length === 0, artifactsBindingHint(inferred.jurisdiction)],
         [
             artifactsOtherNames.length > 0,
             `ctx.artifacts is used and ${artifactsOtherNames.map((name) => `"${name}"`).join(", ")} ${artifactsOtherNames.length === 1 ? "is" : "are"} bound, but none is named "${ARTIFACTS_BINDING}"; make sure \`.artifacts()\` on defineApp points ctx.artifacts at it — otherwise it reads env.${ARTIFACTS_BINDING} and throws.`,
@@ -285,7 +292,7 @@ const missingRequiredSecretWarnings = (inferred: InferredBindings, parsed?: Wran
           ];
 };
 
-const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape): string[] => {
+const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape, target?: string): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
     const warnings: string[] = [];
 
@@ -332,7 +339,11 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
         warnings.push(`@lunora/payment is used; set one provider's secret pair in .dev.vars — ${describePaymentProviders()}.`);
     }
 
-    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed), ...missingRequiredSecretWarnings(inferred, parsed));
+    warnings.push(
+        ...collectX402Warnings(inferred),
+        ...collectHintBindingWarnings(inferred, parsed, target),
+        ...missingRequiredSecretWarnings(inferred, parsed),
+    );
 
     if (parsed !== undefined) {
         warnings.push(...orphanedEntryWarnings(inferred, parsed));

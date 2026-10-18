@@ -14,7 +14,8 @@ import type { ArgsOf, FunctionReference } from "../../../shared/function-referen
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 
 /** A workflow instance's lifecycle status. Mirrors `WorkflowInstanceStatus`. */
-export type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceStatus =
+    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 
 /** Result of `WorkflowInstance.status()`. Mirrors Cloudflare's `InstanceStatus`. */
 export interface WorkflowStatusResult {
