@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "1.0.0-alpha.371",
+    "version": "1.0.0-alpha.374",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -72,10 +72,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "1.0.0-alpha.323",
-        "@lunora/container": "1.0.0-alpha.80",
+        "@lunora/codegen": "1.0.0-alpha.326",
+        "@lunora/container": "1.0.0-alpha.82",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/seed": "1.0.0-alpha.233",
+        "@lunora/seed": "1.0.0-alpha.236",
         "@visulima/colorize": "catalog:cli",
         "@visulima/find-ai-runner": "catalog:cli",
         "@visulima/fs": "catalog:cli",
@@ -87,6 +87,9 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-pgvector": "catalog:sql",
+        "@electric-sql/pglite-socket": "catalog:sql",
         "@types/dockerode": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -97,9 +100,21 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@electric-sql/pglite": "^0.5.8",
+        "@electric-sql/pglite-pgvector": "^0.0.9",
+        "@electric-sql/pglite-socket": "^0.2.11",
         "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0"
     },
     "peerDependenciesMeta": {
+        "@electric-sql/pglite": {
+            "optional": true
+        },
+        "@electric-sql/pglite-pgvector": {
+            "optional": true
+        },
+        "@electric-sql/pglite-socket": {
+            "optional": true
+        },
         "@lunora/studio": {
             "optional": true
         }

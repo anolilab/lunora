@@ -44,6 +44,7 @@ describe("discoverPlatformSignals", () => {
             liveContext: false,
             liveStreams: false,
             secrets: false,
+            socketRoutes: false,
             typedWebSockets: false,
             workflowRollback: false,
         });

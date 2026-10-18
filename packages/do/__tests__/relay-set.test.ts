@@ -281,7 +281,7 @@ describe("relay collapse (detach on drain)", () => {
 
         const detach = posts.find((post) => post.body.type === "relay_detach");
 
-        expect(detach).toStrictEqual({ body: { relayIndex: 0, type: "relay_detach" }, name: "room-1" });
+        expect(detach).toStrictEqual({ body: { relayIndex: 0, seq: expect.any(Number), type: "relay_detach" }, name: "room-1" });
         expect(detach?.name).toBe("room-1"); // forwarded to the owner, not a relay
     });
 

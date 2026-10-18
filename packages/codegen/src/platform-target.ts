@@ -433,6 +433,8 @@ interface PlatformDiagnostic {
     /** The lint id: one of the `platform_*` names in the union below. */
     name:
         | "platform_live_stream_delivery_authorization"
+        // eslint-disable-next-line no-secrets/no-secrets -- a diagnostic id, not a credential
+        | "platform_socket_delivery_authorization"
         | "platform_undeclared_feature"
         | "platform_unknown_target"
         | "platform_unreadable_target"
@@ -514,6 +516,21 @@ const liveStreamsDeliveryAuthorizationDiagnostic = (target: string): PlatformDia
         message: `This app declares defineLiveStream topics and enables delivery authorization. With delivery authorization on, the shard answers every /_lunora/live/* request with 501, so the live streams cannot be served.`,
         name: "platform_live_stream_delivery_authorization",
         remediation: `Remove the defineLiveStream declarations, or remove the .deliveryAuthorization(...) call. Live streams and delivery authorization cannot be combined.`,
+        target,
+    };
+};
+
+/**
+ * The app declares `defineWebSocket` routes AND `.deliveryAuthorization(...)`. The shard refuses a route's upgrade
+ * under delivery authorization (501), so the route could never be reached. Refused at build time on every target.
+ */
+const socketRoutesDeliveryAuthorizationDiagnostic = (target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `This app declares defineWebSocket routes and enables delivery authorization. With delivery authorization on, the shard answers every route upgrade with 501, so the routes cannot be served.`,
+        // eslint-disable-next-line no-secrets/no-secrets -- a diagnostic id, not a credential
+        name: "platform_socket_delivery_authorization",
+        remediation: `Remove the defineWebSocket declarations, or remove the .deliveryAuthorization(...) call. Socket routes and delivery authorization cannot be combined.`,
         target,
     };
 };
@@ -731,6 +748,7 @@ export {
     readProjectTarget,
     readTargetDiagnostics,
     resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
     studioPlatformFor,
     vectorizeDimensionDiagnostics,
 };

@@ -192,6 +192,14 @@ export interface SocketHost {
     idFor: (socket: SocketHandle) => string;
 
     /**
+     * Open the two ends of one connection. `server` is the end the shard
+     * accepts; `client` is the end the upgrade response hands to the transport.
+     * On Cloudflare this is `new WebSocketPair()`. A host without that global
+     * supplies its own pair, and `upgradeResponse` must understand it.
+     */
+    newPair: () => { client: unknown; server: unknown };
+
+    /**
      * Remove a tag from a live socket — all of them when `tag` is omitted.
      * Optional, and only meaningful alongside {@link SocketHost.setTag}: a
      * host that cannot retag a live socket must omit both.
@@ -206,4 +214,12 @@ export interface SocketHost {
      * accept, so callers re-accept instead of silently losing the retag.
      */
     setTag?: (socket: SocketHandle, tag: string) => void;
+
+    /**
+     * The `101 Switching Protocols` response that carries a pair's client end.
+     * Cloudflare builds it as `new Response(null, { status: 101, webSocket })`.
+     * A host whose `Response` cannot carry status 101 returns its own marker,
+     * which its HTTP listener recognises and completes the handshake from.
+     */
+    upgradeResponse: (client: unknown) => Response;
 }

@@ -27,6 +27,8 @@ interface PlatformCodeSignals {
     liveStreams: boolean;
     /** A `ctx.secrets` read — the Secrets Store facade, which needs a host binding. */
     secrets: boolean;
+    /** A `defineWebSocket` route alone, not a room: the delivery-authorization refusal covers routes, and rooms are disabled rather than refused. */
+    socketRoutes: boolean;
     /** A `defineWebSocket` route or `defineRoom` room — both ride hibernated shard sockets. */
     typedWebSockets: boolean;
     /** A `defineStep` call declaring a `rollback` compensation. */
@@ -37,10 +39,10 @@ interface PlatformCodeSignals {
  * The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry.
  * `.deliveryAuthorization(...)` is not here: it is a method on the app builder, so it is matched by receiver in {@link isAppBuilderReceiver}.
  */
-const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
+const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "socketRoutes" | "typedWebSockets">> = {
     defineLiveStream: "liveStreams",
     defineRoom: "typedWebSockets",
-    defineWebSocket: "typedWebSockets",
+    defineWebSocket: "socketRoutes",
 };
 
 /** The `defineContainer` keys that turn on outbound interception. */
@@ -310,6 +312,7 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
         liveContext: false,
         liveStreams: false,
         secrets: false,
+        socketRoutes: false,
         typedWebSockets: false,
         workflowRollback: false,
     };
@@ -342,6 +345,9 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
             break;
         }
     }
+
+    // A route is a typed WebSocket too: the capability gate keys on `typedWebSockets`, which rooms also set.
+    signals.typedWebSockets = signals.typedWebSockets || signals.socketRoutes;
 
     // The `app` hook lives in `lunora.config.*` at the project root, outside
     // `lunora/`, so the walk above never reaches it. Only the builder call is

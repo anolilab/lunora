@@ -31,28 +31,31 @@ The package never rewrites SQL, so use your driver's native placeholders.
 
 ## Step 2: Create the binding
 
+Nothing to write by hand: `lunora dev` and `lunora deploy` add a `HYPERDRIVE` binding
+to `wrangler.jsonc` with a placeholder `id`.
+
+- **Dev.** `ctx.sql` runs on an embedded Postgres (PGlite), data in
+  `.wrangler/state/lunora-pglite`. Install its two optional packages:
+
 ```bash
-wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
 ```
 
-Add the printed `id` to `wrangler.jsonc`. `localConnectionString` lets `lunora dev`
-connect directly:
+To use your own database, set `localConnectionString` on the binding or
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`; neither is overridden.
 
-```jsonc
-{
-    "hyperdrive": [
-        {
-            "binding": "HYPERDRIVE",
-            "id": "<the id from the command above>",
-            "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
-        },
-    ],
-}
+- **Deploy.** Give `lunora deploy` the origin and a token that may edit Hyperdrive:
+
+```bash
+LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
 ```
 
-Lunora validates the entry but never writes the `id` itself, because only
-`wrangler hyperdrive create` can mint it. Validation fails without a `binding`
-and warns when `id` is empty.
+(`CLOUDFLARE_API_TOKEN` with Hyperdrive: Edit, and `CLOUDFLARE_ACCOUNT_ID`; the variable is
+`LUNORA_<BINDING>_URL`.) Lunora creates the config, or reuses one of the same name, and writes
+its `id` into `wrangler.jsonc`. The connection string is never written or logged.
+
+To manage the config yourself, run `wrangler hyperdrive create my-db --connection-string=...`
+and put the `id` in the binding. Validation fails without a `binding`.
 
 ## Step 3: Regenerate types
 
@@ -163,8 +166,9 @@ How `.source()` behaves:
 
 1. **`ctx.sql` in a query/mutation.** It's action-only. Move the SQL into an action.
 2. **Expecting `ctx.sql` writes to update subscriptions.** They don't. Use Step 5.
-3. **Placeholder or empty `id`.** The binding can't connect. Run
-   `wrangler hyperdrive create` and paste the id.
+3. **Placeholder `id` at deploy.** The deploy stops until `LUNORA_<BINDING>_URL` is set
+   (Lunora then creates the config) or the real `id` is pasted in. An empty `id` is not
+   provisioned: wrangler rejects it, so remove the entry and let Lunora add it again.
 4. **Wrong placeholders.** Use `$1` for `postgres`/`pg` and `?` for `mysql2`.
 5. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
    rows are copied into each shard. `defineSchema` throws, and the

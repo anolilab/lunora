@@ -144,15 +144,24 @@ const relayCountFor = (subscribers: number, perRelayCapacity: number, maxRelays:
     return Math.min(needed, Math.max(0, maxRelays));
 };
 
-/** A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to. */
+/**
+ * A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to.
+ * `seq` raises the owner's mark for that relay, which a later, older detach is checked against; an attach itself always applies.
+ * Absent on a frame sent before sequencing.
+ */
 interface RelayAttach {
     relayIndex: number;
+    seq?: number;
     type: "relay_attach";
 }
 
-/** A relay announces it has drained to zero sockets and is detaching, so the owner stops forwarding to it. */
+/**
+ * A relay announces it has drained to zero sockets and is detaching, so the owner stops forwarding to it. `seq` is ordered like {@link RelayAttach}: a
+ * detach that lands after a newer attach is ignored, so it cannot unregister a relay that has live sockets again.
+ */
 interface RelayDetach {
     relayIndex: number;
+    seq?: number;
     type: "relay_detach";
 }
 
@@ -304,6 +313,8 @@ interface LiveSocketControlCall {
     connectionId: string;
     identityExpiry?: number;
     key: string;
+    /** Stamped by the owner when it forwards the call; a later call on the same subscription supersedes an earlier one. Absent on a call sent before sequencing. */
+    seq?: number;
     subscriptionId: string;
 }
 

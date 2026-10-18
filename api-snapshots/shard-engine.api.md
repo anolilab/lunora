@@ -1336,6 +1336,7 @@ interface LiveSocketControlCall {
     connectionId: string;
     identityExpiry?: number;
     key: string;
+    seq?: number;
     subscriptionId: string;
 }
 ```
@@ -1541,7 +1542,7 @@ interface OrderKeyConstraints {
 class OwnerRelay extends RelayLink {
     constructor(host: RelayHost, ownerKey: string);
     forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
-    forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined>;
+    forwardLiveControl(call: LiveSocketControlCall): Promise<Response | undefined>;
     forwardLiveFrame(topic: string, key: string, frame: string): Promise<void>;
     onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     seedRelayShape(): Promise<"ok" | undefined | {
@@ -1555,8 +1556,10 @@ class OwnerRelay extends RelayLink {
     minShapeCursor(): number | undefined;
     isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
-    protected onAttach(index: number): void;
-    protected onDetach(index: number): void;
+    protected onAttach(index: number, seq: number | undefined): boolean;
+    protected onDetach(index: number, seq: number | undefined): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected onShapePoke(): RelayPokeDelivery;
@@ -2218,6 +2221,7 @@ type RelationWriteMap = Readonly<Record<string, Readonly<Record<string, Relation
 ```ts
 interface RelayAttach {
     relayIndex: number;
+    seq?: number;
     type: "relay_attach";
 }
 ```
@@ -2227,6 +2231,7 @@ interface RelayAttach {
 ```ts
 interface RelayDetach {
     relayIndex: number;
+    seq?: number;
     type: "relay_detach";
 }
 ```
@@ -2295,8 +2300,10 @@ class RelayMember extends RelayLink {
     relayCount(): number;
     isShapeRelayUniform(): boolean;
     minShapeCursor(): number | undefined;
-    protected onAttach(): void;
-    protected onDetach(): void;
+    protected onAttach(): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onDetach(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(): Promise<void>;
     protected onShapeSubscribe(): RelayShapeSeed;
     protected onShapeUnsubscribe(): void;
@@ -2940,6 +2947,8 @@ interface SocketAttachment {
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
+    socketFunction?: string;
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
     userId?: string;
     whispers?: string[];
@@ -5750,6 +5759,7 @@ abstract class RelayLink {
     protected canAddressSiblings(): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
+    protected nextRelaySeq(): number;
     protected postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void>;
     protected requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined>;
     abstract forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
@@ -5764,9 +5774,11 @@ abstract class RelayLink {
     abstract relayCount(): number;
     abstract isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     abstract minShapeCursor(): number | undefined;
-    protected abstract onAttach(index: number): void;
-    protected abstract onDetach(index: number): void;
+    protected abstract onAttach(index: number, seq: number | undefined): boolean;
+    protected abstract onDetach(index: number, seq: number | undefined): boolean;
+    protected abstract onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+    protected abstract refusesAsIdle(): boolean;
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;

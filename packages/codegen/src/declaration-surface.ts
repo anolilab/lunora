@@ -75,6 +75,7 @@ import {
     liveStreamsDeliveryAuthorizationDiagnostic,
     readTargetDiagnostics,
     resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
     vectorizeDimensionDiagnostics,
 } from "./platform-target";
 import { findProjectConfigFile } from "./project-config-path";
@@ -388,6 +389,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
                 ...platformGate.diagnostics,
                 ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
                 ...(codeSignals.liveStreams && codeSignals.deliveryAuthorization ? [liveStreamsDeliveryAuthorizationDiagnostic(target)] : []),
+                ...(codeSignals.socketRoutes && codeSignals.deliveryAuthorization ? [socketRoutesDeliveryAuthorizationDiagnostic(target)] : []),
             ],
         },
         queues,

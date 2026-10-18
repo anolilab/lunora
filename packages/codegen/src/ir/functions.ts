@@ -39,15 +39,17 @@ export interface FunctionIR {
 
     /**
      * Set on lifecycle hooks (`onConnect`/`onDisconnect`/`onShardInit`/
-     * `onQueryChange`/`onWhisper`) and on a `defineRoom` registration: the moment
-     * the hook fires on. Such a function is also an internal registration (so it
-     * lands in `LUNORA_FUNCTIONS` for path dispatch) — a mutation for every moment
-     * except `whisper`, which is a query; emit additionally collects the socket
-     * moments into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this moment, and
-     * a `room` registration into the `LUNORA_ROOMS` topic→path map. Absent on
-     * ordinary functions.
+     * `onQueryChange`/`onWhisper`), on a `defineRoom` registration, and on a
+     * `defineWebSocket` route: the moment the hook fires on. Such a function is
+     * also an internal registration (so it lands in `LUNORA_FUNCTIONS` for path
+     * dispatch) — a mutation for every moment except `whisper`, which is a
+     * query; emit additionally collects the socket moments into the
+     * `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this moment, a `room`
+     * registration into the `LUNORA_ROOMS` topic→path map, and a `socket` route
+     * into the `LUNORA_SOCKETS` path→registration map. Absent on ordinary
+     * functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.
@@ -66,6 +68,13 @@ export interface FunctionIR {
      * project lacks a tsconfig that can reach `@lunora/server`).
      */
     returnType: string;
+
+    /**
+     * A `defineWebSocket` route: the literal URL `path` it serves and whether it requires a session (`auth`). Read at
+     * build time so the lazy `LUNORA_SOCKETS` map can be emitted without evaluating the route's module.
+     * `origin` names the `defineWebSocket` call the route was read from: two export names of one call are one route.
+     */
+    socket?: { auth: boolean; origin?: string; path: string };
 
     /**
      * Call surface the function is exposed on. Absent (or `"public"`) means it

@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
 import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
-import type { materializeDevWranglerConfig, materializeServiceDevConfigs } from "@lunora/config/cloudflare";
+import type { materializeDevWranglerConfig, materializeServiceDevConfigs, startLocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -103,6 +103,8 @@ interface DevCommandOptions {
     startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
+    /** Injection seam for tests — defaults to the embedded Postgres behind a Hyperdrive binding. */
+    startHyperdrive?: typeof startLocalHyperdrive;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */

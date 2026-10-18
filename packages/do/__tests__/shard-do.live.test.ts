@@ -691,13 +691,15 @@ describe("shardDO live streams", () => {
         await expect(own.json()).resolves.toEqual({ delivered: 1 });
     });
 
-    it("refuses a publish to a room topic, which members trust as their handler's output", async () => {
-        expect.assertions(1);
+    it("refuses a publish to a room or route topic, which members trust as their handler's output", async () => {
+        expect.assertions(2);
 
         const shard = makeShard([]);
         const room = await publish(shard, { data: "forged", stream: "s", topic: "room:chat" });
+        const route = await publish(shard, { data: "forged", stream: "s", topic: "__lunora_socket__:/chat" });
 
         expect(room.status).toBe(403);
+        expect(route.status).toBe(403);
     });
 
     it("refuses an oversized publish rather than dropping it silently", async () => {
@@ -890,6 +892,17 @@ describe("shardDO live streams", () => {
         const shard = makeShard([]);
 
         await expect(shard.publishFromAction("room:chat", "forged", { stream: "s" })).rejects.toMatchObject({ code: "FORBIDDEN_TOPIC", status: 403 });
+    });
+
+    it("refuses an action publish to a defineWebSocket route topic", async () => {
+        expect.assertions(1);
+
+        const shard = makeShard([]);
+
+        await expect(shard.publishFromAction("__lunora_socket__:sockets:chat", "forged", { stream: "s" })).rejects.toMatchObject({
+            code: "FORBIDDEN_TOPIC",
+            status: 403,
+        });
     });
 
     it("refuses an oversized action publish rather than dropping it", async () => {

@@ -316,7 +316,10 @@ const inferToFixpoint = (options: {
     // A target that rejects `typedWebSockets` gets no room surface: its room registrations are not emitted.
     for (let pass = 1; ; pass += 1) {
         // Recomputed each pass: the inference refines `functions`, and the emit must see that.
-        const emittedFunctions = roomsSupported ? functions : functions.filter((definition) => definition.channel?.kind !== "room");
+        const emittedFunctions = roomsSupported
+            ? functions
+            : functions.filter((definition) => definition.channel?.kind !== "room" && definition.lifecycle !== "socket");
+
         const apiContent = emitApi({ agents, functions: emittedFunctions, httpRoutes, mutators, useUmbrella, workflows });
         const functionsOptions = {
             agents,
@@ -488,8 +491,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
 
-    // Rooms ride hibernated shard sockets: a target that rejects `typedWebSockets` gets no room
-    // surface. The gate has already reported the rejection as `platform_unsupported_feature`.
+    // Rooms and socket routes ride hibernated shard sockets: a target that rejects `typedWebSockets`
+    // gets neither surface. The gate has already reported the rejection as `platform_unsupported_feature`.
     const roomsSupported = platformGate.signals.typedWebSockets !== false;
     const { apiContent, erased, functions, functionModulesContent, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
@@ -706,6 +709,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasFlags,
         hasNotify,
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
+        hasSockets: roomsSupported && functions.some((definition) => definition.lifecycle === "socket"),
         lazyFunctions,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,

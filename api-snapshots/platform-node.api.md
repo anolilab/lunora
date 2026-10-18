@@ -226,6 +226,7 @@ interface NodeSchedulerHostOptions {
 
 ```ts
 interface NodeShard {
+    inbound: Pick<NodeSocketHost, "onClose" | "onMessage">;
     kv: ShardKvStore;
     shard: ShardHost;
     shardKey: string;
@@ -274,6 +275,10 @@ interface NodeShardState {
     id: {
         name?: string;
     };
+    openSocketPair: () => {
+        client: unknown;
+        server: unknown;
+    };
     storage: {
         delete: (key: string) => Promise<boolean>;
         deleteAlarm: () => Promise<void>;
@@ -290,6 +295,7 @@ interface NodeShardState {
         };
         transaction: <T>(closure: () => Promise<T>) => Promise<T>;
     };
+    upgradeResponse: (client: unknown) => Response;
     waitUntil: (promise: Promise<unknown>) => void;
 }
 ```
@@ -298,6 +304,9 @@ interface NodeShardState {
 
 ```ts
 interface NodeSocketHost {
+    drain: () => Promise<void> | undefined;
+    onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
+    onMessage: (handler: (socket: NodeServerEnd, data: string | ArrayBuffer) => void) => void;
     readFrames: (handle: SocketHandle) => string[];
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
     simulateRecycle: () => void;
@@ -330,6 +339,21 @@ interface NodeWorkflowHostOptions<Workflows extends Record<string, {
     store: WorkflowStore;
     workflows: Workflows;
 }
+```
+
+### `ShardSocketHooks` (interface)
+
+```ts
+interface ShardSocketHooks {
+    webSocketClose(ws: unknown, code: number, reason: string, wasClean: boolean): unknown;
+    webSocketMessage(ws: unknown, message: string | ArrayBuffer): unknown;
+}
+```
+
+### `bindShardSockets` (const)
+
+```ts
+const bindShardSockets: (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void;
 ```
 
 ### `createNodeDispatchRoute` (const)
@@ -453,4 +477,19 @@ const createNodeWorkflowStore: (database: Database.Database) => WorkflowStore;
 
 ```ts
 const createNodeConformanceHost: () => ConformanceHost;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `NodeServerEnd` (interface)
+
+```ts
+interface NodeServerEnd {
+    close: (code?: number, reason?: string) => void;
+    send: (data: string | ArrayBuffer) => void;
+}
 ```

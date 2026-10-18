@@ -523,6 +523,11 @@ const createReferenceHost = (): ReferenceHost => {
     };
 
     const socket: SocketHost = {
+        // The reference host has no transport, so its pair is two plain objects and its upgrade response is a placeholder.
+        newPair: () => {
+            return { client: {}, server: {} };
+        },
+        upgradeResponse: () => new Response(null, { status: 200 }),
         accept: (rawSocket, attachment, tags) => {
             assertOpen("accept a socket");
 

@@ -362,9 +362,14 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
     output?: ValidatorIR;
     returnType: string;
+    socket?: {
+        auth: boolean;
+        origin?: string;
+        path: string;
+    };
     visibility?: "internal" | "public";
     x402?: {
         price?: number | string;
@@ -646,7 +651,7 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_live_stream_delivery_authorization" | "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
+    name: "platform_live_stream_delivery_authorization" | "platform_socket_delivery_authorization" | "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
     remediation: string;
     target: string;
 }
@@ -1446,7 +1451,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSockets, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -2542,6 +2547,7 @@ interface EmitShardOptions {
     hasFlags?: boolean;
     hasNotify?: boolean;
     hasRooms?: boolean;
+    hasSockets?: boolean;
     hasVectors?: boolean;
     lazyFunctions?: boolean;
     liveStreams?: boolean;

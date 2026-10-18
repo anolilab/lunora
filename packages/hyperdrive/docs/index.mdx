@@ -67,34 +67,42 @@ pnpm add mysql2          # mysql2        → fromMysql2
 
 ## Set up the binding
 
-1.  Create a Hyperdrive config pointing at your origin database:
+Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` and
+`lunora deploy` add a `HYPERDRIVE` binding to `wrangler.jsonc` for you, with a
+placeholder `id`.
+
+- **In dev**, `ctx.sql` runs against an embedded Postgres ([PGlite](https://pglite.dev)),
+  with its data in `.wrangler/state/lunora-pglite`, so there is nothing to run. It starts under
+  `lunora dev`, `vite dev` and `vite preview`.
+  It needs two optional packages, and `lunora dev` says so when they are missing:
 
     ```bash
-    wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+    pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
     ```
 
-    This prints an `id`.
+    To use your own database instead, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`
+    (the last part is the binding name) or `localConnectionString` on the binding. Neither is
+    overridden. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets
+    a warning and must set that variable to a local MySQL of its own. A plain `wrangler dev` that
+    Lunora does not start has no embedded database either: set the variable (or
+    `localConnectionString`) there too.
 
-2.  Add the binding to `wrangler.jsonc`. Use `localConnectionString` so local
-    dev (`lunora dev`) connects straight to your DB without the edge proxy:
+- **On deploy**, set the origin's connection string and a token that may edit Hyperdrive
+  (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):
 
-    ```jsonc
-    {
-        "hyperdrive": [
-            {
-                "binding": "HYPERDRIVE",
-                "id": "<the id from step 1>",
-                "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
-            },
-        ],
-    }
+    ```bash
+    LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
     ```
 
-Lunora validates the binding (it errors when `binding` is missing and warns when
-`id` is empty, since a placeholder id can't connect), but it does **not**
-auto-provision the `id`: that's a remote resource only `wrangler hyperdrive create`
-can mint, so importing `@lunora/hyperdrive` surfaces a hint rather than writing the
-binding for you.
+    The variable is `LUNORA_<BINDING>_URL`. Lunora creates a config named after the deployed Worker (so `--env staging` gets its own) and
+    the binding, or reuses one with that name that reaches the same database, and writes its `id`
+    into `wrangler.jsonc`. A same-named config for another database stops the deploy. The
+    connection string is only sent to Cloudflare: it is never written to a file or logged. Once the
+    `id` is real, later deploys need neither variable.
+
+Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection-string=...`
+and put the `id` in the binding; Lunora then leaves it alone. Lunora validates the binding
+(it errors when `binding` is missing).
 
 ## The canonical recipe
 

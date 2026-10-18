@@ -1,3 +1,29 @@
+## @lunora/sql-store [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.190...@lunora/sql-store@1.0.0-alpha.191) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+* **@lunora/do:** upgraded to 1.0.0-alpha.228
+
+## @lunora/sql-store [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.189...@lunora/sql-store@1.0.0-alpha.190) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/do:** upgraded to 1.0.0-alpha.227
+
+## @lunora/sql-store [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.188...@lunora/sql-store@1.0.0-alpha.189) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/do:** upgraded to 1.0.0-alpha.226
+
 ## @lunora/sql-store [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.187...@lunora/sql-store@1.0.0-alpha.188) (2026-10-18)
 
 
