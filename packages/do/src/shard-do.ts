@@ -15863,9 +15863,12 @@ abstract class ShardDO {
         // Fire the route's `onOpen` under the socket's verified identity, exactly as `onConnect` fires for the
         // subscription socket. Not awaited: a slow or stuck handler must not hold the handshake, and the per-socket
         // chain in `dispatchSocketEvent` still runs it before any frame the socket sends. A throwing handler is
-        // logged and swallowed there.
+        // logged and swallowed there. Handed to the host's `waitUntil`, so an eviction cannot cut the handler's mutation off.
         if (route !== undefined) {
-            this.dispatchSocketEvent(accepted, { functionPath: route.functionPath, path: url.pathname }, "open").catch(() => undefined);
+            // Created before the hand-off: `waitUntil?.(…)` would skip evaluating its argument on a host without one.
+            const opened = this.dispatchSocketEvent(accepted, { functionPath: route.functionPath, path: url.pathname }, "open").catch(() => undefined);
+
+            this.shardHost.waitUntil?.(opened);
             // A route socket joins its reserved topic here and sends no `connect` frame, so on a relay this is where
             // the relay announces itself. Without it the owner never forwards route broadcasts to this relay.
             this.relay?.announce().catch(() => undefined);
@@ -15911,7 +15914,9 @@ abstract class ShardDO {
 
         if (route !== undefined && !this.routeCloseSent.has(ws)) {
             this.routeCloseSent.add(ws);
-            this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close").catch(() => undefined);
+            const closed = this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close").catch(() => undefined);
+
+            this.shardHost.waitUntil?.(closed);
         }
 
         dropExpiredCredentialSocket(ws);
