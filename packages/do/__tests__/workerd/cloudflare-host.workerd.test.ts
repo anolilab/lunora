@@ -35,7 +35,7 @@
  */
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
-import { createSecretValueHost, createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
+import { createSecretValueHost, createSecretValueStore, createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { TestContext } from "vitest";
 import { describe, expect, it } from "vitest";
@@ -56,6 +56,9 @@ let currentState: DurableObjectState | undefined;
 // eslint-disable-next-line sonarjs/no-unused-collection, vitest/require-hook -- write-only by design: a module-scope GC anchor for the client ends of in-flight WebSocketPairs, reset per test by the `it` wrapper
 let liveSockets: WebSocket[] = [];
 
+/** The reserved key prefix the secret-value records live under, as `createSecretValueStore` writes them. */
+const SECRET_KEY_PREFIX = "__lunora_secret_value:";
+
 const createCloudflareHost = (): ConformanceHost => {
     const state = currentState;
 
@@ -63,7 +66,7 @@ const createCloudflareHost = (): ConformanceHost => {
         throw new Error("no DurableObjectState in scope — the conformance body ran outside runInDurableObject");
     }
 
-    const platform = createShardPlatform(state);
+    const platform = createShardPlatform(state, env);
 
     // A fully fake clock per host, started at real time. Real elapsed time must
     // not leak in: the expiry legs move the clock only through `advanceClock`.
@@ -89,7 +92,7 @@ const createCloudflareHost = (): ConformanceHost => {
         // this TCK run covers BOTH: the adapters' behaviour and the assembly
         // `createShardPlatform` performs. A wiring mistake in the root — the
         // wrong storage handle into `kv`, say — fails here, not in production.
-        directory: createShardDirectory(env.ECHO as unknown as Parameters<typeof createShardDirectory>[0]),
+        directory: createShardDirectory(env.ECHO),
         // `runSerialized` is `blockConcurrencyWhile`: the input gate, not the
         // SQL executor, is where this host keeps concurrent tasks apart. See
         // the `isolatesByDispatch` note on `ConformanceHost` for what that
@@ -101,7 +104,24 @@ const createCloudflareHost = (): ConformanceHost => {
         kv: platform.kv,
         // Rebuilt over the same storage with an injectable clock: the composition
         // root's own instance reads `Date.now`, which the expiry legs cannot move.
-        secretValues: createSecretValueHost(state.storage, { now: () => secretClock }),
+        secretValues: createSecretValueHost(state.storage, env, { now: () => secretClock }),
+        secretValueStore: {
+            dump: async () => JSON.stringify([...(await state.storage.list({ prefix: SECRET_KEY_PREFIX }))]),
+            peek: async (ref) => {
+                const record = await state.storage.get<{ scope: string; value: string }>(`${SECRET_KEY_PREFIX}${ref}`);
+
+                return record === undefined ? undefined : { scope: record.scope, value: record.value };
+            },
+            poke: async (ref, fields) => {
+                const key = `${SECRET_KEY_PREFIX}${ref}`;
+                const record = await state.storage.get<Record<string, unknown>>(key);
+
+                if (record !== undefined) {
+                    await state.storage.put(key, { ...record, ...fields });
+                }
+            },
+            store: createSecretValueStore(state.storage, { now: () => secretClock }),
+        },
         shard: platform.shard,
         socket: platform.sockets,
     };

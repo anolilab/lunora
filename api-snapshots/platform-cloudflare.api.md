@@ -41,9 +41,17 @@ interface WorkerPlatformOptions {
 ### `createSecretValueHost` (const)
 
 ```ts
-const createSecretValueHost: (storage: SecretStorageLike, options?: {
+const createSecretValueHost: (storage: SecretStorageLike, env: unknown, options?: {
     now?: () => number;
 }) => SecretValueHost;
+```
+
+### `createSecretValueStore` (const)
+
+```ts
+const createSecretValueStore: (storage: SecretStorageLike, options?: {
+    now?: () => number;
+}) => SecretValueStore;
 ```
 
 ### `createShardAlarms` (const)
@@ -73,7 +81,7 @@ const createShardKvStore: (storage: KvStorageLike) => ShardKvStore;
 ### `createShardPlatform` (const)
 
 ```ts
-const createShardPlatform: (state: unknown) => ShardPlatform;
+const createShardPlatform: (state: unknown, env: unknown) => ShardPlatform;
 ```
 
 ### `createSocketHost` (const)

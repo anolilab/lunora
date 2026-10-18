@@ -18,6 +18,7 @@ import type { DurableObjectNamespace, DurableObjectState, DurableObjectStub, Web
 import { LunoraError } from "@lunora/errors";
 import type {
     SecretValueHost,
+    SecretValueStore,
     ShardAlarms,
     ShardDirectory,
     ShardHost,
@@ -30,7 +31,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "@lunora/platform";
-import { assertSecretValueSize, clampSecretValueTtl } from "@lunora/platform";
+import { clampSecretValueTtl, encryptingSecretValueHost } from "@lunora/platform";
 
 /**
  * Raw cursor returned by Cloudflare's `SqlStorage.exec` — already iterable with
@@ -358,20 +359,18 @@ interface SecretRecord {
  * two takes cannot both observe the ref unbound. `options.now` exists for the
  * conformance suite's clock and defaults to `Date.now`.
  */
-const createSecretValueHost = (storage: SecretStorageLike, options: { now?: () => number } = {}): SecretValueHost => {
+const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () => number } = {}): SecretValueStore => {
     const now = options.now ?? Date.now;
     const keyOf = (ref: string): string => `${SECRET_VALUE_KEY_PREFIX}${ref}`;
 
     return {
         discard: async (ref) => Boolean(await storage.delete(keyOf(ref))),
-        put: async (value, put) => {
-            assertSecretValueSize(value);
-
+        put: async (seal, put) => {
             const at = now();
             const expiresAt = at + clampSecretValueTtl(put.ttlMs);
             const ref = `${String(expiresAt).padStart(15, "0")}.${crypto.randomUUID()}`;
 
-            await storage.put(keyOf(ref), { expiresAt, scope: put.scope, value } satisfies SecretRecord);
+            await storage.put(keyOf(ref), { expiresAt, scope: put.scope, value: await seal(ref) } satisfies SecretRecord);
 
             const earliest = await storage.list<SecretRecord>({ limit: SECRET_VALUE_SWEEP_LIMIT, prefix: SECRET_VALUE_KEY_PREFIX });
             const expired = [...earliest].filter(([, record]) => record.expiresAt <= at).map(([key]) => key);
@@ -408,6 +407,32 @@ const createSecretValueHost = (storage: SecretStorageLike, options: { now?: () =
                 return record.claimant === take.claimant ? record.value : undefined;
             }),
     };
+};
+
+/**
+ * The key bindings a secret value is sealed under. They are Worker secrets read
+ * from `env`, never storage and never `vars` (deployed config). The previous key
+ * is only for rotation: `take` still opens values sealed under it.
+ */
+interface SecretValueKeyBindings {
+    LUNORA_SECRET_VALUE_KEY?: unknown;
+    LUNORA_SECRET_VALUE_KEY_PREVIOUS?: unknown;
+}
+
+/**
+ * Turn a Durable Object's `state.storage` and Worker `env` into a
+ * {@link SecretValueHost}: the reserved-namespace store wrapped in AES-256-GCM.
+ * With no key bound, every `put` and `take` refuses with `SecretValueKeyError`;
+ * nothing falls back to storing plaintext.
+ */
+const createSecretValueHost = (storage: SecretStorageLike, env: unknown, options: { now?: () => number } = {}): SecretValueHost => {
+    const bindings = (env ?? {}) as SecretValueKeyBindings;
+    const stringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+
+    return encryptingSecretValueHost(createSecretValueStore(storage, options), {
+        key: stringOrUndefined(bindings.LUNORA_SECRET_VALUE_KEY),
+        previousKey: stringOrUndefined(bindings.LUNORA_SECRET_VALUE_KEY_PREVIOUS),
+    });
 };
 
 /**
@@ -689,7 +714,7 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
      */
     const toStub = (stub: DurableObjectStub): ShardStub => {
         return {
-            fetch: (request) => stub.fetch(request as unknown as Parameters<DurableObjectStub["fetch"]>[0]) as unknown as Promise<Response>,
+            fetch: (request) => stub.fetch(request) as unknown as Promise<Response>,
         };
     };
 
@@ -714,5 +739,5 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
     return directory;
 };
 
-export { createSecretValueHost, createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
+export { createSecretValueHost, createSecretValueStore, createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
 export type { SqlStorageCursor };
