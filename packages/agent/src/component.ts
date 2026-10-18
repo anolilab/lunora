@@ -1346,11 +1346,16 @@ export const agentComponent = (): AgentComponent => {
      * the client never queues it offline.
      *
      * The host `put` writes through the raw storage handle, not the mutation's own
-     * transaction, so this code does not assume the value and the row commit
-     * together. The order is: check the request is open, `put`, check it is still
-     * open (the deadline can pass during the put), then the compare-and-set. Any
-     * failure after the `put` discards the value, so a refused supply leaves nothing
-     * readable behind it.
+     * transaction, so the store write can overlap a change to the row. The supply is
+     * one compare-and-set on the row it was checked against: the request must still
+     * be pending, before its deadline, and owned by the same run. Any failure before
+     * that commit discards the value, so a refused supply leaves nothing readable.
+     *
+     * The wake-up is sent after the commit, and its failure does not undo the supply.
+     * Rolling back on a failed wake would be wrong: the wake may have been delivered
+     * and only its acknowledgement lost, the run would already have resumed, and it
+     * would expire a request whose value the owner just stored. The committed
+     * `supplied` row is the authority; the wait settles at its deadline and honours it.
      */
     const agentSupplySecret = mutation
         .input({ secret: v.sensitive(v.string()), threadKey: v.string(), toolCallId: v.string() })
@@ -1366,8 +1371,9 @@ export const agentComponent = (): AgentComponent => {
             const store = secretStoreOf(context);
             const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
             const handle = secretWaitHandle(context, thread);
-
-            await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+            const checked = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+            // Copied out now: the row read is not a snapshot the write below can be compared against.
+            const ownerInstanceId = checked["instanceId"] as string;
 
             let ref: string;
 
@@ -1383,6 +1389,13 @@ export const agentComponent = (): AgentComponent => {
 
             try {
                 const request = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+
+                if (request["instanceId"] !== ownerInstanceId) {
+                    throw new LunoraError(
+                        "CONFLICT",
+                        `@lunora/agent: tool call "${args.toolCallId}" on thread "${args.threadKey}" was reopened by a newer run while its secret was being stored`,
+                    );
+                }
 
                 await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
                 // Retire the marker in this same mutation, so the UI stops offering the form.

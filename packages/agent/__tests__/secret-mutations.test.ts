@@ -123,6 +123,21 @@ const requestRow = (rows: ReadonlyMap<string, ReadonlyArray<Record<string, unkno
     return row;
 };
 
+/** A promise the test settles on demand, so an interleaving is held at a known point. */
+const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+    let settle: () => void = () => undefined;
+    const promise = new Promise<void>((resolve) => {
+        settle = resolve;
+    });
+
+    return {
+        promise,
+        resolve: () => {
+            settle();
+        },
+    };
+};
+
 const take = (functions: ReturnType<typeof agentComponent>["functions"], ctx: unknown, args: Record<string, unknown>): Promise<unknown> =>
     call(functions.agentTakeSecret, ctx, args);
 
@@ -303,6 +318,45 @@ describe("secret request component", () => {
             const [ref] = discarded;
 
             await expect(store.take(ref as string, { claimant: "tool:charge:call_2", scope: "t-1" })).resolves.toBeUndefined();
+        });
+
+        it("refuses a supply that a newer run reopened during the store write, discards its value, and leaves the newer request pending", async () => {
+            expect.assertions(4);
+
+            const { discarded, store } = spyStore();
+            const storing = deferred();
+            const storeStarted = deferred();
+            const gatedStore: SecretValueHost = {
+                ...store,
+                put: async (value, options) => {
+                    storeStarted.resolve();
+                    await storing.promise;
+
+                    return store.put(value, options);
+                },
+            };
+            const { caller, ctx, functions, rows } = await stagedThread("user-a", gatedStore);
+
+            const supplying = call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
+
+            await storeStarted.promise;
+
+            // A newer run reuses `call_1` while the older supply is still storing its value.
+            await call(functions.agentOpenSecretRequest, ctx, {
+                consumerTool: "charge",
+                expiresAt: NOW + DEADLINE_MS,
+                instanceId: "wf-2",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+            storing.resolve();
+
+            await expect(supplying).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(discarded).toHaveLength(1);
+            expect(requestRow(rows)).toMatchObject({ instanceId: "wf-2", ref: null, status: "pending" });
+            expect(caller.sent).toStrictEqual([]);
         });
 
         it("rejects an over-size value with PAYLOAD_TOO_LARGE and keeps the request pending", async () => {
