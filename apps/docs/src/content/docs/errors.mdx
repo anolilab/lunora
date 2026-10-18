@@ -601,7 +601,7 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 
 `503` — Offline, write not queued
 
-A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), so it was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
+A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
 
 ### `OUT_OF_ORDER`
 

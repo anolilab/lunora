@@ -14,6 +14,13 @@ export interface UseQueryOptions {
 
 export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     /**
+     * Refuse rather than queue this write when the connection is down; see
+     * `MutationCallOptions.onlineOnly`. For a function with a `v.sensitive` argument
+     * the hook narrows this to `true`, since such a write is always online-only.
+     */
+    onlineOnly?: boolean;
+
+    /**
      * Single-query shortcut forwarded to `client.mutation`: the transform is
      * layered onto the subscription registered under **this write's own**
      * `(reference, args, shardKey)` and nothing else. A `messages:send` mutation
