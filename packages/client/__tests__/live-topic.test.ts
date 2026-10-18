@@ -174,6 +174,30 @@ describe(subscribeLiveTopic, () => {
         off();
     });
 
+    it("does not share a connection between different session keys, and closes the old one when its subscribers leave", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        const { aborted, connects } = stubFetch();
+        const url = "/live/session/connect";
+        const offFirst = subscribeLiveTopic({ sessionKey: "user-1", topic: "a", url });
+        const offSecond = subscribeLiveTopic({ sessionKey: "user-2", topic: "a", url });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(connects).toHaveLength(2);
+
+        offFirst();
+        await vi.advanceTimersByTimeAsync(5);
+
+        expect(aborted[0]).toBe(true);
+        expect(aborted[1]).toBe(false);
+
+        offSecond();
+        await vi.advanceTimersByTimeAsync(5);
+    });
+
     it("does not share a connection between differently configured subscribers", async () => {
         expect.hasAssertions();
 

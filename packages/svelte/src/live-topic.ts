@@ -25,13 +25,14 @@ interface LiveTopicState {
 }
 
 /** The fields that decide which connection and subscription a topic needs. Callbacks are excluded. */
-type LiveTopicConnection = Pick<SubscribeLiveTopicOptions, "headers" | "maxDelayMs" | "retryDelay" | "topic" | "url" | "withCredentials">;
+type LiveTopicConnection = Pick<SubscribeLiveTopicOptions, "headers" | "maxDelayMs" | "retryDelay" | "sessionKey" | "topic" | "url" | "withCredentials">;
 
 const connectionOf = (options: SubscribeLiveTopicOptions): LiveTopicConnection => {
     return {
         headers: options.headers,
         maxDelayMs: options.maxDelayMs,
         retryDelay: options.retryDelay,
+        sessionKey: options.sessionKey,
         topic: options.topic,
         url: options.url,
         withCredentials: options.withCredentials,

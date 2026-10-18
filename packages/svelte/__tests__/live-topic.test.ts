@@ -109,6 +109,23 @@ describe("liveTopic store", () => {
         expect(secondUnsubscribe).toHaveBeenCalledTimes(1);
     });
 
+    it("resubscribes when the session key changes, closing the previous subscription first", () => {
+        const options = writable<SubscribeLiveTopicOptions>({ sessionKey: "user-1", topic: "post:1", url: "/live/posts/connect" });
+        const firstUnsubscribe = vi.fn<() => void>();
+
+        subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
+
+        const stop = liveTopic(options).subscribe(() => {});
+
+        options.set({ sessionKey: "user-2", topic: "post:1", url: "/live/posts/connect" });
+
+        expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
+        expect(lastOptions().sessionKey).toBe("user-2");
+
+        stop();
+    });
+
     it("does not resubscribe when only the callback identities change, and calls the latest", () => {
         const firstHandler = vi.fn<() => void>();
         const latestHandler = vi.fn<() => void>();

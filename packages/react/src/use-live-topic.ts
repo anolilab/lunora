@@ -39,8 +39,8 @@ const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
     // Anything that changes which stream is opened lands in `connectionKey`; the callbacks are left
     // out so their identity never matters, and `stableWireKey` ignores property order, so the same
     // headers in a new order do not resubscribe.
-    const { headers, maxDelayMs, retryDelay, topic, url, withCredentials } = options;
-    const connectionKey = stableWireKey({ headers, maxDelayMs, retryDelay, topic, url, withCredentials });
+    const { headers, maxDelayMs, retryDelay, sessionKey, topic, url, withCredentials } = options;
+    const connectionKey = stableWireKey({ headers, maxDelayMs, retryDelay, sessionKey, topic, url, withCredentials });
 
     const [state, setState] = useState<LiveTopicState>();
     const current = state?.key === connectionKey ? state : undefined;

@@ -210,8 +210,10 @@ and follow topics with the adapter's hook (all return `{ lastEvent, error }`):
 const { lastEvent, error } = useLiveTopic({ url: "/live/posts/connect", topic: `post:${postId}`, onEvent: (payload) => refresh(payload) });
 ```
 
-- Several hooks with the same URL, credentials, headers, `retryDelay` and `maxDelayMs`
-  share a single connection; the last to unmount closes it.
+- Several hooks with the same URL, credentials, headers, `retryDelay`, `maxDelayMs` and
+  `sessionKey` share a single connection; the last to unmount closes it. On a
+  cookie-authenticated stream pass `sessionKey` (the user id), or the connection
+  outlives a sign-out and keeps the previous user's topics.
 - Publish from server code with `ctx.live.publish(topic, payload, { stream })`.
   `ctx.live` exists only on actions, HTTP actions, queue consumers and scheduled
   actions, NOT on a query or mutation. It is always present on an HTTP action

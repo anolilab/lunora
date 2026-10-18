@@ -1436,6 +1436,7 @@ interface StreamIterable<T> extends AsyncIterable<T> {
 interface SubscribeLiveTopicOptions extends Omit<ConnectLiveStreamOptions, "fetch"> {
     onError?: (error: LiveStreamSubscribeError) => void;
     onEvent?: (payload: unknown) => void;
+    sessionKey?: string;
     topic: string;
     url: string;
 }

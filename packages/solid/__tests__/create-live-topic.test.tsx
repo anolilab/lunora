@@ -91,6 +91,27 @@ describe(createLiveTopic, () => {
         expect(secondUnsubscribe).not.toHaveBeenCalled();
     });
 
+    it("resubscribes when the session key changes, closing the previous subscription first", () => {
+        const [sessionKey, setSessionKey] = createSignal("user-1");
+        const firstUnsubscribe = vi.fn<() => void>();
+
+        subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
+
+        render(() => {
+            createLiveTopic(() => {
+                return { sessionKey: sessionKey(), topic: "post:1", url: "/live/posts/connect" };
+            });
+
+            return <div />;
+        });
+
+        setSessionKey("user-2");
+
+        expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
+        expect(lastOptions().sessionKey).toBe("user-2");
+    });
+
     it("does not resubscribe when only the callback identities change, and calls the latest", () => {
         const [handler, setHandler] = createSignal<(payload: unknown) => void>(() => undefined);
         const firstHandler = vi.fn<() => void>();

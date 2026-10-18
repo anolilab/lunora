@@ -69,6 +69,30 @@ describe("liveTopic — reactive options", () => {
         expect(secondUnsubscribe).not.toHaveBeenCalled();
     });
 
+    it("resubscribes when the session key changes, closing the previous subscription first", () => {
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const sessionKey = signal("user-1");
+        const firstUnsubscribe = vi.fn<() => void>();
+
+        subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
+
+        liveTopic(
+            () => {
+                return { sessionKey: sessionKey(), topic: "post:1", url: "/live/posts/connect" };
+            },
+            { destroyRef: destroy.asDestroyRef, injector },
+        );
+
+        TestBed.tick();
+        sessionKey.set("user-2");
+        TestBed.tick();
+
+        expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
+        expect(lastOptions().sessionKey).toBe("user-2");
+    });
+
     it("does not resubscribe when only the callback identities change, and calls the latest", () => {
         const destroy = createFakeDestroyRef();
         const injector = TestBed.inject(Injector);

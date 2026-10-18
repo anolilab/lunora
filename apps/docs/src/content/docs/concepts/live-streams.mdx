@@ -111,6 +111,9 @@ const unsubscribe = subscribeLiveTopic({
 });
 ```
 
+Pass `sessionKey` when the stream is cookie-authenticated and the signed-in user can
+change while a page stays open; see the limits at the end of this page.
+
 To pick a shard, put it in the connect URL: `/live/posts/connect?shard=<key>`. The
 control calls carry the same shard, so the subscription lands on the connection's
 shard.
@@ -151,9 +154,12 @@ Read this before you ship a stream.
   stays open. A credential with an expiry ends the stream at that expiry. A cookie
   session with no expiry keeps receiving until the connection closes, and a shared
   `subscribeLiveTopic` connection stays open as long as any subscriber is mounted,
-  so it outlives a sign-out or an account switch. Unmount the subscribers (or reload
-  the page) when the signed-in user changes, so the connection closes and the next
-  one is authorized as the new user. Shared connections are not keyed by session.
+  so it outlives a sign-out or an account switch. Pass `sessionKey` (a user id, say)
+  to `subscribeLiveTopic` or to the framework binding: connections are shared only
+  between subscribers with the same key, and when the key changes the binding
+  resubscribes on a new connection that is authorized as the new user, while the
+  old one closes. Without a `sessionKey`, unmount the subscribers (or reload the
+  page) when the signed-in user changes. The key is never sent to the server.
 - **Delivery authorization is not compatible.** An app that declares a live stream
   and calls `.deliveryAuthorization(...)` is refused at codegen, because the shard
   answers every `/_lunora/live/*` route with 501 in that mode.

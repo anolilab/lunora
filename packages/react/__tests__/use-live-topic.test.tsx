@@ -90,6 +90,19 @@ describe(useLiveTopic, () => {
         expect(result.current.lastEvent).toBeUndefined();
     });
 
+    it("resubscribes when the session key changes", () => {
+        expect.hasAssertions();
+
+        const { rerender } = renderHook(({ sessionKey }) => useLiveTopic({ sessionKey, topic: "a", url: URL }), {
+            initialProps: { sessionKey: "user-1" },
+        });
+
+        rerender({ sessionKey: "user-2" });
+
+        expect(subscribeLiveTopic).toHaveBeenCalledTimes(2);
+        expect(subscriptionAt(1).options.sessionKey).toBe("user-2");
+    });
+
     it("does not resubscribe when only the callback identity changes, and calls the latest one", () => {
         expect.hasAssertions();
 

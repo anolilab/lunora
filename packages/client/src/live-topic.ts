@@ -21,6 +21,13 @@ interface SubscribeLiveTopicOptions extends Omit<ConnectLiveStreamOptions, "fetc
     onError?: (error: LiveStreamSubscribeError) => void;
     /** Called for every event on `topic`. */
     onEvent?: (payload: unknown) => void;
+
+    /**
+     * Partitions the shared connection. A cookie-authenticated stream is bound to the session that opened it, so
+     * pass something that changes when the signed-in user does (a user id): a new value opens a new connection
+     * and the old one closes once its subscribers have moved. It is never sent to the server.
+     */
+    sessionKey?: string;
     /** The topic to follow. */
     topic: string;
     /** The `connect` route URL of a `defineLiveStream`. */
@@ -39,6 +46,7 @@ const shared = new Map<string, SharedStream>();
 const keyFor = (options: SubscribeLiveTopicOptions): string =>
     JSON.stringify([
         options.url,
+        options.sessionKey,
         options.withCredentials === true,
         options.retryDelay,
         options.maxDelayMs,

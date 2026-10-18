@@ -107,6 +107,19 @@ describe(useLiveTopic, () => {
         expect(result.lastEvent.value).toBeUndefined();
     });
 
+    it("resubscribes when the session key changes", async () => {
+        expect.hasAssertions();
+
+        const options = reactive<Parameters<typeof useLiveTopic>[0]>({ sessionKey: "user-1", topic: "a", url: URL });
+
+        mount(options);
+        options.sessionKey = "user-2";
+        await nextTick();
+
+        expect(subscribeLiveTopic).toHaveBeenCalledTimes(2);
+        expect(subscriptionAt(1).options.sessionKey).toBe("user-2");
+    });
+
     it("does not resubscribe when only a callback changes, and calls the latest one", async () => {
         expect.hasAssertions();
 
