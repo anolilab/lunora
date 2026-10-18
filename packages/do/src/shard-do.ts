@@ -32,6 +32,7 @@ import {
     buildSecurityAudit,
     createDatabaseTally,
     createMetrics,
+    createSensitiveScope,
     createSpanCollector,
     createTracedFetch,
     createTracer,
@@ -51,6 +52,7 @@ import {
     maskSensitiveArgs,
     mergeScanAttribution,
     MetricBuffer,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readFunctionMetricBuckets,
@@ -66,8 +68,7 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
-    scrubSensitiveText,
-    sensitiveStrings,
+    sensitiveValues,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -462,6 +463,24 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 
 /** The empty answer of {@link ShardDO.sensitiveArgNames}: a function with no `v.sensitive` argument. */
 const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * The scrub scope of one invocation: the structural projection of
+ * `@lunora/observability`'s `SensitiveScope`, declared here so generated code can
+ * name it without depending on observability (see {@link ShardDO.openSensitiveScope}).
+ */
+interface SensitiveScope {
+    /** Admit more values into the invocation (a composed call's marked arguments). */
+    add: (values: ReadonlyArray<string>) => void;
+    /** Forget the values. Called once the invocation's records are written. */
+    clear: () => void;
+    /** Scrub a field bag; `undefined` passes through. */
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    /** Scrub a free-text string. */
+    text: (text: string) => string;
+    /** Scrub one structured value. */
+    value: <T>(value: T) => T;
+}
 
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
@@ -3230,6 +3249,7 @@ abstract class ShardDO {
         headroom?: TransactionHeadroomTracker,
         scope?: QueryReadScope,
         bookmarks?: DispatchBookmark,
+        sensitive?: SensitiveScope,
     ): Promise<unknown>;
 
     /**
@@ -5428,6 +5448,27 @@ abstract class ShardDO {
     }
 
     /**
+     * The scrub scope for ONE invocation: every free-text and structured record it
+     * writes (logs, spans, the wide event, metrics, the root span's error) has the
+     * values of its marked arguments replaced. The single place those values are
+     * read. Built from the DECODED args, because a wire-encoded bigint or byte
+     * string would not match the text the handler actually sees. The caller owns
+     * the scope and clears it once the dispatch's records are written.
+     */
+    protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope {
+        return createSensitiveScope(sensitiveValues(args, this.sensitiveArgNames(functionPath)));
+    }
+
+    /**
+     * Admit a composed call's marked arguments into the invocation that makes the
+     * call. The callee runs inside that invocation, so its own `v.sensitive` values
+     * are scrubbed from its records too, not only the caller's.
+     */
+    protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void {
+        scope?.add(sensitiveValues(args, this.sensitiveArgNames(functionPath)));
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -6790,7 +6831,14 @@ abstract class ShardDO {
      * stamps `fields` onto every line. The generated `buildCtx` calls this once
      * per dispatch and assigns the result to `ctx.log`.
      */
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger {
+    protected makeLogger(
+        functionPath: string,
+        sink?: TelemetrySink,
+        boundFields?: Record<string, unknown>,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): ContextLogger {
+        // Every part of the line is scrubbed before it is recorded: the arguments
+        // reach the buffer and the sink raw, and the message, fields and error do too.
         const at =
             (level: ContextLogLevel) =>
             (...args: unknown[]): void => {
@@ -6798,7 +6846,17 @@ abstract class ShardDO {
                 // Searched before `parseLogArgs` stringified any Error in the fields.
                 const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 
-                this.recordUserLog(functionPath, level, args, message, fields, sink, undefined, undefined, error);
+                this.recordUserLog(
+                    functionPath,
+                    level,
+                    scope.value(args),
+                    scope.text(message),
+                    scope.fields(fields),
+                    sink,
+                    undefined,
+                    undefined,
+                    error === undefined ? undefined : scope.value(error),
+                );
             };
 
         return {
@@ -6809,14 +6867,24 @@ abstract class ShardDO {
                 // viewer still shows something meaningful; the structured payload
                 // is `fields`, and `eventName` is what makes a collector treat the
                 // record as a queryable event rather than prose.
-                this.recordUserLog(functionPath, "info", [name], name, boundFields ? { ...boundFields, ...fields } : fields, sink, name);
+                const eventName = scope.text(name);
+
+                this.recordUserLog(
+                    functionPath,
+                    "info",
+                    scope.value([name]),
+                    eventName,
+                    scope.fields(boundFields ? { ...boundFields, ...fields } : fields),
+                    sink,
+                    eventName,
+                );
             },
             fatal: at("fatal"),
             info: at("info"),
             log: at("log"),
             trace: at("trace"),
             warn: at("warn"),
-            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
+            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields, scope),
         };
     }
 
@@ -6836,7 +6904,7 @@ abstract class ShardDO {
      * The Cloudflare custom-spans bridge is threaded here but stays off unless the
      * resolved sink sets `fuseCloudflareTraces` (see {@link resolveHostTracing}).
      */
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextTracer {
         // Resolve the anchor once so its `sampled` verdict is snapshotted for every
         // span this tracer records — carried to `recordSpan` rather than re-looked-up
         // from `traceSampling` at span-close time, so a span that ends AFTER the
@@ -6855,6 +6923,7 @@ abstract class ShardDO {
                 this.recordSpan(span, sink, resolvedAnchor.sampled);
             },
             resolveHostTracing,
+            scope,
             shardKey: this.runner.shardKey,
             userId: () => this.getCurrentUserId(),
         });
@@ -6885,8 +6954,14 @@ abstract class ShardDO {
      * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
      * nothing.
      */
-    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink);
+    protected instrumentDb<T extends object>(
+        database: T,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink?: TelemetrySink,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): T {
+        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink, scope);
 
         return deps === undefined ? database : instrumentDatabase(database, deps);
     }
@@ -6903,8 +6978,14 @@ abstract class ShardDO {
      * spans go to the sink, and the folded counters reach the host invocation
      * span through the root-span mirroring in `recordDispatchRootSpan`.
      */
-    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink);
+    protected instrumentSql<T extends SqlClientLike>(
+        client: T,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink?: TelemetrySink,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): T {
+        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink, scope);
 
         return deps === undefined ? client : instrumentSqlClient(client, deps);
     }
@@ -6922,7 +7003,7 @@ abstract class ShardDO {
      * nobody collects, and an app calling a third party it would rather not send
      * trace ids to needs a way to say so.
      */
-    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch {
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextFetch {
         const base: ContextFetch = (input, init) => globalThis.fetch(input, init);
 
         if (sink === undefined || sink.traceFetch === false) {
@@ -6947,6 +7028,7 @@ abstract class ShardDO {
                 record: (span) => {
                     this.recordSpan(span, sink, anchor.sampled);
                 },
+                scope,
                 shardKey: this.runner.shardKey,
                 userId: () => userId,
             },
@@ -6954,7 +7036,7 @@ abstract class ShardDO {
         );
     }
 
-    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanHandle {
         const spanKey = dispatchSpanKey(anchor);
 
         /**
@@ -6987,6 +7069,7 @@ abstract class ShardDO {
             entry.collector ??= createSpanCollector(
                 { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId },
                 isDevEnvironment(this.env),
+                scope,
             );
             this.dispatchSpans.set(spanKey, entry);
 
@@ -7029,12 +7112,13 @@ abstract class ShardDO {
      * Build the `ctx.metrics` recorder for one dispatched function. Thin wiring
      * over {@link createMetrics}, which owns the instrument semantics.
      */
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics {
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextMetrics {
         return createMetrics({
             functionPath,
             record: (event) => {
                 this.recordMetric(event, sink);
             },
+            scope,
             shardKey: this.runner.shardKey,
         });
     }
@@ -7661,8 +7745,17 @@ abstract class ShardDO {
         // blank classification over the real one and break the in-transaction
         // watermark handshake.
         let dispatchScope: RequestScope = this.captureRequestScope();
+        // Declared out here so the `finally` can release it: the dispatch's records
+        // (root span, wide event, request log) are written after the handler returns.
+        let sensitive: SensitiveScope | undefined;
 
         try {
+            // Decoded once for the whole dispatch: the scrub scope and the handler both
+            // read these, so a value the handler sees is the value the scope masks.
+            const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
+
+            sensitive = this.openSensitiveScope(payload.functionPath, handlerArgs);
+
             // Reserved cross-shard relation read/count (reverse cross-backend
             // relations). Served BEFORE user dispatch and returned BARE (row
             // array / number) — never `{ result }`-wrapped — so the Query
@@ -7778,9 +7871,7 @@ abstract class ShardDO {
             // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
             // the request log/metrics below (JSON-safe — a raw `bigint` there
             // would throw `JSON.stringify`).
-            const runHandler = async (): Promise<unknown> => {
-                const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
-
+            const runHandler = async (): Promise<unknown> =>
                 // A registered `query` goes through the reactive cache when one
                 // is configured; every other kind dispatches straight through. The
                 // decoded args are what get keyed (`stableWireKey` handles the
@@ -7788,18 +7879,17 @@ abstract class ShardDO {
                 // encoding still share an entry. `runCachedQuery` is a pass-through
                 // when `reactiveCache` is undefined, but the cacheability lookup is
                 // skipped in that case so a cache-less shard pays nothing.
-                return this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
+                this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
                     ? this.runCachedQuery(
                           payload.functionPath,
                           handlerArgs,
                           // The scope is threaded BY VALUE into the handler's ctx
                           // (see `handleRpc`), so this dispatch's reads stamp its
                           // own tracker even while a sibling is mid-await.
-                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark),
+                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark, sensitive),
                           dispatchAttribution,
                       )
-                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark);
-            };
+                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark, sensitive);
 
             const dedupMutationId = requestScope.mutationId;
 
@@ -7963,8 +8053,8 @@ abstract class ShardDO {
             const durationMs = Date.now() - dispatchStartedAt;
             // A handler's own message can quote a `v.sensitive` argument it rejected;
             // the free-text sinks below (metrics, request log, dev log) get it scrubbed.
-            const sensitive = this.sensitiveArgNames(payload.functionPath);
-            const message = scrubSensitiveText(error instanceof Error ? error.message : String(error), sensitiveStrings(payload.args ?? {}, sensitive));
+            const thrownText = error instanceof Error ? error.message : String(error);
+            const message = sensitive?.text(thrownText) ?? thrownText;
             // Count only OCC conflicts as write contention — a unique-index
             // breach / onDelete-restrict / trigger-overflow also surfaces as a
             // 409 ConflictError but is a constraint failure, not contention, and
@@ -8049,13 +8139,13 @@ abstract class ShardDO {
             const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
             const rootSpan =
                 this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)
-                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace)
+                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace, sensitive)
                     : undefined;
 
             // Outside that gate: a handler that threw before recording anything
             // is the most common server fault, and its invocation span must still
             // read as failed. The sink was registered eagerly by `makeDispatchSpan`.
-            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault);
+            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault, sensitive);
 
             this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
 
@@ -8083,6 +8173,9 @@ abstract class ShardDO {
                 this.inFlightClaims.release(heldClaim);
             }
 
+            // Every record this dispatch makes is written by now. A span a handler
+            // leaves open past this point is not scrubbed: the values are gone.
+            sensitive?.clear();
             this.endDispatch();
         }
     }
@@ -8472,6 +8565,7 @@ abstract class ShardDO {
         functionPath: string,
         anchor: TraceAnchor,
         sink: TelemetrySink | undefined,
+        scope: SensitiveScope,
     ): DatabaseTelemetryDeps | undefined {
         const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
 
@@ -8497,6 +8591,7 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink, anchor.sampled);
             },
+            scope,
             shardKey: this.runner.shardKey,
             // Parked on the dispatch entry rather than written through `ctx.span`:
             // a query pays only integer increments, and the tally is read ONCE in
@@ -8636,6 +8731,7 @@ abstract class ShardDO {
         startedAt: number,
         failure: { thrown: unknown } | undefined,
         anchor: TraceAnchor,
+        sensitive?: SensitiveScope,
     ): SpanEvent | undefined {
         const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
         const durationMs = Date.now() - startedAt;
@@ -8675,6 +8771,7 @@ abstract class ShardDO {
                 durationMs,
                 failure,
                 functionPath,
+                scope: sensitive,
                 shardKey: this.runner.shardKey,
                 startTs: startedAt,
                 userId: this.getCurrentUserId(),
@@ -8706,6 +8803,7 @@ abstract class ShardDO {
         rootSpan: SpanEvent | undefined,
         failure: { thrown: unknown } | undefined,
         serverFault: boolean,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
     ): void {
         if (sink?.fuseCloudflareTraces !== true) {
             return;
@@ -8720,7 +8818,7 @@ abstract class ShardDO {
                           error: {
                               // Redacted exactly as the root span's own error message.
                               message: redactArgs(
-                                  failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown),
+                                  scope.text(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown)),
                                   isDevEnvironment(this.env),
                               ) as string,
                               serverFault,
@@ -16195,4 +16293,14 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { DispatchBookmark, HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };
+export type {
+    DispatchBookmark,
+    HibernatableWebSocket,
+    QueryReadScope,
+    SensitiveScope,
+    ShardDOOptions,
+    ShardDOState,
+    SubscriptionOutcome,
+    TelemetrySink,
+    TraceRefLike,
+};

@@ -781,6 +781,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    "SensitiveScope",
     ...(hasShardSearchIndexes ? ["SearchBackfillProgress"] : []),
     "TransactionHeadroomTracker",
     "SchemaLike",

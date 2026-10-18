@@ -168,6 +168,7 @@ interface DatabaseTelemetryDeps {
     anchor: TraceAnchor;
     captureRaw?: boolean;
     functionPath: string;
+    scope?: SensitiveScope;
     mode: DatabaseInstrumentation;
     record: (span: SpanEvent) => void;
     shardKey: string | undefined;
@@ -572,8 +573,15 @@ interface MetricSeries {
 interface MetricsDeps {
     functionPath: string;
     record: (event: MetricEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
 }
+```
+
+### `NO_SENSITIVE_SCOPE` (const)
+
+```ts
+const NO_SENSITIVE_SCOPE: SensitiveScope;
 ```
 
 ### `QueryInsightBucket` (interface)
@@ -777,6 +785,18 @@ type SecurityFindingKind = "admin-token-weak" | "auth-secret-weak" | "cookies-in
 type SecurityFindingLevel = "error" | "info" | "warning";
 ```
 
+### `SensitiveScope` (interface)
+
+```ts
+interface SensitiveScope {
+    add: (values: ReadonlyArray<string>) => void;
+    clear: () => void;
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    text: (text: string) => string;
+    value: <T>(value: T) => T;
+}
+```
+
 ### `SpanBuffer` (class)
 
 ```ts
@@ -959,6 +979,7 @@ interface TracedFetchDeps {
     functionPath: string;
     propagate?: ((url: URL) => boolean) | boolean;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -974,6 +995,7 @@ interface TracerDeps {
     fuseHostSpans?: boolean;
     record: (span: SpanEvent) => void;
     resolveHostTracing?: HostTracingResolver;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -1017,10 +1039,16 @@ const createDatabaseTally: () => DatabaseTally;
 const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ```
 
+### `createSensitiveScope` (const)
+
+```ts
+const createSensitiveScope: (values: ReadonlyArray<string>) => SensitiveScope;
+```
+
 ### `createSpanCollector` (const)
 
 ```ts
-const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean) => SpanCollector;
+const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean, scope?: SensitiveScope) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)
@@ -1047,6 +1075,7 @@ const dispatchRootSpan: (input: {
         thrown: unknown;
     } | undefined;
     functionPath: string;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     startTs: number;
     userId: string | undefined;
@@ -1265,16 +1294,10 @@ const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | s
 };
 ```
 
-### `scrubSensitiveText` (const)
+### `sensitiveValues` (const)
 
 ```ts
-const scrubSensitiveText: (text: string, secrets: ReadonlyArray<string>) => string;
-```
-
-### `sensitiveStrings` (const)
-
-```ts
-const sensitiveStrings: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
+const sensitiveValues: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
 ```
 
 ### `setHostSpanAttributes` (const)

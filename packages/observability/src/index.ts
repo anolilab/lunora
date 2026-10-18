@@ -94,21 +94,23 @@ export type {
     RequestLogResult,
     RequestLogWriteOptions,
     RequestOutcome,
+    SensitiveScope,
 } from "./request-log";
 export {
     appendRequestLogEntry,
+    createSensitiveScope,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
     maskSensitiveArgs,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,
     REQUEST_LOG_TABLE,
-    scrubSensitiveText,
     SENSITIVE_ARG_MASK,
-    sensitiveStrings,
+    sensitiveValues,
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
