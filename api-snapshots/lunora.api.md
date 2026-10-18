@@ -1843,6 +1843,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `OnlineOnlyOption` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `OptimisticLocalStore` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -3511,6 +3515,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `SENSITIVE_ARG_MASK` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `SecurityAuditResult` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3680,6 +3688,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `latencyBucketIndex` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `maskSensitiveArgs` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3989,7 +4001,19 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `SecretValueKeyError` (class)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueKeyOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `SecretValuePutOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueStore` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -4110,6 +4134,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `clampSecretValueTtl` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `encryptingSecretValueHost` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -8583,6 +8611,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `containsSensitive` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `cyrb53` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
@@ -8620,6 +8652,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `parseValidatorMap` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `sensitiveArgumentNames` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

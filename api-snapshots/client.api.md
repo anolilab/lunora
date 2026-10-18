@@ -1047,6 +1047,16 @@ interface OfflineQueueOptions {
 }
 ```
 
+### `OnlineOnlyOption` (type)
+
+```ts
+type OnlineOnlyOption<F> = F extends {
+    readonly sensitive: true;
+} ? {
+    onlineOnly?: true;
+} : unknown;
+```
+
 ### `OptimisticLocalStore` (interface)
 
 ```ts
@@ -2497,16 +2507,6 @@ interface OfflineQueueDeps {
     persistence?: PersistenceAdapter;
     version?: string;
 }
-```
-
-### `OnlineOnlyOption` (type)
-
-```ts
-type OnlineOnlyOption<F> = F extends {
-    readonly sensitive: true;
-} ? {
-    onlineOnly?: true;
-} : unknown;
 ```
 
 ### `OptimisticLayer` (interface)

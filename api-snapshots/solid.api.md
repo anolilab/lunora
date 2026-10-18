@@ -540,7 +540,7 @@ interface LunoraProviderProps {
 
 ```ts
 interface MutationClient<F extends FunctionReference> {
-    mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
 }
 ```
 
@@ -550,7 +550,7 @@ interface MutationClient<F extends FunctionReference> {
 interface MutationHandle<F extends FunctionReference> {
     data: Accessor<ReturnOf<F> | undefined>;
     error: Accessor<Error | undefined>;
-    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
     pending: Accessor<boolean>;
     reset: () => void;
 }

@@ -198,7 +198,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 interface MutationHandle<F extends FunctionReference> {
     data: Ref<ReturnOf<F> | undefined>;
     error: Ref<Error | undefined>;
-    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
     pending: Ref<boolean>;
     reset: () => void;
 }
