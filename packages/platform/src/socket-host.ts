@@ -7,8 +7,8 @@
  * The engine relies on three guarantees:
  * 1. **Hibernation** — a socket can be evicted from memory and rehydrated
  * later without losing its subscription state.
- * 2. **Attachment round-trip** — arbitrary JSON state serialized with the
- * socket must survive recycling and be readable on wake.
+ * 2. **Attachment round-trip** — JSON state serialized with the socket, within
+ * the attachment budget below, must survive recycling and be readable on wake.
  * 3. **Tagged fan-out** — the host can enumerate live sockets (optionally by
  * tag) to broadcast query invalidations and shape updates.
  *
@@ -35,11 +35,57 @@
  * Cloudflare's own cap is 10 tags per socket, 256 characters each
  * (developers.cloudflare.com/durable-objects/api/state/), so with one slot
  * reserved a portable caller should assume **at most 9 usable tags, each
- * bounded to at most 256 characters** — a budget-exceeding `accept` call
- * fails loudly on the host that enforces it (see
- * {@link SocketHost.accept}) rather than passing silently on hosts with no
- * cap and only failing, opaquely, on Cloudflare.
+ * bounded to at most 256 characters**. Every host refuses a budget-exceeding
+ * `accept` call (see {@link SocketHost.accept}) through the check they share,
+ * {@link findSocketTagBudgetViolation}, so no host accepts a socket that
+ * Cloudflare would refuse.
+ *
+ * **Attachment budget.** Cloudflare's `serializeAttachment` caps each
+ * socket's attachment at 16384 bytes; a larger value throws
+ * `A WebSocket 'attachment' cannot be larger than 16384 bytes.` (measured
+ * against workerd and pinned by
+ * `packages/do/__tests__/workerd/shard-do.workerd.test.ts`). Portable callers
+ * should keep attachments well under that.
+ * Only Cloudflare enforces it, by throwing at serialize time: measuring every
+ * attachment would sit on the accept and re-attach paths, which the engine
+ * keeps hot, and the engine's own attachments are small by construction.
  */
+
+/**
+ * The portable accept-time tag budget every host refuses beyond. 9 usable tags
+ * is Cloudflare's 10-tag `acceptWebSocket` cap minus the one identity slot its
+ * adapter reserves; 256 characters is Cloudflare's per-tag cap. Verified
+ * against developers.cloudflare.com/durable-objects/api/state/ (2026-08-01);
+ * update these numbers and that date if the page changes.
+ */
+export const SOCKET_TAG_BUDGET = {
+    maxTagLength: 256,
+    usableTags: 9,
+} as const;
+
+/**
+ * Check `tags` against {@link SOCKET_TAG_BUDGET}. Returns a human-readable
+ * violation, or `undefined` when within budget. Hosts call this first in
+ * `accept` and throw their own error type, so an over-budget call fails the
+ * same way on every host rather than only on the one whose provider caps it.
+ */
+export const findSocketTagBudgetViolation = (tags?: ReadonlyArray<string>): string | undefined => {
+    if (tags === undefined) {
+        return undefined;
+    }
+
+    if (tags.length > SOCKET_TAG_BUDGET.usableTags) {
+        return `${String(tags.length)} tags supplied; a socket accepts at most ${String(SOCKET_TAG_BUDGET.usableTags)} (Cloudflare allows 10 per socket and reserves 1 for the host's identity tag).`;
+    }
+
+    const overLength = tags.find((tag) => tag.length > SOCKET_TAG_BUDGET.maxTagLength);
+
+    if (overLength !== undefined) {
+        return `Tag ${JSON.stringify(overLength)} is ${String(overLength.length)} characters; at most ${String(SOCKET_TAG_BUDGET.maxTagLength)} are allowed per tag.`;
+    }
+
+    return undefined;
+};
 
 /**
  * The socket the engine sends through.
@@ -103,10 +149,10 @@ export interface SocketHost {
      * Portable callers should assume a budget of **at most 9 usable tags, each
      * at most 256 characters** — some hosts (Cloudflare) reserve one tag slot
      * of their own 10-tag cap for bookkeeping; see this file's module-header
-     * "Reserved-slot budget" note. A host that enforces a cap rejects an
-     * over-budget call rather than accepting it and silently dropping or
-     * truncating tags, which would break {@link SocketHost.getSockets}'s
-     * exactness requirement.
+     * "Reserved-slot budget" note. Every host rejects an over-budget call (see
+     * {@link findSocketTagBudgetViolation}) rather than accepting it and
+     * silently dropping or truncating tags, which would break
+     * {@link SocketHost.getSockets}'s exactness requirement.
      */
     accept: (socket: unknown, attachment?: unknown, tags?: ReadonlyArray<string>) => SocketHandle;
 

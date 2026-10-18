@@ -492,6 +492,33 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
 
+            // The ceiling pair to the nine-tag floor above: every host refuses an
+            // over-budget accept, and a refused call leaves no half-accepted
+            // socket behind in `getSockets()`. Floor and ceiling are different
+            // regressions, so each has its own leg.
+            it("rejects a tenth caller tag on every host", async () => {
+                expect.assertions(2);
+
+                await withHost(async (host) => {
+                    const tags = Array.from({ length: 10 }, (_unused, index) => `tag-${String(index)}`);
+                    const before = host.socket.getSockets().length;
+
+                    expect(() => host.socket.accept(rawSocket(host), {}, tags)).toThrow();
+                    expect(host.socket.getSockets()).toHaveLength(before);
+                });
+            });
+
+            it("rejects an over-length tag on every host", async () => {
+                expect.assertions(2);
+
+                await withHost(async (host) => {
+                    const before = host.socket.getSockets().length;
+
+                    expect(() => host.socket.accept(rawSocket(host), {}, ["x".repeat(257)])).toThrow();
+                    expect(host.socket.getSockets()).toHaveLength(before);
+                });
+            });
+
             // Enumeration yields handles while the runtime's message/close
             // callbacks yield raw sockets. A host that cannot bridge the two
             // forces every caller back onto the provider socket type, which is

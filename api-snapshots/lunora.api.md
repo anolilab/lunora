@@ -3889,6 +3889,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `SOCKET_TAG_BUDGET` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduleOptions` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -4006,6 +4010,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeVector` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `findSocketTagBudgetViolation` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 

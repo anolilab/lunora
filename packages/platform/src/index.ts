@@ -102,3 +102,4 @@ export type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } fro
 
 // Socket host
 export type { SocketHandle, SocketHost } from "./socket-host";
+export { findSocketTagBudgetViolation, SOCKET_TAG_BUDGET } from "./socket-host";
