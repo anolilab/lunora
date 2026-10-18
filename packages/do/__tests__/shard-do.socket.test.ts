@@ -565,6 +565,55 @@ describe("shardDO socket routes", () => {
         expect(socketCalls(shard)).toHaveLength(0);
     });
 
+    it("treats a mixed-case Upgrade header as a websocket upgrade under delivery authorization", async () => {
+        expect.assertions(1);
+
+        const globalWithPair = globalThis as { WebSocketPair?: unknown };
+        const original = globalWithPair.WebSocketPair;
+
+        globalWithPair.WebSocketPair = function WebSocketPair() {
+            return { 0: {}, 1: new FakeSocket() } as unknown;
+        };
+
+        const shard = new SocketShard({ acceptWebSocket() {}, getWebSockets: () => [], storage: { sql: {} } }, CHAT_ROUTE, {
+            deliveryAuthorization: () => Promise.resolve(undefined),
+        });
+        let status: number;
+
+        try {
+            const response = await shard.fetch(
+                new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "WebSocket", "x-lunora-userid": "user-1" } }),
+            );
+
+            status = response.status;
+        } catch (error) {
+            // Node refuses to build a 101 response, so reaching the upgrade branch surfaces as this RangeError.
+            if (!(error instanceof RangeError)) {
+                throw error;
+            }
+
+            status = 101;
+        } finally {
+            globalWithPair.WebSocketPair = original;
+        }
+
+        expect(status).not.toBe(501);
+    });
+
+    it("records a route frame that is not valid JSON instead of dropping it silently", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const shard = makeShard([a], CHAT_ROUTE);
+
+        await send(shard, a, "{not json");
+
+        const entries = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+
+        expect(socketCalls(shard)).toHaveLength(0);
+        expect(entries.some((entry) => entry.functionPath === "sockets:chat" && entry.message.includes("invalid JSON"))).toBe(true);
+    });
+
     it("drops a route frame under delivery authorization instead of running its mutation", async () => {
         expect.assertions(2);
 

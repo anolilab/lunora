@@ -3292,7 +3292,7 @@ abstract class ShardDO {
             }
             return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
         }
-        if (request.headers.get("Upgrade") === "websocket") {
+        if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
             // A `defineWebSocket` route runs its mutations per frame, which delivery authorization does not cover: its
             // broadcasts would be dropped while the handler still ran. Refused, as the other unsupported modes are.
             if (this.socketRoute(url.pathname) !== undefined) {
@@ -16407,7 +16407,15 @@ abstract class ShardDO {
 
         try {
             raw = JSON.parse(text);
-        } catch {
+        } catch (error) {
+            // Dropped, but recorded: a client sending malformed frames is otherwise invisible.
+            this.logs.push({
+                functionPath: route.functionPath,
+                level: "error",
+                message: `socket frame dropped: invalid JSON (${error instanceof Error ? error.message : String(error)})`,
+                timestamp: Date.now(),
+            });
+
             return;
         }
 
