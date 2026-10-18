@@ -180,6 +180,25 @@ describe("shardDO socket routes", () => {
         expect(b.frames).toEqual([{ data: { echo: { text: "hi" } }, topic: CHAT_TOPIC, type: "message" }]);
     });
 
+    it("refuses a frame from an anonymous socket once its route requires auth", async () => {
+        expect.assertions(3);
+
+        // The socket opened on a public route, then the deployment made the route require a session.
+        const anonymous = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const verified = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, userId: "user-1", whispers: [CHAT_TOPIC] });
+        const shard = makeShard([anonymous, verified], { "/chat": { auth: true, functionPath: "sockets:chat" } });
+
+        await send(shard, anonymous, JSON.stringify(encodeWire({ text: "hi" })));
+
+        expect(socketCalls(shard)).toHaveLength(0);
+        expect(anonymous.frames).toEqual([]);
+
+        // The same route still dispatches a frame from a verified socket.
+        await send(shard, verified, JSON.stringify(encodeWire({ text: "hi" })));
+
+        expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["message"]);
+    });
+
     it("refuses a route broadcast over the byte cap even when its UTF-16 length is under it", async () => {
         expect.assertions(2);
 

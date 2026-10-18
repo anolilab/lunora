@@ -7562,7 +7562,7 @@ abstract class ShardDO {
             // Refused once the close was delivered: its event is already queued, and teardown clears the identity the
             // handler would read. Frames delivered before the close are queued ahead of it and run first.
             if (!deliveredAfterClose) {
-                await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, text);
+                await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, inboundAttachment, text);
             }
 
             return;
@@ -16338,10 +16338,17 @@ abstract class ShardDO {
      * valid JSON, or whose path no longer resolves to a route, is dropped — a
      * malformed frame must not take the socket down.
      */
-    private async handleSocketRouteFrame(ws: ShardSocketLike, socketPath: string, text: string): Promise<void> {
+    private async handleSocketRouteFrame(ws: ShardSocketLike, socketPath: string, attachment: SocketAttachment, text: string): Promise<void> {
         const route = this.socketRoute(socketPath);
 
         if (route === undefined) {
+            return;
+        }
+
+        // A route that requires a session can be declared over a socket that opened before it did, so the upgrade check
+        // alone is not enough: an anonymous socket is refused every frame, as `socketMayReceiveRouteTopic` refuses it
+        // every broadcast.
+        if (route.auth && attachment.userId === undefined) {
             return;
         }
 
