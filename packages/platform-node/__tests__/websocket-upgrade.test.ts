@@ -415,6 +415,38 @@ describe("node upgrade lifecycle", () => {
         await server.close();
     });
 
+    it("cancels a streaming refusal body once the client has gone", async () => {
+        expect.assertions(1);
+
+        let started = false;
+        let cancelled = false;
+        const server = await createNodeHttpServer({
+            fetch: () => {
+                // A refusal whose body never ends: reading it to the end would hold the stream after the client left.
+                const body = new ReadableStream<Uint8Array>({
+                    cancel() {
+                        cancelled = true;
+                    },
+                    start() {
+                        started = true;
+                    },
+                });
+
+                return Promise.resolve(new Response(body, { status: 401 }));
+            },
+        });
+
+        const client = await rawOpen(server, "/private");
+
+        await waitFor(() => started);
+        client.resetAndDestroy();
+        await waitFor(() => cancelled);
+
+        expect(cancelled).toBe(true);
+
+        await server.close();
+    });
+
     it("shuts down promptly while an upgrade is still awaiting its fetch", async () => {
         expect.assertions(1);
 

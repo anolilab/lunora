@@ -178,13 +178,49 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
     outgoing.end();
 };
 
+/** Every chunk of a body, read one at a time so the caller can cancel the reader midway. */
+const readChunks = async (reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[]): Promise<Uint8Array[]> => {
+    const next = await reader.read();
+
+    if (next.done) {
+        return chunks;
+    }
+
+    chunks.push(next.value);
+
+    return readChunks(reader, chunks);
+};
+
 /**
  * Answer a refused upgrade with the response the worker chose: its status, its
  * headers, and its body. The socket is closed afterwards, because a refused
  * handshake has no connection to keep.
  */
 const writeRefusal = async (response: Response, socket: Duplex): Promise<void> => {
-    const body = Buffer.from(await response.arrayBuffer());
+    const reader = response.body?.getReader();
+    // A client that has gone will never read the refusal, so its body is cancelled rather than read to the end.
+    const cancel = (): void => {
+        reader?.cancel().catch(() => undefined);
+    };
+
+    if (socket.destroyed) {
+        cancel();
+
+        return;
+    }
+
+    socket.once("close", cancel);
+
+    const chunks = reader === undefined ? [] : await readChunks(reader, []);
+
+    socket.off("close", cancel);
+
+    // A client that left mid-read has nothing to receive the refusal.
+    if (!socket.writable) {
+        return;
+    }
+
+    const body = Buffer.concat(chunks);
     const lines = [
         `HTTP/1.1 ${String(response.status)} ${response.statusText || "Refused"}`,
         "connection: close",
