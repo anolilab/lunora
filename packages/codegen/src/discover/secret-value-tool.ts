@@ -1,26 +1,7 @@
-import type { ImportDeclaration, Project } from "ts-morph";
+import type { Project } from "ts-morph";
 
 import { listLunoraSourceFiles } from "./ast";
-
-/** The package the agent tools are imported from. */
-const AGENT_MODULE_SPECIFIER = "@lunora/agent";
-
-/**
- * The agent tool that asks a human for a secret value. Its value import from
- * {@link AGENT_MODULE_SPECIFIER} is the signal that wires the secret store. Mirrors
- * how `jsCodeTool` drives `workerLoaders` (see `./sandbox`), except this tool is not
- * a sandbox tool and so gets its own scan rather than a flag in `SandboxUsage`.
- */
-const REQUEST_SECRET_TOOL = "requestSecretTool";
-
-/** Whether an import declaration value-imports {@link REQUEST_SECRET_TOOL} from the agent package. */
-const importsRequestSecretTool = (declaration: ImportDeclaration): boolean => {
-    if (declaration.getModuleSpecifierValue() !== AGENT_MODULE_SPECIFIER || declaration.isTypeOnly()) {
-        return false;
-    }
-
-    return declaration.getNamedImports().some((named) => !named.isTypeOnly() && named.getNameNode().getText() === REQUEST_SECRET_TOOL);
-};
+import { declaresRequestSecretTool } from "./feature-usage";
 
 /**
  * Whether any source in `lunora/` value-imports `requestSecretTool` from
@@ -32,7 +13,7 @@ const discoverSecretValueToolUsage = (project: Project, lunoraDirectory: string)
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        if (sourceFile.getImportDeclarations().some((declaration) => importsRequestSecretTool(declaration))) {
+        if (sourceFile.getImportDeclarations().some((declaration) => declaresRequestSecretTool(declaration))) {
             return true;
         }
     }
