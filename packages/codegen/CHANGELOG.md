@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.323...@lunora/codegen@1.0.0-alpha.324) (2026-10-18)
+
+### Bug Fixes
+
+* harden live stream delivery on the server and node host ([#1247](https://github.com/anolilab/lunora/issues/1247)) ([0074c55](https://github.com/anolilab/lunora/commit/0074c55e1a7910f89b6d4b2b4275b4dbe8113edf))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.232
+* **@lunora/agent:** upgraded to 1.0.0-alpha.224
+* **@lunora/container:** upgraded to 1.0.0-alpha.81
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/queue:** upgraded to 1.0.0-alpha.114
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.136
+* **@lunora/values:** upgraded to 1.0.0-alpha.71
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.83
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.121
+* **@lunora/do:** upgraded to 1.0.0-alpha.226
+* **@lunora/payment:** upgraded to 1.0.0-alpha.219
+* **@lunora/server:** upgraded to 1.0.0-alpha.216
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/codegen [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.322...@lunora/codegen@1.0.0-alpha.323) (2026-10-18)
 
 ### Bug Fixes
