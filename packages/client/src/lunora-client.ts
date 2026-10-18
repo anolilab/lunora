@@ -183,6 +183,7 @@ import type {
     KvNamespaceSummary,
     KvValueResult,
     LunoraClientOptions,
+    OnlineOnlyOption,
     OutboxSink,
     PersistenceAdapter,
     PipelineLogPage,
@@ -359,6 +360,33 @@ interface ActionCallOptions {
 }
 
 /**
+ * True when `function_` is a reference to a function with a `v.sensitive`
+ * argument: the generated `api` types it `& { readonly sensitive: true }` and emits
+ * the same flag at runtime.
+ */
+const isSensitiveReference = (function_: FunctionReference): boolean => (function_ as { sensitive?: unknown }).sensitive === true;
+
+/**
+ * The options a call really runs under. A sensitive function is always
+ * online-only, so its arguments are never queued; an explicit `onlineOnly: false`
+ * is refused rather than quietly overridden, because it can only be a mistake.
+ */
+const forceOnlineOnlyWhenSensitive = <O extends { onlineOnly?: boolean }>(function_: FunctionReference, options: O): O => {
+    if (!isSensitiveReference(function_)) {
+        return options;
+    }
+
+    if (options.onlineOnly === false) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `'${function_.__lunoraRef}' takes a sensitive argument and is always online-only; onlineOnly: false is not allowed`,
+        );
+    }
+
+    return { ...options, onlineOnly: true };
+};
+
+/**
  * Per-call options for {@link LunoraClient.mutation} — the optimistic-update
  * machinery plus `shardKey`. Exported (at the end of this file) so the framework
  * adapters (`@lunora/react`, `/solid`, `/svelte`, `/vue`) can type their
@@ -380,7 +408,8 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * call rejects at once with `OFFLINE_NOT_QUEUED`, and its args never reach the
      * offline queue, the persistence adapter or the outbox. Use it for a write whose
      * arguments must not sit on disk: a credential a person typed in, a one-time
-     * token.
+     * token. A function with a `v.sensitive` argument is always online-only, whatever
+     * this option says: the client forces it on, and `false` is refused.
      *
      * Ordering: an online-only call neither waits for a queue flush nor queues
      * behind writes already queued for its shard. When it is sent it can overtake
@@ -2829,7 +2858,7 @@ class LunoraClient {
     public async mutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
-        options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
+        options: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F> = {},
     ): Promise<ReturnOf<F>> {
         // Checked before anything starts: an aborted call applies no optimistic patch and sends nothing.
         if (options.signal?.aborted) {
@@ -4719,9 +4748,13 @@ class LunoraClient {
     private async runMutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
-        options: MutationCallOptions<unknown, unknown, ArgsOf<F>>,
+        callOptions: MutationCallOptions<unknown, unknown, ArgsOf<F>>,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         this.assertOpen();
+
+        // Forced here, where every mutation path converges, so no caller can route a
+        // sensitive argument into the offline queue or the outbox.
+        const options = forceOnlineOnlyWhenSensitive(function_, callOptions);
 
         const argsRecord = args as Record<string, unknown>;
 
