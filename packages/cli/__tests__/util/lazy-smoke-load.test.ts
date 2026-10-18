@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,12 +13,10 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
     return { ...(await importOriginal()), startDevProcess };
 });
 
-const toolchain = {
-    dev: () => {
-        return { args: ["dev"], tool: "wrangler" };
-    },
-    devServer: "workerd",
-} as unknown as DriverToolchain;
+const dev = vi.fn<(request: { extraArgs?: string[] }) => { args: string[]; tool: string }>((request) => {
+    return { args: ["dev", ...(request.extraArgs ?? [])], tool: "wrangler" };
+});
+const toolchain = { dev, devServer: "workerd" } as unknown as DriverToolchain;
 const logger = {
     error: vi.fn<(message: string) => void>(),
     info: vi.fn<(message: string) => void>(),
@@ -119,5 +117,107 @@ describe(runLazySmokeLoad, () => {
         await expect(run()).resolves.toBeUndefined();
         expect(startDevProcess).not.toHaveBeenCalled();
         expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    describe("what the smoke Worker runs", () => {
+        /** The entry file as it was when wrangler was started — it is removed again once the run ends. */
+        const captureEntry = (): { read: () => { content: string; path: string } } => {
+            const captured = { content: "", path: "" };
+
+            startDevProcess.mockImplementation(async () => {
+                captured.path = dev.mock.lastCall?.[0].extraArgs?.[0] ?? "";
+                captured.content = readFileSync(captured.path, "utf8");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+
+            return { read: () => captured };
+        };
+
+        it("re-exports the entry of the selected environment, not the top-level one", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "src", "prod.ts"), "export default {};\n");
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ env: { production: { main: "src/prod.ts" } }, main: "src/index.ts", name: "app" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run({ environment: "production" });
+
+            expect(entry.read().content).toContain(join(cwd, "src", "prod.ts"));
+            expect(entry.read().content).not.toContain(join(cwd, "src", "index.ts"));
+        });
+
+        it("forces plain http and uses a directory of its own that is gone afterwards", async () => {
+            expect.assertions(4);
+
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run();
+            const first = entry.read().path;
+
+            await run();
+
+            expect(dev.mock.calls[0]?.[0].extraArgs).toStrictEqual(expect.arrayContaining(["--local-protocol", "http"]));
+            expect(entry.read().path).not.toBe(first);
+            expect(existsSync(first)).toBe(false);
+            expect(readdirSync(join(cwd, ".lunora"))).toStrictEqual([]);
+        });
+
+        it("skips a project that declares containers instead of building them locally", async () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(cwd, "wrangler.jsonc"),
+                JSON.stringify({ containers: [{ class_name: "Box", image: "./Dockerfile" }], main: "src/index.ts", name: "app" }),
+            );
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("a Worker that boots but does not answer", () => {
+        it("blocks on a 5xx that carries no result", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<() => Promise<Response>>(async () => new Response("The script will never generate a response.", { status: 500 })),
+            );
+
+            const error = await run();
+
+            expect(error).toContain("failed while evaluating the lazy modules (HTTP 500)");
+            expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("blocks when it never answers within the deadline", async () => {
+            expect.assertions(1);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<() => Promise<Response>>(async () => {
+                    throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+                }),
+            );
+
+            await expect(run()).resolves.toContain("did not finish evaluating the lazy modules");
+        });
+
+        it("only warns when something other than the smoke Worker answers", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<() => Promise<Response>>(async () => new Response("<html></html>", { status: 200 })),
+            );
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unexpected response (HTTP 200)"));
+        });
     });
 });
