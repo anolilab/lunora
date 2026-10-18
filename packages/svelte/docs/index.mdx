@@ -404,7 +404,8 @@ not.
 
     export let postId: string;
 
-    const comments = liveTopic({ url: "/live/posts/connect", topic: `comments:${postId}` });
+    // Re-run when `postId` changes, so the store follows the new post's topic.
+    $: comments = liveTopic({ url: "/live/posts/connect", topic: `comments:${postId}` });
 </script>
 
 {#if $comments.lastEvent !== undefined}<p>New comment</p>{/if}

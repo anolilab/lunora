@@ -22,6 +22,8 @@ Server-Sent Events connection.
 // lunora/live.ts
 import { defineLiveStream } from "@lunora/server";
 
+import { api } from "./_generated/api";
+
 export const posts = defineLiveStream({
     id: "posts",
     onSubscribe: async ({ ctx, topic }) => {
@@ -146,7 +148,12 @@ Read this before you ship a stream.
   literal `true` allows. Any other return value denies, and so does a throw.
   `allowAnonymousControl` does not bypass the handler.
 - **A subscription is authorized once.** It is not re-checked while the connection
-  stays open. A credential with an expiry ends the stream at that expiry.
+  stays open. A credential with an expiry ends the stream at that expiry. A cookie
+  session with no expiry keeps receiving until the connection closes, and a shared
+  `subscribeLiveTopic` connection stays open as long as any subscriber is mounted,
+  so it outlives a sign-out or an account switch. Unmount the subscribers (or reload
+  the page) when the signed-in user changes, so the connection closes and the next
+  one is authorized as the new user. Shared connections are not keyed by session.
 - **Delivery authorization is not compatible.** An app that declares a live stream
   and calls `.deliveryAuthorization(...)` is refused at codegen, because the shard
   answers every `/_lunora/live/*` route with 501 in that mode.
