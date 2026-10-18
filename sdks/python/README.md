@@ -162,7 +162,7 @@ the next resubscribe is a cold one under the new credentials.
 How a replayed write settles, on the single-call and the batch path alike:
 
 - A **coded** error envelope is the server's verdict and is classified by its
-  code alone, whatever the HTTP status: `SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+  code alone, whatever the HTTP status: `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
   `RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue, and so do the refused
   credentials `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` (the write
   is held for a fresh token, not destroyed — while `connect_and_run` is live,

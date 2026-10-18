@@ -133,7 +133,7 @@ half and retried, so no write is dropped for the size of the batch it shared; a
 lone write still refused settles `PAYLOAD_TOO_LARGE`.
 
 One predicate classifies a failed replay, alone or batched: a coded envelope by
-its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, the rate-limit codes and the
+its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`, the rate-limit codes and the
 refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
 re-queue — a token refresh fixes those — and every other code, a coded 5xx
 included, is terminal), an envelope-less reply by its status (re-queued, except

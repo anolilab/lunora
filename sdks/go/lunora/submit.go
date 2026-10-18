@@ -18,8 +18,10 @@ import (
 // TransientErrorCodes are the coded errors a replay must NOT treat as the
 // server's final word.
 //
-// The shard was momentarily unreachable, so the identical call under the same
-// idempotency key is expected to succeed later, and dropping the write would lose
+// The shard was momentarily unreachable, or its delivery authorization changed
+// before the reply could be released (DELIVERY_FENCED: the write may have
+// committed), so the identical call under the same idempotency key is expected
+// to succeed or replay its stored result later, and dropping the write would lose
 // it to a transient condition. Every other coded error IS a verdict: replaying it
 // would only re-trigger the same failure, which is a poison-message loop.
 var TransientErrorCodes = map[string]bool{"DELIVERY_FENCED": true, "SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}

@@ -134,7 +134,7 @@ discard — including one the capacity cap evicts out of a _restored_ queue, whi
 has no caller left to tell — reaches `client.OnMutationSettled`.
 
 A replay failure is classified by ONE rule on the single-call and batch paths:
-a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue, and so do the refused-credential
 codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — the write is held
 until the app sets a fresh token and calls `FlushOfflineQueue` again, since Go

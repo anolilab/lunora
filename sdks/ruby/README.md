@@ -127,7 +127,7 @@ re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
 time remaining.
 
 A replay is classified the same way whether the write went out alone or in a
-batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
 the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
 `UNAUTHENTICATED`, held until a token refresh: nothing flushes on its own when
 `client.auth_token` changes, so call `flush_offline_queue` after setting it, as
