@@ -66,8 +66,9 @@ class SocketShard extends ShardDO {
     public constructor(
         state: ShardDOState,
         private readonly routes: Record<string, { auth: boolean; functionPath: string }>,
+        options: ConstructorParameters<typeof ShardDO>[2] = {},
     ) {
-        super(state, {});
+        super(state, {}, options);
     }
 
     public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -401,6 +402,23 @@ describe("shardDO socket routes", () => {
         await Promise.all([first, second, closed]);
 
         expect(shard.started).toEqual(["message:1", "message:2", "close"]);
+    });
+
+    it("refuses a route frame that arrives after the socket's close began, so the handler never sees a cleared identity", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, userId: "user-a", whispers: [CHAT_TOPIC] });
+        const shard = makeShard([a], CHAT_ROUTE);
+
+        // The close is marked before its first await; the frame's own admission await then resolves after that mark.
+        const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "done", true);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "late" })));
+        await closed;
+
+        // The close still runs; the late frame does not.
+        expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["close"]);
+        expect(a.frames).toEqual([]);
     });
 
     it("ignores a whisper frame addressed to a route's reserved topic", async () => {

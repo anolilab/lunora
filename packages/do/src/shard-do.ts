@@ -3309,13 +3309,19 @@ abstract class ShardDO {
      * ctx's own trace rather than a per-frame root.
      */
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        await this.ensureShardInit();
-
         // Map the runtime socket to the handle enumeration also yields, so
         // per-socket memo state is keyed identically on both paths. Falls back to
         // the raw socket only when the host cannot map it — in which case
         // enumeration cannot see it either, so the two stay consistent.
-        return this.handleWebSocketMessage(this.runner.socketFor(ws), message);
+        const socket = this.runner.socketFor(ws);
+
+        // Sampled before the init await. A frame delivered after the socket's close was delivered is for a connection
+        // being torn down; one delivered before it still runs ahead of the close on the socket's event chain.
+        const deliveredAfterClose = this.closingSockets.has(socket);
+
+        await this.ensureShardInit();
+
+        return this.handleWebSocketMessage(socket, message, deliveredAfterClose);
     }
 
     /**
@@ -7502,7 +7508,7 @@ abstract class ShardDO {
 
     /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
     // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
-    protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void> {
+    protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose = false): Promise<void> {
         // Token-expiry: a socket whose credential lapsed is dropped before its
         // frame is processed, so the client reconnects and re-resolves identity.
         // This is the inbound-activity check; the load-bearing one is in
@@ -7548,7 +7554,11 @@ abstract class ShardDO {
         // identity. Its route path was stamped on the attachment at upgrade, so a
         // hibernated socket that wakes here still resolves the handler.
         if (inboundAttachment.socketPath !== undefined) {
-            await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, text);
+            // Refused once the close was delivered: its event is already queued, and teardown clears the identity the
+            // handler would read. Frames delivered before the close are queued ahead of it and run first.
+            if (!deliveredAfterClose) {
+                await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, text);
+            }
 
             return;
         }
@@ -16405,10 +16415,14 @@ abstract class ShardDO {
 
         this.queuedSocketEvents.set(ws, queued + 1);
 
+        // The identity is read now, while the socket still carries it: a queued event runs after the close that
+        // may clear the attachment, and must not see a cleared identity.
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+
         // Queued on the same per-socket chain as room events (see `roomChains`): a frame
         // waits for the one before it, and a close never overtakes a message still running.
         const previous = this.roomChains.get(ws) ?? Promise.resolve();
-        const run = previous.then(() => this.runSocketEvent(ws, route, kind, message));
+        const run = previous.then(() => this.runSocketEvent(ws, route, kind, info, message));
         const settled = (): void => {
             this.queuedSocketEvents.set(ws, (this.queuedSocketEvents.get(ws) ?? 1) - 1);
         };
@@ -16429,9 +16443,9 @@ abstract class ShardDO {
         ws: ShardSocketLike,
         route: { functionPath: string; path: string },
         kind: "close" | "message" | "open",
+        info: LifecycleDispatchInfo,
         message?: unknown,
     ): Promise<void> {
-        const info = this.lifecycleInfo(this.readAttachment(ws));
         const topic = `${SOCKET_TOPIC_PREFIX}${route.functionPath}`;
         // `send` and `broadcast` only queue: frames go out after the handler's
         // mutation has committed, so no client sees a write that was rolled back.

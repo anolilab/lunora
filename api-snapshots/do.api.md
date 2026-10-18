@@ -595,7 +595,7 @@ abstract class ShardDO {
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
-    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void>;
+    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose?: boolean): Promise<void>;
     protected handleFetchCloudflare(request: Request): Promise<Response>;
     protected handleAlarmCloudflare(): Promise<void>;
     protected captureRequestScope(): RequestScope;
