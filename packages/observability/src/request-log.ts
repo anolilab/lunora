@@ -321,7 +321,13 @@ const maskSensitiveArgs = (args: Record<string, unknown>, sensitive: ReadonlySet
     return Object.fromEntries(Object.entries(args).map(([name, value]) => [name, sensitive.has(name) ? SENSITIVE_ARG_MASK : value]));
 };
 
-/** How deep the scrub walks a marked argument's object tree, or a field's nested containers. */
+/**
+ * How deep {@link scrubValue} walks a structured value. Past it a container is
+ * masked whole rather than returned as it is, so a secret nested deeper than the
+ * walk cannot pass through unchanged. {@link sensitiveValues} has no such cut-off:
+ * it collects every value under a marked argument, or the secret would never be
+ * searched for.
+ */
 const MAX_SENSITIVE_DEPTH = 8;
 
 /**
@@ -338,37 +344,48 @@ const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
  * object. A free-text sink (an error message, a span attribute) must not echo any of
  * them back, and no key-name rule catches a handler quoting the argument it rejected.
  */
-const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
-    const found: string[] = [];
-    const visit = (value: unknown, depth: number): void => {
+
+/**
+ * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
+ * and a `seen` set keeps a shared or cyclic reference from being walked twice.
+ */
+const collectSecretLeaves = (root: unknown, found: string[]): void => {
+    const seen = new Set<object>();
+    const pending: unknown[] = [root];
+
+    while (pending.length > 0) {
+        const value = pending.pop();
+
         if (typeof value === "string") {
             if (value.length > 0) {
                 found.push(value);
             }
-
-            return;
-        }
-
-        if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
             found.push(String(value));
+        } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+            seen.add(value);
 
-            return;
+            for (const child of Object.values(value)) {
+                pending.push(child);
+            }
         }
+    }
+};
 
-        if (depth > MAX_SENSITIVE_DEPTH || typeof value !== "object" || value === null) {
-            return;
-        }
-
-        found.push(stringifyFieldValue(value));
-
-        for (const child of Object.values(value)) {
-            visit(child, depth + 1);
-        }
-    };
+const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
 
     for (const name of sensitive) {
         if (Object.hasOwn(args, name)) {
-            visit(args[name], 0);
+            const root = args[name];
+
+            // The JSON form of the whole argument. Nested objects' JSON is a substring of
+            // it, so only the top level is registered.
+            if (typeof root === "object" && root !== null) {
+                found.push(stringifyFieldValue(root));
+            }
+
+            collectSecretLeaves(root, found);
         }
     }
 
@@ -398,12 +415,36 @@ const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): strin
 };
 
 /**
+ * Rebuild a container with each child passed through `scrubChild`. Returns the
+ * container itself when no child changed.
+ */
+const scrubContainer = (value: object, scrubChild: (child: unknown) => unknown): unknown => {
+    if (Array.isArray(value)) {
+        const mapped = value.map((item) => scrubChild(item));
+
+        return mapped.some((item, index) => item !== value[index]) ? mapped : value;
+    }
+
+    let changed = false;
+    const out: Record<string, unknown> = {};
+
+    for (const [key, child] of Object.entries(value)) {
+        const scrubbed = scrubChild(child);
+
+        changed ||= scrubbed !== child;
+        out[key] = scrubbed;
+    }
+
+    return changed ? out : value;
+};
+
+/**
  * Scrub a structured value (a field, an attribute, a log argument) of the same
  * sensitive values. Returns the original reference when nothing matched, so a
  * caller can tell untouched data from a copy and an unmarked sibling keeps its
  * identity.
  */
-const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: number): unknown => {
+const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: number, ancestors = new Set<object>()): unknown => {
     if (typeof value === "string") {
         return scrubSensitiveText(value, secrets);
     }
@@ -419,27 +460,25 @@ const scrubValue = (value: unknown, secrets: ReadonlyArray<string>, depth: numbe
         return scrubbed === text ? value : scrubbed;
     }
 
-    if (depth >= MAX_SENSITIVE_DEPTH || typeof value !== "object" || value === null) {
+    if (typeof value !== "object" || value === null) {
         return value;
     }
 
-    if (Array.isArray(value)) {
-        const mapped = value.map((item) => scrubValue(item, secrets, depth + 1));
-
-        return mapped.some((item, index) => item !== value[index]) ? mapped : value;
+    // A container past the depth limit is withheld whole, not returned as it is: the
+    // secrets were collected from the whole marked value, so one may sit down there.
+    // A reference to a container still being walked is withheld too, so a cycle
+    // cannot fan out into the walk.
+    if (depth >= MAX_SENSITIVE_DEPTH || ancestors.has(value)) {
+        return SENSITIVE_ARG_MASK;
     }
 
-    let changed = false;
-    const out: Record<string, unknown> = {};
+    ancestors.add(value);
 
-    for (const [key, child] of Object.entries(value)) {
-        const scrubbed = scrubValue(child, secrets, depth + 1);
+    const scrubbed = scrubContainer(value, (child) => scrubValue(child, secrets, depth + 1, ancestors));
 
-        changed ||= scrubbed !== child;
-        out[key] = scrubbed;
-    }
+    ancestors.delete(value);
 
-    return changed ? out : value;
+    return scrubbed;
 };
 
 /**

@@ -17,6 +17,17 @@ const SECRET = "marked-secret-value";
 const anchor = { rootSpanId: "root0000root0000", traceId: "trace00000000000000000000000000" };
 const ids = { spanId: "span0000span0000", traceId: "trace00000000000000000000000000" };
 
+/** A chain of `depth` single-key objects ending in `leaf`, to reach past the scrub's depth limit. */
+const nest = (depth: number, leaf: Record<string, unknown>): Record<string, unknown> => {
+    let node: Record<string, unknown> = leaf;
+
+    for (let level = 0; level < depth; level += 1) {
+        node = { next: node };
+    }
+
+    return node;
+};
+
 const setupTracer = (overrides: Partial<TracerDeps> = {}) => {
     const recorded: SpanEvent[] = [];
 
@@ -88,6 +99,35 @@ describe("createSensitiveScope", () => {
         });
     });
 
+    it("masks a secret nested past the depth limit, and leaves a shallow sibling alone", () => {
+        expect.assertions(4);
+
+        const bag = { deep: nest(10, { value: `prefix ${SECRET}` }), label: "primary" };
+        const scope = createSensitiveScope([SECRET]);
+
+        const scrubbedFields = scope.fields(bag);
+        const scrubbedValue = scope.value(bag);
+
+        expect(scrubbedFields.label).toBe("primary");
+        expect(scrubbedValue.label).toBe("primary");
+        expect(JSON.stringify(scrubbedFields)).not.toContain(SECRET);
+        expect(JSON.stringify(scrubbedValue)).not.toContain(SECRET);
+    });
+
+    it("masks a back-reference to an object still being scrubbed", () => {
+        expect.assertions(3);
+
+        const node: Record<string, unknown> = { label: "primary", value: SECRET };
+
+        node.self = node;
+
+        const scrubbed = createSensitiveScope([SECRET]).value(node);
+
+        expect(scrubbed.self).toBe(SENSITIVE_ARG_MASK);
+        expect(scrubbed.label).toBe("primary");
+        expect(scrubbed.value).toBe(SENSITIVE_ARG_MASK);
+    });
+
     it("scrubs nothing once cleared, so a later record that repeats the text is untouched", () => {
         expect.assertions(2);
 
@@ -147,6 +187,12 @@ describe("sensitiveValues", () => {
 
         expect(sensitiveValues(args, new Set(["value"]))).toEqual(expect.arrayContaining([SECRET, "3", JSON.stringify({ token: SECRET, count: 3 })]));
         expect(sensitiveValues(args, new Set(["value"]))).not.toContain("primary");
+    });
+
+    it("collects a marked value nested past the depth limit", () => {
+        expect.assertions(1);
+
+        expect(sensitiveValues({ value: nest(10, { token: SECRET }) }, new Set(["value"]))).toContain(SECRET);
     });
 });
 
