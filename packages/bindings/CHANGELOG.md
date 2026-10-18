@@ -1,3 +1,9 @@
+## @lunora/bindings [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.122...@lunora/bindings@1.0.0-alpha.123) (2026-10-18)
+
+### Features
+
+* **config:** write the Artifacts binding and leave it out when logged out ([#1243](https://github.com/anolilab/lunora/issues/1243)) ([5e7f80f](https://github.com/anolilab/lunora/commit/5e7f80fb9b3f28868606455d9f48a05000e45162))
+
 ## @lunora/bindings [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.121...@lunora/bindings@1.0.0-alpha.122) (2026-10-18)
 
 
