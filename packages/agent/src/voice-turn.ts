@@ -35,7 +35,10 @@ const WHITESPACE = /\s/u;
  * rides separate binary frames). `ready` announces the negotiated codec on
  * connect; `user_transcript` carries the STT result; `assistant_delta` streams
  * the live LLM text; `assistant_done` is the final turn text; `interrupted`
- * acks a barge-in; `error` reports a non-fatal turn failure.
+ * acks a barge-in; `assistant_discarded` says the turn failed, so the deltas
+ * already streamed for it are not an answer; `error` reports a failure. An
+ * `error` alone does not end a turn: a speech-synthesis failure reports one and
+ * the turn still completes.
  * @experimental
  */
 type VoiceServerFrame =
@@ -44,6 +47,7 @@ type VoiceServerFrame =
     | { text: string; type: "assistant_delta" }
     | { text: string; type: "assistant_done" }
     | { text: string; type: "user_transcript" }
+    | { type: "assistant_discarded" }
     | { type: "interrupted" };
 
 /**
@@ -296,7 +300,15 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
 
     // Reading `signal.aborted` through a call defeats TS control-flow narrowing —
     // it is a live getter the runtime flips mid-turn, not the literal TS infers.
-    const isAborted = (): boolean => signal.aborted;
+    // A failed turn sets `turnFailed` too: sentences already queued for speech
+    // must not synthesize or reach the socket after the turn is over.
+    let turnFailed = false;
+    // Whether any answer text reached the client this turn. A failure before that
+    // (transcription, history read) leaves the previous answer on screen, so it
+    // must not be discarded.
+    let streamedDelta = false;
+    const hasStreamedDelta = (): boolean => streamedDelta;
+    const isAborted = (): boolean => signal.aborted || turnFailed;
 
     const appendMessage = toFunctionReference(paths.appendMessage);
     const ensureThread = toFunctionReference(paths.ensureThread);
@@ -405,6 +417,7 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
                 return;
             }
 
+            streamedDelta = true;
             send({ text: delta, type: "assistant_delta" });
             pending += delta;
 
@@ -443,6 +456,13 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
         // idle before propagating so `useAgentChat`, `agentEnsureThread`'s live-run
         // check, and status-sensitive logic stay consistent. An abort does NOT
         // throw — streamGenerate resolves normally — so only genuine errors reach here.
+        turnFailed = true;
+
+        if (hasStreamedDelta()) {
+            // The text streamed so far is not an answer: tell the client to drop it.
+            send({ type: "assistant_discarded" });
+        }
+
         await run(patchThread, { key: threadKey, status: "idle" });
 
         throw error;
