@@ -12,8 +12,12 @@ const ZERO_WIDTH_SPACE = "\u200B";
 /** `<` and `>` — escaped so payload text can never open or close a tag. */
 const ANGLE_BRACKET = /[<>]/gu;
 
-/** A mention or cashtag (`@`, `$`) not glued to a preceding word, so `user@example.com` is left alone. */
-const MENTION_TRIGGER = /\B([$@])/gu;
+/**
+ * A mention or cashtag (`@`, `$`) not glued to a preceding word, so `user@example.com` is left alone.
+ * `\B` is not used: its word test is ASCII-only, so a letter like `é` would count as a non-word
+ * character and an address such as `josé@example.com` would be altered.
+ */
+const MENTION_TRIGGER = /(?<![\p{L}\p{M}\p{N}_])([$@])/gu;
 
 /** A slash-command `/` at the start of the text or after whitespace, so URL paths are left alone. */
 const COMMAND_TRIGGER = /(^|\s)(\/)/gu;

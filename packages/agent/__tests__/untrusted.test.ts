@@ -72,6 +72,17 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("user@example.com");
     });
 
+    it("leaves addresses and word-glued triggers alone when the preceding letter is not ASCII", () => {
+        const wrapped = wrapUntrusted("josé@example.com, café$TSLA, 日本@alice, π@x, then @alice");
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        expect(inside).toContain("josé@example.com");
+        expect(inside).toContain("café$TSLA");
+        expect(inside).toContain("日本@alice");
+        expect(inside).toContain("π@x");
+        expect(inside).toContain(`then @${ZERO_WIDTH_SPACE}alice`);
+    });
+
     it("redacts credential-like header values and keeps the rest of the header map", () => {
         const headers = new Headers({
             Authorization: "Bearer abc123",
