@@ -691,9 +691,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // in its `__lunora_schema_history` ledger on cold start (plan 200). One
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
-    // The literal-only read of each exported `defineLiveStream`. Gated on the same verdict as `ctx.live`: a target that
-    // withholds live streams gets neither the typed references nor the shard's publish check.
-    const liveStreams = platformGate.signals.liveStreams === true ? discoverLiveStreams(project, lunoraDirectory) : [];
+    // The literal-only read of each exported `defineLiveStream`. Not gated on the platform verdict: the typed references are
+    // client-side data with no host dependency, so a user module importing `_generated/live.ts` keeps resolving. Only the shard's
+    // publish check and `ctx.live` follow the verdict (`liveStreams` below).
+    const liveStreams = discoverLiveStreams(project, lunoraDirectory);
     const shardContent = emitShard({
         // `_generated/shard.ts` is committed, and this finding is a fact about
         // the machine codegen ran on rather than about the app — regenerating

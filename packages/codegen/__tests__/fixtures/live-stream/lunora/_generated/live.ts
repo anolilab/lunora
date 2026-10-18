@@ -2,7 +2,8 @@
 // Run `lunora codegen` to regenerate.
 
 import type { LiveTopicRef } from "@lunora/client";
-import type { LiveTopicPayload } from "@lunora/server";
+import { encodeLiveTopic } from "@lunora/client";
+import type { LiveTopicKey, LiveTopicPayload } from "@lunora/server";
 
 import type { feed as feedStream } from "../live.js";
 
@@ -13,6 +14,10 @@ import type { feed as feedStream } from "../live.js";
  */
 export const live = {
     feed: {
+        item: (key: LiveTopicKey<(typeof feedStream)["topics"]["item"]>): LiveTopicRef<LiveTopicPayload<(typeof feedStream)["topics"]["item"]>> => ({
+            __lunoraLive: "feed",
+            topic: encodeLiveTopic("item", ["id", "kind"], key),
+        }),
         news: (): LiveTopicRef<LiveTopicPayload<(typeof feedStream)["topics"]["news"]>> => ({ __lunoraLive: "feed", topic: "news" }),
     },
 };
