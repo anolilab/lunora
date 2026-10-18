@@ -138,9 +138,10 @@ interface LivePublishOptions {
 }
 
 /**
- * `ctx.live` — publish an arbitrary event to a named topic. The event fans out
- * to the SSE subscribers of `options.stream` on the shard. WebSocket whisper
- * members never receive it (see the live-stream docblock).
+ * `ctx.live` — publish an arbitrary event to a named topic. The event reaches
+ * the SSE subscribers of `options.stream` that followed the topic, and the
+ * WebSocket whisper members that hold a live grant for that stream and topic
+ * (see the live-stream docblock).
  *
  * Reachable from an HTTP-action ctx; an action (a scheduled job) publishes
  * through the same surface in-process (see the live-stream docblock).
@@ -148,9 +149,11 @@ interface LivePublishOptions {
 interface LivePublisher {
     /**
      * Publish `payload` to `topic` on `options.stream`. Best-effort — a topic
-     * with no subscribers is a no-op. Rejects when the shard refuses the publish
-     * (an oversized payload, or a room or route topic), so a silent drop is not
-     * possible.
+     * with no subscribers is a no-op. Rejects when the shard refuses the publish:
+     * a `room:` topic (403), a topic over the control-key bound (400), or a
+     * payload over the publish cap (413), so a refused publish is not silently
+     * dropped. On a target that does not serve live streams it rejects with
+     * `LIVE_STREAMS_UNSUPPORTED`.
      */
     publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
 }

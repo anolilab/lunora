@@ -907,12 +907,21 @@ class LunoraClient {
 
     /**
      * Live-topic grants this client asked for over a WebSocket, keyed `connectionKey(shardKey)` →
-     * subscription id → the stream and topic. Replayed on every `identity` frame: each socket is a
-     * new connection id with no grants, so a bounce would otherwise stop delivery silently.
+     * subscription id → the stream and topic, and `release`, which leaves the topic's whisper membership once. Replayed on every
+     * `identity` frame: each socket is a new connection id with no grants, so a bounce would otherwise stop delivery silently.
      */
     private readonly liveSocketGrants = new Map<
         string,
-        Map<string, { onError?: (error: { status: number; topic: string }) => void; onEvent: (payload: unknown) => void; stream: string; topic: string }>
+        Map<
+            string,
+            {
+                onError?: (error: { status: number; topic: string }) => void;
+                onEvent: (payload: unknown) => void;
+                release: () => void;
+                stream: string;
+                topic: string;
+            }
+        >
     >();
 
     /** Tail of the live-grant control posts. One chain keeps a subscribe and its unsubscribe in order. */
@@ -1908,6 +1917,7 @@ class LunoraClient {
                 sendOn(conn, { topic, type: "whisper_unsubscribe" });
             }
 
+            this.releaseWhisperJoin(key, topic);
             this.releaseIdleShard(options.shardKey);
         };
     }
@@ -1956,6 +1966,15 @@ class LunoraClient {
         // so a peer's whisper on this topic reaches no handler here.
         const leaveTopic = this.whisperSubscribe(topic, () => undefined, { shardKey });
 
+        // Leaves the membership at most once, whether the grant is refused or its handle is released.
+        let membership: (() => void) | undefined = leaveTopic;
+        const release = (): void => {
+            const leave = membership;
+
+            membership = undefined;
+            leave?.();
+        };
+
         let grants = this.liveSocketGrants.get(key);
 
         if (grants === undefined) {
@@ -1963,7 +1982,7 @@ class LunoraClient {
             this.liveSocketGrants.set(key, grants);
         }
 
-        grants.set(subscriptionId, { onError, onEvent, stream, topic });
+        grants.set(subscriptionId, { onError, onEvent, release, stream, topic });
 
         const connectionId = this.getConnection(shardKey)?.connectionId;
 
@@ -1994,7 +2013,7 @@ class LunoraClient {
                 this.postLiveControl(controlPath, shardKey, { action: "unsubscribe", connectionId: liveConnectionId, stream, subscriptionId, topic });
             }
 
-            leaveTopic();
+            release();
         };
     }
 
@@ -7285,7 +7304,7 @@ class LunoraClient {
             }
 
             this.postLiveControl(`/live/${stream}/control`, shardKey, { action: "subscribe", connectionId, stream, subscriptionId, topic }, (status) => {
-                this.refuseLiveGrant(shardKey, subscriptionId, status);
+                this.refuseLiveGrant(shardKey, subscriptionId, status, connectionId);
             });
         };
 
@@ -7326,6 +7345,36 @@ class LunoraClient {
         for (const waiter of join.waiters.splice(0)) {
             clearTimeout(waiter.timer);
             waiter.run();
+        }
+
+        this.releaseWhisperJoin(key, topic);
+    }
+
+    /**
+     * Forget a topic's join state once no handler holds the topic and no join is still unacknowledged.
+     * A join still in flight keeps its entry, and {@link acknowledgeWhisperJoin} drops it when the ack
+     * lands: dropping it early would let that stale ack count toward a rejoin of the same topic.
+     */
+    private releaseWhisperJoin(key: string, topic: string): void {
+        if (this.whisperHandlers.get(key)?.has(topic) === true) {
+            return;
+        }
+
+        const byTopic = this.whisperJoins.get(key);
+        const join = byTopic?.get(topic);
+
+        if (byTopic === undefined || join === undefined || join.pending > 0) {
+            return;
+        }
+
+        for (const waiter of join.waiters.splice(0)) {
+            clearTimeout(waiter.timer);
+        }
+
+        byTopic.delete(topic);
+
+        if (byTopic.size === 0) {
+            this.whisperJoins.delete(key);
         }
     }
 
@@ -7386,14 +7435,16 @@ class LunoraClient {
 
     /**
      * Drop a live grant the shard refused for good, and tell its caller. A grant already released
-     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing.
+     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing. A refusal
+     * for a socket that has since been replaced is ignored too: the new socket posts the grant
+     * again and hears its own answer, and releasing now would strip the new socket's membership.
      */
-    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number): void {
+    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number, connectionId: string): void {
         const key = connectionKey(shardKey);
         const grants = this.liveSocketGrants.get(key);
         const grant = grants?.get(subscriptionId);
 
-        if (grants === undefined || grant === undefined) {
+        if (grants === undefined || grant === undefined || this.getConnection(shardKey)?.connectionId !== connectionId) {
             return;
         }
 
@@ -7403,6 +7454,8 @@ class LunoraClient {
             this.liveSocketGrants.delete(key);
         }
 
+        // A refused grant is final, so its join goes too: an idle socket with a no-op membership would otherwise stay open.
+        grant.release();
         grant.onError?.({ status, topic: grant.topic });
     }
 

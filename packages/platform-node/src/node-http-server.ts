@@ -37,16 +37,90 @@ const publicOrigin = (value: string): string => {
 
 const LOOPBACK_HOST = /^(?:127\.\d+\.\d+\.\d+|::1|localhost)$/;
 
+// ponytail: how much of a refused body is read past the cancel before its socket is destroyed. A ceiling, not a guess at a client's size:
+// raise it if a legitimate client needs more of its body read to receive the 413.
+const REFUSED_BODY_DRAIN_BYTES = 1_048_576;
+
+// ponytail: how long a refused body may keep streaming after the cancel. Same trade-off as REFUSED_BODY_DRAIN_BYTES.
+const REFUSED_BODY_DRAIN_MS = 5000;
+
 /**
  * The request body as a web stream, pulled chunk by chunk. Not `Readable.toWeb`, which the supported Node range does not yet ship.
- * Cancelling the stream destroys the socket, so an unread body does not hold the connection open.
+ * Cancelling the stream discards the rest of the body, up to a byte and a time ceiling, rather than destroying the socket at once: the
+ * worker answers a cancelled over-cap body with a 413, and that response must still reach a client that is still uploading.
  */
-const bodyStream = (incoming: IncomingMessage): ReadableStream<Uint8Array> => {
+const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): ReadableStream<Uint8Array> => {
     const chunks = (incoming as AsyncIterable<Buffer>)[Symbol.asyncIterator]();
 
     return new ReadableStream<Uint8Array>({
         cancel() {
-            incoming.destroy();
+            if (outgoing.headersSent) {
+                incoming.destroy();
+
+                return;
+            }
+
+            // The whole body has already arrived: nothing is left to cut off, and the keep-alive socket stays usable. What is still
+            // buffered is read out, so the request ends and the connection can parse the next one.
+            if (incoming.complete) {
+                incoming.resume();
+
+                return;
+            }
+
+            // The body is read and dropped only up to a byte or time ceiling. Hitting one marks the drain over, and the socket is
+            // destroyed once the 413 has finished, so the response is never cut short. A body that ends first keeps its socket.
+            let drained = 0;
+            let overCeiling = false;
+
+            const ceilingHit = (): void => {
+                // A body that finished arriving meanwhile has nothing left to cut off.
+                if (incoming.complete) {
+                    return;
+                }
+
+                overCeiling = true;
+
+                if (outgoing.writableFinished) {
+                    incoming.destroy();
+
+                    return;
+                }
+
+                // The response is still owed, so the socket stays, but nothing more of the body is read: an upload past the ceiling
+                // is held back by the transport instead of being consumed for as long as the handler takes.
+                incoming.removeAllListeners("readable");
+                incoming.pause();
+            };
+            const timer = setTimeout(ceilingHit, REFUSED_BODY_DRAIN_MS);
+            const stopTimer = (): void => {
+                clearTimeout(timer);
+            };
+
+            outgoing.once("finish", () => {
+                if (overCeiling) {
+                    incoming.destroy();
+                }
+            });
+            incoming.once("end", stopTimer);
+            incoming.once("close", stopTimer);
+
+            incoming.removeAllListeners("readable");
+            incoming.on("readable", () => {
+                let chunk = incoming.read() as Buffer | null;
+
+                while (chunk !== null) {
+                    drained += chunk.byteLength;
+
+                    if (drained > REFUSED_BODY_DRAIN_BYTES) {
+                        ceilingHit();
+
+                        return;
+                    }
+
+                    chunk = incoming.read() as Buffer | null;
+                }
+            });
         },
         async pull(controller) {
             const next = await chunks.next();
@@ -77,7 +151,8 @@ const requestUrl = (target: string | undefined, origin: string): URL => {
 
 // The body is streamed through, not buffered: the worker's own per-route body caps (`@lunora/runtime`) decide what is refused, so a
 // route with a larger budget than the framework default is not cut off here.
-const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSignal): Request => {
+// `outgoing` is the response a refused body's drain watches. An upgrade has none, and a WebSocket handshake is a GET with no body.
+const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSignal, outgoing?: ServerResponse): Request => {
     const headers = new Headers();
 
     for (const [name, value] of Object.entries(incoming.headers)) {
@@ -94,8 +169,8 @@ const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSigna
     // `duplex` is required by the Fetch spec for a streamed request body; it is not in the DOM `RequestInit` type.
     const init: RequestInit & { duplex?: "half" } = { headers, method, signal };
 
-    if (method !== "GET" && method !== "HEAD") {
-        init.body = bodyStream(incoming);
+    if (method !== "GET" && method !== "HEAD" && outgoing !== undefined) {
+        init.body = bodyStream(incoming, outgoing);
         init.duplex = "half";
     }
 
@@ -276,7 +351,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         let request: Request;
 
         try {
-            request = toRequest(incoming, origin, abort.signal);
+            request = toRequest(incoming, origin, abort.signal, outgoing);
         } catch {
             outgoing.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
             outgoing.end("Bad Request");

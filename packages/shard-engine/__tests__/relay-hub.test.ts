@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlExec } from "../src/ctx-db";
 import type { RelayHost } from "../src/relay-hub";
-import { createRelayLink, OwnerRelay } from "../src/relay-hub";
+import { createRelayLink, OwnerRelay, RelayMember } from "../src/relay-hub";
 import type { ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -28,9 +28,13 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 interface RelayDouble {
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
+    /** When set, every answer waits for this to settle, so a test can answer after the owner's deadline has passed. */
+    gate?: Promise<void>;
     /** The status this relay answers a forwarded live control call with; `404` when it holds no socket for it. Defaults to `204`. */
     liveStatus?: number;
     posts: Record<string, unknown>[];
+    /** `true` to accept a forwarded request and never answer it. */
+    stalled?: boolean;
 }
 
 const ownerFor = (
@@ -60,9 +64,16 @@ const ownerFor = (
 
                 relay.posts.push(message);
 
+                // A stalled relay accepts the request and never answers, as an unresponsive sibling does.
+                if (relay.stalled === true) {
+                    return new Promise<Response>(() => {
+                        // Never settles: the relay is stalled.
+                    });
+                }
+
                 const status = message["type"] === "relay_live_control" ? (relay.liveStatus ?? 204) : 204;
 
-                return Promise.resolve(new Response(undefined, { status }));
+                return (relay.gate ?? Promise.resolve()).then(() => new Response(undefined, { status }));
             },
         };
     };
@@ -1019,6 +1030,167 @@ describe("relay hub", () => {
             expect(relayAt(relays, 1).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
         });
 
+        it("does not record a relay as a grant holder when it refused the grant", async () => {
+            expect.assertions(2);
+
+            // A 403 is a refusal: the relay stored no grant, so a publish must not be forwarded to it.
+            const relays = new Map<number, RelayDouble>([[0, { down: false, liveStatus: 403, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await grant(owner);
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
+            expect(relayAt(relays, 0).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+        });
+
+        it("resolves a grant on the first relay that answers, without waiting for a stalled one", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, stalled: true, posts: [] }],
+                [1, { down: false, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+
+            const response = await owner.forwardLiveControl({
+                action: "subscribe",
+                callerId: "u1",
+                connectionId: "c-alice",
+                key: "k1",
+                subscriptionId: "s1",
+            });
+
+            expect(response?.status).toBe(204);
+        });
+
+        it("treats every relay as absent once its deadline passes, rather than waiting on it", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, stalled: true, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const pending = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(pending).resolves.toBeUndefined();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("does not record a relay as a grant holder for an OK unsubscribe", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await owner.forwardLiveControl({ action: "unsubscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+            // The unsubscribe reaches relay 0 only as a holder, so drive one past it as the pending-subscribe path would.
+            await (owner as unknown as { liveControlAnswer: (index: number, control: unknown) => Promise<unknown> }).liveControlAnswer(0, {
+                action: "unsubscribe",
+                callerId: "u1",
+                connectionId: "c-alice",
+                key: "k1",
+                subscriptionId: "s1",
+            });
+
+            expect(database.raw("SELECT idx FROM __lunora_relay_grants")).toHaveLength(0);
+        });
+
+        it("sends an unsubscribe to a relay whose subscribe is still unanswered past the deadline", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([
+                [
+                    0,
+                    {
+                        down: false,
+                        gate: new Promise<void>(() => {
+                            // Never settles: the relay never answers.
+                        }),
+                        posts: [],
+                    },
+                ],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const subscribed = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await subscribed;
+
+                // The relay has not answered, so it is no grant holder yet, but it may still store the grant.
+                const unsubscribed = owner.forwardLiveControl({
+                    action: "unsubscribe",
+                    callerId: "u1",
+                    connectionId: "c-alice",
+                    key: "k1",
+                    subscriptionId: "s1",
+                });
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await unsubscribed;
+            } finally {
+                vi.useRealTimers();
+            }
+
+            const actions = relayAt(relays, 0)
+                .posts.filter((post) => post["type"] === "relay_live_control")
+                .map((post) => (post["control"] as { action: string }).action);
+
+            expect(actions).toStrictEqual(["subscribe", "unsubscribe"]);
+        });
+
+        it("records a relay whose grant answer lands after the deadline, so its later publishes reach it", async () => {
+            // `vi.waitFor` retries its assertion, so the count is not fixed.
+            expect.hasAssertions();
+
+            let releaseAnswer: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                releaseAnswer = resolve;
+            });
+            const relays = new Map<number, RelayDouble>([[0, { down: false, gate, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const pending = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(pending).resolves.toBeUndefined();
+
+                // The relay stores the grant only now, after the owner has already reported a miss.
+                releaseAnswer();
+                await vi.waitFor(() => {
+                    expect(database.raw("SELECT idx FROM __lunora_relay_grants")).toHaveLength(1);
+                });
+            } finally {
+                vi.useRealTimers();
+            }
+
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(1);
+        });
+
         it("still forwards to a grant holder after the owner wakes, because the holder set is durable", async () => {
             expect.assertions(1);
 
@@ -1055,6 +1227,369 @@ describe("relay hub", () => {
             await owner.forwardLiveFrame("feed", "k1", "{}");
 
             expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
+        });
+    });
+
+    describe("relay announce", () => {
+        /** A relay whose attach to its owner answers `status`; the owner's answer is all `announce` can see. */
+        const memberOf = (host: RelayHost): RelayMember => {
+            const link = createRelayLink(host);
+
+            if (!(link instanceof RelayMember)) {
+                throw new TypeError("expected a relay member for a `::relay::` DO name");
+            }
+
+            return link;
+        };
+
+        const announcingRelay = (status: number): RelayMember => {
+            const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };
+
+            return memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+            } as unknown as RelayHost);
+        };
+
+        /** The `type` of a control frame posted to the owner, read from its JSON body. */
+        const frameType = (init: RequestInit | undefined): string => (typeof init?.body === "string" ? (JSON.parse(init.body) as { type: string }).type : "");
+
+        it("reports a failed attach, so the connect handler does not advertise the socket as grant-ready", async () => {
+            expect.assertions(1);
+
+            await expect(announcingRelay(503).announce()).resolves.toBe(false);
+        });
+
+        it("reports a successful attach, and a later announce is a no-op that still reports success", async () => {
+            expect.assertions(2);
+
+            const relay = announcingRelay(200);
+
+            await expect(relay.announce()).resolves.toBe(true);
+            await expect(relay.announce()).resolves.toBe(true);
+        });
+
+        it("re-attaches after a drain, even when the attach begun before it answers late", async () => {
+            expect.assertions(3);
+
+            // Each attach is held until the test answers it, so the drain can land while it is in flight.
+            const answers: ((response: Response) => void)[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    if (frameType(init) !== "relay_attach") {
+                        return Promise.resolve(new Response());
+                    }
+
+                    return new Promise<Response>((resolve) => {
+                        answers.push(resolve);
+                    });
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const first = link.announce();
+
+            // The last socket closes while the attach is held; the drain's detach waits for the attach's answer.
+            await vi.waitFor(() => {
+                if (answers.length !== 1) {
+                    throw new Error("the first attach has not been sent yet");
+                }
+            });
+
+            const drained = link.announceDrain({} as ShardSocketLike);
+
+            answers[0]!(new Response());
+            await first;
+            await drained;
+
+            // The next socket must attach again rather than trust a latch the drain already cleared.
+            const second = link.announce();
+
+            await vi.waitFor(() => {
+                if (answers.length !== 2) {
+                    throw new Error("the second attach has not been sent yet");
+                }
+            });
+
+            expect(answers).toHaveLength(2);
+
+            answers[1]!(new Response());
+
+            await expect(second).resolves.toBe(true);
+            await expect(link.announce()).resolves.toBe(true);
+        });
+
+        it("lets a reconnecting socket attach when the drain's detach is never answered", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>(() => {
+                            // The owner never answers the detach.
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            vi.useFakeTimers();
+
+            try {
+                const drained = link.announceDrain({} as ShardSocketLike);
+                const attached = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await drained;
+
+                await expect(attached).resolves.toBe(true);
+                expect(sent).toStrictEqual(["relay_detach", "relay_attach"]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("orders a second drain's detach behind the first", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const detaches: ((response: Response) => void)[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>((resolve) => {
+                            detaches.push(resolve);
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            // Two close handlers both find no socket left.
+            const first = link.announceDrain({} as ShardSocketLike);
+            const second = link.announceDrain({} as ShardSocketLike);
+
+            await vi.waitFor(() => {
+                if (detaches.length === 0) {
+                    throw new Error("the first detach has not been sent yet");
+                }
+            });
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_detach"]);
+
+            detaches[0]?.(new Response());
+            await vi.waitFor(() => {
+                if (detaches.length < 2) {
+                    throw new Error("the second detach has not been sent yet");
+                }
+            });
+            detaches[1]?.(new Response());
+            await Promise.all([first, second]);
+
+            expect(sent).toStrictEqual(["relay_detach", "relay_detach"]);
+        });
+
+        it("gives up on an attach the owner never answers, so later sockets are not held behind it", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    sent.push(frameType(init));
+
+                    return new Promise<Response>(() => {
+                        // The owner never answers.
+                    });
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            vi.useFakeTimers();
+
+            try {
+                const first = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(first).resolves.toBe(false);
+
+                // The next socket attaches afresh instead of waiting on the stalled one.
+                const second = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await second;
+
+                expect(sent).toStrictEqual(["relay_attach", "relay_attach"]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("sends a drain's detach only after an attach already in flight has been answered", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const attach: { answer?: (response: Response) => void } = {};
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_attach") {
+                        return new Promise<Response>((resolve) => {
+                            attach.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const attached = link.announce();
+
+            await vi.waitFor(() => {
+                if (!sent.includes("relay_attach")) {
+                    throw new Error("the attach has not been sent yet");
+                }
+            });
+
+            // The last socket closes while the attach is still unanswered.
+            const drained = link.announceDrain({} as ShardSocketLike);
+
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_attach"]);
+
+            attach.answer?.(new Response());
+            await attached;
+            await drained;
+
+            expect(sent).toStrictEqual(["relay_attach", "relay_detach"]);
+        });
+
+        it("sends an attach that follows a drain only after the owner has answered the drain's detach", async () => {
+            expect.assertions(2);
+
+            // The detach is held, so a socket can arrive while the owner has not yet dropped the relay.
+            const sent: string[] = [];
+            const detach: { answer?: (response: Response) => void } = {};
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>((resolve) => {
+                            detach.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const drained = link.announceDrain({} as ShardSocketLike);
+
+            await vi.waitFor(() => {
+                if (!sent.includes("relay_detach")) {
+                    throw new Error("the detach has not been sent yet");
+                }
+            });
+
+            const attached = link.announce();
+
+            // Give a wrongly ordered attach every chance to go out first.
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_detach"]);
+
+            detach.answer?.(new Response());
+            await drained;
+            await attached;
+
+            expect(sent).toStrictEqual(["relay_detach", "relay_attach"]);
         });
     });
 });

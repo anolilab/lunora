@@ -27,10 +27,17 @@ const withoutAck = (socket: { frames: Frame[] }): Frame[] => socket.frames.filte
 class FakeSocket {
     public readonly frames: Frame[] = [];
 
+    /** The close code and reason the shard closed this socket with, when it did. */
+    public closed: { code?: number; reason?: string } | undefined;
+
     private attachment: unknown;
 
     public constructor(initial?: unknown) {
         this.attachment = initial;
+    }
+
+    public close(code?: number, reason?: string): void {
+        this.closed = { code, reason };
     }
 
     public deserializeAttachment(): unknown {
@@ -502,6 +509,21 @@ describe("shardDO live streams", () => {
 
         await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
 
+        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
+    });
+
+    it("keeps serving a WebSocket whose relay attach failed, and still advertises its connection id", async () => {
+        expect.assertions(2);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        // A persistent refusal, such as a sibling-secret mismatch, must not turn every new socket into a reconnect loop.
+        Reflect.set(shard, "relay", { announce: () => Promise.resolve(false) });
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        expect(socket.closed).toBeUndefined();
         expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
     });
 

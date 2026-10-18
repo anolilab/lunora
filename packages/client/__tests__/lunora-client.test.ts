@@ -4590,6 +4590,43 @@ describe("lunoraClient", () => {
             expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ topic: "cursors", type: "whisper_unsubscribe" });
         });
 
+        it("forgets the join state of each topic once it is left and acknowledged", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // The first join creates the socket; it is opened and that join left and acknowledged, so the count starts at zero.
+            const warm = client.whisperSubscribe("warm", () => undefined);
+            const socket = latestSocket();
+
+            socket.open();
+            warm();
+            socket.receive({ topic: "warm", type: "whisper_subscribed" });
+
+            const joinStateSize = (): number => (client as unknown as { whisperJoins: Map<string, Map<string, unknown>> }).whisperJoins.get("")?.size ?? 0;
+
+            // Each topic is joined, left, and then acknowledged: the ack for the leave-time join arrives last.
+            for (let index = 0; index < 50; index += 1) {
+                const topic = `cursors-${String(index)}`;
+                const unsubscribe = client.whisperSubscribe(topic, () => undefined);
+
+                unsubscribe();
+                socket.receive({ topic, type: "whisper_subscribed" });
+            }
+
+            expect(joinStateSize()).toBe(0);
+
+            // A topic that is still joined keeps its state.
+            client.whisperSubscribe("kept", () => undefined);
+            socket.receive({ topic: "kept", type: "whisper_subscribed" });
+
+            expect(joinStateSize()).toBe(1);
+        });
+
         it("holds a room send made before the socket opens and delivers it on connect", () => {
             expect.assertions(3);
 
@@ -5287,6 +5324,106 @@ describe("lunoraClient", () => {
                         .map((body) => body.subscriptionId),
                 ).toStrictEqual(["ws-live-2"]);
                 expect(liveControlBodies(fetchMock).filter((body) => body.action === "unsubscribe")).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("leaves a refused topic's whisper membership once, so an idle socket is not held open by it", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+                    const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as Record<string, unknown>;
+
+                    return Promise.resolve(Response.json({ ok: false }, { status: body.subscriptionId === "ws-live-1" ? 403 : 200 }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const errors: unknown[] = [];
+
+                const unsubscribe = client.subscribeLiveTopic({
+                    onError: (error) => errors.push(error),
+                    onEvent: () => undefined,
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                ackJoin(socket, "post:1");
+
+                await vi.waitFor(() => {
+                    if (errors.length === 0) {
+                        throw new Error("refusal not reported yet");
+                    }
+                });
+
+                const leavesSent = (): unknown[] =>
+                    socket.sent.map((frame) => JSON.parse(frame) as Record<string, unknown>).filter((frame) => frame["type"] === "whisper_unsubscribe");
+
+                // The refusal alone releases the join, before the caller ever releases its handle.
+                expect(leavesSent()).toStrictEqual([{ topic: "post:1", type: "whisper_unsubscribe" }]);
+                expect(errors).toStrictEqual([{ status: 403, topic: "post:1" }]);
+
+                // The handle's later release does not leave the topic a second time.
+                unsubscribe();
+
+                expect(leavesSent()).toHaveLength(1);
+
+                client.close();
+            });
+
+            it("ignores a refusal that answers for a socket since replaced, keeping the new socket's membership", async () => {
+                expect.assertions(2);
+
+                const held: { answer?: (response: Response) => void } = {};
+                const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+                    const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as Record<string, unknown>;
+
+                    if (body.connectionId === "ws-1") {
+                        return new Promise<Response>((resolve) => {
+                            held.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(Response.json({ ok: true }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const errors: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onError: (error) => errors.push(error),
+                    onEvent: () => undefined,
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                ackJoin(socket, "post:1");
+
+                await vi.waitFor(() => {
+                    if (held.answer === undefined) {
+                        throw new Error("the grant for ws-1 has not been posted yet");
+                    }
+                });
+
+                // The connection is replaced before the shard answers the old socket's grant.
+                socket.receive({ connectionId: "ws-2", subject: null, type: "identity" });
+                held.answer?.(Response.json({ ok: false }, { status: 403 }));
+
+                await new Promise((resolve) => {
+                    setImmediate(resolve);
+                });
+
+                const leavesSent = socket.sent
+                    .map((frame) => JSON.parse(frame) as Record<string, unknown>)
+                    .filter((frame) => frame["type"] === "whisper_unsubscribe");
+
+                expect(leavesSent).toStrictEqual([]);
+                expect(errors).toStrictEqual([]);
 
                 client.close();
             });

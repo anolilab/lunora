@@ -684,6 +684,7 @@ export const ERROR_CATALOG = {
     EXPIRED: { status: 404, title: "Session expired" },
     LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
     LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
+    LIVE_STREAMS_UNSUPPORTED: { status: 501, title: "Live streams are not served by this worker" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },

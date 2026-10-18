@@ -86,7 +86,7 @@ interface LiveSubscription {
 interface LiveStream {
     /** Close the stream and stop reconnecting. */
     close: () => void;
-    /** The server-minted connection id, or `undefined` before the first connect. */
+    /** The server-minted connection id, or `undefined` before the first connect and while reconnecting. */
     readonly connectionId: string | undefined;
     /** Observe every event on the connection; returns an unsubscribe handle. */
     onEvent: (handler: (event: LiveStreamEvent) => void) => () => void;
@@ -95,6 +95,14 @@ interface LiveStream {
     /** Follow a topic; returns an unsubscribe handle. */
     subscribe: (options: LiveStreamSubscribeOptions) => () => void;
 }
+
+/** Wrap a callback so each handle holds its own reference, even when handles share one function. */
+const wrapCallback = <Args extends unknown[]>(callback: ((...args: Args) => void) | undefined): ((...args: Args) => void) | undefined =>
+    callback === undefined
+        ? undefined
+        : (...args: Args) => {
+              callback(...args);
+          };
 
 /** A single leading space after an SSE field colon. */
 const LEADING_SPACE = /^ /u;
@@ -226,7 +234,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     /** Queue a control call behind the previous one for the same subscription id. */
     const control = (subscriptionId: string, body: Record<string, unknown>): Promise<number | undefined> => {
         const previous = controlChains.get(subscriptionId) ?? Promise.resolve();
-        const run = previous.then(() => postControl(body));
+        // A call still queued when `close()` runs is dropped: `close()` only cancels the request already in flight.
+        const run = previous.then(() => (isClosed() ? undefined : postControl(body)));
         const tail = run.then(
             () => undefined,
             () => undefined,
@@ -418,6 +427,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                 // A fetch failure or a mid-stream throw falls through to the backoff.
             }
 
+            // The connection that id names is gone. A subscribe made during the backoff must not send it:
+            // it would be refused, and its refusal would abort the next connect attempt.
+            connectionId = undefined;
+
             if (isClosed()) {
                 return;
             }
@@ -482,12 +495,9 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                 refs: 0,
                 topic,
             };
-            const listener =
-                onEvent === undefined
-                    ? undefined
-                    : (payload: unknown) => {
-                          onEvent(payload);
-                      };
+            const listener = wrapCallback(onEvent);
+            // Wrapped per handle: two handles may pass the same function, and releasing one must not drop the other's.
+            const errorListener = wrapCallback(onError);
 
             entry.refs += 1;
 
@@ -495,8 +505,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                 entry.handlers.add(listener);
             }
 
-            if (onError !== undefined) {
-                entry.errors.add(onError);
+            if (errorListener !== undefined) {
+                entry.errors.add(errorListener);
             }
 
             if (active === undefined) {
@@ -515,9 +525,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
                             // A subscribe that never reached the shard, failed server-side, names a connection the shard
                             // no longer has, or was rejected for an expired credential is retried by reconnecting, which
                             // re-registers every active subscription. A reply for a connection that has since been replaced
-                            // needs no retry: the new connection registers it too.
+                            // needs no retry: the new connection registers it too. Nor does a reply for a subscription
+                            // that was released or re-registered meanwhile: a stale failure must not drop the live connection.
                             if (status === undefined || status === 401 || status === 404 || status >= 500) {
-                                if (sentOn === connectionId) {
+                                if (sentOn === connectionId && subscriptions.get(subscriptionId) === entry) {
                                     sentAborter?.abort();
                                 }
 
@@ -546,6 +557,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
                 if (listener !== undefined) {
                     entry.handlers.delete(listener);
+                }
+
+                if (errorListener !== undefined) {
+                    entry.errors.delete(errorListener);
                 }
 
                 entry.refs -= 1;

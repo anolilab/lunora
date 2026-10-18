@@ -783,6 +783,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Live connection not found";
     };
+    readonly LIVE_STREAMS_UNSUPPORTED: {
+        readonly status: 501;
+        readonly title: "Live streams are not served by this worker";
+    };
     readonly NESTED_TRANSACTION: {
         readonly internal: true;
         readonly status: 500;
