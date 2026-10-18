@@ -721,10 +721,24 @@ final class OptimisticOfflineTest {
 
         client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
 
+        // A subscription on the write's own path and args, primed with a server value, so an
+        // overlay the write applied would be displayed.
+        Map<String, Object> args = new LinkedHashMap<>();
+        List<Object> seen = new ArrayList<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {});
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.detachSocket();
+
         OfflineException refused = null;
 
         try {
-            client.submit(onlineOnlyWrite());
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
         } catch (OfflineException error) {
             refused = error;
         }
@@ -738,6 +752,9 @@ final class OptimisticOfflineTest {
                 !Json.write(store.records).contains(ONLINE_ONLY_SECRET),
                 "the arguments never reach storage");
         check(posts[0] == 0, "and a refused write never reaches the wire");
+        check(
+                !seen.contains(List.of("a", "c")),
+                "and a refused write's overlay is never displayed");
     }
 
     /** With the socket up, an online-only write is sent normally and commits. */
