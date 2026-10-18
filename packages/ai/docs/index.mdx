@@ -911,6 +911,15 @@ always wins, and the span records which it got:
 | `gen_ai.usage.cost`        | the cost in USD               |
 | `lunora.usage.cost.source` | `"provider"` or `"estimated"` |
 
+On a `ctx.ai.model(...)` call and a `defineRag` embed, an estimate is priced only
+from a complete token report. `lunora.usage.status` is `"complete"` when the
+provider reported every total the call carries, `"partial"` when it reported some
+of them, and `"unavailable"` when it reported none. A partial or unavailable call
+gets no estimated cost, because pricing the input alone would understate it. A
+provider-reported cost is still recorded. Cached input is priced at the table's
+`cacheRead` / `cacheWrite` rate when a model lists one, and at its `input` rate
+otherwise.
+
 The shipped table is **indicative, not authoritative** — a hand-maintained
 snapshot, and providers change prices without warning. It is deliberately small,
 because a table trying to cover every model is a table that is wrong about most
@@ -926,11 +935,18 @@ function's durable metrics. The counters are grouped by the model id you asked
 for (`anthropic/claude-sonnet-5`, not the provider's internal id) and carry the
 same cost-source rule as above:
 
-| Counter                      | Value                     | Attributes                                         |
-| ---------------------------- | ------------------------- | -------------------------------------------------- |
-| `gen_ai.usage.input_tokens`  | input tokens of one call  | `gen_ai.request.model`                             |
-| `gen_ai.usage.output_tokens` | output tokens of one call | `gen_ai.request.model`                             |
-| `gen_ai.usage.cost`          | USD cost of one call      | `gen_ai.request.model`, `lunora.usage.cost.source` |
+| Counter                                    | Value                                          | Attributes                                         |
+| ------------------------------------------ | ---------------------------------------------- | -------------------------------------------------- |
+| `gen_ai.usage.input_tokens`                | input tokens of one call (cache included)      | `gen_ai.request.model`                             |
+| `gen_ai.usage.output_tokens`               | output tokens of one call (reasoning included) | `gen_ai.request.model`                             |
+| `gen_ai.usage.cache_read.input_tokens`     | input tokens read from the provider's cache    | `gen_ai.request.model`                             |
+| `gen_ai.usage.cache_creation.input_tokens` | input tokens written to the provider's cache   | `gen_ai.request.model`                             |
+| `gen_ai.usage.reasoning.output_tokens`     | the reasoning share of `output_tokens`         | `gen_ai.request.model`                             |
+| `gen_ai.usage.cost`                        | USD cost of one call                           | `gen_ai.request.model`, `lunora.usage.cost.source` |
+
+The cache and reasoning counters are emitted only when the provider reports
+them above zero. A breakdown the provider did not send is absent, not a counted
+zero. The span carries `lunora.usage.status` (see above) and the same figures.
 
 Studio's **AI usage** page reads them: total spend and tokens, a breakdown by
 function and by model, and each recent call linked to its trace. A stream's span
