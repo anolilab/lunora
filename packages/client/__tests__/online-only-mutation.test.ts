@@ -392,4 +392,113 @@ describe("online-only mutation", () => {
         await expect(older).resolves.toMatch(/^rejected:/u);
         await expect(newer).resolves.toMatch(/^rejected:/u);
     });
+
+    describe("a connection drop inside the write's own optimistic update", () => {
+        /**
+         * A client on a live shard, with either the built-in offline queue (and its
+         * persistence adapter) or a durable outbox as the place a write would be queued.
+         * `queued` settles when the write reaches whichever sink is wired.
+         */
+        const createDropRig = (withOutbox: boolean) => {
+            const sockets: MockSocket[] = [];
+            const server = createServer();
+            const persistence = createInMemoryPersistence();
+            const { append, persisted } = spyAppend(persistence, 1);
+            let markOutboxed: () => void = () => {};
+            const outboxed = new Promise<void>((resolve) => {
+                markOutboxed = resolve;
+            });
+            const outboxEnqueue = vi.fn<() => Promise<void>>(async () => {
+                markOutboxed();
+            });
+            const client = new LunoraClient({
+                fetch: server.fetch,
+                heartbeatIntervalMs: 0,
+                outbox: withOutbox ? { enqueue: outboxEnqueue } : undefined,
+                persistence,
+                url: "http://app.test",
+                WebSocket: createMockWebSocket(sockets),
+            });
+            const seen: unknown[] = [];
+
+            client.subscribe(fnRef("todos.list"), {}, (value) => {
+                seen.push(value);
+            });
+            sockets.at(-1)?.open();
+
+            return {
+                append,
+                client,
+                outboxEnqueue,
+                queued: withOutbox ? outboxed : persisted,
+                seen,
+                server,
+                sockets,
+            };
+        };
+
+        it.each([
+            ["the built-in offline queue", false],
+            ["a durable outbox", true],
+        ])("refuses an online-only write that drops its shard, and never hands it to %s", async (_sink, withOutbox) => {
+            expect.hasAssertions();
+
+            const { append, client, outboxEnqueue, seen, server, sockets } = createDropRig(withOutbox);
+
+            // The early refusal reads a live shard; the drop lands inside the optimistic
+            // update, before the queue decision reads the gate again.
+            const write = client.mutation(
+                fnRef("todos.set"),
+                { text: "LIVE" },
+                {
+                    onlineOnly: true,
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("todos.list"), {}, ["LIVE"]);
+                        sockets.at(-1)?.triggerClose();
+                    },
+                },
+            );
+
+            await expect(write).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
+
+            expect(outboxEnqueue).not.toHaveBeenCalled();
+            expect(append).not.toHaveBeenCalled();
+            expect(client.pendingCount()).toBe(0);
+            expect(server.observed).toStrictEqual([]);
+            // The optimistic layer is unwound: the subscriber's last value is not the predicted one.
+            expect(seen.at(-1)).not.toStrictEqual(["LIVE"]);
+
+            client.close();
+        });
+
+        it.each([
+            ["the built-in offline queue", false],
+            ["a durable outbox", true],
+        ])("still queues a normal write that drops its shard, to %s", async (_sink, withOutbox) => {
+            expect.hasAssertions();
+
+            const { append, client, outboxEnqueue, queued, sockets } = createDropRig(withOutbox);
+
+            const write = outcomeOf(
+                client.mutation(
+                    fnRef("todos.set"),
+                    { text: "NEWER" },
+                    {
+                        optimisticUpdate: (store) => {
+                            store.setQuery(fnRef("todos.list"), {}, ["NEWER"]);
+                            sockets.at(-1)?.triggerClose();
+                        },
+                    },
+                ),
+            );
+
+            await queued;
+
+            expect(withOutbox ? outboxEnqueue : append).toHaveBeenCalledTimes(1);
+
+            client.close();
+
+            await expect(write).resolves.toMatch(/^(committed|rejected:)/u);
+        });
+    });
 });
