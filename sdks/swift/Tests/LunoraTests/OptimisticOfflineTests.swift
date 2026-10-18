@@ -1673,3 +1673,82 @@ final class MemoryPersistence: LunoraPersistenceAdapter {
         records = []
     }
 }
+
+// MARK: - Online-only writes
+
+/// A credential-shaped argument: nothing that reaches the persistence adapter may hold it.
+private let onlineOnlySecret = "sentinel-secret-7731"
+
+private func onlineOnlyWrite() -> LunoraSubmitOptions {
+    LunoraSubmitOptions(functionPath: "auth:setPassword", args: ["token": onlineOnlySecret], onlineOnly: true)
+}
+
+extension ConformanceTests {
+    /// With the socket down, an online-only write is refused before anything is
+    /// queued, persisted or sent.
+    func caseOfflineOnlineOnlyRefusedWhenDisconnected() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a refused write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        XCTAssertThrowsError(try client.submit(onlineOnlyWrite())) { error in
+            XCTAssertEqual((error as? LunoraAPIError)?.code, LunoraOfflineCode.notQueued)
+        }
+        XCTAssertEqual(client.pendingMutationCount, 0)
+        XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+
+        let persisted = try JSONSerialization.data(withJSONObject: store.records)
+
+        XCTAssertFalse(String(decoding: persisted, as: UTF8.self).contains(onlineOnlySecret))
+    }
+
+    /// With the socket up, an online-only write is sent normally and commits.
+    func caseOfflineOnlineOnlySendsWhenConnected() throws {
+        let store = MemoryPersistence()
+        var sent: [Data] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                sent.append(body)
+
+                return (200, Data("{\"commitCursor\":3,\"result\":{\"ok\":true}}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+        client.attachSocket { _ in }
+
+        let outcome = try client.submit(onlineOnlyWrite())
+
+        XCTAssertEqual(outcome.status, .committed)
+        XCTAssertEqual(sent.count, 1, "one request for the write")
+        XCTAssertTrue(String(decoding: sent[0], as: UTF8.self).contains(onlineOnlySecret), "the arguments go out on the wire")
+        XCTAssertTrue(store.appended.isEmpty, "a sent write is not persisted")
+    }
+
+    /// A normal write made with the socket down still queues beside an online-only one.
+    func caseOfflineOnlineOnlyLeavesNormalWritesQueued() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a queued write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        let outcome = try client.submit(LunoraSubmitOptions(functionPath: "messages:send", args: ["text": "hi"]))
+
+        XCTAssertEqual(outcome.status, .queued)
+        XCTAssertEqual(client.pendingMutationCount, 1)
+        XCTAssertEqual(store.appended.count, 1)
+    }
+}

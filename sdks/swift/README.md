@@ -123,6 +123,14 @@ record whose stored args no longer decode is purged and settled
 every discard — including one the capacity cap evicts out of a _restored_ queue,
 which has no caller left to tell — reaches `client.onMutationSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`onlineOnly: true` on its `LunoraSubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws a
+`LunoraAPIError` coded `LunoraOfflineCode.notQueued` (`OFFLINE_NOT_QUEUED`)
+before the write reaches the queue or the persistence adapter. It does not wait
+for a flush or queue behind pending writes, so it may land before an older queued
+write to the same document.
+
 A flush that comes back rate-limited — whole response or one batch slot —
 re-queues rather than dropping, reports the server's `error.data.retryAfterMs` as
 `LunoraFlushReport.retryAfterMs` (clamped at `lunoraMaxRetryAfterMs`, 60 s), and
