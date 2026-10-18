@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AiMetrics, AiSpan } from "../src/types";
-import { recordUsage } from "../src/usage";
+import { recordUsage, usageStatus } from "../src/usage";
 
 /** A span + metrics double that records exactly what usage accounting reports. */
 const recorder = () => {
@@ -175,5 +175,29 @@ describe("recordUsage", () => {
 
         expect(attributes["lunora.usage.status"]).toBe("complete");
         expect(attributes["gen_ai.usage.cost"]).toBe(0.02);
+    });
+});
+
+describe("usageStatus", () => {
+    it("grades complete only when both totals are reported", () => {
+        expect.assertions(3);
+
+        expect(usageStatus({ inputTokens: 10, outputTokens: 2 })).toBe("complete");
+        expect(usageStatus({ inputTokens: 10 })).toBe("partial");
+        expect(usageStatus({ outputTokens: 2 })).toBe("partial");
+    });
+
+    it("grades a breakdown alone as partial and nothing reported as unavailable", () => {
+        expect.assertions(3);
+
+        expect(usageStatus({ cacheReadTokens: 4 })).toBe("partial");
+        expect(usageStatus({})).toBe("unavailable");
+        expect(usageStatus(undefined)).toBe("unavailable");
+    });
+
+    it("needs only the input total for an embedding call", () => {
+        expect.assertions(1);
+
+        expect(usageStatus({ inputTokens: 10 }, { expectsOutput: false })).toBe("complete");
     });
 });

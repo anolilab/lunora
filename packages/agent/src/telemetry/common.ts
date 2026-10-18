@@ -1,15 +1,4 @@
-/** A finite, non-negative token count, or `undefined`. */
-const tokenCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
-
-/**
- * A breakdown count that is reported and non-zero, or `undefined`. The AI SDK fills
- * 0 in for a detail the provider never sent, so a zero cannot be told from absence.
- */
-const breakdownCount = (value: unknown): number | undefined => {
-    const count = tokenCount(value);
-
-    return count === undefined || count === 0 ? undefined : count;
-};
+import { breakdownCount, tokenCount } from "@lunora/ai/create";
 
 /**
  * Privacy options shared by every telemetry integration in this package.
@@ -78,26 +67,6 @@ export const summarizeUsage = (usage: unknown): Record<string, number> | undefin
     put("reasoningTokens", breakdownCount(readField(outputDetails, "reasoningTokens")));
 
     return Object.keys(summary).length > 0 ? summary : undefined;
-};
-
-/** The usage a call's token report carries, as {@link usageStatus} grades it. */
-export type UsageStatus = "complete" | "partial" | "unavailable";
-
-/**
- * Whether a call's token report is whole, graded the same way `@lunora/ai` grades
- * its spans. `complete`: input and output totals were both reported. `partial`: some
- * of the token buckets were, not all. `unavailable`: none were. `totalTokens` alone
- * does not count, because a total with no split cannot be priced.
- * Only a complete report is priced by estimate; a partial one would understate.
- */
-export const usageStatus = (usage: Record<string, number> | undefined): UsageStatus => {
-    if (usage?.["inputTokens"] !== undefined && usage["outputTokens"] !== undefined) {
-        return "complete";
-    }
-
-    const reported = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"].some((key) => usage?.[key] !== undefined);
-
-    return reported ? "partial" : "unavailable";
 };
 
 /**

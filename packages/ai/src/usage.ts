@@ -22,17 +22,70 @@ interface CallOutcome {
  * Whether a call's token report is whole. `complete`: every total the call should
  * carry was reported. `partial`: some were, not all. `unavailable`: none were.
  * Only a complete call is priced by estimate; a partial one would understate.
+ * @experimental
  */
 type UsageStatus = "complete" | "partial" | "unavailable";
 
-/** A finite, non-negative token count, or `undefined`. */
+/**
+ * One call's token counts, already sanitised by {@link tokenCount} or
+ * {@link breakdownCount}. The breakdowns are subsets of the totals, never added on top.
+ * @experimental
+ */
+interface UsageCounts {
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+}
+
+/**
+ * The span attribute each token bucket is recorded under. Every telemetry surface
+ * in the stack names a bucket through this map, so a dashboard reads one spelling.
+ * @experimental
+ */
+const USAGE_ATTRIBUTE: Readonly<Record<keyof UsageCounts, string>> = {
+    cacheReadTokens: "gen_ai.usage.cache_read.input_tokens",
+    cacheWriteTokens: "gen_ai.usage.cache_creation.input_tokens",
+    inputTokens: "gen_ai.usage.input_tokens",
+    outputTokens: "gen_ai.usage.output_tokens",
+    reasoningTokens: "gen_ai.usage.reasoning.output_tokens",
+};
+
+/**
+ * A finite, non-negative token count, or `undefined`.
+ * @experimental
+ */
 const tokenCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
 
-/** A breakdown count that is reported and non-zero, or `undefined`. */
-const positiveCount = (value: unknown): number | undefined => {
+/**
+ * A breakdown count that is reported and non-zero, or `undefined`. The AI SDK fills
+ * 0 in for a detail the provider never sent, so a zero cannot be told from absence
+ * and adds nothing to a sum anyway.
+ * @experimental
+ */
+const breakdownCount = (value: unknown): number | undefined => {
     const count = tokenCount(value);
 
     return count === undefined || count === 0 ? undefined : count;
+};
+
+/**
+ * Grade a call's token report. Shared by every surface that reports usage, so the
+ * same counts always grade the same way. `expectsOutput` is `false` for an
+ * embedding call, which has no output total to report.
+ * @experimental
+ */
+const usageStatus = (counts: UsageCounts | undefined, { expectsOutput = true }: { expectsOutput?: boolean } = {}): UsageStatus => {
+    const complete = counts?.inputTokens !== undefined && (!expectsOutput || counts.outputTokens !== undefined);
+    // Only the five buckets count: a caller's `totalTokens` alone cannot be priced, so it must not grade as reported.
+    const anyReported = (Object.keys(USAGE_ATTRIBUTE) as (keyof UsageCounts)[]).some((key) => counts?.[key] !== undefined);
+
+    if (complete) {
+        return "complete";
+    }
+
+    return anyReported ? "partial" : "unavailable";
 };
 
 /**
@@ -86,41 +139,28 @@ const recordUsage = (
     metrics: AiMetrics | undefined,
     { expectsOutput = true }: { expectsOutput?: boolean } = {},
 ): void => {
-    const inputTokens = tokenCount(outcome.usage?.inputTokens?.total);
-    const outputTokens = tokenCount(outcome.usage?.outputTokens?.total);
-    // A breakdown reported as 0 is dropped: the AI SDK fills 0 in for details a provider
-    // never sent, so it cannot be told from absence and adds nothing to a sum anyway.
-    const cacheReadTokens = positiveCount(outcome.usage?.inputTokens?.cacheRead);
-    const cacheWriteTokens = positiveCount(outcome.usage?.inputTokens?.cacheWrite);
-    const reasoningTokens = positiveCount(outcome.usage?.outputTokens?.reasoning);
-    const complete = inputTokens !== undefined && (!expectsOutput || outputTokens !== undefined);
-    const anyReported = [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens].some((count) => count !== undefined);
-    let status: UsageStatus = "unavailable";
-
-    if (complete) {
-        status = "complete";
-    } else if (anyReported) {
-        status = "partial";
-    }
+    const counts: UsageCounts = {
+        cacheReadTokens: breakdownCount(outcome.usage?.inputTokens?.cacheRead),
+        cacheWriteTokens: breakdownCount(outcome.usage?.inputTokens?.cacheWrite),
+        inputTokens: tokenCount(outcome.usage?.inputTokens?.total),
+        outputTokens: tokenCount(outcome.usage?.outputTokens?.total),
+        reasoningTokens: breakdownCount(outcome.usage?.outputTokens?.reasoning),
+    };
+    const status = usageStatus(counts, { expectsOutput });
 
     const reported = reportedCostOf(outcome.providerMetadata);
     // An estimate is priced only from a complete report: a partial one would understate the call.
-    const cost = reported ?? (status === "complete" ? estimateModelCost(modelId, { cacheReadTokens, cacheWriteTokens, inputTokens, outputTokens }) : undefined);
+    const cost = reported ?? (status === "complete" ? estimateModelCost(modelId, counts) : undefined);
     const costSource = reported === undefined ? "estimated" : "provider";
     // `"unknown"` keeps an unnamed model's series grouped rather than dropped.
     const modelAttributes = { "gen_ai.request.model": modelId ?? "unknown" };
 
     span?.setAttribute("lunora.usage.status", status);
 
-    const buckets: [string, number | undefined][] = [
-        ["gen_ai.usage.input_tokens", inputTokens],
-        ["gen_ai.usage.output_tokens", outputTokens],
-        ["gen_ai.usage.cache_read.input_tokens", cacheReadTokens],
-        ["gen_ai.usage.cache_creation.input_tokens", cacheWriteTokens],
-        ["gen_ai.usage.reasoning.output_tokens", reasoningTokens],
-    ];
+    for (const key of Object.keys(USAGE_ATTRIBUTE) as (keyof UsageCounts)[]) {
+        const value = counts[key];
+        const name = USAGE_ATTRIBUTE[key];
 
-    for (const [name, value] of buckets) {
         if (value !== undefined) {
             span?.setAttribute(name, value);
             metrics?.count(name, value, modelAttributes);
@@ -146,5 +186,5 @@ const recordImageUsage = (modelId: string, imageCount: number, metrics: AiMetric
     }
 };
 
-export type { CallOutcome };
-export { modelIdOf, recordImageUsage, recordUsage };
+export type { CallOutcome, UsageCounts, UsageStatus };
+export { breakdownCount, modelIdOf, recordImageUsage, recordUsage, tokenCount, USAGE_ATTRIBUTE, usageStatus };
