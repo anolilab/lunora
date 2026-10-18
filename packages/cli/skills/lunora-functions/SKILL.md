@@ -285,6 +285,7 @@ first, then run `lunora codegen` to wire the binding and typed context:
 | `ctx.workflows` / `ctx.runStep`                                     | `@lunora/workflow`            |
 | `ctx.containers`                                                    | `@lunora/container`           |
 | `ctx.browser` (action-only)                                         | `@lunora/browser`             |
+| `ctx.live` (action-side only; see `lunora-realtime`)                | `@lunora/server`              |
 | `ctx.sql` (action-only)                                             | `@lunora/hyperdrive`          |
 | `ctx.kv` / `ctx.images` / `ctx.analytics`                           | `@lunora/bindings` subpaths   |
 | `ctx.pipelines` / `ctx.vectors` / `ctx.r2sql`                       | `@lunora/bindings` subpaths   |

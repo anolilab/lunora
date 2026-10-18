@@ -1,6 +1,6 @@
 ---
 name: lunora-realtime
-description: Wires Lunora's live data into a client app. Covers `LunoraClient` and the per-framework provider, reactive `useQuery`/`useSubscription`, `useMutation` with optimistic updates, `usePaginatedQuery`, `shardKey` routing, connection status, presence, the React/Vue/Solid/Svelte/Angular/React Native adapters, and the `@lunora/db` TanStack DB binding. Use when building UI that reads or writes Lunora functions, when asked to "show live data", "make this update in real time", "add optimistic updates", "add infinite scroll/pagination", or "show offline/reconnecting state", when editing components that import `@lunora/react`/`vue`/`solid`/`svelte`/`angular`/`react-native` or `lunorash/client`, or when a live query stays `undefined`, freezes, or doesn't update.
+description: Wires Lunora's live data into a client app. Covers `LunoraClient` and the per-framework provider, reactive `useQuery`/`useSubscription`, `useMutation` with optimistic updates, `usePaginatedQuery`, `shardKey` routing, connection status, presence, the React/Vue/Solid/Svelte/Angular/React Native adapters, and the `@lunora/db` TanStack DB binding. Use when building UI that reads or writes Lunora functions, when asked to "show live data", "make this update in real time", "add optimistic updates", "add infinite scroll/pagination", or "show offline/reconnecting state", when editing components that import `@lunora/react`/`vue`/`solid`/`svelte`/`angular`/`react-native` or `lunorash/client`, when a live query stays `undefined`, freezes, or doesn't update, or when choosing between a live query, a stream, a live topic (`defineLiveStream`, `useLiveTopic`, `ctx.live.publish`, SSE), a whisper, a room and a socket, such as "push an event to the browser" or "notify the page when X happens".
 ---
 
 # Lunora Realtime
@@ -9,6 +9,27 @@ Consume Lunora functions reactively from the client. Queries are live
 subscriptions over WebSocket — a `useQuery` re-renders as soon as a mutation
 changes the rows it reads — and mutations can paint optimistically with
 automatic rollback.
+
+## Choosing a Channel
+
+Decide by what you are sending. If the client could get it by running a query,
+use a live query: it is typed, runs under the caller's identity, and works across
+shards. Reach past it only for the rest.
+
+| You want                                           | Use                                                    |
+| -------------------------------------------------- | ------------------------------------------------------ |
+| Rows that stay fresh                               | `useQuery` (WebSocket, typed through `api.*`)          |
+| A write / a side effect                            | `useMutation` / `useAction`                            |
+| Chunks of one long call (model tokens)             | `query.stream()` + `useStream` (`durable` to resume)   |
+| Chunks of one HTTP request                         | `httpRoute.get(path).stream()` + `useHttpStream`       |
+| A server-published event that is not a row         | live topic: `defineLiveStream` + `useLiveTopic`        |
+| A client-to-clients ephemeral message (cursors)    | whisper (`client.whisper`; authorize with `onWhisper`) |
+| A room with server join / message / leave handlers | `defineRoom` + `client.connectRoom`                    |
+| A dedicated socket at your own path                | `defineWebSocket` + `client.connectWebSocket(path)`    |
+| Who is online                                      | `usePresence`                                          |
+
+Live topics are the untyped one: the topic is a string and the payload is
+`unknown`. Full guide: the "Choosing a data channel" docs page.
 
 ## When Not to Use
 
@@ -170,6 +191,43 @@ TanStack-style alternative.
 - `useAuth` + `Authenticated` / `Unauthenticated` / `AuthLoading` — see
   `lunora-setup-auth`.
 
+## Live Topics
+
+For an event with no query behind it ("a comment was posted"), the server
+publishes to a named topic and the browser follows topics over ONE shared SSE
+connection. Declare the stream once, mount its two handlers on the HTTP router,
+and follow topics with the adapter's hook (all return `{ lastEvent, error }`):
+
+| Package                | Primitive                 |
+| ---------------------- | ------------------------- |
+| `@lunora/react`, `vue` | `useLiveTopic`            |
+| `@lunora/solid`        | `createLiveTopic`         |
+| `@lunora/svelte`       | `liveTopic` (a store)     |
+| `@lunora/angular`      | `liveTopic` (signals)     |
+| `@lunora/react-native` | re-exports `useLiveTopic` |
+
+```tsx
+const { lastEvent, error } = useLiveTopic({ url: "/live/posts/connect", topic: `post:${postId}`, onEvent: (payload) => refresh(payload) });
+```
+
+- Several hooks on one URL share a single connection; the last to unmount closes it.
+- Publish from server code with `ctx.live.publish(topic, payload, { stream })`.
+  `ctx.live` exists only on actions, HTTP actions, queue consumers and scheduled
+  actions, NOT on a query or mutation. It is always present on an HTTP action
+  but typed optional on an `action` and a queue consumer, so write
+  `ctx.live?.publish(...)` there. To tell a page about a write, have the
+  mutation `ctx.scheduler.runAfter(0, internal.x.publish, args)`: it is held until
+  the commit, so a rolled-back write sends nothing. If the page already has a
+  `useQuery` over those rows, skip the event.
+- Without `onSubscribe` every subscribe is DENIED (unless `allowAnonymousControl`
+  admits anonymous callers). Only a literal `true` allows.
+- Delivery is at least once (a retried action publishes again) and shard-local
+  (no fan-out across Durable Objects). Put an id in the payload to dedupe.
+- React Native's stock `fetch` does not stream, so events never arrive; use a
+  streaming `fetch` such as `expo/fetch`.
+- Live streams are native on Cloudflare and celld, emulated on Node. Codegen
+  refuses an app that reads `ctx.live` on a target that withholds them.
+
 ## `@lunora/db` — TanStack DB Collections
 
 For indexed local collections, cross-query joins, or a durable offline outbox,
@@ -216,3 +274,5 @@ hold stale ones, while `useLiveQuery` still looks correct.
       `optimisticUpdate` rows match the query's element shape.
 - [ ] Lists that grow use `usePaginatedQuery` over a `.paginate` query.
 - [ ] `@lunora/db`: one `defineCollections` instance; no parallel copy of rows.
+- [ ] Events that are not rows use a live topic, published from an action (via
+      `ctx.scheduler` after a write); data a query could return stays a `useQuery`.
