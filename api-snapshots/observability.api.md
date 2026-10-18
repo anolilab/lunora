@@ -168,9 +168,9 @@ interface DatabaseTelemetryDeps {
     anchor: TraceAnchor;
     captureRaw?: boolean;
     functionPath: string;
-    scope?: SensitiveScope;
     mode: DatabaseInstrumentation;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     tally: DatabaseTally;
     userId: () => string | undefined;
