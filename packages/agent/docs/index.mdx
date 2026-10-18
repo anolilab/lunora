@@ -121,6 +121,11 @@ the durable loop:
   when the provider reports them. Those are subsets of the totals and are never
   added on top. A bucket no turn reported is absent, and a thread written before
   these fields existed reads as absent too, not as zero.
+  `status` says whether the report covers the run: `complete` when every turn
+  reported all of its usage, `partial` when some turn reported only part of it, and
+  `unavailable` when no turn reported any. A turn that reported nothing still counts
+  toward the status, so a run with one such turn is never persisted as `complete`. A
+  thread written before `status` existed carries none, and reads as unknown.
 - **`telemetry`**: an ai@7 `TelemetryOptions` handed to every turn; set
   `telemetry.integrations` to trace turns and tool calls.
   The [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships

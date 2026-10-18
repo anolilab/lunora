@@ -1125,9 +1125,9 @@ describe(runAgentLoop, () => {
             stopped: "final",
             text: "final",
             turns: 2,
-            usage: { inputTokens: 30, outputTokens: 13, totalTokens: 43 },
+            usage: { inputTokens: 30, outputTokens: 13, status: "complete", totalTokens: 43 },
         });
-        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 13, totalTokens: 43 });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 13, status: "complete", totalTokens: 43 });
     });
 
     it("sums the cache and reasoning buckets across turns, and a bucket no turn reported stays absent", async () => {
@@ -1158,10 +1158,50 @@ describe(runAgentLoop, () => {
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
 
         // Reasoning (2) is inside outputTokens, so the total is 15 + 28, not 15 + 28 + 2.
-        const expected = { cacheReadTokens: 10, cacheWriteTokens: 1, inputTokens: 30, outputTokens: 13, reasoningTokens: 2, totalTokens: 43 };
+        const expected = {
+            cacheReadTokens: 10,
+            cacheWriteTokens: 1,
+            inputTokens: 30,
+            outputTokens: 13,
+            reasoningTokens: 2,
+            status: "complete",
+            totalTokens: 43,
+        };
 
         expect(result).toMatchObject({ usage: expected });
         expect(runtime.threads.get("thread-1")?.usage).toStrictEqual(expected);
+    });
+
+    it("persists a partial status when one of the run's turns reported only part of its usage", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+        const generate = scriptedGenerate([
+            { text: "", toolCalls: [{ id: "c1", input: {}, name: "lookup" }], usage: { inputTokens: 10, outputTokens: 5 } },
+            // The provider reported the prompt but not the completion for this turn.
+            { text: "final", toolCalls: [], usage: { inputTokens: 20 } },
+        ]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 5, status: "partial" });
+    });
+
+    it("persists an unavailable status when the only turn reported no usage", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([{ text: "final", toolCalls: [], usage: { status: "unavailable" } }]),
+                run: runtime.run,
+            }),
+        );
+
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ status: "unavailable" });
     });
 
     it("replaces a thread row's usage written before the breakdown fields with the run's total", async () => {
@@ -1187,7 +1227,13 @@ describe(runAgentLoop, () => {
         );
 
         // The run's own total, with no residue from the old row and no sum with it.
-        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ cacheReadTokens: 3, inputTokens: 7, outputTokens: 1, totalTokens: 8 });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({
+            cacheReadTokens: 3,
+            inputTokens: 7,
+            outputTokens: 1,
+            status: "complete",
+            totalTokens: 8,
+        });
     });
 
     it("invokes `onStepFinish` once per turn as a durable step", async () => {
@@ -1852,7 +1898,12 @@ describe(runAgentLoop, () => {
         // The retry replays the same journal: the failed step runs again and its answer is the one kept.
         const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
 
-        expect(result).toStrictEqual({ stopped: "final", text: "Whole answer.", turns: 1, usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+        expect(result).toStrictEqual({
+            stopped: "final",
+            text: "Whole answer.",
+            turns: 1,
+            usage: { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 },
+        });
         expect(call).toBe(2);
         expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(2);
 
@@ -2423,7 +2474,7 @@ describe("a turn whose stream fails in-band and is retried", () => {
             stopped: "final",
             text: "Retried answer.",
             turns: 1,
-            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            usage: { inputTokens: 1, outputTokens: 1, status: "complete", totalTokens: 2 },
         });
 
         // The failed attempt was not memoised: the turn's body ran twice.
@@ -2480,12 +2531,12 @@ describe("usage of a failed streamed turn", () => {
         );
 
         // The provider billed the failed attempt, so the run that failed reports those tokens.
-        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, totalTokens: 3 });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 });
 
         const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
 
         // The retry is the same turn: its tokens count once, so the total is not the failed attempt added on top of it.
-        expect(result).toMatchObject({ stopped: "final", usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
-        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, totalTokens: 3 });
+        expect(result).toMatchObject({ stopped: "final", usage: { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 } });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 });
     });
 });

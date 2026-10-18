@@ -198,7 +198,7 @@ describe(agentComponent, () => {
     });
 
     it("accepts a usage value written before the breakdown fields, and one that carries them", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const { usage } = (agentExtension.tables["threads"] as unknown as { shape: Record<string, { parse: (value: unknown) => unknown }> }).shape;
 
@@ -211,6 +211,13 @@ describe(agentComponent, () => {
             inputTokens: 1,
             outputTokens: 2,
             reasoningTokens: 2,
+            totalTokens: 3,
+        });
+        // The status is optional too: a row written before it existed reads without one.
+        expect(usage?.parse({ inputTokens: 1, outputTokens: 2, status: "partial", totalTokens: 3 })).toStrictEqual({
+            inputTokens: 1,
+            outputTokens: 2,
+            status: "partial",
             totalTokens: 3,
         });
         expect(usage?.parse(undefined)).toBeUndefined();

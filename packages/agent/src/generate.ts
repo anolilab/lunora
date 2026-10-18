@@ -1,4 +1,5 @@
 import { jsonSchema } from "@ai-sdk/provider-utils";
+import { usageStatus } from "@lunora/ai/create";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 
@@ -19,11 +20,20 @@ import type {
 } from "./types";
 
 /**
+ * A turn's usage as the loop accumulates it: the reported counts plus the status their report
+ * grades to, graded by the same function the telemetry spans use. A turn that reported nothing
+ * is `unavailable`, not absent, so it still marks the run's total as not complete.
+ */
+const withStatus = (counts: Record<string, number> | undefined): AgentUsage => {
+    return { ...counts, status: usageStatus(counts) };
+};
+
+/**
  * Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage`. The breakdowns
  * come from the `*TokenDetails` objects through the projection the telemetry bridges
  * use, so a persisted total and a span agree on every bucket.
  */
-const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => summarizeUsage(usage);
+const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage => withStatus(summarizeUsage(usage));
 
 /**
  * Normalize a provider's tool-call list onto the loop's {@link AgentToolCall} shape.
@@ -203,22 +213,24 @@ interface ProviderUsage {
  * An error finish may report one bucket or none: a bucket it left out is `undefined`, never a crash,
  * because the provider's failure is what the caller has to see.
  */
-const providerUsageOf = (usage: ProviderUsage | undefined): AgentUsage | undefined => {
+const providerUsageOf = (usage: ProviderUsage | undefined): AgentUsage => {
     if (usage === undefined) {
-        return undefined;
+        return withStatus(undefined);
     }
 
     const input = usage.inputTokens?.total;
     const output = usage.outputTokens?.total;
     const total = input === undefined || output === undefined ? undefined : input + output;
 
-    return summarizeUsage({
-        inputTokens: input,
-        inputTokenDetails: { cacheReadTokens: usage.inputTokens?.cacheRead, cacheWriteTokens: usage.inputTokens?.cacheWrite },
-        outputTokens: output,
-        outputTokenDetails: { reasoningTokens: usage.outputTokens?.reasoning },
-        totalTokens: total,
-    });
+    return withStatus(
+        summarizeUsage({
+            inputTokens: input,
+            inputTokenDetails: { cacheReadTokens: usage.inputTokens?.cacheRead, cacheWriteTokens: usage.inputTokens?.cacheWrite },
+            outputTokens: output,
+            outputTokenDetails: { reasoningTokens: usage.outputTokens?.reasoning },
+            totalTokens: total,
+        }),
+    );
 };
 
 /**
@@ -233,11 +245,8 @@ const finishErrorOf = (finishReason: { raw: string | undefined; unified: string 
         finishReason.raw === undefined ? "model finished with an error reason" : `model finished with an error reason (provider reason: ${finishReason.raw})`,
         { cause: finishReason },
     );
-    const billed = providerUsageOf(usage);
 
-    if (billed !== undefined) {
-        error[FAILED_TURN_USAGE] = billed;
-    }
+    error[FAILED_TURN_USAGE] = providerUsageOf(usage);
 
     return error;
 };
@@ -340,12 +349,10 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
         const request = buildTurnRequest(base, options);
         const result = await ai.generateText({ ...request, model: guardTurnModel(ai, request.model) });
 
-        const usage = toAgentUsage(result.usage);
-
         return {
             text: result.text,
             toolCalls: mapToolCalls(result.toolCalls),
-            ...(usage === undefined ? {} : { usage }),
+            usage: toAgentUsage(result.usage),
             ...(base.output === undefined ? {} : { output: result.output }),
         };
     };
@@ -403,7 +410,7 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
         // spoken prefix) rather than reading the settled promises, which reject
         // with the abort — the caller persists the prefix.
         if (options.signal?.aborted) {
-            return { text: streamed, toolCalls: [] };
+            return { text: streamed, toolCalls: [], usage: withStatus(undefined) };
         }
 
         // `output` is only awaited when the agent declared a structured schema —
@@ -415,12 +422,10 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
             base.output === undefined ? Promise.resolve(undefined) : result.output,
         ]);
 
-        const agentUsage = toAgentUsage(usage);
-
         return {
             text,
             toolCalls: mapToolCalls(toolCalls),
-            ...(agentUsage === undefined ? {} : { usage: agentUsage }),
+            usage: toAgentUsage(usage),
             ...(base.output === undefined ? {} : { output }),
         };
     };

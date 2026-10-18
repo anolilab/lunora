@@ -404,6 +404,14 @@ export interface AgentUsage {
     outputTokens?: number;
     /** Output tokens spent on hidden reasoning. */
     reasoningTokens?: number;
+
+    /**
+     * Whether the provider's report covers every bucket it should carry: `complete` when all
+     * of it was reported, `partial` when some was, `unavailable` when none was. A run's total
+     * is `partial` as soon as one of its turns was not complete. Absent on a value written
+     * before this field existed; that row cannot say whether it was complete, so it reads as unknown.
+     */
+    status?: "complete" | "partial" | "unavailable";
     /** Input + output tokens. */
     totalTokens?: number;
 }

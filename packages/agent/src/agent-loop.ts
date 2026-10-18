@@ -1,3 +1,4 @@
+import { usageStatus } from "@lunora/ai/create";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
@@ -210,9 +211,29 @@ const isStopConditionMet = async (conditions: ReadonlyArray<StopCondition<ToolSe
 const USAGE_KEYS = ["inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
 
 /**
+ * A turn's status. A step written before the field existed (a memoized replay, a scripted
+ * fixture) has none, so it is graded from its counts rather than assumed complete.
+ */
+const statusOf = (usage: AgentUsage): NonNullable<AgentUsage["status"]> => usage.status ?? usageStatus(usage);
+
+/**
+ * Two steps' statuses, combined. The total is `complete` only when both are complete and
+ * `unavailable` only when both are unavailable: any other pairing has a turn whose bucket is
+ * missing from the total, so it is `partial`.
+ */
+const mergeStatus = (base: NonNullable<AgentUsage["status"]>, next: NonNullable<AgentUsage["status"]>): NonNullable<AgentUsage["status"]> => {
+    if (base === next) {
+        return base;
+    }
+
+    return "partial";
+};
+
+/**
  * Accumulate a turn's usage into the running total. A field absent on both sides stays
  * absent, so a provider that never reports a cache or reasoning bucket never shows one.
  * A row or a memoized step written before a field existed is absent there, not zero.
+ * `next` absent means the turn carried no usage record at all, and leaves the total as it was.
  */
 const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): AgentUsage | undefined => {
     if (next === undefined) {
@@ -220,10 +241,10 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
     }
 
     if (base === undefined) {
-        return { ...next };
+        return { ...next, status: statusOf(next) };
     }
 
-    const result: AgentUsage = {};
+    const result: AgentUsage = { status: mergeStatus(statusOf(base), statusOf(next)) };
 
     for (const key of USAGE_KEYS) {
         if (base[key] !== undefined || next[key] !== undefined) {
@@ -1839,4 +1860,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
+export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
