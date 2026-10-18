@@ -6357,15 +6357,45 @@ class LunoraClient {
      */
     private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
         const generation = this.wsTokenGeneration;
+        const attempt = Symbol("ws-token-attempt");
         let token: string | undefined;
 
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = attempt;
+
+        // A provider that never answers would hold the connection in `connecting`
+        // forever — `ensureSocket` returns early while it is. Bound the wait by the
+        // same budget as the socket handshake and fail the attempt the way a
+        // provider rejection does, so the reconnect backoff re-mints.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_resolve, reject) => {
+            if (this.connectTimeoutMs > 0) {
+                timer = setTimeout(() => {
+                    reject(new Error("LunoraClient: wsToken provider timed out"));
+                }, this.connectTimeoutMs);
+            }
+        });
+
         try {
-            token = await provider();
+            token = await Promise.race([provider(), deadline]);
         } catch {
-            this.handleDisconnect(conn);
+            if (conn.providerAttempt === attempt) {
+                // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                conn.providerAttempt = undefined;
+                this.handleDisconnect(conn);
+            }
 
             return;
+        } finally {
+            clearTimeout(timer);
         }
+
+        if (conn.providerAttempt !== attempt) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = undefined;
 
         if (this.closed || this.WebSocketImpl === undefined || conn.wsState !== "connecting" || conn.socket !== undefined) {
             return;

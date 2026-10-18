@@ -95,7 +95,16 @@ interface ShardConnection {
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see `polling-fallback.ts`). */
     readonly polling: PollingFallback;
+
+    /**
+     * Names the connect attempt currently waiting on a `wsToken` provider. An
+     * answer that arrives after its attempt timed out (or was superseded) no longer
+     * holds this value and is dropped, instead of opening a socket on top of the
+     * retry that replaced it.
+     */
+    providerAttempt?: symbol;
     reconnect: ReconnectCalculator;
+
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
@@ -136,6 +145,7 @@ interface ShardConnection {
     roomsRejoined?: boolean;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
+
     socket: undefined | WebSocket;
 
     /**
@@ -154,6 +164,7 @@ interface ShardConnection {
      * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
+
     wasEverConnected: boolean;
 
     /**
