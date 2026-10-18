@@ -48,7 +48,7 @@ describe("agentHarness — requestSecretTool", () => {
         expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
         expect(harness.journalEntries()).toContainEqual(expect.objectContaining({ kind: "wait", name: "secret:call_1", payload: {} }));
         expect(harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret").map((dispatch) => dispatch.args)).toStrictEqual([
-            { claimant: "tool:charge:call_2", consumerCallId: "call_2", threadKey: "thread-1", toolCallId: "call_1" },
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: "wf-1", threadKey: "thread-1", toolCallId: "call_1" },
         ]);
         expect(JSON.stringify([harness.messages("thread-1"), harness.dispatches, harness.journalEntries()])).not.toContain(SECRET);
     });
@@ -77,7 +77,11 @@ describe("agentHarness — requestSecretTool", () => {
         const used: string[] = [];
         const secrets = createFakeSecretValues();
         const harness = agentHarness(billingAgent(used), {
-            script: [toolCallTurn("call_1", "requestKey", {}), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("could not charge")],
+            script: [
+                toolCallTurn("call_1", "requestKey", { label: "API key" }),
+                toolCallTurn("call_2", "charge", { secretRef: "call_1" }),
+                finalTurn("could not charge"),
+            ],
             secrets,
         });
 
@@ -96,7 +100,7 @@ describe("agentHarness — requestSecretTool", () => {
         expect.assertions(2);
 
         const harness = agentHarness(billingAgent([]), {
-            script: [toolCallTurn("call_1", "requestKey", {}), finalTurn("no key")],
+            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")],
         });
 
         const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
