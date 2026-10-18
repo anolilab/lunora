@@ -2216,8 +2216,13 @@ class LunoraClient {
             }
         };
 
+        // An accepted upgrade is not yet proof of a usable socket: the shard can still drop it (an expired identity) right after.
+        // The backoff resets only once the socket has stayed open for the stability window, as the main connection does.
+        let stableTimer: ReturnType<typeof setTimeout> | undefined;
+
         const channel = this.openSupplementarySocket(this.supplementaryUrl(path), {
             onClose: () => {
+                clearTimeout(stableTimer);
                 notify(handlers.onClose);
             },
             onMessage: (event: MessageEvent) => {
@@ -2242,17 +2247,27 @@ class LunoraClient {
                 }
             },
             onOpen: () => {
-                // An accepted upgrade is proof the route is reachable: restart the backoff here,
-                // so a route that stays quiet does not keep doubling its reconnect delay. A
-                // rejected upgrade never opens, so `auth: true` rejections still back off.
-                channel.resetBackoff();
+                // A route that stays open but quiet must not keep doubling its reconnect delay, so a stable socket
+                // restarts the backoff even with no payload frame.
+                clearTimeout(stableTimer);
+
+                const opened = channel.socket();
+
+                stableTimer = setTimeout(() => {
+                    if (channel.socket() === opened) {
+                        channel.resetBackoff();
+                    }
+                }, SOCKET_STABLE_MS);
                 notify(handlers.onOpen);
             },
             shardKey: options.shardKey,
         });
 
         return {
-            close: channel.close,
+            close: () => {
+                clearTimeout(stableTimer);
+                channel.close();
+            },
             send: (message: Message) => {
                 // Encoding runs outside the send guard: an unencodable payload is the caller's
                 // error and must surface, not vanish as if the socket had dropped.
@@ -5824,8 +5839,16 @@ class LunoraClient {
 
             stopHeartbeat(conn);
 
-            conn.socket?.close();
+            const { socket } = conn;
+
             conn.socket = undefined;
+
+            // A socket can throw on close; this runs inside `close()`'s loop over every teardown, which must reach the rest.
+            try {
+                socket?.close();
+            } catch {
+                // Nothing to recover: the socket is already detached.
+            }
         };
 
         this.adminSocketTeardowns.add(teardown);
@@ -5850,7 +5873,14 @@ class LunoraClient {
             }
 
             stopHeartbeat(conn);
-            socket.close();
+
+            // A throw here would skip this channel's reconnect and every bounce after it.
+            try {
+                socket.close();
+            } catch {
+                // The socket is already detached, so the reconnect below still replaces it.
+            }
+
             handlers.onClose?.();
             scheduleReconnect();
         };

@@ -166,6 +166,62 @@ describe("connectWebSocket", () => {
         expect(replacement.closed).toBe(false);
     });
 
+    it("keeps backing off a route socket the shard accepts and then drops at once", async () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({ heartbeatIntervalMs: 0, url: "https://app.example", WebSocket: WebSocketImpl });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        // Each attempt opens and is dropped straight away, as an expired identity would be. Record the gap to the next attempt.
+        const gaps: number[] = [];
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const socket = lastSocket();
+
+            socket.fire("open");
+            socket.fire("close", { code: 4001 });
+
+            let waited = 0;
+
+            while (lastSocket() === socket && waited < 60_000) {
+                // eslint-disable-next-line no-await-in-loop -- step the clock until the reconnect opens a new socket
+                await vi.advanceTimersByTimeAsync(50);
+                waited += 50;
+            }
+
+            gaps.push(waited);
+        }
+
+        // A reset on every open would keep each gap at the initial delay; the backoff grows instead.
+        expect(gaps[2]).toBeGreaterThan(gaps[0] ?? 0);
+
+        client.close();
+    });
+
+    it("finishes closing every route socket when one throws on close", () => {
+        expect.assertions(2);
+
+        const client = makeClient();
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        const throwing = lastSocket();
+
+        throwing.close = () => {
+            throw new Error("close failed");
+        };
+
+        client.connectWebSocket("/lobby", { onMessage: () => undefined });
+
+        const other = lastSocket();
+
+        expect(() => {
+            client.close();
+        }).not.toThrow();
+        expect(other.closed).toBe(true);
+    });
+
     it("contains a throwing onMessage as a route handler failure", () => {
         expect.assertions(2);
 
