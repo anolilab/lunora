@@ -44,6 +44,7 @@ import type {
     OwnerRelayFrame,
     PromotionState,
     RelayFrame,
+    RelayLiveFrame,
     RelayRoomEvent,
     RelayRoomVerdict,
     RelayShapePoke,
@@ -81,8 +82,10 @@ const RELAY_ATTACH_TIMEOUT_MS = 2000;
 
 /**
  * `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach.
- * ponytail: the deadline only stops the wait; the request still runs and can reach the owner after a later one (a late detach after
- * the next attach, a late subscribe after its unsubscribe). Per-relay sequence numbers the receiver checks are the upgrade path.
+ *
+ * The deadline only stops the wait: the request still runs and can land after a later one. A late detach is refused by its sequence
+ * (see {@link OwnerRelay.onDetach}). A late attach does apply, but the relay it re-registers has no sockets, so it answers the next
+ * forwarded frame as idle and the owner drops it.
  */
 const withRelayDeadline = async <T>(request: Promise<T>): Promise<T | undefined> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -253,6 +256,15 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
+/** Status a relay answers a forwarded frame with when it holds no sockets, so the owner stops fanning out to it. */
+const RELAY_IDLE_STATUS = 410;
+
+/** Answer to a detach the receiver has already superseded: the sender has stopped waiting, so the status only has to say "not applied". */
+const staleRelayFrame = (): Response => new Response("stale relay frame", { status: 409 });
+
+/** A sequence for a frame this DO sends: a timestamp in microseconds, bumped past the last one so ties within a millisecond stay ordered. A restart keeps it increasing too, since the clock has moved on. */
+const nextSequence = (last: number): number => Math.max(Date.now() * 1000, last + 1);
+
 /**
  * Shared owner↔relay link: sibling addressing, whisper local-delivery, and the
  * `/_lunora/relay` control-channel dispatch (a single exhaustive switch over the
@@ -260,6 +272,9 @@ const noContent = (): Response => new Response(null, { status: 204 });
  * identity (`roleId`) is fixed at construction from the DO name.
  */
 abstract class RelayLink {
+    /** The last sequence this DO stamped on an outgoing control frame; see {@link nextSequence}. */
+    private lastSequence = 0;
+
     protected constructor(
         protected readonly host: RelayHost,
         /** This DO's fixed role addressing — an owner's own key (no index), or a relay's owner key + slot. */
@@ -296,16 +311,17 @@ abstract class RelayLink {
             return new Response("bad request", { status: 400 });
         }
 
+        // A relay with no sockets answers a forwarded frame or shape poke as idle, so its owner drops it (see {@link RelayLink.refusesAsIdle}).
+        if ((message.type === "relay_frame" || message.type === "relay_live_frame" || message.type === "relay_shape_poke") && this.refusesAsIdle()) {
+            return new Response(undefined, { status: RELAY_IDLE_STATUS });
+        }
+
         switch (message.type) {
             case "relay_attach": {
-                this.onAttach(message.relayIndex);
-
-                return noContent();
+                return this.onAttach(message.relayIndex, message.seq) ? noContent() : staleRelayFrame();
             }
             case "relay_detach": {
-                this.onDetach(message.relayIndex);
-
-                return noContent();
+                return this.onDetach(message.relayIndex, message.seq) ? noContent() : staleRelayFrame();
             }
             case "relay_frame": {
                 // The joiner of a room's own join broadcast is held on this relay: skip it by connection id.
@@ -321,7 +337,7 @@ abstract class RelayLink {
                 return noContent();
             }
             case "relay_live_control": {
-                return this.host.liveControl(message.control);
+                return this.onLiveControl(message.control);
             }
             case "relay_live_frame": {
                 this.host.deliverLiveLocal(message.topic, message.key, message.frame);
@@ -397,6 +413,13 @@ abstract class RelayLink {
      */
     protected bindingName(): string | undefined {
         return this.host.shardBinding();
+    }
+
+    /** A fresh sequence for an outgoing control frame, strictly above every one this DO has stamped. */
+    protected nextRelaySeq(): number {
+        this.lastSequence = nextSequence(this.lastSequence);
+
+        return this.lastSequence;
     }
 
     /** POST a control frame to a sibling by name, fire-and-forget. Best-effort: a transient cross-DO failure drops the frame rather than throwing into the handler. */
@@ -500,14 +523,23 @@ abstract class RelayLink {
      */
     public abstract minShapeCursor(): number | undefined;
 
-    /** Control-channel hook: an owner adds a relay to its set; a relay no-ops. */
-    protected abstract onAttach(index: number): void;
+    /** Control-channel hook: an owner adds a relay to its set and raises its sequence mark; a relay no-ops. */
+    protected abstract onAttach(index: number, seq: number | undefined): boolean;
 
-    /** Control-channel hook: an owner drops a relay from its set; a relay no-ops. */
-    protected abstract onDetach(index: number): void;
+    /** Control-channel hook: an owner drops a relay from its set unless `seq` is older than its mark; a relay no-ops. */
+    protected abstract onDetach(index: number, seq: number | undefined): boolean;
+
+    /** Control-channel hook: an owner forwards a live control call to its socket's host; a relay refuses a call superseded on its subscription. */
+    protected abstract onLiveControl(control: LiveSocketControlCall): Promise<Response>;
 
     /** Control-channel hook: an owner re-distributes a relay-forwarded whisper to its OTHER relays; a relay no-ops. */
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+
+    /**
+     * Whether this DO answers a forwarded frame as an idle relay: a relay with no sockets left, which a late attach can leave
+     * registered on its owner. The owner drops a relay that answers so, which heals any such registration. An owner never does.
+     */
+    protected abstract refusesAsIdle(): boolean;
 
     /** Control-channel hook: an owner builds the seed frames for a relay subscriber; a relay errors (it can't seed). */
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
@@ -534,6 +566,12 @@ class OwnerRelay extends RelayLink {
 
     /** Relay indices that have answered a grant, hydrated once from `__lunora_relay_grants`. See {@link OwnerRelay.liveGrantRelaySet}. */
     private liveGrantRelayCache: Set<number> | undefined;
+
+    /** Whether {@link OwnerRelay.ensureRelayTables} has run its DDL this wake. */
+    private relayTablesReady = false;
+
+    /** Each relay's sequence mark, read once from `__lunora_relay_seqs` and kept in step with it, so a forward costs no query. */
+    private readonly relaySeqMarks = new Map<number, number | undefined>();
 
     /**
      * Relays with a subscribe still unanswered, by count. A subscribe past its deadline may still store the grant, so an unsubscribe
@@ -573,11 +611,7 @@ class OwnerRelay extends RelayLink {
             return;
         }
 
-        await Promise.all(
-            [...relays].map((index) =>
-                this.postRelayMessage(relayName(this.roleId.ownerKey, index), { exceptConnectionId, frame, topic, type: "relay_frame" }),
-            ),
-        );
+        await Promise.all([...relays].map((index) => this.forwardToRelay(index, { exceptConnectionId, frame, topic, type: "relay_frame" })));
     }
 
     /**
@@ -593,10 +627,13 @@ class OwnerRelay extends RelayLink {
      * ponytail: fans out to every relay on a miss; index connection id to relay if the cap grows.
      * @returns the holding relay's response, or `undefined` when no relay holds the socket
      */
-    public forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined> {
+    public forwardLiveControl(call: LiveSocketControlCall): Promise<Response | undefined> {
         if (!this.canAddressSiblings()) {
             return Promise.resolve(undefined);
         }
+
+        // Every relay gets the same stamp, so a relay can order this call against a later one on the same subscription.
+        const control: LiveSocketControlCall = { ...call, seq: this.nextRelaySeq() };
 
         // An unsubscribe can only find its socket on a relay that has held a grant, so it skips
         // the relays that never have. A subscribe fans out to every relay: it is how a first grant
@@ -641,9 +678,7 @@ class OwnerRelay extends RelayLink {
             return;
         }
 
-        await Promise.all(
-            [...targets].map((index) => this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame, key, topic, type: "relay_live_frame" })),
-        );
+        await Promise.all([...targets].map((index) => this.forwardToRelay(index, { frame, key, topic, type: "relay_live_frame" })));
     }
 
     public override async onFlush(changed: Set<string>, frameCursor: number): Promise<void> {
@@ -770,12 +805,33 @@ class OwnerRelay extends RelayLink {
         deleteRelayShapesForConnection(this.host.sql(), message.relayIndex, message.connectionId, message.subId);
     }
 
-    protected override onAttach(index: number): void {
+    protected override onAttach(index: number, seq: number | undefined): boolean {
+        // An attach always applies: refusing one would strand a relay that has live sockets, which is the failure the sequence
+        // exists to prevent. It only raises the mark a later, older detach is checked against.
+        this.recordRelaySeq(index, seq);
         this.addRelayToSet(index);
+
+        return true;
     }
 
-    protected override onDetach(index: number): void {
+    protected override onDetach(index: number, seq: number | undefined): boolean {
+        if (!this.acceptRelaySeq(index, seq)) {
+            return false;
+        }
+
         this.removeRelayFromSet(index);
+
+        return true;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- role hook: an owner is never an idle relay
+    protected override refusesAsIdle(): boolean {
+        return false;
+    }
+
+    protected override onLiveControl(control: LiveSocketControlCall): Promise<Response> {
+        // An owner holds no relay's sockets, so a forwarded live control only reaches it by mistake; answer as the host does.
+        return this.host.liveControl(control);
     }
 
     protected override async onWhisperFrame(message: RelayFrame): Promise<void> {
@@ -784,9 +840,7 @@ class OwnerRelay extends RelayLink {
         await Promise.all(
             [...this.ownerRelaySet()]
                 .filter((index) => index !== message.originRelay)
-                .map((index) =>
-                    this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame: message.frame, topic: message.topic, type: "relay_frame" }),
-                ),
+                .map((index) => this.forwardToRelay(index, { frame: message.frame, topic: message.topic, type: "relay_frame" })),
         );
     }
 
@@ -797,6 +851,57 @@ class OwnerRelay extends RelayLink {
     // eslint-disable-next-line class-methods-use-this -- role hook: an owner doesn't receive multicast pokes (it sends them)
     protected override onShapePoke(): RelayPokeDelivery {
         return { delivered: 0, matched: 0 };
+    }
+
+    /** The newest attach or detach sequence applied for relay `index`, or `undefined` before the first sequenced frame. */
+    private relaySeqMark(index: number): number | undefined {
+        if (this.relaySeqMarks.has(index)) {
+            return this.relaySeqMarks.get(index);
+        }
+
+        this.ensureRelayTables();
+
+        const [row] = this.host.sql().exec<{ seq: bigint | number }>("SELECT seq FROM __lunora_relay_seqs WHERE idx = ?", index).toArray();
+        const mark = row === undefined ? undefined : Number(row.seq);
+
+        this.relaySeqMarks.set(index, mark);
+
+        return mark;
+    }
+
+    /** Raise relay `index`'s mark to `seq`, never lowering it. A frame without `seq` leaves it as it is. */
+    private recordRelaySeq(index: number, seq: number | undefined): void {
+        if (seq === undefined) {
+            return;
+        }
+
+        const mark = this.relaySeqMark(index);
+
+        if (mark === undefined || seq > mark) {
+            this.host.sql().exec("INSERT OR REPLACE INTO __lunora_relay_seqs (idx, seq) VALUES (?, ?)", index, seq);
+            this.relaySeqMarks.set(index, seq);
+        }
+    }
+
+    /**
+     * Whether a detach from relay `index` may apply. A detach older than the relay's newest applied frame is a late one (it answered after
+     * the relay's next attach), so it is refused rather than unregister a relay that has live sockets. The mark is its own row, kept across
+     * a detach, because the detach it guards against is the one that removes the relay's set row. A frame without `seq` always applies.
+     */
+    private acceptRelaySeq(index: number, seq: number | undefined): boolean {
+        if (seq === undefined) {
+            return true;
+        }
+
+        const mark = this.relaySeqMark(index);
+
+        if (mark !== undefined && seq < mark) {
+            return false;
+        }
+
+        this.recordRelaySeq(index, seq);
+
+        return true;
     }
 
     /**
@@ -926,9 +1031,10 @@ class OwnerRelay extends RelayLink {
     private async multicastToRelays(relays: Set<number>, poke: RelayShapePoke, entry: CohortShapeEntry): Promise<void> {
         const legs = await Promise.all(
             [...relays].map(async (index) => {
-                const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), poke);
+                const { dropped, response } = await this.requestDroppingIdle(index, poke);
 
-                return response?.ok === true;
+                // An idle relay holds no cohort socket, so the poke it refused is owed to nobody: no rewind.
+                return dropped || response?.ok === true;
             }),
         );
 
@@ -976,12 +1082,12 @@ class OwnerRelay extends RelayLink {
 
     /** POST one per-socket proxy poke to its relay, rewinding the entry's cursor when the POST never landed (same reasoning as {@link OwnerRelay.multicastToRelays}). */
     private async proxyToRelay(poke: RelayShapePoke, entry: ProxyShapeEntry): Promise<void> {
-        const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), {
+        const { dropped, response } = await this.requestDroppingIdle(entry.relayIndex, {
             ...poke,
             targetConnectionId: entry.connectionId,
         });
 
-        if (response?.ok !== true) {
+        if (!dropped && response?.ok !== true) {
             this.rewindShapeCursor(entry, poke.fromCursor);
         }
     }
@@ -1118,8 +1224,14 @@ class OwnerRelay extends RelayLink {
 
     /** Ensure the reserved owner-side relay tables exist (both auto-hidden from the data browser by the `__lunora` prefix). Idempotent, and independent of `runShardMigrations` so the control channel never depends on migration ordering. */
     private ensureRelayTables(): void {
+        if (this.relayTablesReady) {
+            return;
+        }
+
+        this.relayTablesReady = true;
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_grants (idx INTEGER PRIMARY KEY)");
+        this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_seqs (idx INTEGER PRIMARY KEY, seq INTEGER NOT NULL)");
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_binding (id INTEGER PRIMARY KEY, binding TEXT NOT NULL)");
         migrateRelayShapes(this.host.sql());
     }
@@ -1302,6 +1414,32 @@ class OwnerRelay extends RelayLink {
         this.ensureRelayTables();
         this.host.sql().exec("INSERT OR IGNORE INTO __lunora_relays (idx) VALUES (?)", index);
         this.ownerRelaySet().add(index);
+    }
+
+    /**
+     * Forward a whisper or live frame to relay `index`. A relay that answers it is idle (no sockets left) is dropped from the set: a
+     * late or out-of-sequence attach can leave such a relay registered, and nothing else would ever remove it.
+     */
+    private async forwardToRelay(index: number, message: RelayFrame | RelayLiveFrame): Promise<void> {
+        await this.requestDroppingIdle(index, message);
+    }
+
+    /**
+     * POST `message` to relay `index`, dropping the relay from the set when it answers as idle. An attach that lands while the request is
+     * in flight raises the relay's mark: its idle answer is then stale, and dropping it would unregister a relay that has a socket again.
+     * @returns the relay's response, and whether it was dropped as idle
+     */
+    private async requestDroppingIdle(index: number, message: OwnerRelayFrame): Promise<{ dropped: boolean; response: Response | undefined }> {
+        const markBefore = this.relaySeqMark(index);
+        const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), message);
+
+        if (response?.status !== RELAY_IDLE_STATUS || this.relaySeqMark(index) !== markBefore) {
+            return { dropped: false, response };
+        }
+
+        this.removeRelayFromSet(index);
+
+        return { dropped: true, response };
     }
 
     /**
@@ -1510,6 +1648,9 @@ class RelayMember extends RelayLink {
     /** `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-attach on every subscribe. */
     private relayAnnounced = false;
 
+    /** The newest live control sequence applied per connection and subscription; see {@link RelayMember.onLiveControl}. */
+    private readonly liveControlSeqs = new Map<string, Map<string, number>>();
+
     /** The attach to the owner while one is in flight, so concurrent announces share it. */
     private pendingAnnounce: Promise<boolean> | undefined;
 
@@ -1715,7 +1856,13 @@ class RelayMember extends RelayLink {
 
             this.pendingAnnounce = (this.pendingDetach ?? Promise.resolve())
                 .then(async () =>
-                    withRelayDeadline(this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })),
+                    withRelayDeadline(
+                        this.requestRelayMessage(this.roleId.ownerKey, {
+                            relayIndex: this.roleId.relayIndex as number,
+                            seq: this.nextRelaySeq(),
+                            type: "relay_attach",
+                        }),
+                    ),
                 )
                 .then((response) => {
                     const attached = response?.ok === true;
@@ -1759,6 +1906,7 @@ class RelayMember extends RelayLink {
 
         this.relayMemos().clear();
         deleteAllRelayMemos(this.host.sql());
+        this.liveControlSeqs.clear();
 
         if (!this.canAddressSiblings()) {
             return;
@@ -1780,7 +1928,13 @@ class RelayMember extends RelayLink {
         const detach = Promise.all([inflightAttach?.catch(() => false), priorDetach])
             // Bounded like the attach: a detach the owner never answers must not hold every later connect behind it.
             .then(async () =>
-                withRelayDeadline(this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" })),
+                withRelayDeadline(
+                    this.postRelayMessage(this.roleId.ownerKey, {
+                        relayIndex: this.roleId.relayIndex as number,
+                        seq: this.nextRelaySeq(),
+                        type: "relay_detach",
+                    }),
+                ),
             )
             .catch(() => undefined)
             .finally(() => {
@@ -1812,6 +1966,11 @@ class RelayMember extends RelayLink {
         // connection id can't be admitted by a memo whose row is gone.
         if (connectionId !== undefined) {
             this.forgetRelayShapeMemos(connectionId, subId);
+
+            // A closed socket takes its live control sequences with it: no later control call can name it on this relay.
+            if (subId === undefined) {
+                this.liveControlSeqs.delete(connectionId);
+            }
         }
 
         // No connection id means nothing was ever registered: the owner refuses
@@ -1846,13 +2005,76 @@ class RelayMember extends RelayLink {
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only an owner tracks a relay set
-    protected override onAttach(): void {
-        /* a relay has no relay set */
+    protected override onAttach(): boolean {
+        return true;
+    }
+
+    /**
+     * A relay with no sockets answers forwarded frames as idle, so its owner drops a registration a late attach left behind. It also
+     * forgets its own attach, so the next socket attaches again rather than trust a registration the owner is about to drop.
+     */
+    protected override refusesAsIdle(): boolean {
+        if (this.host.getWebSockets().length > 0) {
+            return false;
+        }
+
+        this.relayAnnounced = false;
+        this.announceGeneration += 1;
+        this.pendingAnnounce = undefined;
+
+        return true;
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only an owner tracks a relay set
-    protected override onDetach(): void {
-        /* a relay has no relay set */
+    protected override onDetach(): boolean {
+        return true;
+    }
+
+    /**
+     * Refuse a live control call that a later call on the same subscription has already superseded. Both
+     * calls are stamped by the owner, so the sequence orders them. Without it, an unsubscribe that reached
+     * this relay first would be a no-op, and the late subscribe would then store a grant the client
+     * already released.
+     *
+     * The entry is set before the host answers, so the check and the set cannot interleave with another call.
+     * A 404 means this relay does not hold the connection, so the entry is dropped again: a relay that holds
+     * no socket keeps no state for it.
+     * ponytail: entries live in memory only, so a hibernation between an unsubscribe and its late subscribe
+     * forgets the tombstone; they are cleared when the connection's last socket closes (see releaseRelayShapes).
+     */
+    protected override async onLiveControl(control: LiveSocketControlCall): Promise<Response> {
+        const { connectionId, seq, subscriptionId } = control;
+
+        if (seq === undefined) {
+            return this.host.liveControl(control);
+        }
+
+        let subscriptions = this.liveControlSeqs.get(connectionId);
+
+        if (subscriptions === undefined) {
+            subscriptions = new Map();
+            this.liveControlSeqs.set(connectionId, subscriptions);
+        }
+
+        const last = subscriptions.get(subscriptionId);
+
+        if (last !== undefined && seq < last) {
+            return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
+        }
+
+        subscriptions.set(subscriptionId, seq);
+
+        const response = await this.host.liveControl(control);
+
+        if (response.status === 404 && subscriptions.get(subscriptionId) === seq) {
+            subscriptions.delete(subscriptionId);
+
+            if (subscriptions.size === 0) {
+                this.liveControlSeqs.delete(connectionId);
+            }
+        }
+
+        return response;
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only an owner re-distributes a forwarded whisper
