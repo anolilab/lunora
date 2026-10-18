@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use lunora::client::{Client, ClientError};
 use lunora::offline::{
     is_stale_version, random_id, replay_identity_verdict, same_shard, token_digest, token_stamp, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
-    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
     CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
@@ -2214,4 +2214,83 @@ fn every_request_of_a_pass_carries_its_token() {
     assert_eq!(report.committed.len(), MAX_BATCH_ENTRIES + 1);
     assert!(bearers.lock().expect("bearers").len() >= 4, "two halves of a split chunk, then the tail");
     assert!(sent(&bearers).iter().all(|bearer| bearer.as_deref() == Some("Bearer token-a")));
+}
+
+/// An online-only write is the one a socket-down client must refuse, so its
+/// arguments never reach the queue or the persistence adapter.
+const SECRET: &str = "sentinel-secret-7731";
+
+fn online_only_write() -> SubmitOptions {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let mut options = SubmitOptions::new("auth:setPassword", args);
+    options.online_only = true;
+
+    options
+}
+
+fn disconnected_client(store: &MemoryStore, posts: Arc<Mutex<Vec<Vec<u8>>>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, body| {
+            posts.lock().expect("posts").push(body.to_vec());
+
+            Ok((200, br#"{"commitCursor":3,"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+    client.offline_queue = OfflineQueue::new()
+        .with_persistence(Box::new(store.clone()))
+        .with_queue_before_first_connect(true);
+
+    client
+}
+
+/// With the socket down, an online-only write is refused before anything is
+/// queued, persisted or sent.
+pub fn offline_online_only_refused_when_disconnected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    let error = client.submit(online_only_write()).expect_err("an online-only write must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+    let persisted = serde_json::to_string(&store.inner.lock().expect("store lock").records).expect("records");
+    assert!(!persisted.contains(SECRET), "the arguments reached durable storage");
+    assert!(posts.lock().expect("posts").is_empty(), "a refused write reached the wire");
+}
+
+/// With the socket up, an online-only write is sent normally and commits.
+pub fn offline_online_only_sends_when_connected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let outcome = client.submit(online_only_write()).expect("committed");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    let sent = posts.lock().expect("posts");
+    assert_eq!(sent.len(), 1, "one request for the write");
+    assert!(String::from_utf8_lossy(&sent[0]).contains(SECRET), "the arguments go out on the wire");
+    assert_eq!(store.appended(), 0, "a sent write is not persisted");
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+pub fn offline_online_only_leaves_normal_writes_queued() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    let args = WireValue::Object(vec![("text".into(), WireValue::String("hi".into()))]);
+    let outcome = client.submit(SubmitOptions::new("messages:send", args)).expect("queued");
+
+    assert_eq!(outcome.status, MutationStatus::Queued);
+    assert_eq!(client.pending_mutation_count(), 1);
+    assert_eq!(store.appended(), 1);
+    assert!(posts.lock().expect("posts").is_empty(), "a queued write is not sent");
 }
