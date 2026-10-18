@@ -2783,6 +2783,9 @@ abstract class ShardDO {
     /** Tail of each socket's queued room-handler events; see `dispatchRoomEvent`. */
     private readonly roomChains = new WeakMap<ShardSocketLike, Promise<void>>();
 
+    /** Route sockets whose `onClose` has been queued. A close the server starts is queued at the drop, so the later close the host delivers does not run it again. */
+    private readonly routeCloseSent = new WeakSet<ShardSocketLike>();
+
     /**
      * Memoised `onWhisper` verdicts for this socket, keyed `"<action>:<topic>"`
      * (see {@link ShardDO.authorizeWhisper}). In-memory and deliberately so: a
@@ -7562,7 +7565,7 @@ abstract class ShardDO {
             // Refused once the close was delivered: its event is already queued, and teardown clears the identity the
             // handler would read. Frames delivered before the close are queued ahead of it and run first.
             if (!deliveredAfterClose) {
-                await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, inboundAttachment, text);
+                await this.handleSocketRouteFrame(ws, inboundAttachment, text);
             }
 
             return;
@@ -15852,7 +15855,7 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
-            ...(route === undefined ? {} : { socketPath: url.pathname }),
+            ...(route === undefined ? {} : { socketFunction: route.functionPath, socketPath: url.pathname }),
             ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies SocketAttachment);
@@ -15903,9 +15906,36 @@ abstract class ShardDO {
      * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
      * client-facing wire shape from one place.
      */
-    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
     private dropExpiredSocket(ws: ShardSocketLike): void {
+        // The close this drop starts is not delivered back to `webSocketClose`, so a route socket's `onClose` runs here.
+        // Queued before the close, it is the same per-socket event `dispatchCloseHooks` would have queued.
+        const route = this.routeOfSocket(this.readAttachment(ws));
+
+        if (route !== undefined && !this.routeCloseSent.has(ws)) {
+            this.routeCloseSent.add(ws);
+            this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close").catch(() => undefined);
+        }
+
         dropExpiredCredentialSocket(ws);
+    }
+
+    /**
+     * The route a route socket was accepted on, when its registration still serves that path under the same function.
+     * A socket is bound to the function that accepted it: after a deployment reassigns the path, the socket resolves
+     * to nothing rather than to the replacement handler. Fails closed for a socket with no recorded function.
+     */
+    private routeOfSocket(attachment: SocketAttachment): undefined | { auth: boolean; functionPath: string; path: string } {
+        if (attachment.socketPath === undefined) {
+            return undefined;
+        }
+
+        const route = this.socketRoute(attachment.socketPath);
+
+        if (route === undefined || route.functionPath !== attachment.socketFunction) {
+            return undefined;
+        }
+
+        return { auth: route.auth, functionPath: route.functionPath, path: attachment.socketPath };
     }
 
     /**
@@ -16338,8 +16368,8 @@ abstract class ShardDO {
      * valid JSON, or whose path no longer resolves to a route, is dropped — a
      * malformed frame must not take the socket down.
      */
-    private async handleSocketRouteFrame(ws: ShardSocketLike, socketPath: string, attachment: SocketAttachment, text: string): Promise<void> {
-        const route = this.socketRoute(socketPath);
+    private async handleSocketRouteFrame(ws: ShardSocketLike, attachment: SocketAttachment, text: string): Promise<void> {
+        const route = this.routeOfSocket(attachment);
 
         if (route === undefined) {
             return;
@@ -16367,7 +16397,7 @@ abstract class ShardDO {
             return;
         }
 
-        await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: socketPath }, "message", raw);
+        await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "message", raw);
     }
 
     /**
@@ -16377,10 +16407,11 @@ abstract class ShardDO {
      */
     private async dispatchCloseHooks(ws: ShardSocketLike, attachment: SocketAttachment): Promise<void> {
         if (attachment.socketPath !== undefined) {
-            const route = this.socketRoute(attachment.socketPath);
+            const route = this.routeOfSocket(attachment);
 
-            if (route !== undefined) {
-                await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: attachment.socketPath }, "close");
+            if (route !== undefined && !this.routeCloseSent.has(ws)) {
+                this.routeCloseSent.add(ws);
+                await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close");
             }
         } else if (attachment.connectionId !== undefined) {
             await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));

@@ -151,7 +151,7 @@ describe("shardDO socket routes", () => {
 
         // The route path is persisted so a hibernated socket still resolves its
         // handler, and it joined the reserved broadcast topic.
-        expect(server.deserializeAttachment()).toMatchObject({ socketPath: "/chat", whispers: [CHAT_TOPIC] });
+        expect(server.deserializeAttachment()).toMatchObject({ socketFunction: "sockets:chat", socketPath: "/chat", whispers: [CHAT_TOPIC] });
 
         const open = socketCalls(shard).find((call) => call.args["kind"] === "open");
 
@@ -164,8 +164,8 @@ describe("shardDO socket routes", () => {
     it("validates a typed message and broadcasts the handler's reply to every route socket", async () => {
         expect.assertions(3);
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
-        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const shard = makeShard([a, b], CHAT_ROUTE);
 
         await send(shard, a, JSON.stringify(encodeWire({ text: "hi" })));
@@ -185,8 +185,15 @@ describe("shardDO socket routes", () => {
         expect.assertions(3);
 
         // The socket opened on a public route, then the deployment made the route require a session.
-        const anonymous = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
-        const verified = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, userId: "user-1", whispers: [CHAT_TOPIC] });
+        const anonymous = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const verified = new FakeSocket({
+            connectionId: "b",
+            socketFunction: "sockets:chat",
+            socketPath: "/chat",
+            subs: {},
+            userId: "user-1",
+            whispers: [CHAT_TOPIC],
+        });
         const shard = makeShard([anonymous, verified], { "/chat": { auth: true, functionPath: "sockets:chat" } });
 
         await send(shard, anonymous, JSON.stringify(encodeWire({ text: "hi" })));
@@ -223,6 +230,55 @@ describe("shardDO socket routes", () => {
         expect(response.status).toBe(404);
     });
 
+    it("binds a route socket to the function that accepted it, not to its path", async () => {
+        expect.assertions(3);
+
+        // The socket was accepted by `sockets:old` on `/chat`; a deployment then points `/chat` at `sockets:new`.
+        const open = new FakeSocket({
+            connectionId: "a",
+            socketFunction: "sockets:old",
+            socketFunction: "sockets:chat",
+            socketPath: "/chat",
+            subs: {},
+            whispers: [CHAT_TOPIC],
+        });
+        const shard = makeShard([open], { "/chat": { auth: false, functionPath: "sockets:new" } });
+
+        await send(shard, open, JSON.stringify(encodeWire({ text: "hi" })));
+        await shard.webSocketClose(open as unknown as WebSocket, 1000, "", true);
+
+        // Neither the frame nor the close reaches the replacement handler.
+        expect(shard.calls).toEqual([]);
+        expect(open.frames).toEqual([]);
+        expect(open.closes).toEqual([]);
+    });
+
+    it("runs a route's onClose once when its expired socket is dropped, not again on the host's close", async () => {
+        expect.assertions(3);
+
+        const expired = new FakeSocket({
+            connectionId: "a",
+            expiresAt: Date.now() - 1000,
+            socketFunction: "sockets:chat",
+            socketPath: "/chat",
+            subs: {},
+            userId: "user-1",
+            whispers: [CHAT_TOPIC],
+        });
+        const shard = makeShard([expired], CHAT_ROUTE);
+
+        // The server closes an expired socket itself, and that close is not delivered back, so the drop runs `onClose`.
+        await send(shard, expired, JSON.stringify(encodeWire({ text: "late" })));
+
+        expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["close"]);
+        expect(expired.closes.map((close) => close.code)).toEqual([4001]);
+
+        // A host that does deliver the close does not dispatch it a second time.
+        await shard.webSocketClose(expired as unknown as WebSocket, 1000, "", true);
+
+        expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["close"]);
+    });
+
     it("refuses a route broadcast over the byte cap even when its UTF-16 length is under it", async () => {
         expect.assertions(2);
 
@@ -239,8 +295,8 @@ describe("shardDO socket routes", () => {
             }
         }
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
-        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const sockets = [a, b];
         const state = {
             acceptWebSocket() {},
@@ -272,8 +328,8 @@ describe("shardDO socket routes", () => {
             }
         }
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
-        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const sockets = [a, b];
         const state = {
             acceptWebSocket() {},
@@ -304,8 +360,8 @@ describe("shardDO socket routes", () => {
             }
         }
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
-        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const sockets = [a, b];
         const state = {
             acceptWebSocket() {},
@@ -324,7 +380,7 @@ describe("shardDO socket routes", () => {
         expect.assertions(1);
 
         const burst = (ShardDO as unknown as { WHISPER_RATE_BURST: number }).WHISPER_RATE_BURST;
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const shard = makeShard([a], CHAT_ROUTE);
 
         for (let index = 0; index < burst + 20; index += 1) {
@@ -339,7 +395,7 @@ describe("shardDO socket routes", () => {
     it("fires onClose for a route socket on close", async () => {
         expect.assertions(1);
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const shard = makeShard([a], CHAT_ROUTE);
 
         await shard.webSocketClose(a as unknown as WebSocket, 1000, "done", true);
@@ -417,7 +473,7 @@ describe("shardDO socket routes", () => {
             });
         };
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         const shard = new SlowShard(
             {
                 acceptWebSocket() {},
@@ -450,7 +506,14 @@ describe("shardDO socket routes", () => {
     it("refuses a route frame that arrives after the socket's close began, so the handler never sees a cleared identity", async () => {
         expect.assertions(2);
 
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, userId: "user-a", whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({
+            connectionId: "a",
+            socketFunction: "sockets:chat",
+            socketPath: "/chat",
+            subs: {},
+            userId: "user-a",
+            whispers: [CHAT_TOPIC],
+        });
         const shard = makeShard([a], CHAT_ROUTE);
 
         // The close is marked before its first await; the frame's own admission await then resolves after that mark.
@@ -480,7 +543,14 @@ describe("shardDO socket routes", () => {
         expect.assertions(2);
 
         // A route socket that predates the mode: its frame must not run the route's handler or broadcast.
-        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, userId: "user-a", whispers: [CHAT_TOPIC] });
+        const a = new FakeSocket({
+            connectionId: "a",
+            socketFunction: "sockets:chat",
+            socketPath: "/chat",
+            subs: {},
+            userId: "user-a",
+            whispers: [CHAT_TOPIC],
+        });
         const sockets = [a];
         const shard = new SocketShard({ acceptWebSocket() {}, getWebSockets: () => sockets, storage: { sql: {} } } as unknown as ShardDOState, CHAT_ROUTE, {
             deliveryAuthorization: () => Promise.resolve(undefined),
@@ -495,7 +565,7 @@ describe("shardDO socket routes", () => {
     it("ignores a whisper frame addressed to a route's reserved topic", async () => {
         expect.assertions(2);
 
-        const member = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const member = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
         // A foreign subscription socket — not a route socket — trying to inject
         // into the route channel over the shared whisper surface.
         const foreign = new FakeSocket({ connectionId: "f", subs: {}, userId: "outsider" });

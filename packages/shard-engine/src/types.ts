@@ -326,6 +326,13 @@ export interface SocketAttachment {
     shapes?: Record<string, ShapeSubscriptionQuery>;
 
     /**
+     * Set with {@link SocketAttachment.socketPath}: the registered function path of the route that accepted the
+     * socket. A route is bound to this function rather than to its path, so a deployment that reassigns the path
+     * does not hand an open socket to a different handler. Absent on a route socket that predates it, which fails closed.
+     */
+    socketFunction?: string;
+
+    /**
      * Set on a socket accepted for a `defineWebSocket` route: the URL path the
      * route serves (e.g. `/chat`). Its presence marks a socket whose inbound
      * frames are typed messages for that route rather than subscription
