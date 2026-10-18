@@ -395,7 +395,10 @@ const secretStoreOf = (context: unknown): SecretValueHost => {
     const { agentSecrets } = context as { agentSecrets?: SecretValueHost };
 
     if (agentSecrets === undefined) {
-        throw new LunoraError("NOT_IMPLEMENTED", "@lunora/agent: this deployment target cannot hold a human-supplied secret value");
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            "@lunora/agent: no secret store is wired on this deployment. Codegen wires one only when a source in lunora/ value-imports requestSecretTool from @lunora/agent (directly, through a namespace import, or through a relative barrel that re-exports it); add that import, or this target cannot hold a human-supplied secret value",
+        );
     }
 
     return agentSecrets;

@@ -6,6 +6,7 @@ import { agentComponent } from "../src/component";
 import { fakeDatabase } from "./loop-harness";
 
 const SECRET = "sk_live_correct-horse-battery-staple";
+const REQUEST_SECRET_TOOL_PATTERN = /requestSecretTool/u;
 const DEADLINE_MS = 60_000;
 const NOW = 1_000_000;
 const REQUESTS = "agent_secret_requests";
@@ -388,6 +389,19 @@ describe("secret request component", () => {
             ).resolves.toStrictEqual({
                 status: "expired",
             });
+        });
+    });
+
+    describe("a deployment with no secret store", () => {
+        it("names the missing codegen wiring, not just the target, when a supply is refused", async () => {
+            expect.assertions(1);
+
+            // No `agentSecrets` on the ctx: codegen did not wire the store, which it does only for an app that imports the tool.
+            const { ctx, functions } = await stagedThread("user-a");
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toThrow(
+                REQUEST_SECRET_TOOL_PATTERN,
+            );
         });
     });
 
