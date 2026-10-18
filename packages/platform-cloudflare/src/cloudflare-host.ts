@@ -744,7 +744,7 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
      */
     const toStub = (stub: DurableObjectStub): ShardStub => {
         return {
-            fetch: (request) => stub.fetch(request) as unknown as Promise<Response>,
+            fetch: (request) => stub.fetch(request as unknown as Parameters<DurableObjectStub["fetch"]>[0]) as unknown as Promise<Response>,
         };
     };
 
