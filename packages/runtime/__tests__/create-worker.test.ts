@@ -3046,6 +3046,33 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.binding).toBe("SHARD"); // told the DO its namespace binding
     });
 
+    it("keeps a defineWebSocket route upgrade on the owner, since its handler writes through the shard that accepted it", async () => {
+        expect.assertions(2);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const route = {
+            args: {},
+            auth: false,
+            handler: () => undefined,
+            kind: "mutation",
+            lifecycle: "socket",
+            socketPath: "/chat",
+            visibility: "internal",
+        };
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: { "sockets:chat": route } as never, shardDO: namespace });
+
+        await worker.fetch(
+            new Request("https://app.example/chat?shard=promoted-route", { headers: { Upgrade: "websocket" } }),
+            { SHARD: namespace },
+            fakeContext,
+        );
+
+        // The owner serves the route; no relay is probed or chosen for it.
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toBe("promoted-route");
+    });
+
     it("spreads connections across the relay set and hints the client's region", async () => {
         expect.assertions(3);
 

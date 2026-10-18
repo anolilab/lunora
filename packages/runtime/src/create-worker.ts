@@ -4342,6 +4342,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    // The declared `defineWebSocket` route paths, read off the generated
+    // `LUNORA_FUNCTIONS` registry the worker already carries. An upgrade at one
+    // of these paths is the SAME forward as `/_lunora/ws`: the shard DO resolves
+    // the route from the request path. Derived here (not threaded as a new
+    // option) so a route-free worker's construction is unchanged, and resolving
+    // it once keeps the per-request check a single Set lookup.
+    const socketRoutePaths = new Set(
+        Object.values(options.functions ?? {}).flatMap((registered) =>
+            registered.lifecycle === "socket" && typeof registered.socketPath === "string" ? [registered.socketPath] : [],
+        ),
+    );
+
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
         if (!isWebSocketUpgrade(request)) {
             throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
@@ -4407,7 +4419,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
 
-            const relayCount = await probeRelayCount(shardDO, shardKey);
+            // A route socket runs its handler on the shard that accepted it, so a relay would write through its own
+            // storage. A route upgrade therefore stays on the owner; only the shared subscription socket spreads to relays.
+            const relayCount = socketRoutePaths.has(url.pathname) ? 0 : await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
                 // Spread connections across the relay set at random, and hint
@@ -5644,18 +5658,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
 
     assertNoReservedRoutes(customRoutes);
-
-    // The declared `defineWebSocket` route paths, read off the generated
-    // `LUNORA_FUNCTIONS` registry the worker already carries. An upgrade at one
-    // of these paths is the SAME forward as `/_lunora/ws`: the shard DO resolves
-    // the route from the request path. Derived here (not threaded as a new
-    // option) so a route-free worker's construction is unchanged, and resolving
-    // it once keeps the per-request check a single Set lookup.
-    const socketRoutePaths = new Set(
-        Object.values(options.functions ?? {}).flatMap((registered) =>
-            registered.lifecycle === "socket" && typeof registered.socketPath === "string" ? [registered.socketPath] : [],
-        ),
-    );
 
     const internalRoutes: Record<string, InternalRoute> = {
         [STATUS_PATH]: (request) => {
