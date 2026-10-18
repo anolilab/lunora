@@ -147,6 +147,11 @@ type SubmitOptions struct {
 	OnSettled func(MutationSettled)
 }
 
+// onlineOnlyNotQueued is the refusal of an OnlineOnly write that would be queued.
+func onlineOnlyNotQueued(functionPath string) OfflineError {
+	return OfflineError{Code: CodeOfflineNotQueued, Message: "'" + functionPath + "' is online-only and the connection is not live, so it was not queued"}
+}
+
 // ErrClientClosed is returned by Submit after Close.
 var ErrClientClosed = OfflineError{Code: CodeClientClosed, Message: "client is closed"}
 
@@ -208,10 +213,18 @@ func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
 	closed := c.closed
+	// Read before any overlay is applied, so a refused online-only write leaves
+	// nothing to roll back. A socket that detaches after this read is caught by the
+	// check under the lock below.
+	queuesNow := c.send == nil && (c.wasEverConnected || c.offline.QueueBeforeFirstConnect())
 	c.mu.Unlock()
 
 	if closed {
 		return MutationOutcome{}, ErrClientClosed
+	}
+
+	if options.OnlineOnly && queuesNow {
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath)
 	}
 
 	writeID := options.MutationID
@@ -248,7 +261,7 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 		c.mu.Unlock()
 		c.settleLayers(nil, rollbacks, nil)
 
-		return MutationOutcome{}, OfflineError{Code: CodeOfflineNotQueued, Message: "'" + options.FunctionPath + "' is online-only and the connection is not live, so it was not queued"}
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath)
 	}
 
 	var evicted []Discarded
