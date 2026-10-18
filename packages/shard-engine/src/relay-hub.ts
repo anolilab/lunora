@@ -44,6 +44,7 @@ import type {
     OwnerRelayFrame,
     PromotionState,
     RelayFrame,
+    RelayLiveFrame,
     RelayRoomEvent,
     RelayRoomVerdict,
     RelayShapePoke,
@@ -82,8 +83,9 @@ const RELAY_ATTACH_TIMEOUT_MS = 2000;
 /**
  * `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach.
  *
- * The deadline only stops the wait: the request still runs and can land after a later one. That is safe because each attach and detach
- * carries a sequence the owner checks (see {@link OwnerRelay.onAttach}), so a late one is refused rather than applied.
+ * The deadline only stops the wait: the request still runs and can land after a later one. A late detach is refused by its sequence
+ * (see {@link OwnerRelay.onDetach}). A late attach does apply, but the relay it re-registers has no sockets, so it answers the next
+ * forwarded frame as idle and the owner drops it.
  */
 const withRelayDeadline = async <T>(request: Promise<T>): Promise<T | undefined> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -254,7 +256,10 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
-/** Answer to an attach or detach the receiver has already superseded: the sender has stopped waiting, so the status only has to say "not applied". */
+/** Status a relay answers a forwarded frame with when it holds no sockets, so the owner stops fanning out to it. */
+const RELAY_IDLE_STATUS = 410;
+
+/** Answer to a detach the receiver has already superseded: the sender has stopped waiting, so the status only has to say "not applied". */
 const staleRelayFrame = (): Response => new Response("stale relay frame", { status: 409 });
 
 /** A sequence for a frame this DO sends: a timestamp in microseconds, bumped past the last one so ties within a millisecond stay ordered. A restart keeps it increasing too, since the clock has moved on. */
@@ -304,6 +309,11 @@ abstract class RelayLink {
             message = JSON.parse(raw) as OwnerRelayFrame;
         } catch {
             return new Response("bad request", { status: 400 });
+        }
+
+        // A relay with no sockets answers a forwarded frame as idle, so its owner drops it (see {@link RelayLink.refusesAsIdle}).
+        if ((message.type === "relay_frame" || message.type === "relay_live_frame") && this.refusesAsIdle()) {
+            return new Response(undefined, { status: RELAY_IDLE_STATUS });
         }
 
         switch (message.type) {
@@ -513,10 +523,10 @@ abstract class RelayLink {
      */
     public abstract minShapeCursor(): number | undefined;
 
-    /** Control-channel hook: an owner adds a relay to its set unless `seq` is older than the relay's last applied frame; a relay no-ops. */
+    /** Control-channel hook: an owner adds a relay to its set and raises its sequence mark; a relay no-ops. */
     protected abstract onAttach(index: number, seq: number | undefined): boolean;
 
-    /** Control-channel hook: an owner drops a relay from its set unless `seq` is older than the relay's last applied frame; a relay no-ops. */
+    /** Control-channel hook: an owner drops a relay from its set unless `seq` is older than its mark; a relay no-ops. */
     protected abstract onDetach(index: number, seq: number | undefined): boolean;
 
     /** Control-channel hook: an owner forwards a live control call to its socket's host; a relay refuses a call superseded on its subscription. */
@@ -524,6 +534,12 @@ abstract class RelayLink {
 
     /** Control-channel hook: an owner re-distributes a relay-forwarded whisper to its OTHER relays; a relay no-ops. */
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+
+    /**
+     * Whether this DO answers a forwarded frame as an idle relay: a relay with no sockets left, which a late attach can leave
+     * registered on its owner. The owner drops a relay that answers so, which heals any such registration. An owner never does.
+     */
+    protected abstract refusesAsIdle(): boolean;
 
     /** Control-channel hook: an owner builds the seed frames for a relay subscriber; a relay errors (it can't seed). */
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
@@ -589,11 +605,7 @@ class OwnerRelay extends RelayLink {
             return;
         }
 
-        await Promise.all(
-            [...relays].map((index) =>
-                this.postRelayMessage(relayName(this.roleId.ownerKey, index), { exceptConnectionId, frame, topic, type: "relay_frame" }),
-            ),
-        );
+        await Promise.all([...relays].map((index) => this.forwardToRelay(index, { exceptConnectionId, frame, topic, type: "relay_frame" })));
     }
 
     /**
@@ -660,9 +672,7 @@ class OwnerRelay extends RelayLink {
             return;
         }
 
-        await Promise.all(
-            [...targets].map((index) => this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame, key, topic, type: "relay_live_frame" })),
-        );
+        await Promise.all([...targets].map((index) => this.forwardToRelay(index, { frame, key, topic, type: "relay_live_frame" })));
     }
 
     public override async onFlush(changed: Set<string>, frameCursor: number): Promise<void> {
@@ -808,6 +818,11 @@ class OwnerRelay extends RelayLink {
         return true;
     }
 
+    // eslint-disable-next-line class-methods-use-this -- role hook: an owner is never an idle relay
+    protected override refusesAsIdle(): boolean {
+        return false;
+    }
+
     protected override onLiveControl(control: LiveSocketControlCall): Promise<Response> {
         // An owner holds no relay's sockets, so a forwarded live control only reaches it by mistake; answer as the host does.
         return this.host.liveControl(control);
@@ -819,9 +834,7 @@ class OwnerRelay extends RelayLink {
         await Promise.all(
             [...this.ownerRelaySet()]
                 .filter((index) => index !== message.originRelay)
-                .map((index) =>
-                    this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame: message.frame, topic: message.topic, type: "relay_frame" }),
-                ),
+                .map((index) => this.forwardToRelay(index, { frame: message.frame, topic: message.topic, type: "relay_frame" })),
         );
     }
 
@@ -1381,6 +1394,18 @@ class OwnerRelay extends RelayLink {
         this.ensureRelayTables();
         this.host.sql().exec("INSERT OR IGNORE INTO __lunora_relays (idx) VALUES (?)", index);
         this.ownerRelaySet().add(index);
+    }
+
+    /**
+     * Forward a whisper or live frame to relay `index`. A relay that answers it is idle (no sockets left) is dropped from the set: a
+     * late or out-of-sequence attach can leave such a relay registered, and nothing else would ever remove it.
+     */
+    private async forwardToRelay(index: number, message: RelayFrame | RelayLiveFrame): Promise<void> {
+        const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), message);
+
+        if (response?.status === RELAY_IDLE_STATUS) {
+            this.removeRelayFromSet(index);
+        }
     }
 
     /**
@@ -1947,6 +1972,22 @@ class RelayMember extends RelayLink {
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only an owner tracks a relay set
     protected override onAttach(): boolean {
+        return true;
+    }
+
+    /**
+     * A relay with no sockets answers forwarded frames as idle, so its owner drops a registration a late attach left behind. It also
+     * forgets its own attach, so the next socket attaches again rather than trust a registration the owner is about to drop.
+     */
+    protected override refusesAsIdle(): boolean {
+        if (this.host.getWebSockets().length > 0) {
+            return false;
+        }
+
+        this.relayAnnounced = false;
+        this.announceGeneration += 1;
+        this.pendingAnnounce = undefined;
+
         return true;
     }
 

@@ -28,6 +28,8 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 interface RelayDouble {
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
+    /** The status this relay answers a forwarded whisper or live frame with; `410` when it holds no sockets. Defaults to `204`. */
+    frameStatus?: number;
     /** When set, every answer waits for this to settle, so a test can answer after the owner's deadline has passed. */
     gate?: Promise<void>;
     /** The status this relay answers a forwarded live control call with; `404` when it holds no socket for it. Defaults to `204`. */
@@ -71,7 +73,14 @@ const ownerFor = (
                     });
                 }
 
-                const status = message["type"] === "relay_live_control" ? (relay.liveStatus ?? 204) : 204;
+                const isFrame = message["type"] === "relay_frame" || message["type"] === "relay_live_frame";
+                let status = 204;
+
+                if (message["type"] === "relay_live_control") {
+                    status = relay.liveStatus ?? 204;
+                } else if (isFrame) {
+                    status = relay.frameStatus ?? 204;
+                }
 
                 return (relay.gate ?? Promise.resolve()).then(() => new Response(undefined, { status }));
             },
@@ -1732,6 +1741,40 @@ describe("relay hub", () => {
             await woken.forwardWhisper("feed", "{}");
 
             expect(relayAt(relays, 0).posts.map((post) => post["type"])).toContain("relay_frame");
+        });
+
+        it("drops a relay that answers a forwarded frame as idle, so a stale registration heals", async () => {
+            expect.assertions(1);
+
+            // A late attach left relay 0 registered after its last socket closed: it answers forwarded frames as idle.
+            const relays = new Map<number, RelayDouble>([[0, { down: false, frameStatus: 410, posts: [] }]]);
+            const { owner } = ownerFor(database.sql, relays);
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, seq: 1_000_000, type: "relay_attach" }));
+            await owner.forwardWhisper("feed", "{}");
+            await owner.forwardWhisper("feed", "{}");
+
+            // The first forward finds it idle and drops it; the second no longer reaches it.
+            expect(relayAt(relays, 0).posts.filter((post) => post["type"] === "relay_frame")).toHaveLength(1);
+        });
+
+        it("answers a forwarded frame as idle once a relay has no sockets", async () => {
+            expect.assertions(1);
+
+            const member = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return {};
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const response = await deliver(member, JSON.stringify({ frame: "{}", topic: "feed", type: "relay_frame" }));
+
+            expect(response.status).toBe(410);
         });
 
         it("applies an attach whose sequence fell below the owner's mark, so a woken relay is not stranded", async () => {

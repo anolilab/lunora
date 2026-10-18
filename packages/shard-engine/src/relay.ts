@@ -146,7 +146,8 @@ const relayCountFor = (subscribers: number, perRelayCapacity: number, maxRelays:
 
 /**
  * A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to.
- * `seq` orders it against that relay's detaches: the owner ignores an attach older than the last one it applied. Absent on a frame sent before sequencing.
+ * `seq` raises the owner's mark for that relay, which a later, older detach is checked against; an attach itself always applies.
+ * Absent on a frame sent before sequencing.
  */
 interface RelayAttach {
     relayIndex: number;

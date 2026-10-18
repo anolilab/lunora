@@ -1558,6 +1558,7 @@ class OwnerRelay extends RelayLink {
     protected onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected onAttach(index: number, seq: number | undefined): boolean;
     protected onDetach(index: number, seq: number | undefined): boolean;
+    protected refusesAsIdle(): boolean;
     protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
@@ -2300,6 +2301,7 @@ class RelayMember extends RelayLink {
     isShapeRelayUniform(): boolean;
     minShapeCursor(): number | undefined;
     protected onAttach(): boolean;
+    protected refusesAsIdle(): boolean;
     protected onDetach(): boolean;
     protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(): Promise<void>;
@@ -5774,6 +5776,7 @@ abstract class RelayLink {
     protected abstract onDetach(index: number, seq: number | undefined): boolean;
     protected abstract onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+    protected abstract refusesAsIdle(): boolean;
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
