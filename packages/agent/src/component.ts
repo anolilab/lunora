@@ -35,6 +35,21 @@ const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_B
  */
 const MAX_QUEUE_DEPTH = 5;
 
+/**
+ * The token usage a thread row stores and its mutations accept. Every field is
+ * optional: a row written before the cache and reasoning breakdowns existed carries
+ * only the three totals, and it must keep reading and patching. Nothing is
+ * backfilled, so an absent breakdown reads as absent, never as zero.
+ */
+const USAGE_VALIDATOR = v.object({
+    cacheReadTokens: v.optional(v.number()),
+    cacheWriteTokens: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    reasoningTokens: v.optional(v.number()),
+    totalTokens: v.optional(v.number()),
+});
+
 /** What `agentHistory` returns: the uncovered messages plus the summary covering the rest. */
 interface AgentHistory {
     /** Rebuild only: the stored summary and its cursor, for when the from-scratch summary fails. */
@@ -216,11 +231,13 @@ const agentExtension: SchemaExtension<
             updatedAt: v.number(),
 
             /**
-             * Cumulative token usage for the latest run on this thread, patched
-             * at run end. Optional so agent-free apps and pre-existing threads
-             * (written before this column existed) are unaffected.
+             * Token usage for the latest run on this thread, patched at run end
+             * (an absolute total for that run, never a sum across runs). Optional so
+             * agent-free apps and pre-existing threads (written before this column
+             * existed) are unaffected. The cache and reasoning breakdowns are optional
+             * for the same reason: rows written before they existed read as absent.
              */
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
             .index("byKey", ["key"], { unique: true })
             .index("byAgent", ["agent"])
@@ -815,7 +832,7 @@ export const agentComponent = (): AgentComponent => {
             summaryRebuiltSeq: v.optional(v.number()),
             summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
         .mutation(async ({ args, ctx: context }): Promise<void> => {
             const { instanceId, key } = args;
@@ -927,7 +944,7 @@ export const agentComponent = (): AgentComponent => {
             instanceId: v.string(),
             key: v.string(),
             status: v.union(v.literal("idle"), v.literal("error"), v.literal("cancelled")),
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
         .mutation(async ({ args, ctx: context }): Promise<{ dequeued?: string }> => {
             const now = Date.now();

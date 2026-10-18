@@ -1094,6 +1094,66 @@ describe(runAgentLoop, () => {
         expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 13, totalTokens: 43 });
     });
 
+    it("sums the cache and reasoning buckets across turns, and a bucket no turn reported stays absent", async () => {
+        expect.assertions(2);
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                lookup: defineAgentTool({
+                    description: "Look something up.",
+                    execute: () => "value",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const generate = scriptedGenerate([
+            {
+                text: "",
+                toolCalls: [{ id: "c1", input: {}, name: "lookup" }],
+                usage: { cacheReadTokens: 4, cacheWriteTokens: 1, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 },
+            },
+            // This turn reports a cache read but no cache write and no reasoning.
+            { text: "final", toolCalls: [], usage: { cacheReadTokens: 6, inputTokens: 20, outputTokens: 8, totalTokens: 28 } },
+        ]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        // Reasoning (2) is inside outputTokens, so the total is 15 + 28, not 15 + 28 + 2.
+        const expected = { cacheReadTokens: 10, cacheWriteTokens: 1, inputTokens: 30, outputTokens: 13, reasoningTokens: 2, totalTokens: 43 };
+
+        expect(result).toMatchObject({ usage: expected });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual(expected);
+    });
+
+    it("replaces a thread row's usage written before the breakdown fields with the run's total", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        // A row as the previous release wrote it: the three totals only.
+        runtime.threads.set("thread-1", {
+            agent: "support",
+            key: "thread-1",
+            messageCount: 0,
+            status: "idle",
+            usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 },
+        });
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([{ text: "final", toolCalls: [], usage: { cacheReadTokens: 3, inputTokens: 7, outputTokens: 1, totalTokens: 8 } }]),
+                run: runtime.run,
+            }),
+        );
+
+        // The run's own total, with no residue from the old row and no sum with it.
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ cacheReadTokens: 3, inputTokens: 7, outputTokens: 1, totalTokens: 8 });
+    });
+
     it("invokes `onStepFinish` once per turn as a durable step", async () => {
         const steps: AgentStepFinishInfo[] = [];
 

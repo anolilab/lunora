@@ -195,6 +195,25 @@ describe(agentComponent, () => {
         expect(error?.parse("boom")).toBe("boom");
     });
 
+    it("accepts a usage value written before the breakdown fields, and one that carries them", () => {
+        expect.assertions(3);
+
+        const { usage } = (agentExtension.tables["threads"] as unknown as { shape: Record<string, { parse: (value: unknown) => unknown }> }).shape;
+
+        // A row the previous release stored must still validate: nothing is backfilled,
+        // so the new fields are read as absent, never required.
+        expect(usage?.parse({ inputTokens: 1, outputTokens: 2, totalTokens: 3 })).toStrictEqual({ inputTokens: 1, outputTokens: 2, totalTokens: 3 });
+        expect(usage?.parse({ cacheReadTokens: 4, cacheWriteTokens: 1, inputTokens: 1, outputTokens: 2, reasoningTokens: 2, totalTokens: 3 })).toStrictEqual({
+            cacheReadTokens: 4,
+            cacheWriteTokens: 1,
+            inputTokens: 1,
+            outputTokens: 2,
+            reasoningTokens: 2,
+            totalTokens: 3,
+        });
+        expect(usage?.parse(undefined)).toBeUndefined();
+    });
+
     it("marks the mutations internal and the queries public", () => {
         const { functions } = agentComponent();
 
