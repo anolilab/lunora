@@ -4678,8 +4678,28 @@ class LunoraClient {
             // network is down. Queue it under the same key, as it would have been
             // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
-            if (httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
-                return enqueue();
+            //
+            // The same holds for any failure that leaves the write's fate unknown — a
+            // `fetch` that rejected after the request left, a request that timed out, an
+            // edge page with no verdict in it. The server may well have committed, so
+            // rolling back and rethrowing would show the user a write that is in fact
+            // there (and invite a double submit). Retry it from the queue under the
+            // same `mutationId`, which the server dedups. A coded server verdict is not
+            // ambiguous and still rejects; a durable replay (it carries a baseline) is
+            // already owned by a queue and reports to it.
+            if (
+                shouldQueueOffline &&
+                options.replayBaseline === undefined &&
+                (error instanceof TypeError || error instanceof TransportError) &&
+                isEncodable(argsRecord)
+            ) {
+                const queued = enqueue();
+
+                // Over a socket that is still open nothing else will flush the queue.
+                this.noteHeldRetryDelay(options.shardKey);
+                this.scheduleRateLimitedRetry(options.shardKey);
+
+                return queued;
             }
 
             this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.flags.authToken);
