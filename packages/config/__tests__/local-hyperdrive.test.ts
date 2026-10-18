@@ -192,8 +192,14 @@ describe("local hyperdrive", () => {
             const local = await startLocalHyperdrive({ env, load: async () => runtime, onWarning: (line) => warnings.push(line), projectRoot: root });
 
             expect(local?.bindings).toStrictEqual([]);
+
+            const envAfterFailure = { ...env };
+
+            // The caller's stop after the failure path's own release stops nothing twice.
+            await local?.stop();
+
             expect(stops).toStrictEqual(["DB_A"]);
-            expect({ env, warnings: warnings.join(" ").includes("boom") }).toStrictEqual({
+            expect({ env: envAfterFailure, warnings: warnings.join(" ").includes("boom") }).toStrictEqual({
                 env: { [`${VAR}DB_A`]: UNAVAILABLE, [`${VAR}DB_B`]: UNAVAILABLE },
                 warnings: true,
             });
@@ -242,6 +248,47 @@ describe("local hyperdrive", () => {
 
             expect(local?.bindings).toStrictEqual(["DB"]);
             expect(existsSync(lock)).toBe(false);
+        });
+
+        it("treats a lock this same process holds as live, and leaves it intact", async () => {
+            expect.assertions(4);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const lock = join(root, ".wrangler", "state", "lunora-pglite", "DB.lock");
+            const first = fakeRuntime();
+            const firstLocal = await startLocalHyperdrive({ env: {}, load: async () => first.runtime, projectRoot: root });
+            const second = fakeRuntime();
+            const secondEnv: NodeJS.ProcessEnv = {};
+            const secondLocal = await startLocalHyperdrive({ env: secondEnv, load: async () => second.runtime, onWarning: () => {}, projectRoot: root });
+
+            expect(second.directories).toStrictEqual([]);
+            expect(secondEnv[`${VAR}DB`]).toBe(UNAVAILABLE);
+
+            await secondLocal?.stop();
+
+            // The second starter never owned the lock, so its stop cannot remove the first one's.
+            expect(existsSync(lock)).toBe(true);
+
+            await firstLocal?.stop();
+
+            expect(existsSync(lock)).toBe(false);
+        });
+
+        it("respects a lock it cannot read, since its owner was never checked", async () => {
+            expect.assertions(2);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            // A directory in the lock's place can't be read as a file (EISDIR), which is not "gone".
+            mkdirSync(join(root, ".wrangler", "state", "lunora-pglite", "DB.lock"), { recursive: true });
+
+            const { directories, runtime } = fakeRuntime();
+
+            await startLocalHyperdrive({ env: {}, load: async () => runtime, onWarning: () => {}, projectRoot: root });
+
+            expect(directories).toStrictEqual([]);
+            expect(existsSync(join(root, ".wrangler", "state", "lunora-pglite", "DB.lock"))).toBe(true);
         });
 
         it("leaves no temporary lock file behind, whether the lock was taken or already held", async () => {
@@ -340,6 +387,23 @@ describe("local hyperdrive", () => {
 
             expect(close).toHaveBeenCalledTimes(1);
             expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("closes the database even when the socket's shutdown fails", async () => {
+            expect.assertions(2);
+
+            const close = vi.fn<() => Promise<void>>(async () => {});
+            const stop = async (): Promise<void> => {
+                throw new Error("socket stuck");
+            };
+            const served = await serveDatabase(
+                parts(async () => {}, close, stop),
+                join(root, "data"),
+            );
+
+            await expect(served.stop()).rejects.toThrow("socket stuck");
+
+            expect(close).toHaveBeenCalledTimes(1);
         });
 
         it("returns a loopback connection string whose stop closes both the socket and the database", async () => {

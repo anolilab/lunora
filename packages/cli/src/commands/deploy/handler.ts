@@ -755,17 +755,15 @@ const warnDurableObjectBudget = async (wranglerPath: string | undefined, target:
 /** Only a real, non-temporary deploy may create account resources: a dry run must leave the account alone, and a temporary deploy's Worker goes to an account that would never see them. */
 const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): boolean => options.dryRun !== true && options.temporary !== true;
 
+/** The first Artifacts check of a real deploy lets a missing namespace pass, because the last step creates it; any other run reports it. */
+const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): ArtifactsCheckMode =>
+    createsAccountResources(options) ? "defer" : "report";
+
 /**
- * The steps that change the account or the sibling Workers, run last so that nothing which could
- * still refuse the deploy comes after them: the service Workers, then the Hyperdrive config.
+ * How the Artifacts namespace check treats a namespace that does not exist yet: `report` refuses (a
+ * dry run, a temporary deploy), `defer` lets it pass because `create` makes it later, just before the deploy.
  */
-const runBeforeSpawnSteps = async (
-    cwd: string,
-    options: DeployCommandOptions,
-    driver: DeployDriver,
-    spawner: Spawner,
-    target: string,
-): Promise<string | undefined> => (await deployServices(cwd, options, driver, spawner)) ?? (await provisionDeployHyperdrive(cwd, options, "deploy", target));
+type ArtifactsCheckMode = "create" | "defer" | "report";
 
 /**
  * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
@@ -780,7 +778,7 @@ const checkArtifactsNamespaces = async (
     environment: string | undefined,
     logger: Logger,
     cache: DiscoveryCache | undefined,
-    create: boolean,
+    mode: ArtifactsCheckMode,
 ): Promise<string | undefined> => {
     const parsed = target === "cloudflare" && wranglerPath !== undefined ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
 
@@ -802,7 +800,11 @@ const checkArtifactsNamespaces = async (
     const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
     // One check per namespace: two bindings on a missing namespace would both see it absent and race to create it.
     const namespaces = [...new Map(entries.map((entry) => [entry.namespace, entry])).values()];
-    const checks = await Promise.all(namespaces.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, create, jurisdiction })));
+    const checks = await Promise.all(
+        namespaces.map(async (entry) =>
+            checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" }),
+        ),
+    );
     const failures: string[] = [];
 
     for (const check of checks) {
@@ -819,6 +821,25 @@ const checkArtifactsNamespaces = async (
 
     return failures.length === 0 ? undefined : failures.join("\n");
 };
+
+/**
+ * The steps that change the account or the sibling Workers, run last so that nothing which could
+ * still refuse the deploy comes after them: the service Workers, then the Artifacts namespace, then
+ * the Hyperdrive config.
+ */
+const runBeforeSpawnSteps = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+    spawner: Spawner,
+    target: string,
+    wranglerPath: string | undefined,
+): Promise<string | undefined> =>
+    (await deployServices(cwd, options, driver, spawner)) ??
+    (createsAccountResources(options)
+        ? await checkArtifactsNamespaces(cwd, wranglerPath, target, options.env, options.logger, options.discoveryCache, "create")
+        : undefined) ??
+    (await provisionDeployHyperdrive(cwd, options, "deploy", target));
 
 const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommandResult> => {
     const options: DeployCommandOptions = { ...input, discoveryCache: input.discoveryCache ?? createDiscoveryCache() };
@@ -842,8 +863,10 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const { validation } = pipeline;
     const driver = resolveDeployDriver(pipeline.target);
 
-    // The Artifacts lookup runs on `--dry-run` too: a dry run reports what a real
-    // deploy would refuse. Only a real, non-temporary deploy creates a missing namespace: a temporary one uploads the Worker to a throwaway account that would never see it.
+    // The Artifacts lookup runs on `--dry-run` too: a dry run reports what a real deploy would
+    // refuse. A real deploy lets a missing namespace pass here and creates it last, just before
+    // wrangler runs; a temporary one never creates it, as its Worker goes to an account that would
+    // never see it.
     const preflightError =
         validateMigrateDeployPreflight(options) ??
         (await checkArtifactsNamespaces(
@@ -853,7 +876,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
             options.env,
             options.logger,
             options.discoveryCache,
-            createsAccountResources(options),
+            artifactsModeFor(options),
         ));
 
     if (preflightError !== undefined) {
@@ -907,7 +930,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     }
 
     const spawner = options.spawner ?? defaultSpawner;
-    const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target);
+    const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target, validation.wranglerPath);
 
     if (beforeSpawnError !== undefined) {
         return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: beforeSpawnError, mintedSecretsFile, validation };

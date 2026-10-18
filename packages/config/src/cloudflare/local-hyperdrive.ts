@@ -18,7 +18,7 @@
  * loaded on demand: an app without Hyperdrive never pays for them.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 import join from "../path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -108,8 +108,12 @@ const serveDatabase = async (
         // PGlite authenticates as "trust", so these credentials are placeholders.
         connectionString: `postgres://postgres:postgres@${host}:${port}/postgres`, // gitleaks:allow
         stop: async () => {
-            await server.stop();
-            await database.close();
+            try {
+                await server.stop();
+            } finally {
+                // The database closes even when the socket's shutdown fails, before the caller lets go of the directory.
+                await database.close();
+            }
         },
     };
 };
@@ -144,14 +148,83 @@ type DirectoryLock = { holder: number } | { release: () => void };
 /** An address nothing listens on: port 1 refuses the connection at once. */
 const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
 
-/** The pid a lock file names, or `undefined` when it is gone or not a pid. */
-const readHolder = (lockPath: string): number | undefined => {
-    try {
-        const holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+/** Locks this process holds, so a second starter here sees a live owner instead of a pid it takes for stale. */
+const heldHere = new Set<string>();
 
-        return Number.isInteger(holder) ? holder : undefined;
+/** What a lock file names. `pid` is -1 unless `kind` is `"pid"`. */
+interface LockHolder {
+    kind: "garbage" | "gone" | "pid" | "unreadable";
+    pid: number;
+}
+
+const readHolder = (lockPath: string): LockHolder => {
+    try {
+        const pid = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+
+        return Number.isInteger(pid) ? { kind: "pid", pid } : { kind: "garbage", pid: -1 };
+    } catch (error) {
+        // Only a missing file is "gone"; any other failure leaves the owner unchecked, so the lock stays respected.
+        return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unreadable", pid: -1 };
+    }
+};
+
+/** Whether the lock names another process that is running. */
+const isOtherLiveProcess = (holder: LockHolder): boolean => holder.kind === "pid" && holder.pid !== process.pid && isProcessAlive(holder.pid);
+
+/** Link the private file into place, or `undefined` when the lock already exists. */
+const publishLock = (mine: string, lockPath: string): DirectoryLock | undefined => {
+    try {
+        linkSync(mine, lockPath);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw error;
+        }
+
+        return undefined;
+    }
+
+    heldHere.add(lockPath);
+
+    return {
+        release: () => {
+            // Idempotent, and only for the lock this starter took: a second call finds nothing to remove.
+            if (heldHere.delete(lockPath)) {
+                rmSync(lockPath, { force: true });
+            }
+        },
+    };
+};
+
+/**
+ * Move a stale lock aside, which only one contender can win. If what was moved turns out to be a live
+ * process's (another contender had already replaced the stale one), it is put back and that process is
+ * reported as the holder. `undefined` means the way is clear to try the link again.
+ */
+const takeOverStale = (lockPath: string, stale: LockHolder): DirectoryLock | undefined => {
+    const aside = `${lockPath}.stale.${randomUUID()}`;
+
+    try {
+        renameSync(lockPath, aside);
     } catch {
         return undefined;
+    }
+
+    const moved = readHolder(aside);
+
+    try {
+        if (moved.pid !== stale.pid && isOtherLiveProcess(moved)) {
+            try {
+                linkSync(aside, lockPath);
+            } catch {
+                // Somebody linked a lock in meanwhile; theirs stands.
+            }
+
+            return { holder: moved.pid };
+        }
+
+        return undefined;
+    } finally {
+        rmSync(aside, { force: true });
     }
 };
 
@@ -161,7 +234,7 @@ const readHolder = (lockPath: string): number | undefined => {
  *
  * The pid is written to a private file and hard-linked into place, which fails atomically if the lock
  * exists, so a lock is never seen half-written and a contender can't mistake an acquisition in
- * progress for a stale one. A lock whose process has gone is taken over.
+ * progress for a stale one. A lock whose process has gone is taken over (see {@link takeOverStale}).
  */
 const lockDirectory = (lockPath: string): DirectoryLock => {
     const mine = `${lockPath}.${String(process.pid)}.${randomUUID()}`;
@@ -170,35 +243,32 @@ const lockDirectory = (lockPath: string): DirectoryLock => {
 
     try {
         for (let attempt = 0; attempt < 3; attempt += 1) {
-            try {
-                linkSync(mine, lockPath);
+            const published = publishLock(mine, lockPath);
 
-                return {
-                    release: () => {
-                        rmSync(lockPath, { force: true });
-                    },
-                };
-            } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-                    throw error;
-                }
+            if (published !== undefined) {
+                return published;
+            }
+
+            if (heldHere.has(lockPath)) {
+                return { holder: process.pid };
             }
 
             const holder = readHolder(lockPath);
 
-            // Our own pid is a lock this process never released (a restart); a dead one is stale. A lock that
-            // vanished while it was read is simply taken on the next attempt.
-            if (holder !== undefined && holder !== process.pid && isProcessAlive(holder)) {
-                return { holder };
+            if (holder.kind === "unreadable" || isOtherLiveProcess(holder)) {
+                return { holder: holder.pid };
             }
 
-            // Removed only if it still names the process it did a moment ago, so a lock taken in between survives.
-            if (readHolder(lockPath) === holder) {
-                rmSync(lockPath, { force: true });
+            // Gone: the next attempt takes it. Otherwise it is stale: its process has gone, it is not a pid,
+            // or it is a lock this process never released.
+            const blocked = holder.kind === "gone" ? undefined : takeOverStale(lockPath, holder);
+
+            if (blocked !== undefined) {
+                return blocked;
             }
         }
 
-        return { holder: readHolder(lockPath) ?? -1 };
+        return { holder: readHolder(lockPath).pid };
     } finally {
         rmSync(mine, { force: true });
     }
@@ -243,11 +313,15 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
     };
     const started: { binding: string; stop: () => Promise<void> }[] = [];
     const release = async (): Promise<void> => {
-        for (const binding of [...started.map((entry) => entry.binding), ...unavailable]) {
+        // Emptied as it goes, so a second call (the failure path, then the caller's stop) has nothing left to stop or unlock.
+        const stopping = started.splice(0);
+        const names = [...stopping.map((entry) => entry.binding), ...unavailable.splice(0)];
+
+        for (const binding of names) {
             Reflect.deleteProperty(env, variableFor(binding));
         }
 
-        await Promise.allSettled(started.map(async (server) => server.stop()));
+        await Promise.allSettled(stopping.map(async (server) => server.stop()));
     };
     const runtime = await (options.load ?? loadPglite)();
 

@@ -46,6 +46,8 @@ interface ArtifactsJurisdictionOptions {
     fetch?: typeof globalThis.fetch;
     /** The schema's `.jurisdiction("…")`. */
     jurisdiction: NonNullable<SchemaInfo["jurisdiction"]>;
+    /** Treat a missing namespace as fine, because a later step creates it. Only meaningful with `create` off. */
+    missingOk?: boolean;
     namespace: string;
 }
 
@@ -114,6 +116,10 @@ const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: s
         if (typeof now === "string") {
             return mismatch(accountId, subject, jurisdiction, now);
         }
+    }
+
+    if (options.missingOk === true) {
+        return { message: `${subject} does not exist yet; it will be created in the "${jurisdiction}" jurisdiction just before the deploy.`, verdict: "ok" };
     }
 
     return {

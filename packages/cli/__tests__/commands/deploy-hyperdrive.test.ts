@@ -280,6 +280,40 @@ describe("hyperdrive on deploy", () => {
             expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
         });
 
+        it("does not create when the listing reply has no result list, since absence is unproven", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const api = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [], success: true }));
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("no result list");
+            expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        });
+
+        it("does not create when the listing runs past the pages it will read", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const api = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [], result: [], result_info: { total_pages: 500 }, success: true }));
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("can't be shown to be absent");
+            expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        });
+
         it("updates the reused config's credentials, so a rotated password reaches the deployed binding", async () => {
             expect.assertions(3);
 
@@ -567,8 +601,8 @@ describe("hyperdrive on deploy", () => {
             await expect(provisionDeployHyperdrive(root, { logger: recordingLogger().logger }, "deploy", "celld")).resolves.toBeUndefined();
         });
 
-        it("has a dry run report a missing connection string, as the real deploy would, without any API call", async () => {
-            expect.assertions(3);
+        it("has a dry run warn about a missing connection string, so a build needs no production secrets, without any API call", async () => {
+            expect.assertions(4);
 
             writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
             vi.stubEnv(URL_VARIABLE, "");
@@ -577,11 +611,13 @@ describe("hyperdrive on deploy", () => {
 
             vi.stubGlobal("fetch", fetchStub);
 
-            const result = await provisionDeployHyperdrive(root, { dryRun: true, logger: recordingLogger().logger }, "deploy", "cloudflare");
+            const { errors, logger, messages } = recordingLogger();
+            const result = await provisionDeployHyperdrive(root, { dryRun: true, logger }, "deploy", "cloudflare");
 
-            expect(result).toContain("LUNORA_HYPERDRIVE_URL");
+            expect(result).toBeUndefined();
+            expect(errors).toStrictEqual([]);
             expect(fetchStub).not.toHaveBeenCalled();
-            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+            expect(messages.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
 
             vi.unstubAllGlobals();
             vi.unstubAllEnvs();

@@ -188,8 +188,12 @@ const findConfig = async (request: Request, name: string): Promise<ListedConfig 
             throw new Error(`listing Hyperdrive configs failed (${describeFailure(listed)})`);
         }
 
-        const configs = Array.isArray(listed.body.result) ? (listed.body.result as ListedConfig[]) : [];
-        const found = configs.find((entry) => entry.name === name);
+        // A reply that isn't a list can't show the name is absent, and absence is what permits a create.
+        if (!Array.isArray(listed.body.result)) {
+            throw new TypeError("the listing of Hyperdrive configs had no result list");
+        }
+
+        const found = (listed.body.result as ListedConfig[]).find((entry) => entry.name === name);
         const info = (typeof listed.body.result_info === "object" && listed.body.result_info !== null ? listed.body.result_info : {}) as {
             total_pages?: unknown;
         };
@@ -199,7 +203,8 @@ const findConfig = async (request: Request, name: string): Promise<ListedConfig 
         }
     }
 
-    return undefined;
+    // Out of pages to ask for while the listing says there are more: absence is unproven, so no create.
+    throw new Error(`the listing of Hyperdrive configs has more than ${String(MAX_PAGES)} pages, so "${name}" can't be shown to be absent`);
 };
 
 /**
@@ -341,6 +346,44 @@ const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined):
 };
 
 /**
+ * The checks every run makes before any API call: no two bindings share a variable, and each has a
+ * usable connection string and credentials. A dry run or a build only warns about the latter two (it
+ * needs no production secrets to bundle) and says what a real deploy will stop on. Returns the
+ * error that blocks the deploy, if any.
+ */
+const preflight = (
+    origins: ReadonlyArray<{ binding: string; origin: Record<string, number | string> | undefined }>,
+    hasCredentials: boolean,
+    options: Pick<ProvisionHyperdriveOptions, "dryRun" | "logger">,
+): string | undefined => {
+    const collision = sharedVariable(origins.map(({ binding }) => binding));
+
+    if (collision !== undefined) {
+        const message = `deploy blocked: the Hyperdrive bindings ${collision.bindings.map((name) => `"${name}"`).join(" and ")} both read ${collision.variable} and would share one config. Rename one so their names differ in letters or digits, not only in punctuation.`;
+
+        options.logger.error(message);
+
+        return message;
+    }
+
+    for (const { binding, origin } of origins) {
+        const blocked = blocker(binding, origin, hasCredentials);
+
+        if (blocked !== undefined && options.dryRun === true) {
+            options.logger.warn(`dry run: ${blocked} A real deploy stops here.`);
+        } else if (blocked !== undefined) {
+            const message = `deploy blocked: ${blocked}`;
+
+            options.logger.error(message);
+
+            return message;
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * Replace every placeholder Hyperdrive id in `wrangler.jsonc` with a real config's.
  * Returns the error that blocks the deploy, or `undefined` when nothing is left to do.
  */
@@ -357,28 +400,12 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     const origins = entries.map(({ binding }) => {
         return { binding, origin: parseOrigin(environment[connectionStringVariable(binding)] ?? "") };
     });
-    const collision = sharedVariable(entries.map(({ binding }) => binding));
-
-    if (collision !== undefined) {
-        const message = `deploy blocked: the Hyperdrive bindings ${collision.bindings.map((name) => `"${name}"`).join(" and ")} both read ${collision.variable} and would share one config. Rename one so their names differ in letters or digits, not only in punctuation.`;
-
-        options.logger.error(message);
-
-        return message;
-    }
-
     // Everything a binding needs is checked before the first API call, so a later binding's missing
     // connection string cannot leave an earlier one's config created and its id unrecorded.
-    for (const { binding, origin } of origins) {
-        const blocked = blocker(binding, origin, token !== undefined && accountId !== undefined);
+    const refused = preflight(origins, token !== undefined && accountId !== undefined, options);
 
-        if (blocked !== undefined) {
-            const message = `deploy blocked: ${blocked}`;
-
-            options.logger.error(message);
-
-            return message;
-        }
+    if (refused !== undefined) {
+        return refused;
     }
 
     if (options.dryRun === true) {

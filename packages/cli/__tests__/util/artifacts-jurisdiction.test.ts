@@ -128,6 +128,35 @@ describe(checkArtifactsJurisdiction, () => {
         await expect(check(api, "eu", credentials, true)).resolves.toMatchObject({ verdict: "missing" });
     });
 
+    it("lets a missing namespace pass when a later step will create it, and still refuses a wrong jurisdiction", async () => {
+        expect.assertions(3);
+
+        const absent = vi.fn<typeof globalThis.fetch>(async () =>
+            Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 }),
+        );
+        const result = await checkArtifactsJurisdiction({
+            binding: "ARTIFACTS",
+            environment: credentials,
+            fetch: absent,
+            jurisdiction: "eu",
+            missingOk: true,
+            namespace: "repos",
+        });
+
+        expect(result.verdict).toBe("ok");
+        expect(absent.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        await expect(
+            checkArtifactsJurisdiction({
+                binding: "ARTIFACTS",
+                environment: credentials,
+                fetch: namespaceApi("unrestricted"),
+                jurisdiction: "eu",
+                missingOk: true,
+                namespace: "repos",
+            }),
+        ).resolves.toMatchObject({ verdict: "mismatch" });
+    });
+
     it("creates nothing unless asked to, so doctor and a dry run stay read-only", async () => {
         expect.assertions(2);
 
