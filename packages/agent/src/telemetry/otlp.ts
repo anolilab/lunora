@@ -4,7 +4,7 @@ import type { Telemetry } from "ai";
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf, usageStatus } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 /** Spans per OTLP export before an early flush. */
@@ -269,12 +269,19 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
         // `execute()` resolves with carries no usage at all, because it resolves the
         // moment `doStream` hands the stream back.
         const usage = summarizeUsage(readField(event, "usage") ?? readField(result, "usage"));
+        const status = usageStatus(usage);
 
-        if (usage) {
-            pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
-            pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
-            pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
-        }
+        // Stamped on every chat span, even with no usage, so `unavailable` is visible
+        // rather than an absent attribute. Same names and semantics as `@lunora/ai`.
+        pushAttribute(attributes, "lunora.usage.status", status);
+        // Cache and reasoning counts are subsets of the input and output totals; each is
+        // emitted only when reported, so an absent bucket is never a counted zero.
+        pushAttribute(attributes, "gen_ai.usage.input_tokens", usage?.inputTokens);
+        pushAttribute(attributes, "gen_ai.usage.output_tokens", usage?.outputTokens);
+        pushAttribute(attributes, "gen_ai.usage.total_tokens", usage?.totalTokens);
+        pushAttribute(attributes, "gen_ai.usage.cache_read.input_tokens", usage?.cacheReadTokens);
+        pushAttribute(attributes, "gen_ai.usage.cache_creation.input_tokens", usage?.cacheWriteTokens);
+        pushAttribute(attributes, "gen_ai.usage.reasoning.output_tokens", usage?.reasoningTokens);
 
         // Cloudflare AI Gateway telemetry — additive, only present when the
         // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
@@ -290,12 +297,20 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
 
         // A provider-reported cost always wins; without a gateway the cost
         // is derived from token usage and the price table, so spend stays
-        // visible off Cloudflare too. The two are never conflated — the
-        // source is stamped alongside, exactly as the RAG embed span does.
+        // visible off Cloudflare too. An estimate is priced only from a complete
+        // report: a partial one would understate the call. The two are never
+        // conflated — the source is stamped alongside, exactly as the RAG embed span does.
         const reportedCost = gateway?.cost;
         const cost =
             reportedCost ??
-            (typeof modelId === "string" ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens }) : undefined);
+            (typeof modelId === "string" && status === "complete"
+                ? estimateModelCost(modelId, {
+                      cacheReadTokens: usage?.cacheReadTokens,
+                      cacheWriteTokens: usage?.cacheWriteTokens,
+                      inputTokens: usage?.inputTokens,
+                      outputTokens: usage?.outputTokens,
+                  })
+                : undefined);
 
         if (cost !== undefined) {
             pushAttribute(attributes, "gen_ai.usage.cost", cost);

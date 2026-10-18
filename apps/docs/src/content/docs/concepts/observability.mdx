@@ -541,7 +541,10 @@ A generation span carries `gen_ai.request.model` and, from the model result,
 `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`; with the agent
 integration's `recordInputs` / `recordOutputs` it also carries the prompt /
 completion (off by default). The Lunora cloud reads these to show the model,
-token counts, and cost on the Traces waterfall.
+token counts, and cost on the Traces waterfall. On the agent's `otlpTelemetry`
+spans, `lunora.usage.status` says whether the token report was `complete`,
+`partial` or `unavailable`; an estimated cost is set only from a complete report,
+while a provider-reported cost is always kept.
 
 ### Span durations on Workers
 
