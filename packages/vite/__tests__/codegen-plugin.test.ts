@@ -1222,7 +1222,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(createCalls).toHaveBeenCalledTimes(before + 2);
         });
 
-        it("a lunora.config.ts save drops the cached Project — `codegen.exclude` changes which files it is seeded with", async () => {
+        it("a lunora.config.ts save drops the cached Project without regenerating — the next save seeds a fresh one", async () => {
             expect.assertions(3);
 
             writeFixture(workdir);
@@ -1242,13 +1242,14 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             expect(createCalls).toHaveBeenCalledTimes(before + 1);
 
-            // The config save regenerates, so a changed `exclude` is applied at once.
+            // The config save does not regenerate: a binding-relevant save restarts the server
+            // instead, and a pass here would race that restart.
             changeListener!(join(workdir, "lunora.config.ts"));
             await vi.runAllTimersAsync();
 
-            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
 
-            // The next schema save reuses the Project the config save built.
+            // The next schema save builds the fresh Project, seeded from the saved config.
             changeListener!(join(workdir, "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 

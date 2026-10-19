@@ -286,6 +286,12 @@ describe("globals declared outside lunora/", () => {
             expected: "enabled: boolean",
         },
         {
+            name: "a script whose only import and export words sit in a comment",
+            files: { "src/globals.ts": "// import and export appear only in this comment\ndeclare var __COMMENTED__: number;\n" },
+            handler: "{ commented: __COMMENTED__ }",
+            expected: "commented: number",
+        },
+        {
             name: "a declare module for a specifier the lunora source imports",
             files: { "src/virtual.ts": 'declare module "virtual-mode" {\n    export const mode: "dev" | "prod";\n}\n' },
             probeImports: 'import { mode } from "virtual-mode";\n',

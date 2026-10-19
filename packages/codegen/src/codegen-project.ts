@@ -49,10 +49,6 @@ const DECLARATION_FILE_RE = /\.d\.(?:ts|mts|cts)$/;
 /** A global declaration that reaches the whole program: a `declare global` block or a triple-slash directive. */
 const GLOBAL_DECLARATION_RE = /\bdeclare\s+global\b|\/\/\/\s*<reference\b/;
 
-/** Top-level module syntax. A file without it is a script, so its declarations are global. */
-// ponytail: a script that mentions `import` or `export` only in a comment reads as a module and is not seeded; add the file to a lunora/ import to load it.
-const MODULE_SYNTAX_RE = /\b(?:import|export)\b/;
-
 /** `declare module "x"` augmentations or ambient module declarations; the specifier is capture group 1. */
 const MODULE_DECLARATION_RE = /\bdeclare\s+module\s+["']([^"']+)["']/g;
 
@@ -74,6 +70,32 @@ const tsconfigFiles = (tsconfigPath: string): string[] => {
  * cheap next to the app sources the seeding skips.
  */
 const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfigSources.filter((path) => DECLARATION_FILE_RE.test(path));
+
+/**
+ * Whether a file is a module, which is what keeps its declarations out of the program
+ * (a script's are global). Scanned token by token, so an `import` or `export` in a
+ * comment or string does not count. A `import(` call or `import.meta` does not either.
+ * Stops at the first module token, which is near the top of a module.
+ */
+const isModuleSource = (text: string): boolean => {
+    const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
+
+    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+        if (token === ts.SyntaxKind.ExportKeyword) {
+            return true;
+        }
+
+        if (token === ts.SyntaxKind.ImportKeyword) {
+            const next = scanner.scan();
+
+            if (next !== ts.SyntaxKind.OpenParenToken && next !== ts.SyntaxKind.DotToken) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
 
 /** Whether `text` imports or names `specifier` as a quoted module name, or a subpath of it (`"x/y"`). */
 const namesModule = (text: string, specifier: string): boolean =>
@@ -99,7 +121,7 @@ const globalDeclarationFiles = (tsconfigSources: string[], lunoraDirectory: stri
 
         const text = readFileSync(path, "utf8");
 
-        if (GLOBAL_DECLARATION_RE.test(text) || !MODULE_SYNTAX_RE.test(text)) {
+        if (GLOBAL_DECLARATION_RE.test(text) || !isModuleSource(text)) {
             return true;
         }
 

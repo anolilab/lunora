@@ -717,13 +717,14 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
 
                 // `codegen.exclude` in lunora.config decides which `lunora/` files a Project
-                // is seeded with, so a config save drops the cached Project and runs codegen.
-                // Every key is treated alike: reading just `exclude` out of the file here
-                // would need the parse `createCodegenProject` does anyway.
+                // is seeded with, so a config save drops the cached Project. The next run
+                // seeds a fresh one. It does not regenerate here: a binding-relevant save
+                // already restarts the server, and a second pass racing that restart could
+                // invalidate the new server from the old one.
                 if (PROJECT_CONFIG_FILENAMES.some((name) => normalized === resolve(options.projectRoot, name))) {
                     cachedProject = undefined;
 
-                    return true;
+                    return false;
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the
