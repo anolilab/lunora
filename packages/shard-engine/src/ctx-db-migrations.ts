@@ -157,7 +157,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
 const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
     const existing = runDrizzle<{ sql: null | string }>(
         sql,
-        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName}`,
+        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName}`,
     ).toArray();
 
     const current = existing[0]?.sql;
@@ -208,7 +208,8 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
  * along, and re-scanning for it on every cold start would be pure cost.
  */
 const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolean =>
-    runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName} LIMIT 1`).toArray().length > 0;
+    runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} LIMIT 1`).toArray()
+        .length > 0;
 
 /**
  * Create one index, probing for duplicates first when it is UNIQUE and not yet
@@ -257,6 +258,9 @@ const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void 
  * alone.
  */
 const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: ReadonlySet<string>): void => {
+    // SQLite folds ASCII case in an identifier, so `By_Slug` IS `by_slug`: an index renamed that way
+    // is the declared one, and dropping it would leave the table with nothing.
+    const declaredFolded = new Set([...declared].map((name) => name.toLowerCase()));
     const held = runDrizzle<{ name: string; sql: null | string }>(
         sql,
         dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} AND sql IS NOT NULL`,
@@ -269,7 +273,7 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
             statement !== null &&
             (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
 
-        if (createdHere && !declared.has(name)) {
+        if (createdHere && !declaredFolded.has(name.toLowerCase())) {
             runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
         }
     }
@@ -313,6 +317,8 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
 
         declared.add(indexName);
         deferIfBlocked(blocked, () => {
+            // The name only differs from a held one by the field's case, whose path is another expression.
+            dropIndexIfShapeChanged(sql, indexName, tableName, reference, true, [reference]);
             createIndexGuarded(sql, indexName, tableName, reference, true, [reference]);
         });
     }

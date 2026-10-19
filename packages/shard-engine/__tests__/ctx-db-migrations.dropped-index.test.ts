@@ -105,3 +105,61 @@ describe("runShardMigrations — an index whose name starts with an underscore",
         await expect(writer.insert("notes", { slug: "dup" })).resolves.toBeTypeOf("string");
     });
 });
+
+/**
+ * SQLite folds ASCII case in an identifier, so `By_Slug` and `by_slug` are ONE index name: the `CREATE ... IF NOT EXISTS`
+ * for the new spelling finds the old index and does nothing. Dropping "the old name" as undeclared then removed the only
+ * index the table had.
+ */
+describe("runShardMigrations — an index renamed to a name that differs only in case", () => {
+    const shape = { body: { kind: "string" }, slug: { kind: "string" } };
+    const declared = (name: string, fields: string[]): SchemaLike => table(shape, [{ fields, name, unique: true }]);
+
+    const insertTwice = async (schema: SchemaLike, document: Record<string, unknown>): Promise<unknown> => {
+        const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+        await writer.insert("notes", document);
+
+        return writer.insert("notes", document);
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("keeps the index, and the constraint it enforces", async () => {
+        expect.assertions(2);
+
+        runShardMigrations(harness.sql, declared("by_slug", ["slug"]));
+        runShardMigrations(harness.sql, declared("By_Slug", ["slug"]));
+
+        expect(indexNames().filter((name) => name.toLowerCase() === "notes_by_slug")).toHaveLength(1);
+        await expect(insertTwice(declared("By_Slug", ["slug"]), { body: "b", slug: "dup" })).rejects.toThrow(/unique|conflict/iu);
+    });
+
+    it("rebuilds it to the new definition when the columns changed too", () => {
+        expect.assertions(1);
+
+        runShardMigrations(harness.sql, declared("by_slug", ["slug"]));
+        runShardMigrations(harness.sql, declared("BY_SLUG", ["slug", "body"]));
+
+        const [held] = harness.raw(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug' COLLATE NOCASE`);
+
+        expect(String(held?.["sql"])).toContain("$.body");
+    });
+
+    it("enforces a `.unique()` that moved to a field differing only in case", async () => {
+        expect.assertions(1);
+
+        const column = (name: string): SchemaLike => table({ [name]: { _meta: { column: { unique: true } }, kind: "string" } });
+
+        runShardMigrations(harness.sql, column("slug"));
+        runShardMigrations(harness.sql, column("Slug"));
+
+        await expect(insertTwice(column("Slug"), { Slug: "dup" })).rejects.toThrow(/unique|conflict/iu);
+    });
+});

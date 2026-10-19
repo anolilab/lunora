@@ -185,3 +185,61 @@ describe.each(routes)("global table migrations (%s) — a rank companion whose s
         await expect(flipped.insert("notes", { _id: "p3", name: "c", score: 20 }, { allowExplicitId: true })).resolves.toBe("p3");
     });
 });
+
+/**
+ * The engine folds ASCII case in an identifier, so `By_Slug` and `by_slug` are ONE index name: the `CREATE ... IF NOT
+ * EXISTS` for the new spelling finds the old index and does nothing, and dropping "the old name" as undeclared would
+ * leave the table with no index at all.
+ */
+describe.each(routes)("global table migrations (%s) — an index renamed to a name that differs only in case", (_route, makeHarness) => {
+    const shape = { body: column("string"), slug: column("string") };
+    const declared = (name: string, fields: string[]): SchemaLike => notes(shape, [{ fields, name, unique: true }]);
+
+    beforeEach(() => {
+        harness = makeHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("keeps the index, and the constraint it enforces", async () => {
+        expect.assertions(2);
+
+        await migrate(declared("by_slug", ["slug"]));
+
+        const writer = await migrate(declared("By_Slug", ["slug"]));
+
+        await expect(indexNames().then((names) => names.filter((name) => name.toLowerCase() === "notes_by_slug"))).resolves.toHaveLength(1);
+
+        await writer.insert("notes", { body: "b", slug: "dup" });
+
+        await expect(writer.insert("notes", { body: "b", slug: "dup" })).rejects.toThrow(/unique/iu);
+    });
+
+    it("rebuilds it to the new definition when the columns changed too", async () => {
+        expect.assertions(2);
+
+        await migrate(declared("by_slug", ["slug"]));
+
+        const writer = await migrate(declared("BY_SLUG", ["slug", "body"]));
+
+        await writer.insert("notes", { body: "one", slug: "dup" });
+
+        // Unique over (slug, body): the same slug with another body is fine, the same pair is not.
+        await expect(writer.insert("notes", { body: "two", slug: "dup" })).resolves.toBeTypeOf("string");
+        await expect(writer.insert("notes", { body: "two", slug: "dup" })).rejects.toThrow(/unique/iu);
+    });
+
+    it("enforces a `.unique()` that moved to a field differing only in case", async () => {
+        expect.assertions(1);
+
+        await migrate(notes({ slug: column("string", { unique: true }) }));
+
+        const writer = await migrate(notes({ Slug: column("string", { unique: true }) }));
+
+        await writer.insert("notes", { Slug: "dup" });
+
+        await expect(writer.insert("notes", { Slug: "dup" })).rejects.toThrow(/unique/iu);
+    });
+});

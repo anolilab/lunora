@@ -363,7 +363,11 @@ const dropIndexIfShapeChanged = async (
         return;
     }
 
-    const held = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} AND tbl_name = ${spec.table}`);
+    const held = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} COLLATE NOCASE AND tbl_name = ${spec.table}`,
+    );
     const current = held[0]?.["sql"];
 
     // No row, or an implicit index the engine created for a constraint (`sql` is
