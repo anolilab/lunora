@@ -7,7 +7,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { collectPages } from "../../../shared/collect-pages";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
-import { decodeErrorDetail, describeError, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -2078,10 +2078,11 @@ const buildErrorEvent = (
     const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? error.status : 500;
     const { message, name, stack } = describeError(error);
+    const internal = describeInternal(error, { capped: false });
 
     return {
         durationMs,
-        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }) },
+        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }), ...(internal === undefined ? {} : { internal }) },
         functionPath,
         ok: false,
         ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),

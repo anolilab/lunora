@@ -99,4 +99,17 @@ describe("structured error propagation (087)", () => {
         expect(error.hint).toStrictEqual(["Re-read the row and retry."]);
         expect(error.docsUrl).toBe("https://lunora.sh/docs/errors");
     });
+
+    it("ignores a non-string why on an RPC error envelope", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "CONFLICT", message: "stale", why: 42 } }, { status: 409 }));
+
+        const error = (await client(fetchMock)
+            .mutation(fnRef("docs:write"), {})
+            .catch((error_: unknown) => error_)) as { code?: string; why?: unknown };
+
+        expect(error.code).toBe("CONFLICT");
+        expect(error.why).toBeUndefined();
+    });
 });

@@ -111,7 +111,7 @@ interface ShardCallOptions {
 
 /** The error half of the shard RPC envelope. */
 interface ShardErrorEnvelope {
-    error: { code: string; data?: unknown; message: string };
+    error: { code: string; data?: unknown; message: string; why?: string };
 }
 
 /** The success half of the shard RPC envelope. */
@@ -170,11 +170,15 @@ const referencePath = (reference: unknown): string => {
  * machine-readable `code` and any wire-encoded `data`, so a server-side caller can
  * branch on the verdict exactly like a browser caller.
  */
-const reconstructShardError = (error: { code: string; data?: unknown; message: string }): LunoraError => {
+const reconstructShardError = (error: { code: string; data?: unknown; message: string; why?: unknown }): LunoraError => {
     const rebuilt = new LunoraError(error.code, error.message);
 
     if (error.data !== undefined) {
         (rebuilt as LunoraError & { data?: unknown }).data = decodeWire(error.data);
+    }
+
+    if (typeof error.why === "string") {
+        (rebuilt as LunoraError & { why?: string }).why = error.why;
     }
 
     return rebuilt;

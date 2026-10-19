@@ -22,7 +22,7 @@ import { buildTraceparent, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared
 import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
 import type { HostSpanLike, HostTracingResolver } from "./host-span";
 import { applyHostSpanAttributes } from "./host-span";
-import { redactArgs, redactSecrets } from "./request-log";
+import { redactArgs, redactCredentials } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -336,7 +336,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = redactSecrets(boundedAttributes(attributes), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(boundedAttributes(attributes), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -349,7 +349,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = redactSecrets(boundedAttributes(link.attributes), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(boundedAttributes(link.attributes), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -539,8 +539,8 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // Credentials masked: `ctx.trace(name, fn, args)` and
                     // `span.setAttributes(...)` take whatever the handler holds,
                     // and a span is what ships to a third-party collector. PII
-                    // rules are deliberately not applied — see `redactSecrets`.
-                    const attributes = redactSecrets(merged, captureRaw) as LogFields;
+                    // rules are deliberately not applied — see `redactCredentials`.
+                    const attributes = redactCredentials(merged, captureRaw) as LogFields;
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];
@@ -803,7 +803,7 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
         }
 
         // Credentials masked like span attributes: metric attributes ship to the same collector.
-        const normalized = redactSecrets(normalizeLogFields(attributes)) as LogFields | undefined;
+        const normalized = redactCredentials(normalizeLogFields(attributes)) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.
         try {
@@ -873,7 +873,7 @@ export const dispatchRootSpan = (input: {
     const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
     // Credentials masked, like `ctx.trace` attributes: `ctx.span` writes
     // whatever the handler holds onto the span a collector receives.
-    const attributes = redactSecrets(collected?.attributes ?? {}, captureRaw) as LogFields;
+    const attributes = redactCredentials(collected?.attributes ?? {}, captureRaw) as LogFields;
 
     return {
         ...(Object.keys(attributes).length === 0 ? {} : { attributes }),

@@ -900,6 +900,7 @@ type LunoraClientError = Error & {
     data?: unknown;
     docsUrl?: string;
     hint?: string | string[];
+    why?: string;
 };
 ```
 
@@ -1473,6 +1474,7 @@ type SubscriptionCallback = (data: unknown) => void;
 interface SubscriptionError {
     code?: LunoraErrorCodeInput;
     message: string;
+    why?: string;
 }
 ```
 

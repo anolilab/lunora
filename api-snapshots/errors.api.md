@@ -982,6 +982,7 @@ interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    why?: string;
 }
 ```
 
@@ -1026,6 +1027,8 @@ class LunoraError extends Error {
     readonly status: number;
     readonly docsUrl: string | undefined;
     readonly data: unknown;
+    readonly why: string | undefined;
+    readonly internal: Record<string, unknown> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1052,6 +1055,7 @@ interface LunoraErrorLike extends Error {
     hint?: ErrorHint;
     status: number;
     type: "VisulimaError";
+    why?: string;
 }
 ```
 
@@ -1063,10 +1067,12 @@ interface LunoraErrorOptions {
     data?: unknown;
     docsUrl?: string;
     hint?: ErrorHint;
+    internal?: Record<string, unknown>;
     location?: ErrorLocation;
     name?: string;
     status?: number;
     title?: string;
+    why?: string;
 }
 ```
 

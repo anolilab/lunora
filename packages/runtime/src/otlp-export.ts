@@ -14,6 +14,9 @@
  * further down in `shared/otlp.ts`, shared with `@lunora/container` so the worker
  * and container speak an identical wire format.
  */
+import { redactCredentials } from "@lunora/observability";
+
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import { coerceFieldValue } from "../../../shared/log-fields";
 import type { OtlpAttribute } from "../../../shared/otlp";
 import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
@@ -26,11 +29,27 @@ const SAMPLED_TRACE_FLAG = 1;
 /** Trace flags with `sampled` clear — a trace the head decision dropped, exported anyway by the tail bias. */
 const UNSAMPLED_TRACE_FLAG = 0;
 
-/** OTel semconv `exception.*` attributes, shared by the RPC span's exception event and an error log record. */
-const exceptionAttributes = (type: string, message: string, stack: string | undefined): OtlpAttribute[] => [
+/**
+ * The operator context as one JSON attribute, with credentials masked. A value JSON cannot
+ * encode (a bigint, a cycle) drops only this attribute: throwing here would discard the
+ * whole buffered flush the event belongs to.
+ */
+const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(redactCredentials(plain)))];
+};
+
+/**
+ * OTel semconv `exception.*` attributes, shared by the RPC span's exception event and an error log record.
+ * The operator-only `internal` context rides along as one JSON attribute, masked by
+ * {@link operatorContextAttribute}; it is only ever written to the operator's own collector, never a client.
+ */
+const exceptionAttributes = (type: string, message: string, stack: string | undefined, internal?: Record<string, unknown>): OtlpAttribute[] => [
     encodeAttribute("exception.type", type),
     encodeAttribute("exception.message", message),
     ...(stack === undefined ? [] : [encodeAttribute("exception.stacktrace", stack)]),
+    ...(internal === undefined ? [] : operatorContextAttribute(internal)),
 ];
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */
@@ -124,7 +143,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     if (event.error) {
         span.events = [
             {
-                attributes: exceptionAttributes(event.error.code, event.error.message, event.error.stack),
+                attributes: exceptionAttributes(event.error.code, event.error.message, event.error.stack, event.error.internal),
                 name: "exception",
                 timeUnixNano: otlpUnixNano(endMs),
             },
@@ -333,7 +352,7 @@ const otlpLogBody = (event: LogEvent): unknown => {
     // A caller field of the same name gives way, so the record never carries a
     // key twice (collectors may reject that).
     if (event.error !== undefined) {
-        const exception = exceptionAttributes(event.error.name, event.error.message, event.error.stack);
+        const exception = exceptionAttributes(event.error.name, event.error.message, event.error.stack, event.error.internal);
         const keys = new Set(exception.map((attribute) => attribute.key));
 
         logRecord.attributes = [...(logRecord.attributes as OtlpAttribute[]).filter((attribute) => !keys.has(attribute.key)), ...exception];

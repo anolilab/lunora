@@ -266,7 +266,14 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import type { ErrorDetail } from "../../../shared/error-detail";
-import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import {
+    describeError,
+    describeInternal,
+    encodeErrorDetail,
+    ERROR_DETAIL_HEADER,
+    findLoggedError,
+    WANT_ERROR_DETAIL_HEADER,
+} from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
@@ -516,7 +523,10 @@ const reportStreamError = (ws: ShardSocketLike, id: string, error: unknown, logM
         console.error(`[@lunora/do] ${logMessage}:`, error);
     }
 
-    trySendFrame(ws, JSON.stringify({ error: { code: body.code, message: body.message }, id, type: "error" }));
+    trySendFrame(
+        ws,
+        JSON.stringify({ error: { code: body.code, message: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, id, type: "error" }),
+    );
 };
 
 /** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
@@ -8633,7 +8643,11 @@ abstract class ShardDO {
             // The body is redacted for the client; the worker that asked gets the
             // real error (stack included) for its `onRpc` sinks, and strips it.
             if (request.headers.get(WANT_ERROR_DETAIL_HEADER) === "1") {
-                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail(describeError(error)));
+                // `internal` is attached HERE and nowhere else: `describeError` also feeds
+                // the log-event `error`, which the client-visible log surfaces would read.
+                const internal = describeInternal(error);
+
+                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail({ ...describeError(error), ...(internal === undefined ? {} : { internal }) }));
             }
 
             return errorResponse;
@@ -8942,7 +8956,7 @@ abstract class ShardDO {
         }
         this.unsubscribe(ws, subId);
         const { body } = toErrorBody(error, { redactedMessage: "internal error" });
-        this.sendSubscriptionError(ws, subId, body.code, body.message);
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
         this.recordSubscriptionRefreshError(functionPath, error, { subId });
         return true;
     }
@@ -13137,7 +13151,7 @@ abstract class ShardDO {
 
         const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
 
-        this.sendSubscriptionError(ws, subId, body.code, body.message);
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
     }
 
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
@@ -13260,7 +13274,7 @@ abstract class ShardDO {
                         (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
                     ) {
                         this.unsubscribe(ws, subId);
-                        this.sendSubscriptionError(ws, subId, error.code, error.message);
+                        this.sendSubscriptionError(ws, subId, error.code, error.message, error.why);
                         this.recordSubscriptionRefreshError(functionPath, error, { subId });
                         return;
                     }
@@ -13366,7 +13380,7 @@ abstract class ShardDO {
             // internal or bare throw is redacted.
             const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
 
-            this.sendSubscriptionError(ws, subId, body.code, body.message);
+            this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
         }
     }
 
@@ -13516,9 +13530,9 @@ abstract class ShardDO {
     }
 
     /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
-    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
+    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string, why?: string): void {
         try {
-            this.sendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }), "control");
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message, ...(why === undefined ? {} : { why }) }, id: subId, type: "error" }), "control");
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }

@@ -165,6 +165,49 @@ describe("httpStream", () => {
         expect((error as Error & { code?: string }).code).toBe("FORBIDDEN");
     });
 
+    it("keeps the server's why explanation on an `event: error` frame", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturning([
+            'data: {"text":"partial"}\n\n',
+            'event: error\ndata: {"code":"CONFLICT","message":"stale","why":"row moved"}\n\n',
+        ]);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { why?: string });
+
+        expect((error as Error & { why?: string }).why).toBe("row moved");
+    });
+
+    it("keeps HTTP_STREAM_STATUS as the code, and the server's message and why, for a non-2xx error envelope", async () => {
+        expect.assertions(3);
+
+        const { fetchImpl } = fetchReturning([JSON.stringify({ code: "INVALID_INPUT", error: "bad args", why: "limit must be positive" })], { status: 400 });
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch(
+            (error_: unknown) => error_ as Error & { code?: string; why?: string },
+        );
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_STATUS");
+        expect((error as Error & { message?: string }).message).toContain("bad args");
+        expect((error as Error & { why?: string }).why).toBe("limit must be positive");
+    });
+
+    it("does not wait on a non-2xx error body that never ends", async () => {
+        expect.assertions(1);
+
+        const body = new ReadableStream<Uint8Array>({
+            start() {
+                // Never closed: the body stays open.
+            },
+        });
+
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => new Response(body, { status: 400 })) as unknown as typeof fetch;
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_STATUS");
+    });
+
     it("fails with HTTP_STREAM_STATUS on a non-2xx response", async () => {
         expect.assertions(2);
 
@@ -305,7 +348,7 @@ describe("httpStream", () => {
         expect(removeSpy).toHaveBeenCalledWith("abort", handler);
     });
 
-    it("cancels a non-OK response's body instead of leaving it unread (CLIENT-05 regression)", async () => {
+    it("reads a non-OK response's body to its end instead of leaving it unread (CLIENT-05 regression)", async () => {
         expect.assertions(1);
 
         const body = new ReadableStream<Uint8Array>({
@@ -313,13 +356,13 @@ describe("httpStream", () => {
                 controller.close();
             },
         });
-        const cancelSpy = vi.spyOn(body, "cancel");
 
         const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => new Response(body, { status: 503 })) as unknown as typeof fetch;
 
         await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch(() => undefined);
 
-        expect(cancelSpy).toHaveBeenCalledTimes(1);
+        // A reader holds the body until it is consumed, so a locked body was released.
+        expect(body.locked).toBe(true);
     });
 
     it("rejects transport failures with HTTP_STREAM_TRANSPORT", async () => {

@@ -94,7 +94,10 @@ const useSubscription = <F extends FunctionReference>(
                     // Preserve the server-supplied `code` (matching Vue/Svelte's
                     // subscription primitives) so consumers can branch on the
                     // error kind instead of only seeing a flat message.
-                    const normalized = error.code === undefined ? new Error(error.message) : new LunoraError(error.code, error.message);
+                    const normalized = Object.assign(
+                        error.code === undefined ? new Error(error.message) : new LunoraError(error.code, error.message),
+                        error.why === undefined ? {} : { why: error.why },
+                    );
 
                     onErrorRef.current?.(error);
 
