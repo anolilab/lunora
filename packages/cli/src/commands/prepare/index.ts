@@ -21,7 +21,6 @@ const prepareCommand: Command = {
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
-        // Both halves declared explicitly, as `lunora deploy` does: the handler reads `!== false`, and the pair is what `build` and `deploy` accept.
         {
             description: "Evaluate every lazy function module in workerd before passing (default; nothing to check for an eager registry)",
             name: "smoke-load",

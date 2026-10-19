@@ -1,4 +1,3 @@
-import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -202,9 +201,10 @@ const probeLazyModules = async (port: number, runId: string): Promise<{ checked:
 
 /** A `wrangler dev` started in a process group of its own, so the whole tree can be signalled together. */
 interface SmokeGroup {
-    child: ChildProcess;
     /** Removes the handlers that kill the group if the CLI exits or is interrupted first. */
     dispose: () => void;
+    /** The group id, which is the pid of the process that leads it. */
+    pid: number;
 }
 
 /** A group leader's pid is the group id, and a group with no members left is an error to signal, not a failure. */
@@ -263,11 +263,7 @@ const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
 
     group.dispose();
 
-    const { pid } = group.child;
-
-    if (pid === undefined) {
-        return;
-    }
+    const { pid } = group;
 
     signalGroup(pid, "SIGTERM");
 
@@ -469,7 +465,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
         const child = spawn(command, [...args], { cwd: spawnOptions.cwd, detached: grouped, shell: spawnOptions.shell, stdio: ["ignore", "pipe", "pipe"] });
 
         if (grouped && child.pid !== undefined) {
-            group = { child, dispose: killGroupOnExit(child.pid) };
+            group = { dispose: killGroupOnExit(child.pid), pid: child.pid };
         }
 
         return child;
