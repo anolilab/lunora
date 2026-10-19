@@ -1041,8 +1041,6 @@ interface OfflineQueueOptions {
     onPersistenceError?: (context: PersistenceErrorContext) => void;
     queueBeforeFirstConnect?: boolean;
     replayRetry?: {
-        baseDelayMs?: number;
-        maxDelayMs?: number;
         maxShardErrorAttempts?: number;
     };
 }
