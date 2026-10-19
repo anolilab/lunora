@@ -210,4 +210,21 @@ describe("defaultSpawner", () => {
 
         expect(result.stdout).toBe("é");
     });
+
+    it("captures all of a large stdout written immediately before exit", async () => {
+        expect.assertions(5);
+
+        const size = 1_000_000;
+
+        for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await defaultSpawner({
+                args: ["-e", `process.stdout.write("x".repeat(${String(size)}), () => process.exit(0));`],
+                captureStdoutSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.stdout?.length).toBe(size);
+        }
+    });
 });

@@ -203,7 +203,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
             });
         }
 
+        let settled = false;
+
         child.on("error", (error) => {
+            settled = true;
+
             // The single chokepoint for "that program isn't installed": every
             // shell-out in the CLI goes through this spawner, and Node reports a
             // command that isn't on PATH as an `ENOENT` on the child (no PID, no
@@ -224,12 +228,25 @@ export const defaultSpawner: Spawner = (descriptor) =>
             reject(error);
         });
 
+        let exitCode = 0;
+
         child.on("exit", (code, signal) => {
             // A signal-killed child reports `code === null`; treat that as a
             // failure (non-zero) rather than silently passing — e.g. an
             // OOM-killed `tsc` must not read as a clean type-check.
+            exitCode = code ?? (signal ? 1 : 0);
+        });
+
+        // Settle on `close`, not `exit`: `exit` can fire while the piped stdio
+        // is still draining, which would truncate the captured output.
+        child.on("close", () => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
             resolve({
-                code: code ?? (signal ? 1 : 0),
+                code: exitCode,
                 stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
                 stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
             });
