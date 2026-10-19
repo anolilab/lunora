@@ -388,15 +388,13 @@ const planStepText = (step: Record<string, unknown>): string => {
     return typeof text === "string" ? text : Object.values(step).map(String).join(" | ");
 };
 
-/** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place; returns the fields it assigned. */
+/** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
 const applyOnUpdate = (
     definition: TableDefinitionLike,
     provided: Record<string, unknown>,
     target: Record<string, unknown>,
     auth: ServerDefaultContextLike["auth"],
-): string[] => {
-    const assigned: string[] = [];
-
+): void => {
     for (const [field, column] of tableColumns(definition)) {
         if (column.serverDefault) {
             // Server-trusted: if the client tried to set this field, overwrite it
@@ -405,7 +403,6 @@ const applyOnUpdate = (
             if (field in provided) {
                 // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above)
                 target[field] = column.serverDefault({ auth });
-                assigned.push(field);
             }
 
             continue;
@@ -417,11 +414,8 @@ const applyOnUpdate = (
             // values land on the object that is about to be persisted.
             // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above)
             target[field] = column.onUpdateFn();
-            assigned.push(field);
         }
     }
-
-    return assigned;
 };
 
 /**
@@ -2687,16 +2681,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const effectivePatch = resolvePatch(definition, patch, existing);
         const mergedRow: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
 
-        const hookFields = applyOnUpdate(definition, effectivePatch, mergedRow, auth);
+        applyOnUpdate(definition, effectivePatch, mergedRow, auth);
 
         // Refinement checks fire on the merged row so a patch that flips
         // a field to an invalid value is rejected before D1 sees it. A transform
         // column (`v.from` anywhere inside) is stored as its parsed output, and is
-        // parsed only when the patch (or an update hook) sets it to something other
-        // than what is stored: the rest of the row is stored output, which its own
-        // transform would reject or apply twice.
+        // parsed only when the patch sets it to something other than what is stored:
+        // the rest of the row, an update hook's value included, is stored output,
+        // which its own transform would reject or apply twice.
         const merged = runRowValidators(definition, mergedRow, {
-            only: new Set([...Object.keys(effectivePatch), ...hookFields]),
+            only: new Set(Object.keys(effectivePatch)),
             previous: () => existing,
             tolerateStoredNull: true,
         });
@@ -3584,9 +3578,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             assertStorableStrings(dialect.name, document);
 
             // Refinements declared via `.check(predicate)` fire on the post-default
-            // row so a defaulted value still passes its checks. A `v.from` column is
-            // stored as its parsed output; a trusted replay already holds that output.
+            // row so a defaulted value still passes its checks. A `v.from` column the
+            // caller wrote is stored as its parsed output; a defaulted one is declared as
+            // that output already, and a trusted replay holds it.
             const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), {
+                supplied: document,
                 trusted: insertOptions?.allowExplicitId === true,
             });
 
@@ -4313,10 +4309,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
             // field still has to satisfy its `.check()` predicate. A `v.from` column
-            // is stored as its parsed output, except on a trusted replay, whose
-            // document already holds it.
+            // the caller wrote is stored as its parsed output; an update hook's value
+            // is already that output, and so is a trusted replay's document.
             const replaced = runRowValidators(definition, replacement, {
                 previous: () => previous ?? decodeRow(definition, snapshot) ?? undefined,
+                supplied: document,
                 trusted: replaceOptions?.allowExplicitId === true,
             });
 

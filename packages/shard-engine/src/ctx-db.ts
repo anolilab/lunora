@@ -1639,18 +1639,16 @@ const buildReader = (
 /**
  * Recompute every `.$onUpdateFn()` field the caller did not set explicitly,
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
- * unless the caller overrode them. Returns the fields it assigned, which the
- * caller's validators must treat as written even though `provided` lacks them.
+ * unless the caller overrode them.
  */
 const applyOnUpdate = (
     definition: TableDefinitionLike,
     provided: Record<string, unknown>,
     target: Record<string, unknown>,
     auth: ServerDefaultContextLike["auth"],
-): string[] => {
+): void => {
     // Mutate the caller-owned record in place; alias so the param isn't reassigned.
     const out = target;
-    const assigned: string[] = [];
 
     for (const [field, column] of tableColumns(definition)) {
         if (column.serverDefault) {
@@ -1659,7 +1657,6 @@ const applyOnUpdate = (
             // untouched field keeps its stored value (no re-stamp to the caller).
             if (field in provided) {
                 out[field] = column.serverDefault({ auth });
-                assigned.push(field);
             }
 
             continue;
@@ -1667,11 +1664,8 @@ const applyOnUpdate = (
 
         if (column.onUpdateFn && !(field in provided)) {
             out[field] = column.onUpdateFn();
-            assigned.push(field);
         }
     }
-
-    return assigned;
 };
 
 /**
@@ -3846,10 +3840,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // Refinements declared via `.check(predicate)` fire here on the
             // post-default row so a defaulted value still passes its checks. A
-            // `v.from` column is stored as its parsed output, which is what reads
-            // are typed as; a trusted replay already holds that output.
+            // `v.from` column the caller wrote is stored as its parsed output, which
+            // is what reads are typed as; a defaulted one is declared as that output
+            // already, and a trusted replay holds it.
             const trusted = insertOptions?.allowExplicitId === true;
-            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { trusted });
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { supplied: document, trusted });
 
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
@@ -3982,13 +3977,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 chunkSeqFields.push(commitSeqFields(tableName));
             }
 
-            // Still unvalidated, but a `v.from` column is stored as its parsed output like every
-            // other insert; a trusted replay already holds that output.
+            // Still unvalidated, but a `v.from` column the caller wrote is stored as its parsed
+            // output like every other insert; a trusted replay already holds that output.
             const transformColumns = batchOptions?.allowExplicitId === true ? undefined : transformOnlyDefinition(definition);
 
             const rows = documents.map((document, index) => {
                 const defaulted = applyInsertDefaults(definition, document, auth);
-                const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted);
+                const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
@@ -4172,17 +4167,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const effectivePatch = resolvePatch(tableDefinition, patch, existing);
             const mergedRow = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
-            const hookFields = applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
+            applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
             //
-            // A transform column is parsed only when the patch (or an update hook)
-            // sets it to something other than what is stored: the rest of `merged`
-            // is stored output, which its own transform would reject or apply twice.
+            // A transform column is parsed only when the patch sets it to something
+            // other than what is stored: the rest of `merged`, an update hook's value
+            // included, is stored output, which its own transform would reject or
+            // apply twice.
             const merged = runRowValidators(tableDefinition, mergedRow, {
-                only: new Set([...Object.keys(effectivePatch), ...hookFields]),
+                only: new Set(Object.keys(effectivePatch)),
                 previous: () => existing,
                 tolerateStoredNull: true,
             });
@@ -4694,10 +4690,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
             // field still has to satisfy its `.check()` predicate. A `v.from` column
-            // is stored as its parsed output, except on a trusted replay, whose
-            // document already holds it.
+            // the caller wrote is stored as its parsed output; an update hook's value
+            // is already that output, and so is a trusted replay's document.
             const trusted = replaceOptions?.allowExplicitId === true;
-            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, trusted });
+            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, supplied: document, trusted });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });

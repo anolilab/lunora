@@ -75,9 +75,21 @@ const doublyOptionalFrom = (): ValidatorLike => {
     };
 };
 
-/** A `v.from` column whose update hook returns the numeric STRING the schema accepts. */
+/**
+ * A `v.from` column whose default and update hook return the column's OUTPUT (a number), not the
+ * numeric string the schema accepts; the transform must never run over them.
+ */
 const hookedFromColumn = (): ValidatorLike => {
-    return { _meta: { column: { defaultFn: () => "1", notNull: true, onUpdateFn: () => "5" } }, kind: "from", parse: numericOutput };
+    return { _meta: { column: { defaultFn: () => 1, notNull: true, onUpdateFn: () => 5 } }, kind: "from", parse: numericOutput };
+};
+
+/** A non-idempotent `v.from` over numbers (x100): a second run would turn a stored 5 into 50_000. */
+const centiColumn = (column: Record<string, unknown> = {}): ValidatorLike => {
+    return {
+        _meta: { column: { notNull: true, ...column } },
+        kind: "from",
+        parse: (value: unknown) => (typeof value === "number" ? value * 100 : refuse()),
+    };
 };
 
 /** `v.record(v.from(lowercase), v.string())`: only the KEYS carry a transform. */
@@ -93,6 +105,16 @@ const lowercasedKeyRecord = (): ValidatorLike => {
 
 const schema = {
     tables: {
+        priced: {
+            indexes: [],
+            shape: {
+                bumped: centiColumn({ defaultValue: 1, onUpdateFn: () => 7 }),
+                label: col("string"),
+                price: centiColumn({ defaultValue: 5 }),
+                tagged: centiColumn({ defaultFn: () => 9 }),
+            },
+            shardMode: { kind: "global" },
+        },
         labelled: { indexes: [], shape: { labels: lowercasedKeyRecord() }, shardMode: { kind: "global" } },
         nested: {
             indexes: [],
@@ -363,7 +385,7 @@ describe("createSqlCtxDb read-modify-write of a row holding parsed columns", () 
     });
 });
 
-describe("createSqlCtxDb runs an update hook's value through the column's transform", () => {
+describe("createSqlCtxDb stores a default and an update hook's value as declared", () => {
     beforeEach(() => {
         harness = createSqliteHarness();
         writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
@@ -373,7 +395,7 @@ describe("createSqlCtxDb runs an update hook's value through the column's transf
         harness.close();
     });
 
-    it("patch of another field stores the hook's value as the transform's output", async () => {
+    it("insert keeps a $defaultFn value and patch keeps a $onUpdateFn value, neither run through the transform", async () => {
         expect.assertions(2);
 
         const id = await writer.insert("nested", nestedInput());
@@ -383,6 +405,50 @@ describe("createSqlCtxDb runs an update hook's value through the column's transf
         await writer.patch(id, { label: "b" });
 
         await expect(stored(id, "stamp")).resolves.toBe(5);
+    });
+
+    it("insert stores a default as declared when omitted, and transforms the same value when the caller supplies it", async () => {
+        expect.assertions(4);
+
+        const omitted = await writer.insert("priced", { label: "a" });
+
+        await expect(stored(omitted, "price")).resolves.toBe(5);
+        await expect(stored(omitted, "tagged")).resolves.toBe(9);
+
+        const supplied = await writer.insert("priced", { label: "b", price: 5, tagged: 9 });
+
+        await expect(stored(supplied, "price")).resolves.toBe(500);
+        await expect(stored(supplied, "tagged")).resolves.toBe(900);
+    });
+
+    it("patch stores an $onUpdateFn value as declared and still transforms a value the caller sets", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("priced", { label: "a" });
+
+        await writer.patch(id, { label: "b" });
+
+        await expect(stored(id, "bumped")).resolves.toBe(7);
+
+        await writer.patch(id, { bumped: 3, label: "c" });
+
+        await expect(stored(id, "bumped")).resolves.toBe(300);
+
+        await writer.patch(id, { label: "d" });
+
+        await expect(stored(id, "bumped")).resolves.toBe(7);
+    });
+
+    it("replace stores an $onUpdateFn value as declared and transforms the columns the caller wrote", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("priced", { label: "a" });
+
+        await writer.replace(id, { label: "b", price: 2, tagged: 9 });
+
+        await expect(stored(id, "bumped")).resolves.toBe(7);
+        await expect(stored(id, "price")).resolves.toBe(200);
+        await expect(stored(id, "label")).resolves.toBe("b");
     });
 });
 

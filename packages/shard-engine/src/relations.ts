@@ -849,9 +849,9 @@ const transformOnlyDefinition = (definition: TableDefinitionLike): TableDefiniti
 interface RowValidatorOptions {
     /**
      * Parse transform columns only for these fields; the rest are skipped. A patch
-     * passes the keys it sets and the fields an update hook assigned, because the
-     * others in the merged row are already stored output and must not be fed
-     * through their transform again.
+     * passes the keys it sets, because the others in the merged row are already
+     * stored output and must not be fed through their transform again. A field an
+     * update hook assigned is not among them: a hook returns the stored form.
      */
     only?: ReadonlySet<string>;
 
@@ -864,6 +864,15 @@ interface RowValidatorOptions {
      * transform an explicit write equal to the stored output is kept as is, not re-parsed.
      */
     previous?: () => Readonly<Record<string, unknown>> | undefined;
+
+    /**
+     * The document as the caller wrote it, before defaults and update hooks filled in
+     * the rest (`insert`, `replace`). Only the transform columns it carries are INPUT
+     * and parsed; a value from `.default()`, `.$defaultFn()`, `.$onUpdateFn()` or a
+     * `.serverDefault()` is declared as the stored form and kept as is. Ignored when
+     * `only` is set.
+     */
+    supplied?: Readonly<Record<string, unknown>>;
 
     /**
      * Skip a `null` on an optional field (see below). Set on the patch path only.
@@ -894,11 +903,32 @@ const storedValueCheck = (previous: RowValidatorOptions["previous"]): ((field: s
 };
 
 /**
- * Whether a transform column's value is already stored output rather than input: the write
- * replays a stored row, the column is one the write did not set, or it equals what is stored.
+ * The fields of `supplied` the caller really wrote: not an `undefined` (which defaults fill) and
+ * not a `.serverDefault()` column (which is stamped over whatever was sent).
  */
-const holdsStoredOutput = (field: string, value: unknown, options: RowValidatorOptions, isStored: (field: string, value: unknown) => boolean): boolean =>
-    options.trusted === true || (options.only !== undefined && !options.only.has(field)) || isStored(field, value);
+const callerFields = (definition: TableDefinitionLike, supplied: Readonly<Record<string, unknown>>): Set<string> => {
+    const fields = new Set(Object.keys(supplied).filter((field) => supplied[field] !== undefined));
+
+    for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            fields.delete(field);
+        }
+    }
+
+    return fields;
+};
+
+/**
+ * Whether a transform column's value is already stored output rather than input: the write
+ * replays a stored row, the column is one the caller did not write (`only`), or it equals what is stored.
+ */
+const holdsStoredOutput = (
+    field: string,
+    value: unknown,
+    options: RowValidatorOptions,
+    only: ReadonlySet<string> | undefined,
+    isStored: (field: string, value: unknown) => boolean,
+): boolean => options.trusted === true || (only !== undefined && !only.has(field)) || isStored(field, value);
 
 /**
  * A copy of a declared default that no write can alias: plain objects, arrays, dates, byte
@@ -995,7 +1025,9 @@ const applyInsertDefaults = (
  *
  * Returns the document to store. It is the argument itself unless a transform
  * column was parsed, in which case it is a copy carrying that column's parsed
- * OUTPUT — reads are typed as the output, so that is what must be stored. A column
+ * OUTPUT — reads are typed as the output, so that is what must be stored. Only
+ * a value the caller wrote is parsed (see `supplied` / `only`): a default or an
+ * update hook already yields the output type and is stored as declared. A column
  * counts as one when a `v.from` sits anywhere inside it (an array element, an
  * object field, a doubly-wrapped optional). Every other column keeps storing what the caller supplied: their parsers are
  * idempotent, and adopting a normalised result (`v.bytes()` turning a view into
@@ -1009,6 +1041,7 @@ const applyInsertDefaults = (
 const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, options: RowValidatorOptions = {}): Record<string, unknown> => {
     let parsed: Record<string, unknown> | undefined;
     const isStored = storedValueCheck(options.previous);
+    const only = options.only ?? (options.supplied === undefined ? undefined : callerFields(definition, options.supplied));
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
@@ -1021,7 +1054,7 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 
         const fromColumn = hasTransform(validator);
 
-        if (fromColumn && holdsStoredOutput(field, document[field], options, isStored)) {
+        if (fromColumn && holdsStoredOutput(field, document[field], options, only, isStored)) {
             continue;
         }
 
