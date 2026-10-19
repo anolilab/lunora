@@ -169,6 +169,8 @@ export const ERROR_CATALOG = {
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+    /** A relay refused a live control call (subscribe or unsubscribe) because a later call for the same subscription already applied. Static message, so not `internal`. */
+    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "Live control call superseded" },
     /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
     IDENTITY_MISMATCH: {
         hint: [

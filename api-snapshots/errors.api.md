@@ -212,6 +212,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Offline identity changed";
     };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "Live control call superseded";
+    };
     readonly IDENTITY_MISMATCH: {
         readonly hint: readonly [
             "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
