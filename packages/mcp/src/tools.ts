@@ -353,7 +353,10 @@ const callWriteTool = async (client: LunoraClient, name: string, input: Record<s
 
     const target = sensitiveArgs.length === 0 ? reference(functionPath) : { __lunoraRef: functionPath, sensitive: true as const };
 
-    return ok(kind === "action" ? await client.action(target, args, { shardKey }) : await client.mutation(target, args, { shardKey }));
+    // A tool call wants its answer now, so a mutation is never queued for later. That also keeps
+    // an argument that became sensitive after the cached descriptor was read from reaching an
+    // offline queue: the descriptor decides how the call is MASKED, not whether it may be stored.
+    return ok(kind === "action" ? await client.action(target, args, { shardKey }) : await client.mutation(target, args, { onlineOnly: true, shardKey }));
 };
 
 /** The opt-in flags `toolDefinitions` and `callTool` accept, by name. */
