@@ -18,6 +18,21 @@ describe("waitRegistry — awaitWait", () => {
     });
 });
 
+describe("waitRegistry — an observer asked before the wait began", () => {
+    it("resolves when the run starts the wait and takes an event already delivered for it", async () => {
+        expect.hasAssertions();
+
+        const registry = new WaitRegistry([]);
+        const observed = registry.awaitWait("run-1", "go");
+
+        // The event lands before the run reaches its wait, so the wait never becomes pending.
+        registry.deliver("run-1", "go", { ok: true });
+
+        await expect(registry.wait("run-1", "go", "go-type")).resolves.toStrictEqual({ ok: true });
+        await expect(observed).resolves.toBeUndefined();
+    });
+});
+
 describe("waitRegistry — late deliveries", () => {
     it("drops a delivery that arrives after expiry instead of holding it for the run's next wait", async () => {
         expect.hasAssertions();

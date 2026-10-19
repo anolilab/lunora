@@ -46,6 +46,7 @@ class WaitRegistry {
             const early = this.delivered.get(key);
 
             this.delivered.delete(key);
+            this.notifyReached(key, count);
 
             return Promise.resolve(this.record(name, type, early));
         }
@@ -65,18 +66,7 @@ class WaitRegistry {
                 },
             });
 
-            const listeners = this.reached.get(key) ?? [];
-
-            this.reached.set(
-                key,
-                listeners.filter((listener) => listener.target > count),
-            );
-
-            for (const listener of listeners) {
-                if (listener.target <= count) {
-                    listener.resolve();
-                }
-            }
+            this.notifyReached(key, count);
         });
     }
 
@@ -131,6 +121,22 @@ class WaitRegistry {
         return new Promise<void>((resolve) => {
             this.reached.set(key, [...(this.reached.get(key) ?? []), { resolve, target }]);
         });
+    }
+
+    /** Resolve every observer waiting for the `count`th wait on `key` or an earlier one. */
+    private notifyReached(key: string, count: number): void {
+        const listeners = this.reached.get(key) ?? [];
+
+        this.reached.set(
+            key,
+            listeners.filter((listener) => listener.target > count),
+        );
+
+        for (const listener of listeners) {
+            if (listener.target <= count) {
+                listener.resolve();
+            }
+        }
     }
 
     private record(name: string, type: string, payload: unknown): unknown {
