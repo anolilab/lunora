@@ -304,8 +304,17 @@ const reexportedBy = (declaration: ExportDeclaration, forwarded: SecretToolExpor
     const namespaceExport = declaration.getNamespaceExport();
 
     if (namespaceExport !== undefined) {
-        if (forwarded.names.size > 0) {
-            exported.namespaces.set(namespaceExport.getName(), forwarded.names);
+        // A nested namespace keeps its path: `agent.requestSecretTool` is what a reader of `tools` reaches through it.
+        const members = new Set(forwarded.names);
+
+        forwarded.namespaces.forEach((inner, member) => {
+            inner.forEach((name) => {
+                members.add(`${member}.${name}`);
+            });
+        });
+
+        if (members.size > 0) {
+            exported.namespaces.set(namespaceExport.getName(), members);
         }
 
         return;
@@ -424,9 +433,16 @@ const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile)
 
 /** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
 const readsNamespaceMember = (file: SourceFile, namespace: string, names: ReadonlySet<string>): boolean =>
-    file
-        .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
-        .some((access) => access.getExpression().getText() === namespace && names.has(access.getName()));
+    file.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
+        const expression = access.getExpression().getText();
+
+        // `ns.name`, or `ns.inner.name` through a nested namespace, which `names` records as `inner.name`.
+        if (expression === namespace) {
+            return names.has(access.getName());
+        }
+
+        return expression.startsWith(`${namespace}.`) && names.has(`${expression.slice(namespace.length + 1)}.${access.getName()}`);
+    });
 
 /**
  * Whether a named import wires the tool: it imports a name the module exports the tool under, or a namespace

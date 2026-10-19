@@ -198,6 +198,31 @@ describe("discover/secret-value-tool", () => {
         expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
     });
 
+    it("detects a tool reached through two namespace barrels, read as a chain", () => {
+        expect.assertions(1);
+
+        writeFile("agent.ts", `export * as agent from "@lunora/agent";`);
+        writeFile("tools.ts", `export * as tools from "./agent";`);
+        writeAgents(`
+            import { tools } from "./tools";
+            export const support = { ask: tools.agent.requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("does not treat a type-only reference to the tool as runtime use", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export * as agent from "@lunora/agent";`);
+        writeAgents(`
+            import { agent } from "./tools";
+            export type SecretTool = typeof agent.requestSecretTool;
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
     it("ignores a barrel that re-exports other names from the agent package", () => {
         expect.assertions(1);
 
