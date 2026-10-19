@@ -1149,12 +1149,16 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("keeps secret values out of ShardKvStore's listing and reads", async (context) => {
+            it("keeps secret values out of ShardKvStore's listing and reads", async () => {
                 await withSecretValues(async (host) => {
-                    // The ShardKvStore gap, reported by its own block; a host
-                    // without a KV store has no listing to keep secrets out of.
+                    // A host without a KV store has no listing to keep secrets out of, so the
+                    // check does not apply. That has to be the matrix's claim, asserted here,
+                    // not a silent skip: a host that rates keyValueStore but lacks it fails.
                     if (host.kv === undefined) {
-                        context.skip(`${name} does not implement ShardKvStore`);
+                        // A host with no matrix is taken as supporting every surface, as `secretValuesRating` does.
+                        const rating = host.capabilities === undefined ? "native" : (host.capabilities.features.keyValueStore?.level ?? "unsupported");
+
+                        expect(rating, `${name} has no ShardKvStore but rates keyValueStore ${rating}`).toBe("unsupported");
 
                         return;
                     }
