@@ -93,6 +93,8 @@ interface RelayShapeRow {
     key: string;
     name: string;
     relayIndex?: number;
+    /** The table the shape resolved to at seed, so a flush can skip it on the changed-table set before re-resolving. Absent on a row written before the column existed. */
+    table?: string;
 }
 
 /**
@@ -112,9 +114,19 @@ const migrateRelayShapes = (sql: SqlExec): void => {
             name TEXT NOT NULL,
             args TEXT NOT NULL,
             identity TEXT NOT NULL,
-            cursor INTEGER NOT NULL
+            cursor INTEGER NOT NULL,
+            table_name TEXT
         )`,
     );
+
+    // A table created by an earlier build has no `table_name` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one. Its rows read back with no
+    // table, and the flush falls back to resolving them.
+    try {
+        runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(RELAY_SHAPES_TABLE)} ADD COLUMN table_name TEXT`);
+    } catch {
+        // Already present (or the table was just created with it).
+    }
 };
 
 /** The stored column shape, before the JSON/wire columns are decoded back into a {@link RelayShapeRow}. */
@@ -126,6 +138,7 @@ interface StoredRelayShape {
     key: string;
     name: string;
     relay_idx: bigint | null | number;
+    table_name: null | string;
 }
 
 /**
@@ -168,7 +181,7 @@ const decodeColumn = (raw: string): unknown => decodeWire(JSON.parse(raw));
 const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
     const rows = runDrizzle<StoredRelayShape>(
         sql,
-        dsql`SELECT key, relay_idx, connection_id, name, args, identity, cursor FROM ${dsql.identifier(RELAY_SHAPES_TABLE)}`,
+        dsql`SELECT key, relay_idx, connection_id, name, args, identity, cursor, table_name FROM ${dsql.identifier(RELAY_SHAPES_TABLE)}`,
     ).toArray();
 
     return rows.map((row) => {
@@ -180,6 +193,7 @@ const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
             key: row.key,
             name: row.name,
             relayIndex: row.relay_idx === null ? undefined : Number(row.relay_idx),
+            table: row.table_name ?? undefined,
         };
     });
 };
@@ -188,15 +202,16 @@ const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
 const writeRelayShape = (sql: SqlExec, row: RelayShapeRow): void => {
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(RELAY_SHAPES_TABLE)} (key, relay_idx, connection_id, name, args, identity, cursor)
-             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${encodeColumn(row.args)}, ${encodeColumn(row.identity ?? {})}, ${row.cursor})
+        dsql`INSERT INTO ${dsql.identifier(RELAY_SHAPES_TABLE)} (key, relay_idx, connection_id, name, args, identity, cursor, table_name)
+             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${encodeColumn(row.args)}, ${encodeColumn(row.identity ?? {})}, ${row.cursor}, ${row.table ?? SQL_NULL})
              ON CONFLICT(key) DO UPDATE SET
                 relay_idx = excluded.relay_idx,
                 connection_id = excluded.connection_id,
                 name = excluded.name,
                 args = excluded.args,
                 identity = excluded.identity,
-                cursor = excluded.cursor`,
+                cursor = excluded.cursor,
+                table_name = excluded.table_name`,
     );
 };
 

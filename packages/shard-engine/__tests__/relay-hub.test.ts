@@ -1004,6 +1004,47 @@ describe("relay hub", () => {
         });
     });
 
+    describe("flush short-circuit on the changed-table set", () => {
+        it("does not resolve any seeded shape when the flushed table is one none of them read", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const { owner, resolvedUnder } = ownerFor(database.sql, relays);
+
+            await subscribe(owner, OPEN_SHAPE, 0);
+            await subscribe(owner, { args: {}, name: "lobby-presence" }, 0, "c-bob");
+            await subscribe(owner, SCOPED_SHAPE, 0);
+
+            const seeded = resolvedUnder.length;
+
+            await owner.onFlush(new Set(["invoices"]), 20);
+
+            expect(resolvedUnder).toHaveLength(seeded);
+            expect(pokesIn(relayAt(relays, 0))).toHaveLength(0);
+        });
+
+        it("refreshes a hydrated cohort row whose stored table is stale or missing on re-seed", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+
+            await subscribe(ownerFor(database.sql, relays).owner, OPEN_SHAPE, 0);
+            await subscribe(ownerFor(database.sql, relays).owner, { args: {}, name: "lobby-presence" }, 0);
+
+            // One row written before the column existed, one a deploy has since re-pointed.
+            database.sql.exec("UPDATE __lunora_relay_shapes SET table_name = NULL WHERE name = ?", OPEN_SHAPE.name);
+            database.sql.exec("UPDATE __lunora_relay_shapes SET table_name = 'old_table' WHERE name = ?", "lobby-presence");
+
+            const { owner: evicted } = ownerFor(database.sql, relays);
+
+            await subscribe(evicted, OPEN_SHAPE, 0, "c-bob");
+            await subscribe(evicted, { args: {}, name: "lobby-presence" }, 0, "c-bob");
+            await evicted.onFlush(new Set(["messages"]), 20);
+
+            expect(new Set(pokesIn(relayAt(relays, 0)).map((poke) => poke["name"]))).toStrictEqual(new Set(["lobby-messages", "lobby-presence"]));
+        });
+    });
+
     describe("relay index validation", () => {
         const relaysRows = (): number[] =>
             database.sql

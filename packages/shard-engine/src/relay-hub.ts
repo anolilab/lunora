@@ -123,6 +123,8 @@ interface CohortShapeEntry {
     cursor: number;
     key: string;
     name: string;
+    /** The table the shape resolved to at seed; lets a flush skip it before re-resolving. Absent on a row hydrated from before it was stored. */
+    table?: string;
 }
 
 /**
@@ -956,6 +958,11 @@ class OwnerRelay extends RelayLink {
         frameCursor: number,
         epoch: string | undefined,
     ): RelayShapePoke | undefined {
+        // The seed already resolved this shape: when its table did not change, skip it without re-resolving.
+        if (entry.table !== undefined && !changed.has(entry.table)) {
+            return undefined;
+        }
+
         let resolved: ResolvedShape | undefined;
 
         try {
@@ -1190,12 +1197,17 @@ class OwnerRelay extends RelayLink {
             let entry = cohort.get(routingKey);
 
             if (entry === undefined) {
-                entry = { args: request.args, cursor, key: routingKey, name: request.name };
+                entry = { args: request.args, cursor, key: routingKey, name: request.name, table: resolved.table };
                 cohort.set(routingKey, entry);
                 // Register durably on the SEED path — once per cohort, not per
                 // write — so the registry survives the owner eviction a
                 // socket-less relay-mode owner is always one idle moment away
                 // from. See `ctx-db-relay-shapes.ts`.
+                writeRelayShape(this.host.sql(), entry);
+            } else if (entry.table !== resolved.table) {
+                // A row hydrated from before the table was stored, or one a deploy re-pointed: refresh it, or the
+                // flush short-circuit in `buildShapePoke` would skip this cohort on the table it now reads.
+                entry.table = resolved.table;
                 writeRelayShape(this.host.sql(), entry);
             }
 
@@ -1210,6 +1222,7 @@ class OwnerRelay extends RelayLink {
                 key,
                 name: request.name,
                 relayIndex: request.relayIndex,
+                table: resolved.table,
             };
 
             proxies.set(key, proxy);
@@ -1357,7 +1370,7 @@ class OwnerRelay extends RelayLink {
 
         for (const row of readRelayShapes(this.host.sql())) {
             if (row.relayIndex === undefined || row.connectionId === undefined) {
-                hydrated.cohort.set(row.key, { args: row.args, cursor: row.cursor, key: row.key, name: row.name });
+                hydrated.cohort.set(row.key, { args: row.args, cursor: row.cursor, key: row.key, name: row.name, table: row.table });
             } else {
                 hydrated.proxies.set(row.key, {
                     args: row.args,
@@ -1367,6 +1380,7 @@ class OwnerRelay extends RelayLink {
                     key: row.key,
                     name: row.name,
                     relayIndex: row.relayIndex,
+                    table: row.table,
                 });
             }
         }

@@ -71,4 +71,27 @@ describe("relay shape persistence", () => {
 
         expect(stored?.identity).toStrictEqual({ identity: { issuedAt }, userId: "user_1" });
     });
+
+    it("adds the table column to a registry created before it existed, reading old rows back with no table", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+
+        try {
+            harness.sql.exec(
+                "CREATE TABLE __lunora_relay_shapes (key TEXT PRIMARY KEY, relay_idx INTEGER, connection_id TEXT, name TEXT NOT NULL, args TEXT NOT NULL, identity TEXT NOT NULL, cursor INTEGER NOT NULL)",
+            );
+            harness.sql.exec("INSERT INTO __lunora_relay_shapes VALUES ('old', NULL, NULL, 'feed', '{}', '{}', 3)");
+
+            migrateRelayShapes(harness.sql);
+            writeRelayShape(harness.sql, { args: {}, cursor: 4, key: "new", name: "feed", table: "messages" });
+
+            const byKey = new Map(readRelayShapes(harness.sql).map((row) => [row.key, row.table]));
+
+            expect(byKey.get("old")).toBeUndefined();
+            expect(byKey.get("new")).toBe("messages");
+        } finally {
+            harness.close();
+        }
+    });
 });
