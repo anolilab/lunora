@@ -1260,7 +1260,7 @@ const toFilterClauses: (filters: ReadonlyArray<EditableFilter>) => FilterClause[
 ### `useAutoRefresh` (const)
 
 ```ts
-const useAutoRefresh: (onTick: () => void, enabled: boolean, intervalMs?: number) => void;
+const useAutoRefresh: (onTick: () => unknown, enabled: boolean, intervalMs?: number) => void;
 ```
 
 ### `useDebounced` (const)
@@ -1590,6 +1590,7 @@ const MESSAGE_IDS: readonly [
     "SVG",
     "Export / Import",
     "Exported {count} rows.",
+    "Importing rows {from}–{to} of {total}…",
     "Facets",
     "file:function",
     "Files",
@@ -1748,6 +1749,8 @@ const MESSAGE_IDS: readonly [
     "Run as (userId)",
     "Identity (userId) to run as",
     "Run probe",
+    "Include mutations and actions",
+    "This will execute `{functionPath}` as user `{userId}`.",
     "Allowed",
     "Denied",
     "Errored",
