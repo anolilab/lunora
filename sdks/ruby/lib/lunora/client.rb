@@ -645,6 +645,13 @@ module Lunora
 
       return MutationOutcome.new(mutation_id: options.mutation_id, status: :queued) unless entry.nil?
 
+      # The notifications above are subscriber callbacks, and one may drop the socket. An online-only write that
+      # would now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+      if options.online_only && @mutex.synchronize { @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect) }
+        settle_layers([], rollbacks, nil)
+        raise OfflineError.new(OFFLINE_NOT_QUEUED, "'#{options.function_path}' is online-only and the connection is not live, so it was not queued")
+      end
+
       begin
         value, commit_cursor = rpc_full(options.function_path, options.args, options.shard_key, options.mutation_id)
       rescue StandardError => e

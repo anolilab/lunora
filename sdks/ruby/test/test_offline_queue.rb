@@ -961,6 +961,26 @@ class TestOnlineOnlyWrites < Minitest::Test
     refute_includes seen, %w[a c], "a refused write's overlay is never displayed"
   end
 
+  def test_an_online_only_write_whose_callback_drops_the_socket_is_refused_not_sent
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+    client.attach_socket(->(_frame) {})
+
+    # The subscriber sees the overlay, and the connection goes down inside its notification.
+    drop_on_overlay = lambda do |value|
+      client.detach_socket if value.is_a?(Array) && value.include?("c")
+    end
+    client.subscribe("auth:setPassword", { "token" => SECRET }, drop_on_overlay)
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_empty posts
+  end
+
   def test_an_online_only_write_is_sent_when_connected
     ConformanceManifest.covers("offline_online_only_sends_when_connected")
     store = MemoryStore.new
