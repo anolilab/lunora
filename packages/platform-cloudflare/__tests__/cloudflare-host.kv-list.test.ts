@@ -31,7 +31,10 @@ const sortedStorage = (entries: Record<string, unknown>) => {
 
 describe("createShardKvStore list", () => {
     const reserved = Object.fromEntries(
-        Array.from({ length: 40 }, (_, index) => [`__lunora_secret_value:${String(index).padStart(3, "0")}`, { value: "sealed" }]),
+        Array.from({ length: 40 }, (_, index) => [
+            `__lunora_secret_value:${String(index).padStart(3, "0")}`,
+            { expiresAt: Number.MAX_SAFE_INTEGER, scope: "thread-1", value: "sealed" },
+        ]),
     );
 
     it("returns every app key, however many reserved secret records sort before them", async () => {

@@ -279,9 +279,10 @@ interface SecretStorageLike extends KvStorageLike {
 
 /**
  * Key prefix the secret-value records live under, in the same `state.storage`
- * as the shard's KV surface. {@link createShardKvStore} hides every key under it,
- * so `ShardKvStore` can neither list nor read a secret, and a ref cannot be used
- * to bypass the claimant check.
+ * as the shard's KV surface. Only a value that is secret-shaped is hidden under
+ * it: an app's own records that happen to share the prefix stay usable, and
+ * {@link createShardKvStore} refuses to let a user record take on the shape of a
+ * secret, since the secret host would read it as one.
  */
 const SECRET_VALUE_KEY_PREFIX = "__lunora_secret_value:";
 
@@ -290,10 +291,34 @@ const SECRET_VALUE_SWEEP_LIMIT = 32;
 
 const isReservedKey = (key: string): boolean => key.startsWith(SECRET_VALUE_KEY_PREFIX);
 
-const assertNotReservedKey = (key: string): void => {
-    if (isReservedKey(key)) {
-        throw new TypeError(`key "${key}" is in the reserved secret-value namespace`);
+/** One stored secret. `expiresAt` is absolute, so a restored record still expires on time. */
+interface SecretRecord {
+    claimant?: string;
+    expiresAt: number;
+    scope: string;
+    value: string;
+}
+
+/**
+ * Whether a stored value has the shape the secret host writes. This is the only
+ * test that decides whether a reserved key is a secret: a non-secret value is an
+ * app record and stays visible, and a secret-shaped value is never accepted from
+ * the KV surface, so the secret host cannot be handed a forged record.
+ */
+const isSecretRecord = (value: unknown): value is SecretRecord => {
+    if (typeof value !== "object" || value === null) {
+        return false;
     }
+
+    const record = value as Record<string, unknown>;
+
+    return (
+        typeof record.expiresAt === "number" &&
+        Number.isFinite(record.expiresAt) &&
+        typeof record.scope === "string" &&
+        typeof record.value === "string" &&
+        (record.claimant === undefined || typeof record.claimant === "string")
+    );
 };
 
 /**
@@ -301,18 +326,24 @@ const assertNotReservedKey = (key: string): void => {
  * {@link ShardKvStore}. The DO's KV surface already matches the contract
  * method-for-method; this adapter normalizes the return of `delete` (workerd
  * resolves a boolean, some doubles a number), fails closed on a `list` the
- * underlying storage does not provide, and keeps the reserved secret-value
- * namespace invisible: `get` answers `undefined` for it, `list` omits it, and
- * `put`/`delete` refuse it.
+ * underlying storage does not provide, and keeps secret records invisible: `get`
+ * and `list` skip a reserved key whose stored value is secret-shaped, and
+ * `put`/`delete` refuse to touch one.
  */
 const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
     return {
         delete: async (key) => {
-            assertNotReservedKey(key);
+            if (isReservedKey(key) && isSecretRecord(await storage.get(key))) {
+                throw new TypeError(`key "${key}" holds a secret value and cannot be deleted through the KV surface`);
+            }
 
             return Boolean(await storage.delete(key));
         },
-        get: async (key) => (isReservedKey(key) ? undefined : storage.get(key)),
+        get: async <T = unknown>(key: string) => {
+            const value = await storage.get<T>(key);
+
+            return isReservedKey(key) && isSecretRecord(value) ? undefined : value;
+        },
         list: async <T = unknown>(options?: ShardKvListOptions) => {
             if (typeof storage.list !== "function") {
                 throw new TypeError("storage.list is not available on this DurableObjectStorage");
@@ -324,11 +355,11 @@ const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
             const prefix = options?.prefix;
             const entries = await storage.list<T>(prefix === undefined ? {} : { prefix });
 
-            // storage.list has no exclude, so reserved records are read and dropped
+            // storage.list has no exclude, so secret records are read and dropped
             // here. The sweep in put does not bound them: it removes only expired
             // records, so live secret records can be numerous.
-            for (const key of entries.keys()) {
-                if (isReservedKey(key)) {
+            for (const [key, value] of entries) {
+                if (isReservedKey(key) && isSecretRecord(value)) {
                     entries.delete(key);
                 }
             }
@@ -336,20 +367,14 @@ const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
             return entries;
         },
         put: async (key, value) => {
-            assertNotReservedKey(key);
+            if (isReservedKey(key) && (isSecretRecord(value) || isSecretRecord(await storage.get(key)))) {
+                throw new TypeError(`key "${key}" is reserved for secret values and cannot be written through the KV surface`);
+            }
 
             await storage.put(key, value);
         },
     };
 };
-
-/** One stored secret. `expiresAt` is absolute, so a restored record still expires on time. */
-interface SecretRecord {
-    claimant?: string;
-    expiresAt: number;
-    scope: string;
-    value: string;
-}
 
 /**
  * Turn a Durable Object's `state.storage` into a {@link SecretValueHost}.
@@ -368,27 +393,46 @@ const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () 
     const keyOf = (ref: string): string => `${SECRET_VALUE_KEY_PREFIX}${ref}`;
 
     return {
-        discard: async (ref) => Boolean(await storage.delete(keyOf(ref))),
+        discard: async (ref) => {
+            const key = keyOf(ref);
+
+            // Erasing a ref must not remove an app record that sits at the same key.
+            if (!isSecretRecord(await storage.get(key))) {
+                return false;
+            }
+
+            return Boolean(await storage.delete(key));
+        },
         put: async (seal, put) => {
             const at = now();
             const expiresAt = at + clampSecretValueTtl(put.ttlMs);
             const ref = `${String(expiresAt).padStart(15, "0")}.${crypto.randomUUID()}`;
+            const key = keyOf(ref);
+            const sealed = await seal(ref);
 
-            await storage.put(keyOf(ref), { expiresAt, scope: put.scope, value: await seal(ref) } satisfies SecretRecord);
+            // A random ref makes this unreachable in practice. Failing closed keeps an app record from being
+            // overwritten if it ever happens.
+            if ((await storage.get(key)) !== undefined) {
+                throw new Error(`secret value ref "${ref}" is already in use`);
+            }
 
-            const earliest = await storage.list<SecretRecord>({ limit: SECRET_VALUE_SWEEP_LIMIT, prefix: SECRET_VALUE_KEY_PREFIX });
-            const expired = [...earliest].filter(([, record]) => record.expiresAt <= at).map(([key]) => key);
+            await storage.put(key, { expiresAt, scope: put.scope, value: sealed } satisfies SecretRecord);
 
-            await Promise.all(expired.map(async (key) => storage.delete(key)));
+            const earliest = await storage.list({ limit: SECRET_VALUE_SWEEP_LIMIT, prefix: SECRET_VALUE_KEY_PREFIX });
+            const expired = [...earliest].filter(([, record]) => isSecretRecord(record) && record.expiresAt <= at).map(([stored]) => stored);
+
+            await Promise.all(expired.map(async (stored) => storage.delete(stored)));
 
             return ref;
         },
         take: (ref, take, open) =>
             storage.transaction(async (txn) => {
                 const key = keyOf(ref);
-                const record = await txn.get<SecretRecord>(key);
+                const record = await txn.get(key);
 
-                if (record === undefined) {
+                // An app record that sits at a secret ref is not a secret, so it is
+                // neither returned nor bound.
+                if (!isSecretRecord(record)) {
                     return undefined;
                 }
 
