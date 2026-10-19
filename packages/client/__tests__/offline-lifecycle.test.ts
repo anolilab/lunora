@@ -590,6 +590,7 @@ describe("offline lifecycle (e2e)", () => {
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
             queryCache: createIndexedDbQueryCache({ indexedDB }),
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
@@ -613,7 +614,11 @@ describe("offline lifecycle (e2e)", () => {
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
 
         // --- The app's session resolves — as the SAME user -------------------
+        // A bearer landing on an anonymous socket reconnects it, so the bearer
+        // rides the next upgrade; the held write replays once that socket opens.
         client.setAuthToken("token-a", "user-a");
+        await flushMicrotasks();
+        latestSocket().open();
         await settleIndexedDb();
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
