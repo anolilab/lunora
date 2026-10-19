@@ -415,12 +415,6 @@ const statusErrorOf = (body: unknown, status: number): LunoraError | undefined =
 };
 
 /**
- * Request headers for one attempt. A set `lastEventId` replaces any differently
- * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
- * and only the latest resume position may be sent.
- */
-
-/**
  * A non-2xx response's JSON body, read for at most `ERROR_BODY_WAIT_MS`. `undefined` when the body is
  * absent, malformed or slow; the body is then cancelled so it cannot hold the connection. An abort
  * while reading rethrows, so the attempt's abort handling takes over.
@@ -448,6 +442,11 @@ const readErrorBody = async (response: Response, signal: AbortSignal): Promise<u
     }
 };
 
+/**
+ * Request headers for one attempt. A set `lastEventId` replaces any differently
+ * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
+ * and only the latest resume position may be sent.
+ */
 const attemptHeaders = (extra: Record<string, string> | undefined, lastEventId: string | undefined): Record<string, string> => {
     const kept = Object.entries(extra ?? {}).filter(([name]) => lastEventId === undefined || name.toLowerCase() !== "last-event-id");
 
