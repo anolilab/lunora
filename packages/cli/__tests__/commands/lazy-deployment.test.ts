@@ -148,6 +148,29 @@ describe("lazy deployment", () => {
             expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
         });
 
+        it("skips prepare's smoke check on --no-smoke-load, as build and deploy do", async () => {
+            expect.assertions(2);
+
+            vi.mocked(runLazySmokeLoad).mockClear();
+            const { spawner } = createRecordingSpawner();
+            const result = await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLoad: false, spawner, strictAdvisories: false });
+
+            expect(vi.mocked(runLazySmokeLoad)).not.toHaveBeenCalled();
+            expect(result.code).toBe(0);
+        });
+
+        it("hands an injected smoke launcher to prepare's check", async () => {
+            expect.assertions(1);
+
+            vi.mocked(runLazySmokeLoad).mockClear();
+            const smokeLauncher = vi.fn<DevProcessSpawner>();
+            const { spawner } = createRecordingSpawner();
+
+            await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLauncher, spawner, strictAdvisories: false });
+
+            expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
+        });
+
         it("refuses prepare, the CI gate, when a lazy module fails to load", async () => {
             expect.assertions(2);
 
