@@ -198,6 +198,31 @@ for (const { item, view } of FRAMEWORKS) {
     emit(manifestPath, await prettier.format(JSON.stringify({ ...manifest, files }), { ...prettierOptions, parser: "json" }));
 }
 
+/*
+ * Every template ships its own copy of the `ratelimit` item's schema, and the
+ * copies drifted from it (other limits, other imports). They are hand-owned —
+ * the template's comments point at its own files, not the item's — so this does
+ * not rewrite them; it fails when one differs from the item in anything but
+ * comment-only lines, once the item's `@lunora/*` imports are spelled the way
+ * templates import (`lunorash/*`). Runs in both modes: there is nothing to sync.
+ */
+const codeLines = (text) =>
+    text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !/^(?:\/\/|\/\*|\*)/u.test(line));
+const ratelimitItem = codeLines(readFileSync(join(REGISTRY, "ratelimit", "schema.ts"), "utf8").replaceAll('from "@lunora/', 'from "lunorash/'));
+const ratelimitDrift = readdirSync(join(ROOT, "templates"))
+    .map((template) => join(ROOT, "templates", template, "lunora", "ratelimit", "schema.ts"))
+    .filter((copy) => existsSync(copy) && codeLines(readFileSync(copy, "utf8")).join("\n") !== ratelimitItem.join("\n"));
+
+if (ratelimitDrift.length > 0) {
+    process.stderr.write(
+        `these templates' lunora/ratelimit/schema.ts differ from registry/ratelimit/schema.ts beyond comments — make the code match:\n${ratelimitDrift.map((copy) => `  ${relative(ROOT, copy)}`).join("\n")}\n`,
+    );
+    process.exit(1);
+}
+
 if (CHECK && pending.length > 0) {
     process.stderr.write(`auth-ui registry is stale — run \`pnpm --filter @lunora/auth-ui sync:registry\`:\n${pending.map((p) => `  ${p}`).join("\n")}\n`);
     process.exit(1);
