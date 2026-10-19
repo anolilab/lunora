@@ -1774,3 +1774,107 @@ func TestANormalWriteStillQueuesWhenDisconnected(t *testing.T) {
 		t.Fatalf("a queued write reached the wire: %d requests", len(bodies))
 	}
 }
+
+// overlayRolledBack fails unless the overlay was shown and the last value shown is
+// the base again. Without the first half, a rollback proves nothing.
+func overlayRolledBack(t *testing.T, seen []any) {
+	t.Helper()
+
+	shown := false
+
+	for _, value := range seen {
+		if reflect.DeepEqual(value, []any{"a", "c"}) {
+			shown = true
+		}
+	}
+
+	if !shown || len(seen) == 0 || !reflect.DeepEqual(seen[len(seen)-1], []any{"a"}) {
+		t.Fatalf("overlay not shown and rolled back: seen %v", seen)
+	}
+}
+
+// An online-only write sent directly to a shard that never connected, whose request
+// got no reply, is refused as a queued write would have been: nothing queued or
+// persisted, the overlay rolled back, the transport error kept as the cause. A
+// coded rejection is the server's verdict and surfaces as itself, and a failure
+// while the socket is up surfaces as it always has.
+func TestOnlineOnlyTransportFailureIsRefused(t *testing.T) {
+	covers("offline_online_only_transport_failure_refused")
+
+	unreachable := errors.New("dial tcp: connection refused")
+	args := map[string]any{"token": onlineOnlySecret}
+
+	// fresh returns a client that has never connected, so an online-only write takes
+	// the direct path, with a subscription holding the server value ["a"].
+	fresh := func(post HTTPPoster, store *memoryStore) (*Client, *[]any, *int) {
+		requests := 0
+		client := NewClient("https://app.example", func(endpoint string, headers map[string]string, body []byte) (int, []byte, error) {
+			requests++
+
+			return post(endpoint, headers, body)
+		})
+		client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store}))
+
+		var seen []any
+
+		client.Subscribe("auth:setPassword", args, func(value any) { seen = append(seen, value) }, nil, "")
+
+		for _, entry := range client.subscriptions {
+			entry.state.LastValue = []any{"a"}
+			entry.state.ServerBase = []any{"a"}
+		}
+
+		return client, &seen, &requests
+	}
+
+	unreachablePost := func(string, map[string]string, []byte) (int, []byte, error) { return 0, nil, unreachable }
+	submit := SubmitOptions{Args: args, FunctionPath: "auth:setPassword", OnlineOnly: true, Optimistic: appender("c")}
+
+	store := &memoryStore{}
+	client, seen, requests := fresh(unreachablePost, store)
+
+	_, err := client.Submit(submit)
+
+	var refused OfflineError
+	if !errors.As(err, &refused) || refused.Code != CodeOfflineNotQueued {
+		t.Fatalf("err: got %v, want code %s", err, CodeOfflineNotQueued)
+	}
+
+	if !errors.Is(err, unreachable) {
+		t.Fatalf("the transport error is not the cause: %v", err)
+	}
+
+	if *requests != 1 || client.PendingMutationCount() != 0 || len(store.appended) != 0 {
+		t.Fatalf("requests=%d pending=%d appended=%d, want 1 direct send, nothing queued", *requests, client.PendingMutationCount(), len(store.appended))
+	}
+
+	overlayRolledBack(t, *seen)
+
+	coded := func(string, map[string]string, []byte) (int, []byte, error) {
+		return 403, []byte(`{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}`), nil
+	}
+
+	client, seen, _ = fresh(coded, &memoryStore{})
+
+	_, err = client.Submit(submit)
+
+	var apiError APIError
+	if !errors.As(err, &apiError) || apiError.Code != "PERMISSION_DENIED" {
+		t.Fatalf("a coded rejection: got %v, want PERMISSION_DENIED as itself", err)
+	}
+
+	if errors.As(err, &refused) {
+		t.Fatalf("a coded rejection was reported as refused: %v", err)
+	}
+
+	overlayRolledBack(t, *seen)
+
+	client, _, _ = fresh(unreachablePost, &memoryStore{})
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	_, err = client.Submit(SubmitOptions{Args: args, FunctionPath: "auth:setPassword", OnlineOnly: true})
+
+	if !errors.Is(err, unreachable) || errors.As(err, &refused) {
+		t.Fatalf("a failure while connected: got %v, want the transport error unchanged", err)
+	}
+}
