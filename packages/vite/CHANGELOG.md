@@ -1,3 +1,17 @@
+## @lunora/vite [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.355...@lunora/vite@1.0.0-alpha.356) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.333
+* **@lunora/config:** upgraded to 1.0.0-alpha.382
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/studio:** upgraded to 1.0.0-alpha.322
+
 ## @lunora/vite [1.0.0-alpha.355](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.354...@lunora/vite@1.0.0-alpha.355) (2026-10-19)
 
 
