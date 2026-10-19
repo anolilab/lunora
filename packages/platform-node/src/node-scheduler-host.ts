@@ -173,13 +173,22 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
 
     // Databases created before the claim lease existed lack the column.
-    if (
-        !database
+    const hasClaimColumn = (): boolean =>
+        database
             .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
             .all()
-            .some((column) => column.name === "claimed_at")
-    ) {
-        database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+            .some((column) => column.name === "claimed_at");
+
+    if (!hasClaimColumn()) {
+        try {
+            database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+        } catch (error) {
+            // Another process sharing the file added it between our check and
+            // our ALTER; anything else is a real failure.
+            if (!hasClaimColumn()) {
+                throw error;
+            }
+        }
     }
 
     database.exec(
