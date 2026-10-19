@@ -444,6 +444,21 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         expect(events[0]?.error?.internal?.password).not.toBe("not-a-real-credential"); // gitleaks:allow -- test fixture, not a credential
     });
 
+    it("keeps ids and URLs in the operator context, which the PII rules would mask", () => {
+        expect.assertions(1);
+
+        const { events, sink } = collectEvents();
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: { code: "INTERNAL", internal: { shardId: "shard-42", upstream: "https://replica.example/v1" }, message: "boom", status: 500 },
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        expect(events[0]?.error?.internal).toEqual({ shardId: "shard-42", upstream: "https://replica.example/v1" });
+    });
+
     it("leaves an event without internal untouched", () => {
         expect.assertions(1);
 

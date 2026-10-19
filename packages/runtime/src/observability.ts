@@ -13,7 +13,7 @@
  */
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
-import { redactArgs } from "@lunora/observability";
+import { redactSecrets } from "@lunora/observability";
 
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
@@ -42,8 +42,8 @@ export interface ObservabilityEvent {
 
         /**
          * Operator-only context from the thrown `LunoraError`'s `internal`. Sinks only:
-         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactArgs`
-         * before a sink sees it.
+         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactSecrets`
+         * before a sink sees it: credential-named fields only, so ids and URLs survive.
          */
         internal?: Record<string, unknown>;
         message: string;
@@ -327,7 +327,7 @@ export const emitRpcEvent = (
         const outgoing =
             event.error === undefined || internal === undefined
                 ? event
-                : { ...event, error: { ...event.error, internal: redactArgs(internal) as Record<string, unknown> } };
+                : { ...event, error: { ...event.error, internal: redactSecrets(internal) as Record<string, unknown> } };
 
         sink.onRpc(outgoing, context);
     } catch {

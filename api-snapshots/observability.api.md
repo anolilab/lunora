@@ -1245,6 +1245,12 @@ const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rows
 const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ```
 
+### `redactSecrets` (const)
+
+```ts
+const redactSecrets: (value: unknown, captureRaw?: boolean) => unknown;
+```
+
 ### `resolveTraceAnchor` (const)
 
 ```ts
