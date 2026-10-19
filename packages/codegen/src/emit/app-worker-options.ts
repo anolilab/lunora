@@ -53,7 +53,7 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
               `        const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry, secret: (env as { SHARD_REGISTRY_DO_SECRET?: string }).SHARD_REGISTRY_DO_SECRET }) });
         }`,
           ]
         : []),

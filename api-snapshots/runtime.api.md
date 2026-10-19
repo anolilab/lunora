@@ -593,6 +593,7 @@ interface DynamicShardRegistryOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: ShardNamespaceLike;
+    secret?: string;
 }
 ```
 

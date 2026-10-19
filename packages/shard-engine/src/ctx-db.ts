@@ -247,6 +247,7 @@ interface CtxDbOptions {
      * sends, and it makes the stale check answer "not stale".
      */
     baselineSeq?: () => number | undefined;
+
     broadcast?: BroadcastDelta;
 
     /**
@@ -272,6 +273,15 @@ interface CtxDbOptions {
     cdc?: boolean;
 
     clock?: Clock;
+
+    /**
+     * Shard-scoped memo of aggregate / rank companions already verified against
+     * their durable marker. `createShardCtxDb` runs per dispatch, so without a
+     * long-lived set every dispatch re-checks each companion on first touch; a
+     * host (the generated ShardDO) passes one set for the DO's lifetime and clears
+     * it when migrations run. Omitted, each writer keeps its own.
+     */
+    companionMemo?: Set<string>;
 
     /**
      * Opt into the secure-by-default write-path guard. When `true` AND the
@@ -2263,10 +2273,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // A `.memory()` table never reaches the changelog. Its rows do not
         // survive the next eviction, so a CDC consumer replaying them would
         // materialize state the shard itself no longer believes in — and log
-        // retention is opt-in (`LUNORA_CDC_LOG_RETENTION`; without it
-        // `CdcRetentionRunner.sweep` returns before trimming anything), so on a
-        // default deployment a heartbeat-rate presence table would grow the log
-        // without bound for the life of the shard.
+        // retention defaults to a 100,000-row window (`LUNORA_CDC_LOG_RETENTION`),
+        // so a heartbeat-rate presence table would churn the whole window and
+        // evict the entries real consumers still need.
         //
         // What this costs, stated because two call sites got it wrong by
         // assuming otherwise:
@@ -2709,6 +2718,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         recordCdc,
         schema,
         sql,
+        verified: options.companionMemo,
     });
 
     /**
@@ -2774,6 +2784,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      */
     const globalFallbackFor = (expectedTable?: string): DatabaseWriterLike | undefined =>
         expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
+
+    /**
+     * Delete one `.global()` row by id straight on the D1 writer, skipping the
+     * shard-local probe. Charges the meter exactly as the by-id fallback in
+     * `delete` does (a delete costs a row and no bytes, and D1 does not roll back
+     * with the DO's transaction).
+     */
+    const deleteGlobalById = async (global: DatabaseWriterLike, id: string, deleteOptions?: { hard?: boolean }): Promise<void> => {
+        meterWrite(undefined);
+        await global.delete(id, undefined, deleteOptions);
+    };
 
     /**
      * Locate a row by id and return both the owning table and the decoded
@@ -3371,6 +3392,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // returning the same page. Leave the table unpinned for a global table —
             // exactly what `deleteWhere` does when it hands ids to `deleteMany`.
             const expectedTable = isGlobalTable(tableName) ? undefined : tableName;
+            // A global table's ids never live in this DO, so they skip the local probe
+            // and go straight to the D1 writer; shard-local tables keep the pinned path.
+            const global = globalWriterFor(tableName, "deleteAll");
             let deleted = 0;
 
             // Resolve-then-delete in chunks until the table is empty. Deliberately
@@ -3398,7 +3422,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                     for (const id of ids) {
                         // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                        await writer.delete(id, expectedTable, deleteOptions);
+                        await (global === undefined ? writer.delete(id, expectedTable, deleteOptions) : deleteGlobalById(global, id, deleteOptions));
                         deleted += 1;
                     }
 
@@ -3447,6 +3471,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const ids = page.page.map((row) => String(row["_id"]));
 
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
+
+            // A global table's rows live in D1, never in this DO: skip the local
+            // by-id probe and hand the ids straight to the global writer.
+            const global = globalWriterFor(tableName, "deleteWhere");
+
+            if (global) {
+                for (let charged = 0; charged < ids.length; charged += 1) {
+                    meterWrite(undefined);
+                }
+
+                if (global.deleteMany === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: the global writer has no batch delete`);
+                }
+
+                return global.deleteMany(ids, batchOptions);
+            }
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always

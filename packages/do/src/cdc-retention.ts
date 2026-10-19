@@ -36,6 +36,18 @@ import {
 const CDC_ARCHIVE_BINDING = "LUNORA_CDC_ARCHIVE";
 
 /**
+ * Row window applied when CDC is enabled and neither retention knob is set.
+ *
+ * Every write appends a full post-image to `__cdc_log`, so an unconfigured shard
+ * grew that log for its whole lifetime and nothing said so — the storage bill
+ * and the DO's size limit were the first signal. A generous default turns that
+ * silent growth into a bounded one; a consumer that resumes below the window is
+ * told to re-seed (or is served from the archive when `LUNORA_CDC_ARCHIVE` is
+ * bound). Set `LUNORA_CDC_LOG_RETENTION` to move it.
+ */
+const DEFAULT_CDC_LOG_RETENTION_ROWS = 100_000;
+
+/**
  * Minimum spacing between retention sweeps. The sweep is amortized onto a write
  * dispatch rather than a timer, so this is what keeps it off the per-mutation
  * path on a busy shard.
@@ -201,27 +213,25 @@ class CdcRetentionRunner {
         // use) turns `LUNORA_CDC_LOG_RETENTION=10k` into "keep 10 rows" — an
         // operator's typo silently destroying the changelog rather than being
         // ignored. `envOptionalPositiveInt` requires the whole string to be an
-        // integer and treats anything else as unset, i.e. as off.
+        // integer and treats anything else as unset, i.e. as the default window.
         const environment = this.host.env();
-        const keepRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
+        const configuredRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
+        const keepRows = configuredRows ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
         const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
-
-        if (keepRows === undefined && keepPayloads === undefined) {
-            return;
-        }
 
         // Compacting a window WIDER than the one being deleted is a no-op with a
         // misleading configuration: rows leave the log before they can reach the
         // payload cutoff. Clamp rather than ignore, so the stated payload window
         // is honoured as far as the row window allows.
-        const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows ?? Number.POSITIVE_INFINITY);
+        const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows);
 
         const sql = this.host.sql();
 
         try {
             const bucket = cdcArchiveBucket(environment);
 
-            // Archiving is gated on ROW retention, not on a bucket alone.
+            // Archiving is gated on an EXPLICIT row window, not on a bucket alone
+            // (the default window trims but never uploads).
             //
             // What the archive undoes is the trim. Compaction keeps the key and
             // drops the payload, and the SHAPE paths degrade gracefully to a
@@ -243,7 +253,7 @@ class CdcRetentionRunner {
             // uploading rows that are never deleted, so the log and the archive
             // both hold them, with only the R2 lifecycle rule bounding either.
             // Not smuggled in here.
-            if (bucket === undefined || keepRows === undefined) {
+            if (bucket === undefined || configuredRows === undefined) {
                 this.applyRetention(sql, payloadWindow, keepRows, Number.POSITIVE_INFINITY, SHARD_CDC_SWEEP_MAX_ROWS);
 
                 return;

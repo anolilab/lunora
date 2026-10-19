@@ -268,6 +268,7 @@ import type { ErrorDetail } from "../../../shared/error-detail";
 import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
+import { SHARD_REGISTRY_SECRET_ENV } from "../../../shared/internal-secret";
 import { jsonResponse } from "../../../shared/json-response";
 import {
     encodeLiveFrame,
@@ -2175,6 +2176,12 @@ abstract class ShardDO {
      * on the first call.
      */
     protected readonly reactiveCache: ReactiveCache | undefined;
+
+    /**
+     * Companions the per-dispatch ctx-db has verified, shared across dispatches
+     * through {@link ShardDO.ctxDbTuning}. Cleared whenever migrations run.
+     */
+    protected readonly companionMemo: Set<string> = new Set<string>();
 
     /**
      * Function paths a dispatch has been observed reading `ctx.ip` through, and
@@ -7006,9 +7013,15 @@ abstract class ShardDO {
      * accessor made reading the slice — in a test, or to log it — silently disarm
      * the invalidation backstop in {@link ShardDO.recordChangedTable}.
      */
-    protected ctxDbTuning(): { cache?: ReactiveCache; maxRelationKeys?: number; relationExistsPushDown?: "always" | "auto" | "never" } {
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        companionMemo: Set<string>;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    } {
         return {
             ...this.ctxDbRelationOptions,
+            companionMemo: this.companionMemo,
             ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
         };
     }
@@ -11244,6 +11257,8 @@ abstract class ShardDO {
      */
     private handleRebuildCompanions(): Response {
         clearCompanionSignatures(this.shardHost.sql);
+        // The shard-scoped memo would otherwise keep reporting every companion as verified.
+        this.companionMemo.clear();
         this.recordAudit("rebuildCompanions");
 
         return adminResponse({ ok: true });
@@ -12662,6 +12677,13 @@ abstract class ShardDO {
         return run;
     }
 
+    /** The `SHARD_REGISTRY_DO_SECRET` the registry requires of its callers, when one is provisioned. */
+    private registrySecret(): string | undefined {
+        const secret = (this.env as Record<string, unknown> | undefined)?.[SHARD_REGISTRY_SECRET_ENV];
+
+        return typeof secret === "string" ? secret : undefined;
+    }
+
     /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
     private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
         return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
@@ -12717,7 +12739,7 @@ abstract class ShardDO {
                     this.registeredTables.add(table);
 
                     try {
-                        await registerShardKey(stub, table, shardKey);
+                        await registerShardKey(stub, table, shardKey, this.registrySecret());
                     } catch (error: unknown) {
                         this.registeredTables.delete(table);
                         this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
@@ -12769,7 +12791,7 @@ abstract class ShardDO {
 
                 if (!dryRun) {
                     // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await unregisterShardKey(stub, table, shardKey);
+                    await unregisterShardKey(stub, table, shardKey, this.registrySecret());
                     this.registeredTables.delete(table);
                 }
 

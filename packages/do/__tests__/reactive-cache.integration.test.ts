@@ -1055,10 +1055,10 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         const tuned = new GeneratedLikeShard(createFakeState(), {}, { maxRelationKeys: 9000, relationExistsPushDown: "never" });
         const bare = new GeneratedLikeShard(createFakeState(), {});
 
-        expect(tuned.tuning()).toStrictEqual({ maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        expect(tuned.tuning()).toStrictEqual({ companionMemo: expect.any(Set), maxRelationKeys: 9000, relationExistsPushDown: "never" });
         // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
         // clobber an engine default with an explicit undefined.
-        expect(bare.tuning()).toStrictEqual({});
+        expect(bare.tuning()).toStrictEqual({ companionMemo: expect.any(Set) });
     });
 });
 
