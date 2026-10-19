@@ -1520,7 +1520,8 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 throw new ValidationError("v.from(): Standard Schema validator returned a non-object result", {
                     expected: "Standard Schema result object",
                     path: [...context.path],
-                    received: describeValue(looseResult),
+                    // A marked value's primitive result is the value itself, so it is described by its type under `sensitive`.
+                    received: context.redact === true ? describeRedacted(looseResult) : describeValue(looseResult),
                 });
             }
 
