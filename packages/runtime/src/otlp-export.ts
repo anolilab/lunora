@@ -35,7 +35,8 @@ const UNSAMPLED_TRACE_FLAG = 0;
  */
 const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
     try {
-        return [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(internal)))];
+        // The clone first: it flattens nested objects, so their credential fields are masked too.
+        return [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(structuredClone(internal))))];
     } catch {
         return [];
     }

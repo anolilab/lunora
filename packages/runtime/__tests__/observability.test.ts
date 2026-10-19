@@ -459,6 +459,47 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         expect(events[0]?.error?.internal).toEqual({ shardId: "shard-42", upstream: "https://replica.example/v1" });
     });
 
+    it("masks a credential inside a nested Error, which the key-aware redactor would pass through", () => {
+        expect.assertions(1);
+
+        const { events, sink } = collectEvents();
+        const upstream = Object.assign(new Error("upstream refused"), { password: "hunter2-secret" }); // gitleaks:allow -- test fixture, not a credential
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: { code: "INTERNAL", internal: { upstream }, message: "boom", status: 500 },
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        expect(JSON.stringify(events[0]?.error?.internal)).not.toContain("hunter2-secret");
+    });
+
+    it("still delivers the event when a getter in the operator context throws", () => {
+        expect.assertions(2);
+
+        const { events, sink } = collectEvents();
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: {
+                code: "INTERNAL",
+                internal: {
+                    get boom(): never {
+                        throw new Error("getter exploded");
+                    },
+                },
+                message: "boom",
+                status: 500,
+            },
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        expect(events).toHaveLength(1);
+        expect(events[0]?.error?.internal).toBeUndefined();
+    });
+
     it("leaves an event without internal untouched", () => {
         expect.assertions(1);
 

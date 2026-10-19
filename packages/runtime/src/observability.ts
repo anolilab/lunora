@@ -22,6 +22,20 @@ import { resolveTraceSampling, shouldExportTrace } from "../../../shared/samplin
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
+ * The operator context a sink receives: a plain copy with credentials masked. The copy
+ * flattens nested objects, so an `Error`'s enumerable credential fields are not passed
+ * through opaque by the key-aware redactor. `undefined` when it cannot be cloned, so a
+ * throwing getter drops only this context and the event still reaches the sink.
+ */
+const operatorContextFor = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
+    try {
+        return redactSecrets(structuredClone(internal)) as Record<string, unknown>;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
  * fan-outs set `fanOut` with the table being aggregated, shard count, and
  * per-shard failure count.
@@ -325,9 +339,7 @@ export const emitRpcEvent = (
         // (single-shard, batch, fan-out, worker-side) passes through here.
         const internal = event.error?.internal;
         const outgoing =
-            event.error === undefined || internal === undefined
-                ? event
-                : { ...event, error: { ...event.error, internal: redactSecrets(internal) as Record<string, unknown> } };
+            event.error === undefined || internal === undefined ? event : { ...event, error: { ...event.error, internal: operatorContextFor(internal) } };
 
         sink.onRpc(outgoing, context);
     } catch {
