@@ -14,6 +14,8 @@
  * further down in `shared/otlp.ts`, shared with `@lunora/container` so the worker
  * and container speak an identical wire format.
  */
+import { redactSecrets } from "@lunora/observability";
+
 import { coerceFieldValue } from "../../../shared/log-fields";
 import type { OtlpAttribute } from "../../../shared/otlp";
 import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
@@ -27,15 +29,28 @@ const SAMPLED_TRACE_FLAG = 1;
 const UNSAMPLED_TRACE_FLAG = 0;
 
 /**
+ * The operator context as one JSON attribute, with credentials masked. A value JSON cannot
+ * encode (a bigint, a cycle) drops only this attribute: throwing here would discard the
+ * whole buffered flush the event belongs to.
+ */
+const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
+    try {
+        return [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(internal)))];
+    } catch {
+        return [];
+    }
+};
+
+/**
  * OTel semconv `exception.*` attributes, shared by the RPC span's exception event and an error log record.
- * The operator-only `internal` context rides along as one JSON attribute (already redacted upstream
- * by `emitRpcEvent`); it is only ever written to the operator's own collector, never a client.
+ * The operator-only `internal` context rides along as one JSON attribute, masked by
+ * {@link operatorContextAttribute}; it is only ever written to the operator's own collector, never a client.
  */
 const exceptionAttributes = (type: string, message: string, stack: string | undefined, internal?: Record<string, unknown>): OtlpAttribute[] => [
     encodeAttribute("exception.type", type),
     encodeAttribute("exception.message", message),
     ...(stack === undefined ? [] : [encodeAttribute("exception.stacktrace", stack)]),
-    ...(internal === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(internal))]),
+    ...(internal === undefined ? [] : operatorContextAttribute(internal)),
 ];
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */

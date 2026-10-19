@@ -124,4 +124,21 @@ describe("otlpTraceBody error internal context", () => {
 
         expect(JSON.stringify(otlpTraceBody(failed(), 1_000_000))).not.toContain("lunora.error.internal");
     });
+
+    it("masks credential-named fields in the exported operator context", () => {
+        expect.assertions(1);
+
+        const body = JSON.stringify(otlpTraceBody(failed({ password: "hunter2-secret", shardId: "shard-42" }), 1_000_000));
+
+        expect(body).not.toContain("hunter2-secret");
+    });
+
+    it("drops only the operator attribute when it cannot be encoded, keeping the event", () => {
+        expect.assertions(2);
+
+        const body = JSON.stringify(otlpTraceBody(failed({ count: 10n }), 1_000_000));
+
+        expect(body).not.toContain("lunora.error.internal");
+        expect(body).toContain("orders:place");
+    });
 });
