@@ -416,8 +416,21 @@ class LunoraClient {
       }
 
       return outcome.result;
-    } on Object {
+    } on Object catch (error) {
       rollbackOptimistic(handles);
+
+      // An uncoded throw is the transport, not a verdict (the replay reads it the same
+      // way), so an online-only write that never reached the server while the shard has
+      // no socket is refused rather than surfacing the raw throw.
+      if (onlineOnly && error is! LunoraApiException && !connectedTo(shardKey)) {
+        throw LunoraApiException(
+          offlineNotQueued,
+          "'$functionPath' is online-only and the connection is not live, so it was not queued",
+          null,
+          false,
+          error,
+        );
+      }
 
       rethrow;
     }

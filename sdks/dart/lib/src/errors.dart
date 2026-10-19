@@ -12,11 +12,15 @@ library;
 /// rejected the write, which is terminal; an uncoded throw is a transport
 /// failure, which is transient and re-queues.
 class LunoraApiException implements Exception {
-  const LunoraApiException(this.code, this.message, [this.data, this.transient = false]);
+  const LunoraApiException(this.code, this.message, [this.data, this.transient = false, this.cause]);
 
   final String code;
   final String message;
   final Object? data;
+
+  /// The transport error behind a refusal that was raised instead of the raw
+  /// throw, so the caller can still see why the write never reached the server.
+  final Object? cause;
 
   /// The call never reached a verdict: a reply carrying no error envelope at all
   /// (an edge error page, a WAF block, a proxy, a body that is not a JSON

@@ -141,6 +141,7 @@ Future<void> main() async {
   await run(casePreconditionFailureDiscardsBeforeReplay);
   await run(caseOnlineOnlyRefusedWhenDisconnected);
   await run(caseOnlineOnlySendsWhenConnected);
+  await run(caseOnlineOnlyTransportFailureRefused);
   await run(caseOnlineOnlyLeavesNormalWritesQueued);
   await run(caseHydrateRestoresAheadOfThisSession);
   await run(caseIdentityChangeDiscardsQueuedWrites);
