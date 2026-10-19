@@ -336,8 +336,8 @@ describe("recordedModel through the production streaming seam", () => {
         const harness = agentHarness(agent, {});
         const result = await harness.run({ input: "hello", threadKey: "t1" }, { model });
 
-        expect(result.usage).toStrictEqual({ inputTokens: 12, outputTokens: 5, totalTokens: 17 });
-        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 12, outputTokens: 5, totalTokens: 17 });
+        expect(result.usage).toStrictEqual({ inputTokens: 12, outputTokens: 5, status: "complete", totalTokens: 17 });
+        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 12, outputTokens: 5, status: "complete", totalTokens: 17 });
     });
 
     it("resumes a crashed instance without replaying the turns it already completed", async () => {

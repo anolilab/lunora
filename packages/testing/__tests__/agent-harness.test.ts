@@ -111,8 +111,8 @@ describe("agentHarness", () => {
 
         const result = await harness.run({ input: "go", threadKey: "t1" });
 
-        expect(result.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, totalTokens: 12 });
-        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, totalTokens: 12 });
+        expect(result.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, status: "complete", totalTokens: 12 });
+        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, status: "complete", totalTokens: 12 });
     });
 
     it("stops at maxTurns when the model never finalizes", async () => {
