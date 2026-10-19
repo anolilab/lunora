@@ -14,7 +14,7 @@ const keyOf = (functionPath: string, args: Record<string, unknown>): string => `
 export interface FakeSubscription {
     args: Record<string, unknown>;
     /** Push a subscription-scoped error to the live `onError` sink (no-op if none registered). */
-    error: (error: { code?: string; message: string }) => void;
+    error: (error: { code?: string; message: string; why?: string }) => void;
     functionPath: string;
     push: (value: unknown) => void;
     shardKey?: string;
@@ -132,7 +132,7 @@ export const createFakeClient = (): FakeClient => {
             function_: FunctionReference,
             args: Record<string, unknown>,
             callback: (data: unknown) => void,
-            options?: { onError?: (error: { code?: string; message: string }) => void; shardKey?: string },
+            options?: { onError?: (error: { code?: string; message: string; why?: string }) => void; shardKey?: string },
         ): Unsubscribe => {
             const sub: FakeSubscription = {
                 args,

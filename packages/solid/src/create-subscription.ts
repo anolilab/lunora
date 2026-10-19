@@ -58,9 +58,11 @@ const createSubscription = <F extends FunctionReference>(
                     // a plain `new Error(message)` would discard it. When a code is
                     // present, surface a `LunoraError` (its `.code` is typed);
                     // otherwise fall back to a bare `Error`.
-                    const normalized = subscriptionError.code
-                        ? new LunoraError(subscriptionError.code, subscriptionError.message)
-                        : new Error(subscriptionError.message);
+                    // The server's `why` explanation rides along the same way, as on the other adapters.
+                    const normalized = Object.assign(
+                        subscriptionError.code ? new LunoraError(subscriptionError.code, subscriptionError.message) : new Error(subscriptionError.message),
+                        subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                    );
 
                     setError(() => normalized);
                     setData(() => undefined);

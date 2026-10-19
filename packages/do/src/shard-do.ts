@@ -13151,7 +13151,7 @@ abstract class ShardDO {
 
         const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
 
-        this.sendSubscriptionError(ws, subId, body.code, body.message);
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
     }
 
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
