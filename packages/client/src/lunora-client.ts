@@ -675,6 +675,9 @@ class LunoraClient {
     /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
     private outboxMutationCounter = 0;
 
+    /** Orders offline-queued writes by when they were issued; see {@link QueuedMutation.issueSeq}. */
+    private mutationIssueCounter = 0;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
@@ -4696,6 +4699,12 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
+        // Taken before any await or send: a write that only reaches the queue after its direct send fails
+        // must still replay ahead of the ones issued while that send was in flight.
+        this.mutationIssueCounter += 1;
+
+        const issueSeq = this.mutationIssueCounter;
+
         // A durable replay's credential, redeemed before any await: the request
         // below is sent with the bearer its verdict judged, not the live one.
         const replay = this.takeReplayCredential(options.replayCredential);
@@ -4794,6 +4803,7 @@ class LunoraClient {
                 options.mutationId,
                 replay?.stamp,
                 ambiguousSend,
+                issueSeq,
             );
 
         if (socketDown || midReconnect || queuedAhead) {
@@ -4921,6 +4931,7 @@ class LunoraClient {
         callerMutationId: string | undefined,
         replayStamp: null | string | undefined,
         ambiguousSend: boolean,
+        issueSeq: number,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue). A durable replay going
@@ -4991,6 +5002,7 @@ class LunoraClient {
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
+                issueSeq,
                 // Persisted alongside the write so a replay (including one after a
                 // reload) namespaces server-side under the id that ISSUED it — the
                 // standalone client's own id is per-session, and an anonymous
@@ -7374,6 +7386,10 @@ class LunoraClient {
             const identity = this.identityFingerprint();
             const key = SubscriptionRegistry.keyOf(state);
 
+            // A refusal answers the request: the subscription stops counting as pending on this connection.
+            // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
+            this.markQueryRejected(state);
+
             fanSubscriptionError(state.errorCallbacks, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
@@ -7397,7 +7413,25 @@ class LunoraClient {
         const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
 
         if (shapeState) {
+            // Answered by refusal, as for a query above: marked before the callbacks run.
+            if (!shapeState.answered) {
+                shapeState.answered = true;
+                this.emitSyncStatus();
+            }
+
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
+        }
+    }
+
+    /** Count a query the server refused as answered, by the evidence {@link syncStatus} asks of it, emitting only on a change. */
+    private markQueryRejected(state: SubscriptionState): void {
+        const ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling;
+        const field = ackless ? "valueReceived" : "acked";
+
+        if (!state[field]) {
+            // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place, as `ackAndAdvanceCursor` does
+            state[field] = true;
+            this.emitSyncStatus();
         }
     }
 

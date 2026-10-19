@@ -44,6 +44,14 @@ interface QueuedMutation<T = unknown> {
     identity?: string | null;
 
     /**
+     * Position in the order this session ISSUED its writes, taken before the first send. A write whose
+     * direct send failed ambiguously is queued only once that send gives up, behind writes issued (and
+     * queued) while it was in flight; this puts it back ahead of them. Absent on hydrated records,
+     * which are older than anything issued this session.
+     */
+    readonly issueSeq?: number;
+
+    /**
      * `true` when a live caller is still awaiting this write's `mutation()`
      * Promise; `false`/absent for a write restored from durable storage after a
      * reload (its original awaiter is gone). Carried so terminal-verdict
@@ -228,7 +236,16 @@ class OfflineQueue {
         const item = entry as QueuedMutation;
 
         item.id ??= nextId();
-        this.items.push(item);
+
+        // Behind everything issued before it, ahead of anything issued after it; a record without an
+        // issue number (hydrated from a prior session) is older than any numbered write.
+        let index = this.items.length;
+
+        while (item.issueSeq !== undefined && index > 0 && (this.items[index - 1]?.issueSeq ?? -1) > item.issueSeq) {
+            index -= 1;
+        }
+
+        this.items.splice(index, 0, item);
         this.unsettled.set(item.id, item);
 
         this.persist(this.recordOf(item, item.id));

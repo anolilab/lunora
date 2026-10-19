@@ -212,7 +212,15 @@ export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string
     const state = host.subscription(key);
 
     if (state) {
+        // The leader's refusal answers this tab's request, as its first value would.
+        const firstAnswer = !state.valueReceived;
+
+        state.valueReceived = true;
         fanSubscriptionError(state.errorCallbacks, error);
+
+        if (firstAnswer) {
+            host.emitConnectionStatus();
+        }
     }
 };
 

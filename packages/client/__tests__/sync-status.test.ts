@@ -5,7 +5,7 @@ import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import type { SubscriptionState } from "../src/subscription";
 import type { TabLeadershipHost } from "../src/tab-leadership";
-import { onFollowerSubscriptionData } from "../src/tab-leadership";
+import { onFollowerSubscriptionData, onFollowerSubscriptionError } from "../src/tab-leadership";
 import type { HarnessSocket } from "./lib/harness";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
@@ -122,6 +122,22 @@ describe("sync status", () => {
         // Later frames change no answered-count, so they do not re-announce.
         onFollowerSubscriptionData(host, "key", { n: 2 }, undefined, undefined, undefined);
 
+        expect(emitConnectionStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells a follower tab's listeners when the leader's refusal answers its subscription", () => {
+        expect.assertions(3);
+
+        const onError = vi.fn<() => void>();
+        const state = { errorCallbacks: new Set([onError]), valueReceived: false } as unknown as SubscriptionState;
+        const emitConnectionStatus = vi.fn<() => void>();
+        const host = { emitConnectionStatus, identityFingerprint: () => null, subscription: () => state } as unknown as TabLeadershipHost;
+
+        onFollowerSubscriptionError(host, "key", { message: "denied" }, undefined);
+        onFollowerSubscriptionError(host, "key", { message: "denied" }, undefined);
+
+        expect(state.valueReceived).toBe(true);
+        expect(onError).toHaveBeenCalledTimes(2);
         expect(emitConnectionStatus).toHaveBeenCalledTimes(1);
     });
 
@@ -259,6 +275,68 @@ describe("sync status listeners", () => {
 
         // Removing a still-unanswered shape releases what it was holding back.
         expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 0, synced: true });
+
+        client.close();
+    });
+
+    it("stops counting a query and a shape the server rejected, and counts them again on the next connection", async () => {
+        expect.assertions(8);
+
+        vi.useFakeTimers();
+
+        const { client, sockets } = createClient();
+        const seen: SyncStatus[] = [];
+        const errors: string[] = [];
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined, { onError: (error) => errors.push(`query:${error.message}`) });
+        client.subscribeShape({ name: "messages" }, () => undefined, { onError: (error) => errors.push(`shape:${error.message}`) });
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        client.onSyncStatus((status) => {
+            seen.push(status);
+        });
+
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 2, synced: false });
+
+        const queryId = sockets[0]?.frames().find((frame) => frame.type === "subscribe")?.id;
+
+        sockets[0]?.receive({ id: queryId, message: "denied", type: "error" });
+
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 1, synced: false });
+
+        sockets[0]?.receive({ id: shapeIdOf(sockets[0]), message: "unknown shape", type: "error" });
+
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 0, synced: true });
+        expect(errors).toStrictEqual(["query:denied", "shape:unknown shape"]);
+
+        // A repeated rejection changes nothing, so nothing is emitted.
+        const emitted = seen.length;
+
+        sockets[0]?.receive({ id: queryId, message: "denied", type: "error" });
+        sockets[0]?.receive({ id: shapeIdOf(sockets[0]), message: "unknown shape", type: "error" });
+
+        expect(seen).toHaveLength(emitted);
+
+        sockets[0]?.triggerClose();
+
+        while (sockets.length < 2) {
+            // eslint-disable-next-line no-await-in-loop -- each step must run before the next check
+            await vi.advanceTimersByTimeAsync(100);
+        }
+
+        sockets[1]?.open();
+        await settle();
+
+        // The answer was for the previous connection; the new one has not answered either request yet.
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 2, synced: false });
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 2, synced: false });
+
+        sockets[1]?.receive({ id: sockets[1]?.frames().find((frame) => frame.type === "subscribe")?.id, message: "denied", type: "error" });
+        sockets[1]?.receive({ id: shapeIdOf(sockets[1]), message: "unknown shape", type: "error" });
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 0, synced: true });
 
         client.close();
     });
