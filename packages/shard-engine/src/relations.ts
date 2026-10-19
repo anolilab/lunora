@@ -753,6 +753,11 @@ interface RowValidatorOptions {
     only?: ReadonlySet<string>;
 
     /**
+     * Skip a `null` on an optional field (see below). Set on the patch path only.
+     */
+    tolerateStoredNull?: boolean;
+
+    /**
      * The document is a replay of an already-stored row (an import, a CDC apply, a
      * data-migration rewrite — the writes made under `allowExplicitId`), so its
      * `v.from` columns hold output, not input, and are neither parsed nor adopted.
@@ -768,7 +773,7 @@ interface RowValidatorOptions {
  *
  * Skips fields the validator doesn't declare a `parse` for (the structural
  * fakes used in DO/D1 unit tests omit it), fields absent from the document, and
- * — only when `tolerateStoredNull` is set, i.e. on the patch path — a `null` on
+ * — only when `options.tolerateStoredNull` is set, i.e. on the patch path — a `null` on
  * an optional field (see below). The shape is iterated, not the document, so
  * unknown fields pass through untouched — they're part of the JSON-blob shape
  * but not part of the schema's declared columns.
@@ -785,12 +790,7 @@ interface RowValidatorOptions {
  * copies. The signature is intentionally `validator.parse?` so the unit-test
  * fakes (which never carry a runtime parser) keep working.
  */
-const runRowValidators = (
-    definition: TableDefinitionLike,
-    document: Record<string, unknown>,
-    tolerateStoredNull = false,
-    options: RowValidatorOptions = {},
-): Record<string, unknown> => {
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, options: RowValidatorOptions = {}): Record<string, unknown> => {
     let parsed: Record<string, unknown> | undefined;
 
     for (const [field, validator] of Object.entries(definition.shape)) {
@@ -825,7 +825,7 @@ const runRowValidators = (
         //
         // Required fields are unaffected on every path: a null there is a genuine
         // violation and still throws.
-        if (tolerateStoredNull && document[field] === null && validator.kind === "optional") {
+        if (options.tolerateStoredNull === true && document[field] === null && validator.kind === "optional") {
             continue;
         }
 

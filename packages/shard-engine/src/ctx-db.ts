@@ -3884,11 +3884,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // post-default row so a defaulted value still passes its checks. A
             // `v.from` column is stored as its parsed output, which is what reads
             // are typed as; a trusted replay already holds that output.
-            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), false, {
-                trusted: insertOptions?.allowExplicitId === true,
-            });
+            const trusted = insertOptions?.allowExplicitId === true;
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { trusted });
 
-            if (insertOptions?.allowExplicitId !== true) {
+            if (!trusted) {
                 assertForeignKeysExist(tableName, withDefaults);
             }
 
@@ -4212,7 +4211,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // A `v.from` column is parsed only when the patch sets it: the rest of
             // `merged` is stored output, which its own transform would reject or
             // transform a second time.
-            const merged = runRowValidators(tableDefinition, mergedRow, true, { only: new Set(Object.keys(effectivePatch)) });
+            const merged = runRowValidators(tableDefinition, mergedRow, { only: new Set(Object.keys(effectivePatch)), tolerateStoredNull: true });
 
             assertForeignKeysExist(tableName, merged, existing);
 
@@ -4718,9 +4717,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // field still has to satisfy its `.check()` predicate. A `v.from` column
             // is stored as its parsed output, except on a trusted replay, whose
             // document already holds it.
-            const replaced = runRowValidators(tableDefinition, replacement, false, { trusted: replaceOptions?.allowExplicitId === true });
+            const trusted = replaceOptions?.allowExplicitId === true;
+            const replaced = runRowValidators(tableDefinition, replacement, { trusted });
 
-            if (replaceOptions?.allowExplicitId !== true) {
+            if (!trusted) {
                 assertForeignKeysExist(tableName, replaced, previous);
             }
 
