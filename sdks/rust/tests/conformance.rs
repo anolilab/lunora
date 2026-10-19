@@ -27,11 +27,11 @@ use offline_cases::{
     offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
     offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
     offline_online_only_leaves_normal_writes_queued, offline_online_only_refused_when_disconnected, offline_online_only_sends_when_connected,
-    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
-    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest, offline_write_held_for_credential_replays_after_token_refresh,
-    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
-    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    offline_online_only_transport_failure_refused, offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order,
+    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
+    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest,
+    offline_write_held_for_credential_replays_after_token_refresh, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -135,6 +135,7 @@ fn conformance_manifest_is_covered() {
             "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
             "offline_online_only_refused_when_disconnected" => offline_online_only_refused_when_disconnected(),
             "offline_online_only_sends_when_connected" => offline_online_only_sends_when_connected(),
+            "offline_online_only_transport_failure_refused" => offline_online_only_transport_failure_refused(),
             "offline_online_only_leaves_normal_writes_queued" => offline_online_only_leaves_normal_writes_queued(),
             "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),

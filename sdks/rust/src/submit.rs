@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription};
+use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription, TransportError};
 use crate::key::stable_wire_key;
 use crate::offline::{
     random_id, replay_identity_verdict, same_shard, Discarded, Precondition, QueuedMutation, ReplayVerdict, SettledHandler, AUTH_REPLAY_ERROR_CODES,
@@ -125,8 +125,10 @@ pub struct SubmitOptions {
     /// Never queued, persisted or replayed. Where a normal write would be queued,
     /// `submit` fails with `CODE_OFFLINE_NOT_QUEUED` before any optimistic layer
     /// is installed, so the arguments never reach the queue or the persistence
-    /// adapter. It does not wait for a queue flush or queue behind pending writes,
-    /// so it may overtake them. For a credential or a one-time token.
+    /// adapter. A send that gets no reply while the socket is down fails the same
+    /// way, with the transport error as its source. It does not wait for a queue
+    /// flush or queue behind pending writes, so it may overtake them. For a
+    /// credential or a one-time token.
     pub online_only: bool,
     /// Reports the eventual verdict on a queued write.
     pub on_settled: Option<SettledHandler>,
@@ -178,7 +180,20 @@ fn coded(code: &str, message: &str) -> ApiError {
         data: None,
         message: message.to_string(),
         transient: false,
+        source: None,
     }
+}
+
+/// The refusal of an online-only write that would be queued. `cause` is the
+/// transport failure when the write was sent and got no reply, `None` when it was
+/// refused before anything was sent.
+fn not_queued(function_path: &str, cause: Option<TransportError>) -> ClientError {
+    let message = format!("'{function_path}' is online-only and the connection is not live, so it was not queued");
+
+    ClientError::Api(Box::new(ApiError {
+        source: cause,
+        ..coded(CODE_OFFLINE_NOT_QUEUED, &message)
+    }))
 }
 
 impl Client {
@@ -205,12 +220,7 @@ impl Client {
 
         // Refused before anything is installed, so no overlay outlives the call.
         if queue_it && options.online_only {
-            let message = format!(
-                "'{}' is online-only and the connection is not live, so it was not queued",
-                options.function_path
-            );
-
-            return Err(ClientError::Api(Box::new(coded(CODE_OFFLINE_NOT_QUEUED, &message))));
+            return Err(not_queued(&options.function_path, None));
         }
 
         let layers = self.apply_optimistic(&options);
@@ -252,6 +262,15 @@ impl Client {
                     status: MutationStatus::Committed,
                     value,
                 })
+            }
+            // An online-only write that got no reply while the socket is down is refused
+            // as a queued write would have been, the transport failure as its cause. A
+            // missing poster is also a `Transport` error, but nothing was attempted, so
+            // it is not one; a coded reply and any failure while connected surface as is.
+            Err(ClientError::Transport(cause)) if options.online_only && self.send.is_none() && self.has_poster() => {
+                self.rollback_layers(&layers);
+
+                Err(not_queued(&options.function_path, Some(TransportError(cause))))
             }
             Err(error) => {
                 self.rollback_layers(&layers);
@@ -880,6 +899,7 @@ fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
         // A coded envelope is a verdict: its code alone decides a replay, as
         // on the single-call path (`crate::client::rpc_result`).
         transient: false,
+        source: None,
     }
 }
 
