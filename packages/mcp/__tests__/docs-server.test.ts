@@ -53,6 +53,32 @@ describe("createToolServer", () => {
         expect(listed.tools.map((entry) => entry.name)).toStrictEqual(["alpha", "beta"]);
     });
 
+    it("advertises an output schema that admits a failure's code and message", async () => {
+        expect.assertions(3);
+
+        const output = { properties: { count: { type: "number" } }, required: ["count"], type: "object" } as const;
+        const server = createToolServer({ name: "test", version: "1.0.0" }, [
+            {
+                definition: {
+                    annotations: { readOnlyHint: true },
+                    description: "counted",
+                    inputSchema: { properties: {}, type: "object" },
+                    name: "counted",
+                    outputSchema: output,
+                },
+                handle: async () => {return { content: [{ text: "x", type: "text" }] }},
+            },
+        ]);
+
+        const listed = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({ params: {} })) as ListToolsResult;
+        const schema = listed.tools[0]?.outputSchema as { properties: Record<string, unknown>; required?: string[] };
+
+        expect(Object.keys(schema.properties)).toStrictEqual(expect.arrayContaining(["code", "count", "message"]));
+        expect(schema.required).toBeUndefined();
+        // The declared tool is left as written for anything that holds it.
+        expect(output.required).toStrictEqual(["count"]);
+    });
+
     it("dispatches to the named tool", async () => {
         expect.assertions(2);
 

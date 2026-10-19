@@ -17,7 +17,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, ListResourcesResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { errorFromThrown, errorResult } from "./tool-result";
+import { errorFromThrown, errorResult, withErrorShape } from "./tool-result";
 import type { ToolDefinition, ToolResult } from "./tool-types";
 
 /** A tool: what to advertise in `ListTools`, and what to run on `CallTool`. */
@@ -73,7 +73,11 @@ const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>, re
         }
     }
 
-    const definitions = [...dispatch.values()].map((tool) => tool.definition);
+    // A failure carries `{ code, message }` as structured content, and a client validates it against
+    // the tool's `outputSchema`, so a composed tool's success-only schema is widened to admit it.
+    const definitions = [...dispatch.values()].map(({ definition }) =>
+        definition.outputSchema === undefined ? definition : { ...definition, outputSchema: withErrorShape(definition.outputSchema) },
+    );
     // Only advertise what we actually serve: a client that sees a `resources`
     // capability will call `resources/list`, and answering that with an error
     // is worse than never claiming it.
