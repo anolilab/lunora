@@ -597,6 +597,47 @@ describe("functionRunner with a v.sensitive argument", () => {
         expect(shown).toContain("primary");
     });
 
+    it("masks a sensitive value nested deeper than the old walk limit, in a failed run's message", async () => {
+        expect.assertions(2);
+
+        const DEEP = "p@ss-very-deep-7";
+        // Forty single-key levels down: past any fixed depth limit a walk might stop at.
+        let credentials: Record<string, unknown> = { password: DEEP };
+
+        for (let level = 0; level < 40; level += 1) {
+            credentials = { next: credentials };
+        }
+
+        const mock = createMockClient({
+            mutation: () => {
+                throw new Error(`rejected ${DEEP}`);
+            },
+        });
+        const functionsWithDeep: FunctionDescriptor[] = [
+            {
+                args: [{ kind: "object", name: "credentials", optional: false, sensitive: true }],
+                kind: "mutation",
+                path: "vault:store",
+            },
+        ];
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={functionsWithDeep} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ credentials }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        const shown = screen.getByTestId("error").textContent ?? "";
+
+        expect(shown).not.toContain(DEEP);
+        expect(shown).toContain("«sensitive»");
+    });
+
     it("does not reload a sensitive run's args from history, and says why", async () => {
         expect.assertions(2);
 

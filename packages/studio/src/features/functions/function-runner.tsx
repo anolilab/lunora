@@ -66,41 +66,54 @@ const historyArgsText = (argsText: string, sensitive: ReadonlyArray<string>): st
 /** Below this length a value is masked only as a whole token, so a short PIN does not mangle ordinary words. */
 const SUBSTRING_MASK_MIN_LENGTH = 4;
 
-const MAX_LEAF_DEPTH = 32;
+/**
+ * The UTF-8 text of a byte value, or `undefined` when its bytes are not UTF-8: a handler that decodes them logs
+ * that text, and bytes that are not UTF-8 have none.
+ */
+const bytesTextOf = (value: ArrayBuffer | ArrayBufferView): string | undefined => {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+        return undefined;
+    }
+};
 
 /**
  * Every string and number under a sensitive argument's value, as the text an error
  * might quote it in. Booleans carry no secret and would mangle ordinary text, so they
- * are left out.
+ * are left out. The walk has no depth limit: a value however deep is found, and a
+ * `seen` set keeps a shared or cyclic reference from being walked twice.
  */
-const leavesOf = (value: unknown, into: string[] = [], depth = 0): string[] => {
-    if (typeof value === "string") {
-        if (value.length > 0) {
-            into.push(value);
-        }
-    } else if (typeof value === "number" || typeof value === "bigint") {
-        into.push(String(value));
-    } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-        // A byte value keeps its content in its buffer, which a property walk never reaches. Bytes that are
-        // not UTF-8 have no text a handler would log, so they add nothing.
-        const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+const leavesOf = (value: unknown): string[] => {
+    const found: string[] = [];
+    const seen = new Set<object>();
+    const pending: unknown[] = [value];
 
-        try {
-            const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    while (pending.length > 0) {
+        const current = pending.pop();
 
-            if (text.length > 0) {
-                into.push(text);
+        if (typeof current === "string") {
+            if (current.length > 0) {
+                found.push(current);
             }
-        } catch {
-            // Not UTF-8: no text to register.
-        }
-    } else if (typeof value === "object" && value !== null && depth < MAX_LEAF_DEPTH) {
-        for (const child of Object.values(value)) {
-            leavesOf(child, into, depth + 1);
+        } else if (typeof current === "number" || typeof current === "bigint") {
+            found.push(String(current));
+        } else if (current instanceof ArrayBuffer || ArrayBuffer.isView(current)) {
+            // A byte value keeps its content in its buffer, which a property walk never reaches.
+            const text = bytesTextOf(current);
+
+            if (text !== undefined && text.length > 0) {
+                found.push(text);
+            }
+        } else if (typeof current === "object" && current !== null && !seen.has(current)) {
+            seen.add(current);
+            pending.push(...Object.values(current as Record<string, unknown>));
         }
     }
 
-    return into;
+    return found;
 };
 
 const maskLeaf = (text: string, leaf: string): string => {
