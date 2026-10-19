@@ -638,6 +638,13 @@ interface SensitiveScope {
      * live is scrubbed from the values as they stand then.
      */
     hold: () => () => void;
+
+    /**
+     * Scrub a telemetry name (an event or span name). A name that is exactly a marked
+     * property name masks whole, because a handler that uses a key of a marked object as
+     * a name has put that key on the record; any other name is scrubbed as text.
+     */
+    name: (name: string) => string;
     /** Scrub a free-text string. */
     text: (text: string) => string;
     /** Scrub one structured value. */
@@ -661,6 +668,8 @@ const createSensitiveScope = (values: ReadonlyArray<string>, names: ReadonlyArra
             secrets = NO_SECRETS;
         }
     };
+
+    const scrubText = (text: string): string => (secrets.texts.length === 0 ? text : scrubSensitiveText(text, secrets.texts));
 
     return {
         add(more, moreNames = []) {
@@ -690,7 +699,8 @@ const createSensitiveScope = (values: ReadonlyArray<string>, names: ReadonlyArra
         },
         fields: <T extends Record<string, unknown> | undefined>(bag: T): T =>
             bag === undefined || !hasSecrets(secrets) ? bag : (scrubValue(bag, secrets, 0) as T),
-        text: (text) => (secrets.texts.length === 0 ? text : scrubSensitiveText(text, secrets.texts)),
+        name: (name) => (secrets.names.has(name) ? SENSITIVE_ARG_MASK : scrubText(name)),
+        text: scrubText,
         value: <T>(value: T): T => (hasSecrets(secrets) ? (scrubValue(value, secrets, 0) as T) : value),
     };
 };

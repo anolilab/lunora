@@ -354,7 +354,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, sco
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
-                name: scope.text(name),
+                name: scope.name(name),
                 ts: Date.now(),
             });
         },
@@ -583,7 +583,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // bytes and pre-existing recorded spans stay identical.
                             ...(resolved.kind === undefined || resolved.kind === "internal" ? {} : { kind: resolved.kind }),
                             ...(links.length === 0 ? {} : { links }),
-                            name: scope.text(name),
+                            name: scope.name(name),
                             ok,
                             parentSpanId: parentId,
                             ...spanAnchorFields(anchor),

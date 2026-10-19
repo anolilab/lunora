@@ -793,6 +793,7 @@ interface SensitiveScope {
     clear: () => void;
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
     hold: () => () => void;
+    name: (name: string) => string;
     text: (text: string) => string;
     value: <T>(value: T) => T;
 }

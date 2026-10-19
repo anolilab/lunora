@@ -202,6 +202,13 @@ class TelemetryShard extends ShardDO {
             return { ok: true };
         }
 
+        if (functionPath === "vault:event") {
+            // A key of the marked object, used as the event name.
+            log.event(Object.keys(args["value"] as Record<string, unknown>)[0] ?? "");
+
+            return { ok: true };
+        }
+
         if (functionPath === "vault:serialize") {
             // A handler that quotes its whole argument bag, as JSON, in a log line and in a
             // failure: the marked value appears in its escaped spelling, not its raw one.
@@ -312,6 +319,26 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
 
             expect(named?.fields).toStrictEqual({ [SENSITIVE_ARG_MASK]: "x", label: "primary" });
             expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a key of a marked object used as an event name, in the logs", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            await shard.fetch(telemetryRpc("vault:event", { label: "primary", value: { "ops-mailbox": 1 } }));
+
+            expect(logs.length).toBeGreaterThan(0);
+            expect(JSON.stringify(logs)).not.toContain("ops-mailbox");
         } finally {
             database.close();
         }

@@ -501,6 +501,8 @@ interface SensitiveScope {
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
     /** Keep the values for a record opened under the scope and not yet written. Returns the release. */
     hold: () => () => void;
+    /** Scrub a telemetry name (an event or span name), masking an exact match against a marked property name. */
+    name: (name: string) => string;
     /** Scrub a free-text string. */
     text: (text: string) => string;
     /** Scrub one structured value. */
@@ -7432,12 +7434,12 @@ abstract class ShardDO {
                 // viewer still shows something meaningful; the structured payload
                 // is `fields`, and `eventName` is what makes a collector treat the
                 // record as a queryable event rather than prose.
-                const eventName = scope.text(name);
+                const eventName = scope.name(name);
 
                 this.recordUserLog(
                     functionPath,
                     "info",
-                    scope.value([name]),
+                    scope.value([eventName]),
                     eventName,
                     scope.fields(boundFields ? { ...boundFields, ...fields } : fields),
                     sink,

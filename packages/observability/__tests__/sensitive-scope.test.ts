@@ -274,6 +274,21 @@ describe("field names under a sensitive scope", () => {
         expect(scope.text("ops-mailbox rejected")).toBe("ops-mailbox rejected");
         expect(names).not.toContain("creds");
     });
+
+    it("masks a marked property name used as a telemetry name, and leaves prose that contains it alone", () => {
+        expect.assertions(4);
+
+        const names = sensitiveNames({ creds: { "ops-mailbox": 1 } }, new Set(["creds"]));
+        const scope = createSensitiveScope([], names);
+        const { collected, handle } = createSpanCollector(ids, false, scope);
+
+        handle.addEvent("ops-mailbox", {});
+
+        expect(scope.name("ops-mailbox")).toBe(SENSITIVE_ARG_MASK);
+        expect(scope.name("ops-mailbox rejected")).toBe("ops-mailbox rejected");
+        expect(collected.events[0]?.name).toBe(SENSITIVE_ARG_MASK);
+        expect(collected.events).toHaveLength(1);
+    });
 });
 
 describe("escaped spellings under a sensitive scope", () => {
