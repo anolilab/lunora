@@ -117,7 +117,9 @@ A write that must never sit on disk — a credential, a one-time token — sets
 `online_only = true` on its `SubmitOptions`. It is never queued, persisted or
 replayed: where a normal write would be queued, `submit` fails with
 `CODE_OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its
-arguments never reach the persistence adapter. It does not wait for a flush or
+arguments never reach the persistence adapter. A send that gets no reply while
+the socket is down is refused the same way, with the transport error as its
+`source()`. It does not wait for a flush or
 queue behind pending writes, so it may land before an older queued write to the
 same document.
 
