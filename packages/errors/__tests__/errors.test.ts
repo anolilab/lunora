@@ -520,6 +520,20 @@ describe("lunoraError internal and why", () => {
         expect(json).not.toHaveProperty("internal");
     });
 
+    it("leaves a non-string why out of the body, so the response still serializes", () => {
+        expect.assertions(2);
+
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        const error = Object.assign(new LunoraError("CONFLICT", "stale"), { why: cyclic });
+        const { body } = toErrorBody(error);
+
+        expect(body).not.toHaveProperty("why");
+        expect(() => JSON.stringify(body)).not.toThrow();
+    });
+
     it("ships why on a non-redacted body and never ships internal on any body", () => {
         expect.assertions(4);
 

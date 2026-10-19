@@ -73,7 +73,7 @@ export const toErrorBody = (error: unknown, options: ToErrorBodyOptions = {}): T
             body.docsUrl = error.docsUrl;
         }
 
-        if (error.why !== undefined) {
+        if (typeof error.why === "string") {
             body.why = error.why;
         }
 
