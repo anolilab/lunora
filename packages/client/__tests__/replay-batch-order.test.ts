@@ -45,7 +45,7 @@ describe("batched replay order", () => {
         const client = new LunoraClient({
             fetch: fetchImpl,
             heartbeatIntervalMs: 0,
-            offlineQueue: { maxItems: MAX_BATCH_ENTRIES + 10, queueBeforeFirstConnect: true, replayRetry: { baseDelayMs: 10, maxDelayMs: 20 } },
+            offlineQueue: { maxItems: MAX_BATCH_ENTRIES + 10, queueBeforeFirstConnect: true },
             persistence: createInMemoryPersistence(),
             url: "http://app.test",
             WebSocket,
@@ -110,7 +110,7 @@ describe("batched replay order", () => {
         const client = new LunoraClient({
             fetch: fetchImpl,
             heartbeatIntervalMs: 0,
-            offlineQueue: { queueBeforeFirstConnect: true, replayRetry: { baseDelayMs: 10, maxDelayMs: 20 } },
+            offlineQueue: { queueBeforeFirstConnect: true },
             persistence: createInMemoryPersistence(),
             url: "http://app.test",
             WebSocket,

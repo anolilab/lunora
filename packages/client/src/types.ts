@@ -127,24 +127,17 @@ export interface OfflineQueueOptions {
     queueBeforeFirstConnect?: boolean;
 
     /**
-     * Pacing and give-up policy for replaying queued writes that fail
-     * retryably. The defaults are the ones the client always used.
-     *
-     * A hintless retryable failure (a `429`/`503` the edge answered, or a
-     * request that timed out) backs off from `baseDelayMs`, doubling per
-     * consecutive failure up to `maxDelayMs` (also the ceiling for a server's
-     * `Retry-After` hint). `SHARD_ERROR` is retried because the worker cannot
-     * tell a flaky shard from a write that makes the shard fail every time; a
-     * write that collects `maxShardErrorAttempts` of them is settled with that
-     * error instead, so one such write cannot hold up every write queued behind
-     * it. Transport failures, timeouts, rate limits and refused credentials
-     * never count against it.
+     * Give-up policy for replaying queued writes that fail retryably. A hintless
+     * retryable failure (a `429`/`503` the edge answered, or a request that timed
+     * out) backs off from 1s, doubling per consecutive failure up to 60s (also
+     * the ceiling for a server's `Retry-After` hint). `SHARD_ERROR` is retried
+     * because the worker cannot tell a flaky shard from a write that makes the
+     * shard fail every time; a write that collects `maxShardErrorAttempts` of them
+     * is settled with that error instead, so one such write cannot hold up every
+     * write queued behind it. Transport failures, timeouts, rate limits and
+     * refused credentials never count against it.
      */
     replayRetry?: {
-        /** Shortest retry wait in ms. Defaults to 1000. */
-        baseDelayMs?: number;
-        /** Longest retry wait in ms. Defaults to 60000. */
-        maxDelayMs?: number;
         /** `SHARD_ERROR` answers one write may collect before it is settled. Defaults to 10. */
         maxShardErrorAttempts?: number;
     };

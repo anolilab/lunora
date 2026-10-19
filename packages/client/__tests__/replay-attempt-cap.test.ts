@@ -6,7 +6,7 @@ import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness"
 
 const shardError = (): Response => jsonResponse({ error: { code: "SHARD_ERROR", message: "shard answered garbage" } }, { status: 500 });
 
-const replayRetry = { baseDelayMs: 10, maxDelayMs: 20, maxShardErrorAttempts: 3 };
+const replayRetry = { maxShardErrorAttempts: 3 };
 
 const createClient = (fetchImpl: typeof fetch) => {
     const { sockets, WebSocket } = createSocketHarness();
@@ -44,7 +44,7 @@ describe("replay attempt cap", () => {
 
         await settle();
         sockets[0]?.open();
-        await vi.advanceTimersByTimeAsync(500);
+        await vi.advanceTimersByTimeAsync(5000);
 
         await expect(outcome).resolves.toBe("SHARD_ERROR");
         expect(fetchImpl).toHaveBeenCalledTimes(3);
@@ -83,7 +83,7 @@ describe("replay attempt cap", () => {
 
         await settle();
         sockets[0]?.open();
-        await vi.advanceTimersByTimeAsync(500);
+        await vi.advanceTimersByTimeAsync(5000);
 
         await expect(sibling).resolves.toStrictEqual({ ok: true });
         await expect(poison).resolves.toBe("SHARD_ERROR");
@@ -108,7 +108,7 @@ describe("replay attempt cap", () => {
 
         await settle();
         sockets[0]?.open();
-        await vi.advanceTimersByTimeAsync(2000);
+        await vi.advanceTimersByTimeAsync(40_000);
 
         await expect(write).resolves.toStrictEqual({ ok: true });
         expect(fetchImpl).toHaveBeenCalledTimes(6);

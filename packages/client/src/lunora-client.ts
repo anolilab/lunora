@@ -125,10 +125,9 @@ import { resolvePersistenceAdapter } from "./persistence";
 import { createPollingFallback, withinPollTimeout } from "./polling-fallback";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
-import type { ReplayBackoff, RpcEnvelopeBody } from "./replay";
+import type { RpcEnvelopeBody } from "./replay";
 import {
     DEFAULT_MAX_SHARD_ERROR_ATTEMPTS,
-    DEFAULT_REPLAY_BACKOFF,
     defaultReplayRetryDelayMs,
     indexReplaySlots,
     isTransientReplayFailure,
@@ -1061,9 +1060,6 @@ class LunoraClient {
      */
     private readonly replayRetryState = new Map<string, { attempts: number; delayMs: number | undefined }>();
 
-    /** Retry pacing of a replay; see `offlineQueue.replayRetry`. */
-    private readonly replayBackoff: ReplayBackoff;
-
     /** How many `SHARD_ERROR` answers one queued write may collect before the replay settles it; see `offlineQueue.replayRetry`. */
     private readonly maxShardErrorAttempts: number;
 
@@ -1094,10 +1090,6 @@ class LunoraClient {
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
-        this.replayBackoff = {
-            baseDelayMs: options.offlineQueue?.replayRetry?.baseDelayMs ?? DEFAULT_REPLAY_BACKOFF.baseDelayMs,
-            maxDelayMs: options.offlineQueue?.replayRetry?.maxDelayMs ?? DEFAULT_REPLAY_BACKOFF.maxDelayMs,
-        };
         this.maxShardErrorAttempts = options.offlineQueue?.replayRetry?.maxShardErrorAttempts ?? DEFAULT_MAX_SHARD_ERROR_ATTEMPTS;
         this.managedSocketOptions = {
             connectTimeoutMs: this.connectTimeoutMs,
@@ -8892,7 +8884,7 @@ class LunoraClient {
 
         this.replayRetryState.set(key, {
             attempts,
-            delayMs: Math.max(previous?.delayMs ?? 0, defaultReplayRetryDelayMs(attempts, undefined, this.replayBackoff)),
+            delayMs: Math.max(previous?.delayMs ?? 0, defaultReplayRetryDelayMs(attempts)),
         });
     }
 
@@ -8912,8 +8904,7 @@ class LunoraClient {
         const previous = this.replayRetryState.get(key);
         const attempts = (previous?.attempts ?? 0) + 1;
         const delay =
-            replayRetryDelayMs(error, attempts, undefined, this.replayBackoff) ??
-            (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts, undefined, this.replayBackoff) : undefined);
+            replayRetryDelayMs(error, attempts) ?? (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts) : undefined);
 
         this.replayRetryState.set(key, {
             attempts,

@@ -9,7 +9,6 @@ const createConnectedClient = async (fetchImpl: typeof fetch) => {
     const client = new LunoraClient({
         fetch: fetchImpl,
         heartbeatIntervalMs: 0,
-        offlineQueue: { replayRetry: { baseDelayMs: 10, maxDelayMs: 20 } },
         persistence: createInMemoryPersistence(),
         url: "http://app.test",
         WebSocket,
@@ -88,7 +87,6 @@ describe("direct mutation whose response was lost", () => {
         const client = new LunoraClient({
             fetch: fetchImpl,
             heartbeatIntervalMs: 0,
-            offlineQueue: { replayRetry: { baseDelayMs: 10, maxDelayMs: 20 } },
             persistence: createInMemoryPersistence(),
             url: "http://app.test",
             WebSocket,
@@ -109,7 +107,7 @@ describe("direct mutation whose response was lost", () => {
             (error: unknown) => (error as { code?: string }).code,
         );
 
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(120_000);
 
         await expect(outcome).resolves.toBe("INTERNAL");
         // The write is not retried for ever, and its predicted value is taken back.
