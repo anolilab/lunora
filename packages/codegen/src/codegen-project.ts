@@ -185,11 +185,7 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
     // `worker-configuration.d.ts` from `wrangler types`) is otherwise never added,
     // so a warm run keeps resolving types without it.
     const tsconfigPath = findTsconfig(lunoraDirectory);
-    const diskPaths = [
-        ...lunoraSeedFiles(lunoraDirectory),
-        ...generatedSeedFiles(lunoraDirectory),
-        ...(tsconfigPath === undefined ? [] : ambientDeclarationFiles(tsconfigPath)),
-    ];
+    const diskPaths = [...programSeedFiles(lunoraDirectory), ...(tsconfigPath === undefined ? [] : ambientDeclarationFiles(tsconfigPath))];
 
     for (const path of diskPaths) {
         const existing = project.getSourceFile(path);

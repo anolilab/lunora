@@ -312,4 +312,19 @@ export const listItems = query({
 
         expect(loaded(project, helperPath)).toBe(true);
     });
+
+    it("adds a worker entry created after the Project was built, on the next refresh", () => {
+        expect.assertions(2);
+
+        const entryPath = join(workdir, "src", "server", "index.ts");
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, entryPath)).toBe(false);
+
+        mkdirSync(join(workdir, "src", "server"), { recursive: true });
+        writeFileSync(entryPath, "export default { fetch: () => new Response() };\n", "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, entryPath)).toBe(true);
+    });
 });

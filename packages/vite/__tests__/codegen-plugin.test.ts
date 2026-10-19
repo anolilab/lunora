@@ -1242,12 +1242,13 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             expect(createCalls).toHaveBeenCalledTimes(before + 1);
 
-            // The config save alone runs no codegen — nothing new to emit from it.
+            // The config save regenerates, so the new program scope is applied at once.
             changeListener!(join(workdir, "lunora.config.ts"));
             await vi.runAllTimersAsync();
 
-            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
 
+            // The next schema save reuses the Project the config save built.
             changeListener!(join(workdir, "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 
