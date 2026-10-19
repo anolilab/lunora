@@ -1985,13 +1985,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * column that still holds its stored value is skipped: a delete with no
      * `onDelete` leaves children dangling, and a rewrite that does not touch the
      * reference — a spread `replace`, a patch carrying the old value — must not
-     * fail on it.
+     * fail on it. A reference to the document's own `_id` is satisfied: the row
+     * is not written yet on insert, but it will exist by the time it is read.
      */
     const assertForeignKeysExist = (tableName: string, document: Record<string, unknown>, stored?: Record<string, unknown>): void => {
         for (const edge of checkedForeignKeys.get(tableName) ?? []) {
             const value = document[edge.column];
 
-            if (typeof value !== "string" || stored?.[edge.column] === value) {
+            if (typeof value !== "string" || stored?.[edge.column] === value || document["_id"] === value) {
                 continue;
             }
 
@@ -3884,7 +3885,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // After the `before` trigger, so one that creates the referenced parent
             // through its own db context can still save the child.
             if (!trusted) {
-                assertForeignKeysExist(tableName, withDefaults);
+                assertForeignKeysExist(tableName, documentWithMeta);
             }
 
             // Backfill counters BEFORE the physical write so the rebuild
@@ -4173,9 +4174,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const hookFields = applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
 
-            // The caller's authorization verdict, taken on the row this write actually produces.
-            assertPatchAllowed(patchOptions, existing, mergedRow);
-
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
@@ -4188,6 +4186,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 previous: () => existing,
                 tolerateStoredNull: true,
             });
+
+            // The caller's authorization verdict, taken on the row this write actually produces:
+            // `merged` carries each transform column's parsed OUTPUT, which is what lands.
+            assertPatchAllowed(patchOptions, existing, merged);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });

@@ -2689,9 +2689,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         const hookFields = applyOnUpdate(definition, effectivePatch, mergedRow, auth);
 
-        // The caller's authorization verdict, taken on the row this attempt actually produces.
-        assertPatchAllowed(patchOptions, existing, mergedRow);
-
         // Refinement checks fire on the merged row so a patch that flips
         // a field to an invalid value is rejected before D1 sees it. A transform
         // column (`v.from` anywhere inside) is stored as its parsed output, and is
@@ -2703,6 +2700,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             previous: () => existing,
             tolerateStoredNull: true,
         });
+
+        // The caller's authorization verdict, taken on the row this attempt actually produces:
+        // `merged` carries each transform column's parsed OUTPUT, which is what lands.
+        assertPatchAllowed(patchOptions, existing, merged);
 
         if (hasMatchingTrigger(tableName, "before", "update")) {
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });

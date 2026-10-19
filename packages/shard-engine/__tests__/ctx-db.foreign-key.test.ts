@@ -19,6 +19,8 @@ import createSqliteExec from "./_helpers/node-sqlite";
 const schema = {
     tables: {
         customers: { indexes: [], shape: { name: v.string() } },
+        // A tree: a root references itself.
+        nodes: { indexes: [], shape: { parentId: v.id("nodes") } },
         orders: {
             indexes: [],
             shape: { customerId: v.id("customers"), note: v.string(), referrerId: v.optional(v.id("customers")) },
@@ -146,5 +148,22 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         expect.assertions(1);
 
         await expect(writer.insert("shardedOrders", { tenantId: "tenant-in-another-do" })).resolves.toBeTypeOf("string");
+    });
+
+    it("insert with a client id may reference the row being inserted", async () => {
+        expect.assertions(2);
+
+        const clientId = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
+        await expect(writer.insert("nodes", { parentId: clientId }, { clientId })).resolves.toBe(clientId);
+        await expect(writer.get(clientId)).resolves.toMatchObject({ parentId: clientId });
+    });
+
+    it("insert with a client id still rejects a reference to a different missing row", async () => {
+        expect.assertions(1);
+
+        const clientId = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
+        await expect(codeOf(writer.insert("nodes", { parentId: "no-such-node" }, { clientId }))).resolves.toBe("VALIDATION_ERROR");
     });
 });

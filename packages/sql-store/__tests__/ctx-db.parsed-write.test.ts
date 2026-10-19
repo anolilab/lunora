@@ -408,3 +408,35 @@ describe("createSqlCtxDb stores the parsed output of a v.from record key", () =>
         await expect(stored(id, "labels")).resolves.toStrictEqual({ beta: "y" });
     });
 });
+
+describe("createSqlCtxDb: a patch verifier sees the row that will be stored", () => {
+    beforeEach(() => {
+        harness = createSqliteHarness();
+        writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("approves a patch whose transform output satisfies the verifier, though the raw input does not", async () => {
+        expect.assertions(1);
+
+        const id = await writer.insert("items", input());
+
+        await writer.patch(id, { score: "9" }, undefined, { verify: (_previous, next) => typeof next["score"] === "number" });
+
+        await expect(stored(id, "score")).resolves.toBe(9);
+    });
+
+    it("denies a patch whose transform output is forbidden, though the raw input looks fine", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("items", input());
+
+        await expect(writer.patch(id, { score: "500" }, undefined, { verify: (_previous, next) => next["score"] !== 500 })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        await expect(stored(id, "score")).resolves.toBe(42);
+    });
+});
