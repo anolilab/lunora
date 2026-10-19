@@ -464,9 +464,14 @@ const fileWiresRequestSecretTool = (file: SourceFile): boolean =>
         const defaultImport = declaration.getDefaultImport();
         const namespace = declaration.getNamespaceImport();
 
+        // A default import binds the module's `default` export. That is the tool itself when a barrel re-exports it as
+        // `default`, or a namespace when it re-exports the agent package with `export * as default`, read for the tool.
+        const defaultWiresTool =
+            defaultImport !== undefined &&
+            (exported.names.has("default") || readsNamespaceMember(file, defaultImport.getText(), exported.namespaces.get("default") ?? new Set<string>()));
+
         return (
-            // A default import binds the module's `default` export, so only a barrel that re-exports the tool as `default` wires it.
-            (defaultImport !== undefined && exported.names.has("default")) ||
+            defaultWiresTool ||
             declaration.getNamedImports().some((named) => !named.isTypeOnly() && namedImportWiresTool(file, named, exported)) ||
             (namespace !== undefined && readsNamespaceMember(file, namespace.getText(), exported.names))
         );

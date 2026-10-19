@@ -186,6 +186,18 @@ describe("discover/secret-value-tool", () => {
         expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
     });
 
+    it("detects a namespace a barrel re-exports as its default export, read through the default import", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export * as default from "@lunora/agent";`);
+        writeAgents(`
+            import agent from "./tools";
+            export const support = { ask: agent.requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
     it("ignores a barrel that re-exports other names from the agent package", () => {
         expect.assertions(1);
 
