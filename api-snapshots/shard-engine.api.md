@@ -2418,6 +2418,7 @@ interface ReplicaFollowerHost extends ShardSiblingHost {
         errors: ReadonlyArray<unknown>;
     }>;
     reportError?: (scope: string, error: unknown) => void;
+    transactionLimits: () => Partial<TransactionLimits>;
 }
 ```
 
