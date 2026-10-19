@@ -318,9 +318,6 @@ export interface SyncWriter<T extends object> {
 export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => string): Map<string, T> =>
     new Map(rows.map((row): [string, T] => [getKey(row), row]));
 
-/** Serialized form of each row object already diffed, keyed by identity. */
-const rowJson = new WeakMap<object, string>();
-
 /**
  * Build an `emit(next)` that diffs a desired keyed snapshot into a collection's
  * sync channel — only changed rows are written, so a reconnect snapshot or a
@@ -360,14 +357,7 @@ export const makeDiffEmit =
         const nextJson = new Map<string, string>();
 
         for (const [key, value] of next) {
-            // The client's delta merge keeps object identity for untouched rows, so a
-            // row seen before reuses its string instead of being re-serialized.
-            let valueJson = rowJson.get(value);
-
-            if (valueJson === undefined) {
-                valueJson = JSON.stringify(value);
-                rowJson.set(value, valueJson);
-            }
+            const valueJson = JSON.stringify(value);
 
             nextJson.set(key, valueJson);
 

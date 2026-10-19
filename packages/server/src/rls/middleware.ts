@@ -428,6 +428,10 @@ type RlsDatabase = DatabaseWriterLike;
 const DEFAULT_BATCH_LIMIT = 500;
 
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+        throw new LunoraError("BATCH_LIMIT_EXCEEDED", `${op}: batch limit must be a non-negative integer`, { status: 400 });
+    }
+
     const cap = limit ?? DEFAULT_BATCH_LIMIT;
 
     if (count > cap) {
@@ -1436,6 +1440,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // delete. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validate the limit before the read so `cap + 1` is always a finite integer.
+            assertBatchLimit(0, options?.limit, "deleteWhere");
             // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(where, baseWhere),
@@ -1729,6 +1735,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // patch. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validate the limit before the read so `cap + 1` is always a finite integer.
+            assertBatchLimit(0, options?.limit, "patchWhere");
             // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(args.where, baseWhere),

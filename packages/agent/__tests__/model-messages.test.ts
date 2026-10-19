@@ -103,4 +103,29 @@ describe(buildModelMessages, () => {
             role: "tool",
         });
     });
+
+    it("pairs a call whose only tool row is an awaiting-approval placeholder", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "delete it", role: "user", seq: 0 },
+                { content: "", role: "assistant", seq: 1, toolCalls: [{ id: "call_a", input: {}, name: "remove" }] },
+                { content: "", role: "tool", seq: 2, status: "awaiting_approval", toolCallId: "call_a", toolName: "remove" },
+            ],
+        });
+
+        const results = messages.filter((message) => message.role === "tool");
+
+        expect(results).toHaveLength(1);
+        expect(results[0]).toStrictEqual({
+            content: [
+                {
+                    output: { type: "text", value: "Tool call was not executed: the run was interrupted before it ran." },
+                    toolCallId: "call_a",
+                    toolName: "remove",
+                    type: "tool-result",
+                },
+            ],
+            role: "tool",
+        });
+    });
 });

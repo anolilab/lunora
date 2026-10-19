@@ -135,46 +135,49 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
 };
 
 // Re-sync one subscription against the provider's truth. Returns whether the store changed.
+//
+// The row is read on both sides of the provider call: a webhook that lands while the adapter call
+// is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
+// call can see it change. `PaymentStore` has no conditional upsert, so a write racing the window
+// between `after` and the upsert is still possible; that window holds no network round-trip.
 const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getSubscription(adapter.identifier, id);
     const current = await adapter.getSubscriptionStatus(id);
-    const existing = await store.getSubscription(adapter.identifier, id);
+    const after = await store.getSubscription(adapter.identifier, id);
 
-    if (!subscriptionDrifted(existing, current)) {
+    if (after?.lastEventAt !== before?.lastEventAt || after?.updatedAt !== before?.updatedAt) {
         return false;
     }
 
-    // A webhook that landed mid-sweep is newer than the provider snapshot: leave its write alone.
-    const latest = await store.getSubscription(adapter.identifier, id);
-
-    if (latest?.lastEventAt !== existing?.lastEventAt || latest?.updatedAt !== existing?.updatedAt) {
+    if (!subscriptionDrifted(after, current)) {
         return false;
     }
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    await store.upsertSubscription(overlayProviderSubscription(existing, current));
+    await store.upsertSubscription(overlayProviderSubscription(after, current));
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
+// Same before/after guard as `reconcileSubscription`.
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getPaymentSession(adapter.identifier, id);
     const providerTruth = await adapter.getPaymentStatus(id);
-    const existing = await store.getPaymentSession(adapter.identifier, id);
-    const current = mergePaymentTruth(existing, providerTruth);
+    const after = await store.getPaymentSession(adapter.identifier, id);
 
-    if (!paymentDrifted(existing, current)) {
+    if (after?.updatedAt !== before?.updatedAt) {
         return false;
     }
 
-    // Same mid-sweep webhook guard as `reconcileSubscription`.
-    const latest = await store.getPaymentSession(adapter.identifier, id);
+    const current = mergePaymentTruth(after, providerTruth);
 
-    if (latest?.updatedAt !== existing?.updatedAt) {
+    if (!paymentDrifted(after, current)) {
         return false;
     }
 
-    await store.upsertPaymentSession({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt });
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;

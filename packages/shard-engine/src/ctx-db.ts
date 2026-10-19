@@ -463,6 +463,10 @@ const ITERATOR_PAGE_SIZE = 128;
  * structural throws) so the caller sees a clear failure, not a silent slow path.
  */
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+        throw new LunoraError("BATCH_LIMIT_EXCEEDED", `${op}: batch limit must be a non-negative integer`, { status: 400 });
+    }
+
     const cap = limit ?? DEFAULT_BATCH_LIMIT;
 
     if (count > cap) {
@@ -3435,6 +3439,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
             const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
+            // Validate the limit before the read so `cap + 1` is always a finite integer.
+            assertBatchLimit(0, batchOptions?.limit, "deleteWhere");
             // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
             const page = await source.findMany(tableName, { limit: cap + 1, where });
@@ -4273,6 +4279,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent patches
             // consistent.
             const source = globalWriterFor(tableName, "patchWhere") ?? writer;
+            // Validate the limit before the read so `cap + 1` is always a finite integer.
+            assertBatchLimit(0, batchOptions?.limit, "patchWhere");
             // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
             const page = await source.findMany(tableName, { limit: cap + 1, where: args.where });

@@ -219,6 +219,21 @@ describe("ctx-db batch writes", () => {
             // Nothing was deleted — the cap is checked before any write.
             await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(600);
         });
+
+        it.each([Number.POSITIVE_INFINITY, -1])("deleteWhere rejects limit %s before reading", async (limit) => {
+            expect.assertions(2);
+
+            const { writer } = setupWriter();
+            const findMany = vi.spyOn(writer, "findMany");
+
+            await expect(writer.deleteWhere("messages", { channelId: "c1" }, { limit })).rejects.toMatchObject({
+                code: "BATCH_LIMIT_EXCEEDED",
+                message: "deleteWhere: batch limit must be a non-negative integer",
+            });
+            expect(findMany).not.toHaveBeenCalled();
+
+            findMany.mockRestore();
+        });
     });
 
     describe("patchMany", () => {

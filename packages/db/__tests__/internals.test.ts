@@ -137,21 +137,19 @@ const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "i
 };
 
 describe(makeDiffEmit, () => {
-    it("serializes a row object once across re-deliveries of the same snapshot", () => {
+    it("emits an update for a row mutated in place and re-emitted in a new map", () => {
         const syncedJson = new Map<string, string>();
         const { ops, writer } = recordingWriter();
         const emit = makeDiffEmit(syncedJson, writer);
-        const toJSON = vi.fn<() => Row>(() => {
-            return { _id: "a", text: "1" };
-        });
-        const rows = new Map<string, Row>([["a", { _id: "a", text: "1", toJSON }]]);
+        const row: Row = { _id: "a", text: "1" };
 
-        emit(rows);
+        emit(new Map([["a", row]]));
         ops.length = 0;
-        emit(rows);
+        // An optimistic transform may mutate the row object and return a new outer container.
+        row.text = "2";
+        emit(new Map([["a", row]]));
 
-        expect(toJSON).toHaveBeenCalledTimes(1);
-        expect(ops).toStrictEqual([]);
+        expect(ops).toStrictEqual([{ type: "update", value: { _id: "a", text: "2" } }]);
     });
 
     it("emits only the rows that changed between snapshots", () => {
