@@ -344,7 +344,9 @@ Provider-issued tool-call ids can repeat across runs, so a later run that reuses
 finished run's id starts a new request and discards the old value.
 Supplying is owner-only and fails closed: an anonymous caller, and any caller on
 an ownerless thread, is refused, because an ownerless thread is readable by anyone
-who knows its key. A second supply, a supply after a decline or after a timeout,
+who knows its key. A run on an ownerless thread that asks for a secret therefore has
+nobody who can answer and waits out its deadline, so pass an `owner` to any run that
+uses `requestSecretTool`. A second supply, a supply after a decline or after a timeout,
 or a supply on a thread paused before the request table existed, is a `CONFLICT`
 and stores nothing.
 
