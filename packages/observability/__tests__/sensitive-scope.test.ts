@@ -107,13 +107,15 @@ describe("createSensitiveScope", () => {
         expect(scope.text("abcd")).toBe(SENSITIVE_ARG_MASK);
     });
 
-    it("masks a numeric value as a whole field value, whatever its length", () => {
-        expect.assertions(2);
+    it("masks a numeric value of three digits or more as a whole field value, and leaves a shorter one alone", () => {
+        expect.assertions(3);
 
-        const scope = createSensitiveScope(["42"]);
+        const scope = createSensitiveScope(["421", "42", "0"]);
 
-        expect(scope.fields({ value: 42, label: 42 })).toEqual({ label: SENSITIVE_ARG_MASK, value: SENSITIVE_ARG_MASK });
-        expect(scope.fields({ value: 43 })).toEqual({ value: 43 });
+        expect(scope.fields({ value: 421, label: 421 })).toEqual({ label: SENSITIVE_ARG_MASK, value: SENSITIVE_ARG_MASK });
+        expect(scope.fields({ value: 422 })).toEqual({ value: 422 });
+        // A short numeric leaf must not blank the retry counts and status fields of the same invocation.
+        expect(scope.fields({ retries: 0, rows: 42 })).toEqual({ retries: 0, rows: 42 });
     });
 
     it("returns the same reference for a bag it did not change", () => {
