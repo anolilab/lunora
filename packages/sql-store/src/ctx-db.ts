@@ -388,13 +388,15 @@ const planStepText = (step: Record<string, unknown>): string => {
     return typeof text === "string" ? text : Object.values(step).map(String).join(" | ");
 };
 
-/** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
+/** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place; returns the fields it assigned. */
 const applyOnUpdate = (
     definition: TableDefinitionLike,
     provided: Record<string, unknown>,
     target: Record<string, unknown>,
     auth: ServerDefaultContextLike["auth"],
-): void => {
+): string[] => {
+    const assigned: string[] = [];
+
     for (const [field, column] of tableColumns(definition)) {
         if (column.serverDefault) {
             // Server-trusted: if the client tried to set this field, overwrite it
@@ -403,6 +405,7 @@ const applyOnUpdate = (
             if (field in provided) {
                 // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above)
                 target[field] = column.serverDefault({ auth });
+                assigned.push(field);
             }
 
             continue;
@@ -414,8 +417,11 @@ const applyOnUpdate = (
             // values land on the object that is about to be persisted.
             // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above)
             target[field] = column.onUpdateFn();
+            assigned.push(field);
         }
     }
+
+    return assigned;
 };
 
 /**
@@ -2681,17 +2687,22 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const effectivePatch = resolvePatch(definition, patch, existing);
         const mergedRow: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
 
-        applyOnUpdate(definition, effectivePatch, mergedRow, auth);
+        const hookFields = applyOnUpdate(definition, effectivePatch, mergedRow, auth);
 
         // The caller's authorization verdict, taken on the row this attempt actually produces.
         assertPatchAllowed(patchOptions, existing, mergedRow);
 
         // Refinement checks fire on the merged row so a patch that flips
-        // a field to an invalid value is rejected before D1 sees it. A `v.from`
-        // column is stored as its parsed output, and is parsed only when the patch
-        // sets it: the rest of the row is stored output, which its own transform
-        // would reject or transform a second time.
-        const merged = runRowValidators(definition, mergedRow, { only: new Set(Object.keys(effectivePatch)), tolerateStoredNull: true });
+        // a field to an invalid value is rejected before D1 sees it. A transform
+        // column (`v.from` anywhere inside) is stored as its parsed output, and is
+        // parsed only when the patch (or an update hook) sets it to something other
+        // than what is stored: the rest of the row is stored output, which its own
+        // transform would reject or apply twice.
+        const merged = runRowValidators(definition, mergedRow, {
+            only: new Set([...Object.keys(effectivePatch), ...hookFields]),
+            previous: () => existing,
+            tolerateStoredNull: true,
+        });
 
         if (hasMatchingTrigger(tableName, "before", "update")) {
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -4303,7 +4314,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // field still has to satisfy its `.check()` predicate. A `v.from` column
             // is stored as its parsed output, except on a trusted replay, whose
             // document already holds it.
-            const replaced = runRowValidators(definition, replacement, { trusted: replaceOptions?.allowExplicitId === true });
+            const replaced = runRowValidators(definition, replacement, {
+                previous: () => previous ?? decodeRow(definition, snapshot) ?? undefined,
+                trusted: replaceOptions?.allowExplicitId === true,
+            });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });

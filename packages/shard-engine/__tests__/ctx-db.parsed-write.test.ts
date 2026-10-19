@@ -30,6 +30,20 @@ const numericString = {
 
 const schema = {
     tables: {
+        nested: {
+            indexes: [],
+            shape: {
+                box: v.object({ n: v.from(numericString), tag: v.string() }),
+                deep: v.optional(v.optional(v.from(numericString))),
+                label: v.string(),
+                scores: v.array(v.from(numericString)),
+                // Filled by an update hook with the numeric STRING the schema accepts.
+                stamp: v
+                    .from(numericString)
+                    .$defaultFn(() => "1")
+                    .$onUpdateFn(() => "5"),
+            },
+        },
         items: {
             indexes: [],
             shape: {
@@ -207,5 +221,139 @@ describe("ctx.db writes leave every other column's stored value as it was", () =
 
         expect(bare["note"]).toBeNull();
         expect("optionalLabel" in bare).toBe(false);
+    });
+});
+
+/** A `nested` row as the caller supplies it: every `v.from` inside is still the input string. */
+const nestedInput = (overrides: Record<string, unknown> = {}): Record<string, unknown> => {
+    return { box: { n: "3", tag: "t" }, deep: "4", label: "a", scores: ["1", "2"], ...overrides };
+};
+
+describe("ctx.db stores the parsed output of a v.from nested inside another validator", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("insert stores the transformed value inside an array, an object and a doubly-wrapped optional", async () => {
+        expect.assertions(3);
+
+        const row = await read(await writer.insert("nested", nestedInput()));
+
+        expect(row["scores"]).toEqual([1, 2]);
+        expect(row["box"]).toEqual({ n: 3, tag: "t" });
+        expect(row["deep"]).toBe(4);
+    });
+
+    it("patch and replace store the transformed value of a nested column they set", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("nested", nestedInput());
+
+        await writer.patch(id, { scores: ["8", "9"] });
+
+        await expect(stored(id, "scores")).resolves.toEqual([8, 9]);
+
+        await writer.replace(id, nestedInput({ box: { n: "6", tag: "u" }, deep: "7" }));
+
+        await expect(stored(id, "box")).resolves.toEqual({ n: 6, tag: "u" });
+        await expect(stored(id, "deep")).resolves.toBe(7);
+    });
+
+    it("a trusted replay stores the nested output as given", async () => {
+        expect.assertions(1);
+
+        const id = await writer.insert("nested", nestedInput({ _id: "n1", box: { n: 3, tag: "t" }, deep: 4, scores: [1, 2], stamp: 1 }), {
+            allowExplicitId: true,
+        });
+
+        await expect(stored(id, "scores")).resolves.toEqual([1, 2]);
+    });
+});
+
+describe("ctx.db read-modify-write of a row holding parsed columns", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("replace of the spread row passes unchanged output through and still parses a new input", async () => {
+        expect.assertions(4);
+
+        const id = await writer.insert("items", input({ maybeScore: "7" }));
+        const current = await read(id);
+
+        await writer.replace(id, { ...current, label: "b" });
+
+        await expect(read(id)).resolves.toMatchObject({ label: "b", maybeScore: 7, score: 42 });
+
+        await writer.replace(id, { ...(await read(id)), score: "50" });
+
+        await expect(stored(id, "score")).resolves.toBe(50);
+        await expect(writer.replace(id, { ...(await read(id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
+        await expect(stored(id, "score")).resolves.toBe(50);
+    });
+
+    it("patch of the spread row passes unchanged output through and still parses a new input", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("items", input());
+
+        await writer.patch(id, { ...(await read(id)), label: "b" });
+
+        await expect(read(id)).resolves.toMatchObject({ label: "b", score: 42 });
+
+        await writer.patch(id, { ...(await read(id)), score: "60" });
+
+        await expect(stored(id, "score")).resolves.toBe(60);
+        await expect(writer.patch(id, { ...(await read(id)), score: "nope" })).rejects.toThrow(/numeric string/iu);
+    });
+
+    it("replace of the spread row keeps nested output too", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("nested", nestedInput());
+
+        await writer.replace(id, { ...(await read(id)), label: "b" });
+
+        await expect(read(id)).resolves.toMatchObject({ box: { n: 3, tag: "t" }, deep: 4, label: "b", scores: [1, 2] });
+
+        await writer.replace(id, { ...(await read(id)), scores: ["5"] });
+
+        await expect(stored(id, "scores")).resolves.toEqual([5]);
+    });
+});
+
+describe("ctx.db runs an update hook's value through the column's transform", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("patch of another field stores the hook's value as the transform's output", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("nested", nestedInput());
+
+        await expect(stored(id, "stamp")).resolves.toBe(1);
+
+        await writer.patch(id, { label: "b" });
+
+        await expect(stored(id, "stamp")).resolves.toBe(5);
     });
 });

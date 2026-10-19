@@ -737,22 +737,75 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
     }
 };
 
+const transformCache = new WeakMap<ValidatorLike, boolean>();
+
 /**
- * Whether a column is a `v.from(schema)` column, bare or under `v.optional(...)`
- * (a nullable keeps the inner kind). Those are the only columns whose `parse()`
- * is not idempotent: a transform (`z.string().transform(Number)`) changes the
- * value, so its output is not valid input to the same schema.
+ * Whether a column holds a `v.from(schema)` anywhere inside it — bare, or under
+ * `v.optional` / `v.array` / `v.object` / `v.record` / `v.union` (a nullable keeps the
+ * inner kind). Those are the only columns whose `parse()` is not idempotent: a
+ * transform (`z.string().transform(Number)`) changes the value, so its output may
+ * not be valid input to the same schema (or is transformed a second time). A write
+ * therefore parses such a column only when it carries a NEW value — see
+ * `RowValidatorOptions.previous` for how stored output handed back is told apart.
  */
-const isFromColumn = (validator: ValidatorLike): boolean =>
-    validator.kind === "from" || (validator.kind === "optional" && validator._meta?.inner?.kind === "from");
+const hasTransform = (validator: ValidatorLike): boolean => {
+    const cached = transformCache.get(validator);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    // `v.record`'s value validator is not on the structural `_meta` type.
+    const meta: (NonNullable<ValidatorLike["_meta"]> & { readonly valueValidator?: ValidatorLike }) | undefined = validator._meta;
+    const children = [meta?.inner, meta?.valueValidator, ...(meta?.members ?? []), ...Object.values(meta?.shape ?? {})];
+    const result = validator.kind === "from" || children.some((child) => child !== undefined && hasTransform(child));
+
+    transformCache.set(validator, result);
+
+    return result;
+};
+
+/** Structural equality over what a column stores: primitives, dates, arrays and plain objects. */
+const sameValue = (a: unknown, b: unknown): boolean => {
+    if (Object.is(a, b)) {
+        return true;
+    }
+
+    if (a instanceof Date && b instanceof Date) {
+        return a.getTime() === b.getTime();
+    }
+
+    if (Array.isArray(a) || Array.isArray(b)) {
+        return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => sameValue(item, b[index]));
+    }
+
+    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+        return false;
+    }
+
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+
+    return keys.length === Object.keys(right).length && keys.every((key) => key in right && sameValue(left[key], right[key]));
+};
 
 interface RowValidatorOptions {
     /**
-     * Parse `v.from` columns only for these fields; the rest are skipped. A patch
-     * passes the keys it sets, because the others in the merged row are already
-     * stored output and must not be fed through their transform again.
+     * Parse transform columns only for these fields; the rest are skipped. A patch
+     * passes the keys it sets and the fields an update hook assigned, because the
+     * others in the merged row are already stored output and must not be fed
+     * through their transform again.
      */
     only?: ReadonlySet<string>;
+
+    /**
+     * The row being overwritten (`patch` and `replace`), read lazily. A transform
+     * column whose value deep-equals the stored one is that stored OUTPUT handed
+     * back — `{ ...(await db.get(id)), x: 1 }` — so it is passed through unparsed;
+     * only a value that differs from what is stored is treated as new input.
+     */
+    previous?: () => Readonly<Record<string, unknown>> | undefined;
 
     /**
      * Skip a `null` on an optional field (see below). Set on the patch path only.
@@ -762,10 +815,32 @@ interface RowValidatorOptions {
     /**
      * The document is a replay of an already-stored row (an import, a CDC apply, a
      * data-migration rewrite — the writes made under `allowExplicitId`), so its
-     * `v.from` columns hold output, not input, and are neither parsed nor adopted.
+     * transform columns hold output, not input, and are neither parsed nor adopted.
      */
     trusted?: boolean;
 }
+
+/** A check for "this value is what the row already stores", reading the stored row once and only if asked. */
+const storedValueCheck = (previous: RowValidatorOptions["previous"]): ((field: string, value: unknown) => boolean) => {
+    let row: Readonly<Record<string, unknown>> | undefined;
+
+    return (field, value) => {
+        if (previous === undefined) {
+            return false;
+        }
+
+        row ??= previous() ?? {};
+
+        return field in row && sameValue(value, row[field]);
+    };
+};
+
+/**
+ * Whether a transform column's value is already stored output rather than input: the write
+ * replays a stored row, the column is one the write did not set, or it equals what is stored.
+ */
+const holdsStoredOutput = (field: string, value: unknown, options: RowValidatorOptions, isStored: (field: string, value: unknown) => boolean): boolean =>
+    options.trusted === true || (options.only !== undefined && !options.only.has(field)) || isStored(field, value);
 
 /**
  * Fill any field absent from `document` that declares a `.default()` literal or
@@ -823,10 +898,11 @@ const applyInsertDefaults = (
  * unknown fields pass through untouched — they're part of the JSON-blob shape
  * but not part of the schema's declared columns.
  *
- * Returns the document to store. It is the argument itself unless a `v.from`
+ * Returns the document to store. It is the argument itself unless a transform
  * column was parsed, in which case it is a copy carrying that column's parsed
- * OUTPUT — reads are typed as the output, so that is what must be stored. Every
- * other column keeps storing what the caller supplied: their parsers are
+ * OUTPUT — reads are typed as the output, so that is what must be stored. A column
+ * counts as one when a `v.from` sits anywhere inside it (an array element, an
+ * object field, a doubly-wrapped optional). Every other column keeps storing what the caller supplied: their parsers are
  * idempotent, and adopting a normalised result (`v.bytes()` turning a view into
  * an `ArrayBuffer`) would change how a column is stored, not just validate it.
  *
@@ -837,6 +913,7 @@ const applyInsertDefaults = (
  */
 const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, options: RowValidatorOptions = {}): Record<string, unknown> => {
     let parsed: Record<string, unknown> | undefined;
+    const isStored = storedValueCheck(options.previous);
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
@@ -847,9 +924,9 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
             continue;
         }
 
-        const fromColumn = isFromColumn(validator);
+        const fromColumn = hasTransform(validator);
 
-        if (fromColumn && (options.trusted === true || (options.only !== undefined && !options.only.has(field)))) {
+        if (fromColumn && holdsStoredOutput(field, document[field], options, isStored)) {
             continue;
         }
 

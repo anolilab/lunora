@@ -1639,16 +1639,18 @@ const buildReader = (
 /**
  * Recompute every `.$onUpdateFn()` field the caller did not set explicitly,
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
- * unless the caller overrode them.
+ * unless the caller overrode them. Returns the fields it assigned, which the
+ * caller's validators must treat as written even though `provided` lacks them.
  */
 const applyOnUpdate = (
     definition: TableDefinitionLike,
     provided: Record<string, unknown>,
     target: Record<string, unknown>,
     auth: ServerDefaultContextLike["auth"],
-): void => {
+): string[] => {
     // Mutate the caller-owned record in place; alias so the param isn't reassigned.
     const out = target;
+    const assigned: string[] = [];
 
     for (const [field, column] of tableColumns(definition)) {
         if (column.serverDefault) {
@@ -1657,6 +1659,7 @@ const applyOnUpdate = (
             // untouched field keeps its stored value (no re-stamp to the caller).
             if (field in provided) {
                 out[field] = column.serverDefault({ auth });
+                assigned.push(field);
             }
 
             continue;
@@ -1664,8 +1667,11 @@ const applyOnUpdate = (
 
         if (column.onUpdateFn && !(field in provided)) {
             out[field] = column.onUpdateFn();
+            assigned.push(field);
         }
     }
+
+    return assigned;
 };
 
 /**
@@ -4156,7 +4162,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const effectivePatch = resolvePatch(tableDefinition, patch, existing);
             const mergedRow = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
-            applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
+            const hookFields = applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
 
             // The caller's authorization verdict, taken on the row this write actually produces.
             assertPatchAllowed(patchOptions, existing, mergedRow);
@@ -4165,10 +4171,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
             //
-            // A `v.from` column is parsed only when the patch sets it: the rest of
-            // `merged` is stored output, which its own transform would reject or
-            // transform a second time.
-            const merged = runRowValidators(tableDefinition, mergedRow, { only: new Set(Object.keys(effectivePatch)), tolerateStoredNull: true });
+            // A transform column is parsed only when the patch (or an update hook)
+            // sets it to something other than what is stored: the rest of `merged`
+            // is stored output, which its own transform would reject or apply twice.
+            const merged = runRowValidators(tableDefinition, mergedRow, {
+                only: new Set([...Object.keys(effectivePatch), ...hookFields]),
+                previous: () => existing,
+                tolerateStoredNull: true,
+            });
 
             assertForeignKeysExist(tableName, merged, existing);
 
@@ -4675,7 +4685,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // is stored as its parsed output, except on a trusted replay, whose
             // document already holds it.
             const trusted = replaceOptions?.allowExplicitId === true;
-            const replaced = runRowValidators(tableDefinition, replacement, { trusted });
+            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, trusted });
 
             if (!trusted) {
                 assertForeignKeysExist(tableName, replaced, previous);
