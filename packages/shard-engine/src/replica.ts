@@ -33,6 +33,8 @@
  * replay, so the replica takes a fresh snapshot instead: every snapshot row is
  * upserted and every local row the snapshot lacks is deleted, in one
  * transaction, so rows changed or removed in the gap cannot survive it.
+ * A snapshot too large for one transaction's write ceilings is refused up front
+ * (reads go to the owner) rather than started and failed halfway.
  *
  * A **forked timeline** (the owner was reset or rolled back, so its CDC epoch
  * changed) cannot be reconciled either way, so the replica reports
@@ -44,6 +46,7 @@
  * operator-driven events.
  */
 
+import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
 import type { RegionHint } from "../../../shared/region-hint";
@@ -53,7 +56,10 @@ import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";
 import { cursorBelowRetainedFloor } from "./ctx-db-cdc";
 import { envPositiveInt } from "./env-int";
+import { estimateBytes } from "./estimate-bytes";
 import { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody } from "./sibling-channel";
+import type { TransactionLimits } from "./transaction-headroom";
+import { DEFAULT_TRANSACTION_LIMITS } from "./transaction-headroom";
 
 /** How stale a replica read may be when the caller names no cursor (per-deployment via `LUNORA_REPLICA_MAX_STALENESS_MS`). */
 const DEFAULT_MAX_STALENESS_MS = 1000;
@@ -222,6 +228,12 @@ interface ReplicaFollowerHost extends ShardSiblingHost {
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{ errors: ReadonlyArray<unknown> }>;
     /** Surface a failure the follow loop absorbed (a page that would not apply) so an operator can see why reads fell back to the owner. */
     reportError?: (scope: string, error: unknown) => void;
+
+    /**
+     * The write ceilings of one transaction on this DO. The replay writer carries no headroom meter, so a
+     * re-snapshot measures itself against these before it opens its one transaction.
+     */
+    transactionLimits: () => Partial<TransactionLimits>;
 }
 
 /** A replica's durable follow position. */
@@ -802,14 +814,22 @@ class ShardReplica {
             return undefined;
         }
 
+        const limits = { ...DEFAULT_TRANSACTION_LIMITS, ...this.host.transactionLimits() };
         const changes: CdcChange[] = [];
         const kept = new Set<string>();
+        let bytes = 0;
 
         for (const { doc, table } of snapshot.rows) {
             const id = String(doc["_id"]);
 
             kept.add(rowKey(table, id));
+            bytes += estimateBytes(doc) ?? Number.POSITIVE_INFINITY;
             changes.push({ doc, id, op: "insert", seq: snapshot.cursor, table, ts: 0 });
+        }
+
+        // The snapshot alone is checked first, so an over-budget one is refused before the local replica is loaded to diff against.
+        if (this.overWriteBudget(changes.length, bytes, limits)) {
+            return undefined;
         }
 
         for (const { doc, table } of await this.host.exportRows()) {
@@ -818,6 +838,11 @@ class ShardReplica {
             if (!kept.has(rowKey(table, id))) {
                 changes.push({ id, op: "delete", seq: snapshot.cursor, table, ts: 0 });
             }
+        }
+
+        // Deletes cost a written row each, no bytes: the same charge an ordinary mutation's `recordWrite` makes.
+        if (this.overWriteBudget(changes.length, bytes, limits)) {
+            return undefined;
         }
 
         if (!(await this.applyAtomically("replica.resnapshot", changes))) {
@@ -830,6 +855,29 @@ class ShardReplica {
         writeReplicaState(this.host.sql(), state);
 
         return state;
+    }
+
+    /**
+     * Whether `rows` writes / `bytes` would break a transaction ceiling, reporting it when so. The caller then
+     * leaves the replica where it is and sends reads to the owner. It never latches {@link divergent}: the
+     * owner can shrink or compact, or the ceilings be raised, and a later snapshot may fit.
+     * ponytail: a replica that keeps being refused re-fetches the owner's whole snapshot on every read that is
+     * not fresh (one at a time); a refusal cooldown is the upgrade if that shows up in practice.
+     */
+    private overWriteBudget(rows: number, bytes: number, limits: TransactionLimits): boolean {
+        if (rows <= limits.maxWrittenRows && bytes <= limits.maxWrittenBytes) {
+            return false;
+        }
+
+        this.host.reportError?.(
+            "replica.resnapshot",
+            new LunoraError(
+                "TRANSACTION_LIMIT_EXCEEDED",
+                `a re-snapshot would write ${String(rows)} documents and ${String(bytes)} bytes, over the ${String(limits.maxWrittenRows)}-document / ${String(limits.maxWrittenBytes)}-byte transaction limit`,
+            ),
+        );
+
+        return true;
     }
 
     /** Take the owner's snapshot into an empty replica, or `undefined` when it can't be had. */

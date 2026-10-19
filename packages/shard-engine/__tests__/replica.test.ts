@@ -5,6 +5,7 @@ import type { SqlExec } from "../src/ctx-db";
 import type { CdcChange } from "../src/ctx-db-cdc";
 import type { ReplicaFollowerHost, ReplicaOwnerHost } from "../src/replica";
 import { createReplicaLink, gateReplicaDispatch, handleReplicaControl } from "../src/replica";
+import type { TransactionLimits } from "../src/transaction-headroom";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -137,6 +138,9 @@ describe("read replicas", () => {
             shardBinding: () => "SHARD",
             shardJurisdiction: () => undefined,
             sql: () => sql,
+            transactionLimits: () => {
+                return {};
+            },
         };
     });
 
@@ -554,6 +558,75 @@ describe("read replicas", () => {
         expect(imported).toStrictEqual([]);
     });
 
+    describe("a re-snapshot against the transaction write ceilings", () => {
+        /** A replica that already follows its owner, then finds the owner's log compacted past it with `snapshot` to take. */
+        const compactedPast = async (limits: Partial<TransactionLimits>, snapshot: ExportRow[]) => {
+            const reported: unknown[] = [];
+            const exported = { count: 0 };
+            const replica = createReplicaLink({
+                ...host,
+                exportRows: async () => {
+                    exported.count += 1;
+
+                    return localRows;
+                },
+                reportError: (_scope, error) => reported.push(error),
+                transactionLimits: () => limits,
+            });
+
+            await replica?.ensureFresh();
+
+            applied.length = 0;
+            localRows = [{ doc: { _id: "stale", title: "gone" }, table: "posts" }];
+            owner.snapshot = snapshot;
+            owner.changes = [change(9, "a")];
+            owner.floor = 9;
+
+            return { exported, replica, reported };
+        };
+
+        const rows = (count: number): ExportRow[] =>
+            Array.from({ length: count }, (_, index) => {
+                return { doc: { _id: `r${String(index)}`, title: "t" }, table: "posts" };
+            });
+
+        it("refuses a snapshot whose rows plus stale deletions exceed the row ceiling, without latching", async () => {
+            expect.assertions(6);
+
+            // 3 snapshot rows + 1 stale deletion = 4 writes against a ceiling of 3.
+            const { replica, reported } = await compactedPast({ maxWrittenRows: 3 }, rows(3));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+            expect(applied).toStrictEqual([]);
+            expect(reported).toHaveLength(1);
+            expect((reported[0] as { code?: string }).code).toBe("TRANSACTION_LIMIT_EXCEEDED");
+            expect(replica?.isDivergent()).toBe(false);
+            expect(replica?.appliedSeq()).toBe(0);
+        });
+
+        it("refuses a snapshot over the byte ceiling before loading the local rows", async () => {
+            expect.assertions(4);
+
+            const { exported, replica } = await compactedPast({ maxWrittenBytes: 50 }, rows(3));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+            expect(applied).toStrictEqual([]);
+            expect(exported.count).toBe(0);
+            expect(replica?.isDivergent()).toBe(false);
+        });
+
+        it("converges when the writes land exactly on the ceiling", async () => {
+            expect.assertions(3);
+
+            // 2 snapshot rows + 1 stale deletion = 3 writes against a ceiling of 3.
+            const { replica, reported } = await compactedPast({ maxWrittenRows: 3 }, rows(2));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+            expect(applied.map(({ id, op }) => `${op}:${id}`)).toStrictEqual(["insert:r0", "insert:r1", "delete:stale"]);
+            expect(reported).toStrictEqual([]);
+        });
+    });
+
     it("re-snapshots when the owner's payloads were compacted past it, without reading the doomed page", async () => {
         expect.assertions(4);
 
@@ -826,6 +899,9 @@ describe("replica dispatch gate", () => {
             shardBinding: () => undefined,
             shardJurisdiction: () => undefined,
             sql: () => harness.sql,
+            transactionLimits: () => {
+                return {};
+            },
         };
     };
 
