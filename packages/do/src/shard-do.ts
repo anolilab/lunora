@@ -3288,11 +3288,19 @@ abstract class ShardDO {
 
                 // Same post-replay step the `applyCdc` admin RPC takes: replayed
                 // rows are real writes, so any live subscriber on this DO has to
-                // see them.
-                await this.flushChangedTables();
+                // see them. The page has committed by now, so a failing refresh is
+                // reported but must not reject: the follower reads a rejection as
+                // "the page was not applied" and would leave its cursor behind rows
+                // that are already there.
+                try {
+                    await this.flushChangedTables();
+                } catch (error) {
+                    this.recordShapeError("replica.flush", error);
+                }
 
                 return applied;
             },
+            exportRows: async () => this.runShardExport({}),
             importRows: async (rows) => this.runShardImport({ rows }),
             reportError: (scope, error) => {
                 this.recordShapeError(scope, error);
@@ -13178,7 +13186,13 @@ abstract class ShardDO {
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
             const { subs } = attachment;
 
-            const refreshQuery = async (subId: string, functionPath: string, args: Record<string, unknown>, isAdmin: boolean): Promise<void> => {
+            const refreshQuery = async (
+                subId: string,
+                functionPath: string,
+                args: Record<string, unknown>,
+                isAdmin: boolean,
+                backingOff: boolean,
+            ): Promise<void> => {
                 try {
                     // Re-run under the socket's OWN verified identity (stamped on the
                     // attachment at upgrade, unforgeable by the client) — passed BY
@@ -13191,6 +13205,11 @@ abstract class ShardDO {
                         permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, args);
                     }
                     if (this.deliveryAuthorization && permit === undefined) {
+                        return;
+                    }
+                    // Backoff skips only the failing query's execution: the authorization above has already run, so a
+                    // revocation during the window ends the subscription at once instead of at the next retry.
+                    if (backingOff) {
                         return;
                     }
                     const memo = this.subMemos.get(ws)?.get(subId);
@@ -13206,6 +13225,9 @@ abstract class ShardDO {
                     const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, isAdmin, socketIdentity(attachment), reactiveRunCache);
 
                     if (!outcome) {
+                        // A clean resolve to "nothing to deliver" still ends the failure streak.
+                        this.subscriptionFailures.clear(ws, subId);
+
                         return;
                     }
 
@@ -13230,7 +13252,12 @@ abstract class ShardDO {
                         this.revokeSubscription(ws, subId);
                         return;
                     }
-                    if (this.deliveryAuthorization && isLunoraError(error) && error.code === "SUBSCRIPTION_PERSIST_FAILED") {
+                    // A result that grew past the cap will not shrink by retrying: end the subscription as the seed does, on
+                    // guarded sockets too (the refusal names a size and a limit, never data).
+                    if (
+                        isLunoraError(error) &&
+                        (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
+                    ) {
                         this.unsubscribe(ws, subId);
                         this.sendSubscriptionError(ws, subId, error.code, error.message);
                         this.recordSubscriptionRefreshError(functionPath, error, { subId });
@@ -13285,12 +13312,15 @@ abstract class ShardDO {
                     continue;
                 }
 
-                if (this.subscriptionFailures.isBackingOff(ws, subId, identityKey, Date.now())) {
+                const backingOff = this.subscriptionFailures.isBackingOff(ws, subId, identityKey, Date.now());
+
+                // An unguarded socket has no authorization to re-check, so a backed-off subscription is skipped outright.
+                if (backingOff && !this.deliveryAuthorization) {
                     continue;
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin);
+                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
         };
 
@@ -15414,6 +15444,19 @@ abstract class ShardDO {
         }
     }
 
+    /** The wire-encoded JSON of `outcome`'s result, encoded once per outcome (sockets sharing a run share it). */
+    private encodeOutcome(outcome: SubscriptionOutcome): string {
+        let json = this.encodedOutcomes.get(outcome);
+
+        if (json === undefined) {
+            // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
+            json = JSON.stringify(encodeWire(outcome.result ?? null));
+            this.encodedOutcomes.set(outcome, json);
+        }
+
+        return json;
+    }
+
     /** Refuse a result too large to send as one frame. */
     private assertResultWithinLimit(json: string): void {
         const limit = envPositiveInt(this.env, "LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS", DEFAULT_SUBSCRIPTION_MAX_RESULT_CHARS);
@@ -15455,6 +15498,11 @@ abstract class ShardDO {
      */
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
         const memos = socketMap(this.subMemos, ws);
+        const json = this.encodeOutcome(outcome);
+
+        // A resume acknowledges a value the client already holds, but the server still retains it as the diff baseline,
+        // so it answers to the same per-result cap as a full seed.
+        this.assertResultWithinLimit(json);
 
         // A refresh that started after this seed already recorded a newer baseline.
         if ((memos.get(subId)?.generation ?? -1) > generation) {
@@ -15463,8 +15511,7 @@ abstract class ShardDO {
 
         memos.set(subId, {
             generation,
-            // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-            lastJson: this.boundedBaseline(memos, subId, JSON.stringify(encodeWire(outcome.result ?? null))),
+            lastJson: this.boundedBaseline(memos, subId, json),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
@@ -15519,13 +15566,7 @@ abstract class ShardDO {
         // pure-JSON result encodes byte-identically, so this baseline + `data`
         // frame stay unchanged for the common case, and the delta path (which
         // encodes its next rows too) diffs against a consistently-encoded baseline.
-        let json = this.encodedOutcomes.get(outcome);
-
-        if (json === undefined) {
-            // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-            json = JSON.stringify(encodeWire(outcome.result ?? null));
-            this.encodedOutcomes.set(outcome, json);
-        }
+        const json = this.encodeOutcome(outcome);
 
         this.assertResultWithinLimit(json);
 

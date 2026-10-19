@@ -282,4 +282,35 @@ describe("shardDO subscription resume cursor", () => {
             database.close();
         }
     });
+
+    it("refuses a resumable result over the per-result cap instead of acknowledging the resume", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema, { cdc: true });
+            append(database.sql, "messages");
+
+            const epoch = readCdcEpoch(database.sql);
+            // The aggregate baseline cap is far above the per-result cap, so only the per-result check can refuse this.
+            const shard = new FixedSubscriptionShard(makeState(database), {
+                LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "100",
+                LUNORA_SUBSCRIPTION_MEMO_MAX_CHARS: "100000",
+            });
+            const ws = new FakeSocket();
+
+            shard.result = [{ _id: "m-1", text: "x".repeat(500) }];
+            ws.serializeAttachment({ subs: {} });
+
+            await shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(1, epoch));
+
+            expect(ws.frames.map((frame) => frame.type)).toStrictEqual(["ack", "error"]);
+            expect((ws.frames[1] as { code?: string }).code).toBe("SUBSCRIPTION_RESULT_TOO_LARGE");
+            expect(ws.frames.some((frame) => frame.type === "resume")).toBe(false);
+            expect(Object.keys((ws.deserializeAttachment() as { subs: object }).subs)).toStrictEqual([]);
+        } finally {
+            database.close();
+        }
+    });
 });

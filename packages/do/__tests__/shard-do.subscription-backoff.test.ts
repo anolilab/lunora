@@ -58,6 +58,8 @@ const createFakeState = (): ShardDOState => {
 class FlakyShard extends ShardDO {
     public failing = false;
 
+    public returnsNull = false;
+
     public runs = 0;
 
     public value = 1;
@@ -94,6 +96,10 @@ class FlakyShard extends ShardDO {
 
         if (this.failing) {
             return Promise.reject(new Error("handler bug"));
+        }
+
+        if (this.returnsNull) {
+            return Promise.resolve(null);
         }
 
         return Promise.resolve({ result: [{ _id: String(this.value) }], tables: new Set(["messages"]) });
@@ -169,6 +175,29 @@ describe("shardDO: failing subscription backoff", () => {
         expect(shard.runs).toBe(latchedRuns + 1);
         // The healed query delivers its value again, so the latch is cleared.
         expect(frames(ws, "data").length + frames(ws, "delta").length).toBeGreaterThan(1);
+    });
+
+    it("forgets the failure streak when the query recovers by resolving to nothing to deliver", async () => {
+        expect.assertions(2);
+
+        await shard.write();
+        await shard.write();
+
+        // The window has elapsed and the query now resolves cleanly — to null.
+        shard.failing = false;
+        shard.returnsNull = true;
+        vi.setSystemTime(Date.now() + 120_000);
+        await shard.write();
+
+        const recoveredRuns = shard.runs;
+
+        // A fresh failure is a first failure again: it retries on the next flush instead of inheriting the old streak's delay.
+        shard.failing = true;
+        await shard.write();
+        await shard.write();
+
+        expect(shard.runs - recoveredRuns).toBe(2);
+        expect(frames(ws, "error")).toHaveLength(2);
     });
 
     it("retries immediately when the subscription is re-registered with new args", async () => {

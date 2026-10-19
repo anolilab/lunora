@@ -116,6 +116,28 @@ describe("shardDO: subscription byte bounds", () => {
         expect(Object.keys((ws.attachment as SocketAttachment).subs)).toStrictEqual([]);
     });
 
+    it("ends a subscription whose refreshed result grew past the byte cap instead of leaving it silently stale", async () => {
+        expect.assertions(4);
+
+        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "1000" });
+
+        shard.registerSocket(ws);
+        shard.sizes.set("blobs:grows", 100);
+        await shard.subscribeTo(ws, "grows", "blobs:grows");
+
+        expect(framesOf(ws, "data", "grows")).toHaveLength(1);
+
+        shard.sizes.set("blobs:grows", 5000);
+        await shard.write();
+
+        const errors = framesOf(ws, "error", "grows");
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.code).toBe("SUBSCRIPTION_RESULT_TOO_LARGE");
+        // Deregistered, so no later flush re-runs and re-encodes the oversized result.
+        expect(Object.keys((ws.attachment as SocketAttachment).subs)).toStrictEqual([]);
+    });
+
     it("seeds a result under the cap as before", async () => {
         expect.assertions(2);
 

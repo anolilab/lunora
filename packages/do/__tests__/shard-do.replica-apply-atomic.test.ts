@@ -1,6 +1,6 @@
 import type { CdcChange, SqlExec } from "@lunora/shard-engine";
 import { applyCdcChanges, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -106,6 +106,19 @@ describe("shardDO replica page apply", () => {
 
         await expect(host.applyChanges([insert(1, "a"), insert(2, "b"), insert(3, "c", "no_such_table")])).rejects.toThrow(/no_such_table|unknown table/u);
         expect(harness.raw("SELECT COUNT(*) AS n FROM messages")).toEqual([{ n: 0 }]);
+    });
+
+    it("still resolves once the page has committed when the refresh that follows it fails", async () => {
+        expect.assertions(3);
+
+        const flush = vi
+            .spyOn(shard as unknown as { flushChangedTables: () => Promise<void> }, "flushChangedTables")
+            .mockRejectedValue(new Error("refresh failed"));
+
+        // A rejection here would be read as "the page was not applied", leaving the cursor behind rows that are already there.
+        await expect(host.applyChanges([insert(1, "a"), insert(2, "b")])).resolves.toBe(2);
+        expect(harness.raw("SELECT COUNT(*) AS n FROM messages")).toEqual([{ n: 2 }]);
+        expect(flush).toHaveBeenCalledTimes(1);
     });
 
     it("queues behind a transaction already open on the DO instead of failing the page", async () => {
