@@ -385,3 +385,15 @@ describe("v.sensitive — JSON Schema", () => {
         expect(toJsonSchema(v.string())).toStrictEqual({ type: "string" });
     });
 });
+
+describe("v.sensitive — keeps the wrapped validator's own methods", () => {
+    it("lets a sensitive object be stripped and keeps the stripped copy sensitive", () => {
+        expect.assertions(3);
+
+        const stripped = v.sensitive(v.object({ token: v.string() })).strip();
+
+        expect(stripped.parse({ extra: 1, token: "abc" })).toStrictEqual({ token: "abc" });
+        expect(containsSensitive(stripped)).toBe(true);
+        expect(rejection(() => stripped.parse({ token: 5 })).message).not.toContain("5");
+    });
+});

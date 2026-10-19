@@ -1154,7 +1154,7 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
 const sensitive = <V extends Validator>(validator: V): V => {
     const inner = toInternal(validator as Validator);
 
-    return createValidator<unknown>(
+    const marked = createValidator<unknown>(
         inner.kind,
         (value, context) => {
             const previous = context.redact;
@@ -1168,7 +1168,16 @@ const sensitive = <V extends Validator>(validator: V): V => {
             }
         },
         { ...inner._meta, sensitive: true },
-    ) as unknown as V;
+    );
+
+    // `.strip()` is the one method only an object validator carries; the rebuild above would drop it.
+    const { strip } = inner as unknown as { strip?: () => Validator };
+
+    if (typeof strip === "function") {
+        (marked as unknown as { strip: () => Validator }).strip = () => sensitive(strip());
+    }
+
+    return marked as unknown as V;
 };
 
 /** Path segment standing in for a record key that may be a secret (see `record`). */
