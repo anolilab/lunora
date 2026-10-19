@@ -319,6 +319,168 @@ export const listItems = query({
 
         expect(loaded(project, entryPath)).toBe(true);
     });
+
+    it("does not seed a frontend module whose only global-looking text is in a comment", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            componentPath,
+            'export const App = () => null;\n// declare global { var __COMMENTED__: number; }\n/* /// <reference types="node" /> */\n',
+            "utf8",
+        );
+
+        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(false);
+    });
+
+    it("does not seed an augmentation a comment names by quoted specifier", () => {
+        expect.assertions(1);
+
+        const augmentPath = join(workdir, "src", "react-augment.ts");
+
+        writeFileSync(augmentPath, 'import "./routes";\n\ndeclare module "react" {\n    interface Attributes {}\n}\n', "utf8");
+        writeFileSync(join(workdir, "src", "routes.ts"), "export const routes = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "probe.ts"), "// see \"react\" and 'react/jsx-runtime'\nexport const probe = 1;\n", "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(false);
+    });
+
+    it("seeds a relative augmentation when a lunora/ source imports the same file by another relative path", () => {
+        expect.assertions(1);
+
+        const routesPath = join(workdir, "src", "routes.ts");
+        const augmentPath = join(workdir, "src", "routes-augment.ts");
+
+        writeFileSync(routesPath, "export const routes = 1;\n", "utf8");
+        // Augments `./routes` from its own folder; the lunora/ source below reaches the same file as `../src/routes`.
+        writeFileSync(augmentPath, 'export {};\n\ndeclare module "./routes" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
+        writeFileSync(join(lunoraDirectory, "usesRoutes.ts"), 'import "../src/routes";\n\nexport const used = 1;\n', "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(true);
+    });
+
+    it("seeds an augmentation of a module that a file a lunora/ source imports reaches", () => {
+        expect.assertions(1);
+
+        const helperPath = join(workdir, "src", "helper.ts");
+        const augmentPath = join(workdir, "src", "fake-mod-augment.ts");
+
+        // The augmentation names `fake-mod`, which only the helper imports.
+        writeFileSync(helperPath, 'import "fake-mod";\n\nexport const helper = 1;\n', "utf8");
+        writeFileSync(augmentPath, 'export {};\n\ndeclare module "fake-mod" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
+        writeFileSync(join(lunoraDirectory, "usesHelper.ts"), 'import { helper } from "../src/helper";\n\nexport const used = helper;\n', "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(true);
+    });
+
+    it("drops a file a lunora/ source stops importing, and keeps the program when nothing changes", () => {
+        expect.assertions(3);
+
+        const listItems = join(lunoraDirectory, "listItems.ts");
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, validatorsPath)).toBe(true);
+
+        // Refreshing with nothing changed rebuilds nothing: the same program object comes back.
+        const before = project.getProgram().compilerObject;
+
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(project.getProgram().compilerObject).toBe(before);
+
+        writeFileSync(
+            listItems,
+            readFileSync(listItems, "utf8")
+                .replace(`import { itemValidator } from "../src/validators";\n`, "")
+                .replace("args: { item: itemValidator }", "args: {}"),
+            "utf8",
+        );
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, validatorsPath)).toBe(false);
+    });
+
+    it("holds every file a run reads with lint on too, so secret discovery adds none once the program exists", () => {
+        expect.assertions(1);
+
+        // A test file under lunora/ is skipped by the default walk; lint's secret scan
+        // reads it, and must not add it to the program.
+        writeFileSync(join(lunoraDirectory, "listItems.test.ts"), 'export const fixture = "sk_live_0000000000000000000000";\n', "utf8");
+
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        const project = createCodegenProject(lunoraDirectory);
+        const seeded = new Set(project.getSourceFiles().map((file) => file.getFilePath()));
+
+        runCodegen({ dryRun: true, lint: true, project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(
+            project
+                .getSourceFiles()
+                .map((file) => file.getFilePath())
+                .filter((path) => !seeded.has(path)),
+        ).toStrictEqual([]);
+    });
+
+    it('treats every non-declaration file as a module under moduleDetection "force"', () => {
+        expect.assertions(2);
+
+        const plainPath = join(workdir, "src", "plain.ts");
+
+        writeFileSync(plainPath, "interface PlainGlobal {\n    marker: true;\n}\n", "utf8");
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { moduleDetection: "force", strict: true }, include: ["src/**/*", "lunora/**/*"] }),
+            "utf8",
+        );
+
+        expect(loaded(createCodegenProject(lunoraDirectory), plainPath)).toBe(false);
+
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { moduleDetection: "auto", strict: true }, include: ["src/**/*", "lunora/**/*"] }),
+            "utf8",
+        );
+
+        expect(loaded(createCodegenProject(lunoraDirectory), plainPath)).toBe(true);
+    });
+
+    it("treats a CommonJS JavaScript file as a module, so it is not seeded as a global script", () => {
+        expect.assertions(2);
+
+        const commonJsPath = join(workdir, "src", "postcss.config.js");
+        const scriptPath = join(workdir, "src", "legacy-script.js");
+
+        writeFileSync(commonJsPath, "const plugins = require('./plugins');\nmodule.exports = { plugins };\n", "utf8");
+        writeFileSync(scriptPath, "var legacyGlobal = 1;\n", "utf8");
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { allowJs: true, strict: true }, include: ["src/**/*", "lunora/**/*"] }),
+            "utf8",
+        );
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, commonJsPath)).toBe(false);
+        expect(loaded(project, scriptPath)).toBe(true);
+    });
+
+    it("reads a file the tsconfig extends again for a new Project, so an edit to it takes effect", () => {
+        expect.assertions(2);
+
+        const plainPath = join(workdir, "src", "plain.ts");
+        const include = ["src/**/*", "lunora/**/*"];
+
+        writeFileSync(plainPath, "interface PlainGlobal {\n    marker: true;\n}\n", "utf8");
+        writeFileSync(join(workdir, "tsconfig.base.json"), JSON.stringify({ compilerOptions: { strict: true }, include }), "utf8");
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ extends: "./tsconfig.base.json" }), "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), plainPath)).toBe(true);
+
+        // The leaf tsconfig is untouched; only the base it extends changes.
+        writeFileSync(join(workdir, "tsconfig.base.json"), JSON.stringify({ compilerOptions: { moduleDetection: "force", strict: true }, include }), "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), plainPath)).toBe(false);
+    });
 });
 
 /**

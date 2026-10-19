@@ -1496,6 +1496,12 @@ const evaluateSchemaDrift: (options: {
 }) => SchemaDriftDecision;
 ```
 
+### `findCodegenConfigFile` (const)
+
+```ts
+const findCodegenConfigFile: (lunoraDirectory: string) => string | undefined;
+```
+
 ### `findLunoraSolution` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -1592,6 +1598,12 @@ const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | und
 
 ```ts
 const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
+### `projectConfigCandidatePaths` (const)
+
+```ts
+const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
 ```
 
 ### `readPackageDependencies` (const)

@@ -93,10 +93,12 @@ Codegen does not parse your whole tsconfig. Its TypeScript program starts from
 the `lunora/` sources, the worker entry, the `.d.ts` files your `tsconfig.json`
 includes, and any other tsconfig-included file whose declarations apply to the
 whole program: a script, a `declare global` block, or a triple-slash directive.
-A `declare module "x"` in such a file counts only when a `lunora/` source imports
-`x`. Everything else (your UI, your tests) is reached only by import, and the
-tsconfig's compiler options and path aliases still apply. A project whose
-tsconfig includes a large `src/` no longer pays to parse it on a cold run.
+A `declare module "x"` in such a file counts only when a file the program reaches
+imports `x`. Everything else (your UI, your tests) is reached only by import, and
+the tsconfig's compiler options and path aliases still apply. A project whose
+tsconfig includes a large `src/` no longer pays to parse it on a cold run. The
+tsconfig's file list is read on a cold start, so a declaration added to `src/`
+mid-session is picked up on the next start.
 
 `lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
 not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
