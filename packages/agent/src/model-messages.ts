@@ -83,7 +83,10 @@ const buildModelMessages = (options: {
         messages.push({ content: `Summary of the earlier conversation:\n\n${options.summary}`, role: "system" });
     }
 
-    const answered = new Set(options.history.filter((row) => row.role === "tool" && row.toolCallId !== undefined).map((row) => row.toolCallId));
+    // An awaiting-approval placeholder is skipped below, so it does not answer its call.
+    const answered = new Set(
+        options.history.filter((row) => row.role === "tool" && row.toolCallId !== undefined && row.status !== "awaiting_approval").map((row) => row.toolCallId),
+    );
     // Synthetic results for the current assistant row's unanswered calls, emitted
     // after its persisted tool rows and before the next non-tool row.
     let unanswered: ModelMessage[] = [];
