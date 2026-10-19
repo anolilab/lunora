@@ -26,9 +26,9 @@ describe("httpRoute error response", () => {
         const response = await dispatch(route, "GET", "/api/fail", new Request("https://x/api/fail"));
         const text = await response.text();
 
-        // This envelope is `{ code, error }` (it carries neither hint nor why today).
+        // This envelope is `{ code, error, why }`: the client-visible explanation reaches the caller.
         expect(response.status).toBe(409);
-        expect(JSON.parse(text)).toStrictEqual({ code: "CONFLICT", error: "stale" });
+        expect(JSON.parse(text)).toStrictEqual({ code: "CONFLICT", error: "stale", why: "row moved" });
         expect(text).not.toContain(SENTINEL);
         expect(JSON.stringify([...response.headers])).not.toContain(SENTINEL);
     });

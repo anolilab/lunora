@@ -495,7 +495,7 @@ const errorResponse = (error: unknown): Response => {
             console.error("[lunora] http action error (redacted on the wire):", error);
         }
 
-        return Response.json({ code: body.code, error: body.message }, { status });
+        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
     }
 
     throw error;

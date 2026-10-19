@@ -131,11 +131,17 @@ const parseServerError = (message: ServerErrorMessage, fallbackMessage: string):
     return { code, messageText: (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? fallbackMessage };
 };
 
-/** Build a coded `Error` from a stream-scoped server `error` frame. */
+/** Build a coded `Error` from a stream-scoped server `error` frame, keeping the server's `why` explanation. */
 const buildStreamError = (message: ServerErrorMessage): Error => {
     const { code, messageText } = parseServerError(message, "stream error");
+    const why = (message.error as { why?: unknown } | undefined)?.why;
+    const error: Error & { why?: string } = code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
 
-    return code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
+    if (typeof why === "string") {
+        error.why = why;
+    }
+
+    return error;
 };
 
 /**

@@ -684,6 +684,29 @@ describe("shardDO streaming queries", () => {
         errorSpy.mockRestore();
     });
 
+    it("carries a LunoraError's client-visible why on the stream error frame", async () => {
+        expect.assertions(2);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("metrics:conflict", async function* conflictGen() {
+            yield 1;
+            throw new LunoraError("CONFLICT", "stale", { internal: { query: "SELECT 1" }, why: "row moved" });
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "stream_why", query: { functionPath: "metrics:conflict" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        const errorFrame = parseFrames(ws).find((f) => f.type === "error");
+
+        expect((errorFrame?.error as { code?: string })?.code).toBe("CONFLICT");
+        // The explanation reaches the client; the operator-only `internal` must not.
+        expect(errorFrame?.error).toStrictEqual({ code: "CONFLICT", message: "stale", why: "row moved" });
+    });
+
     // -----------------------------------------------------------------------
     // A `.stream()` handler runs under the SOCKET's identity — never the shared
     // per-request fields, which a concurrently in-flight `/rpc` owns.

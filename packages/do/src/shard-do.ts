@@ -521,7 +521,10 @@ const reportStreamError = (ws: ShardSocketLike, id: string, error: unknown, logM
         console.error(`[@lunora/do] ${logMessage}:`, error);
     }
 
-    trySendFrame(ws, JSON.stringify({ error: { code: body.code, message: body.message }, id, type: "error" }));
+    trySendFrame(
+        ws,
+        JSON.stringify({ error: { code: body.code, message: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, id, type: "error" }),
+    );
 };
 
 /** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
