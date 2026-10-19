@@ -111,6 +111,18 @@ const requestSecretTool = (options: { consumer: string; description: string }): 
 };
 
 /**
+ * A `JSON.stringify` replacer that expands an Error into the fields a log or telemetry sink
+ * would read. An Error otherwise serializes to `{}`, hiding a secret in its message or stack.
+ */
+const withErrorFields = (_key: string, inner: unknown): unknown => {
+    if (!(inner instanceof Error)) {
+        return inner;
+    }
+
+    return { ...Object.fromEntries(Object.entries(inner)), message: inner.message, name: inner.name, stack: inner.stack };
+};
+
+/**
  * Whether a value's serialized form carries the secret, including the JSON-escaped
  * spelling of it (a quote or backslash in the secret is escaped inside a string).
  * A value that cannot be serialized cannot be persisted as a step output either,
@@ -125,7 +137,7 @@ const containsSecret = (value: unknown, secret: string): boolean => {
     let serialized: string;
 
     try {
-        serialized = JSON.stringify(value);
+        serialized = JSON.stringify(value, withErrorFields);
     } catch {
         return false;
     }

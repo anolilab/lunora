@@ -619,6 +619,21 @@ describe("withSecret — the consuming step", () => {
             toolCallId,
         }) as unknown as AgentToolContext;
 
+    it("refuses a callback result that carries the secret only inside an Error", async () => {
+        expect.assertions(1);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const context = consumerContext(host, new WaitJournal(), [], "tool:charge:call_2", "call_2");
+
+        // An Error stringifies to `{}`, so only its message and stack give it away.
+        await expect(
+            withSecret(context, ref, (secret) => {
+                return { failure: new Error(`gateway said ${secret}`) };
+            }),
+        ).rejects.toThrow("withSecret's callback returned the secret");
+    });
+
     it("replays a completed consume from its journal entry when the enclosing tool step runs again", async () => {
         expect.assertions(3);
 
