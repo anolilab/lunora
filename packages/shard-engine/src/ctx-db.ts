@@ -101,7 +101,7 @@ import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
-import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators, transformOnlyDefinition } from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
@@ -3850,10 +3850,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const trusted = insertOptions?.allowExplicitId === true;
             const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { trusted });
 
-            if (!trusted) {
-                assertForeignKeysExist(tableName, withDefaults);
-            }
-
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
             // responds) or the trusted-import `allowExplicitId` (verbatim `_id`).
@@ -3883,6 +3879,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
             if (hasMatchingTrigger(tableName, "before", "insert")) {
                 await fireTriggers("before", "insert", { doc: { ...documentWithMeta }, id, op: "insert", table: tableName });
+            }
+
+            // After the `before` trigger, so one that creates the referenced parent
+            // through its own db context can still save the child.
+            if (!trusted) {
+                assertForeignKeysExist(tableName, withDefaults);
             }
 
             // Backfill counters BEFORE the physical write so the rebuild
@@ -3977,8 +3979,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 chunkSeqFields.push(commitSeqFields(tableName));
             }
 
+            // Still unvalidated, but a `v.from` column is stored as its parsed output like every
+            // other insert; a trusted replay already holds that output.
+            const transformColumns = batchOptions?.allowExplicitId === true ? undefined : transformOnlyDefinition(definition);
+
             const rows = documents.map((document, index) => {
-                const withDefaults = applyInsertDefaults(definition, document, auth);
+                const defaulted = applyInsertDefaults(definition, document, auth);
+                const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted);
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
@@ -4180,11 +4187,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 tolerateStoredNull: true,
             });
 
-            assertForeignKeysExist(tableName, merged, existing);
-
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
             }
+
+            // After the `before` trigger, which may create the referenced parent.
+            assertForeignKeysExist(tableName, merged, existing);
 
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
@@ -4687,12 +4695,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const trusted = replaceOptions?.allowExplicitId === true;
             const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, trusted });
 
-            if (!trusted) {
-                assertForeignKeysExist(tableName, replaced, previous);
-            }
-
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            }
+
+            // After the `before` trigger, which may create the referenced parent.
+            if (!trusted) {
+                assertForeignKeysExist(tableName, replaced, previous);
             }
 
             ensureBackfilledForTable(tableName);

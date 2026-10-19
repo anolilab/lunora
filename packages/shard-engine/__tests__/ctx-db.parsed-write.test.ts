@@ -28,8 +28,20 @@ const numericString = {
     },
 };
 
+const reversedBytes = {
+    "~standard": {
+        validate: (value: unknown) =>
+            value instanceof ArrayBuffer
+                ? { value: new Uint8Array([...new Uint8Array(value)].toReversed()).buffer }
+                : { issues: [{ message: "expected bytes" }] },
+        vendor: "test",
+        version: 1 as const,
+    },
+};
+
 const schema = {
     tables: {
+        plain: { indexes: [], shape: { label: v.string() } },
         nested: {
             indexes: [],
             shape: {
@@ -43,6 +55,11 @@ const schema = {
                     .$defaultFn(() => "1")
                     .$onUpdateFn(() => "5"),
             },
+        },
+        // A transform over bytes: the stored output is the input reversed.
+        payloads: {
+            indexes: [],
+            shape: { label: v.string(), payload: v.from(reversedBytes) },
         },
         items: {
             indexes: [],
@@ -355,5 +372,97 @@ describe("ctx.db runs an update hook's value through the column's transform", ()
         await writer.patch(id, { label: "b" });
 
         await expect(stored(id, "stamp")).resolves.toBe(5);
+    });
+});
+
+describe("ctx.db treats bytes by content when deciding whether a transform column is stored output", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const bytes = async (id: string): Promise<number[]> => [...new Uint8Array((await stored(id, "payload")) as ArrayBuffer)];
+
+    it("patch and replace parse a NEW buffer instead of persisting it as stored output", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("payloads", { label: "a", payload: bytesOf(1, 2, 3) });
+
+        await expect(bytes(id)).resolves.toEqual([3, 2, 1]);
+
+        await writer.patch(id, { payload: bytesOf(4, 5, 6) });
+
+        await expect(bytes(id)).resolves.toEqual([6, 5, 4]);
+
+        await writer.replace(id, { label: "a", payload: bytesOf(7, 8, 9) });
+
+        await expect(bytes(id)).resolves.toEqual([9, 8, 7]);
+    });
+
+    it("a buffer holding the stored bytes is still passed through unparsed", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("payloads", { label: "a", payload: bytesOf(1, 2, 3) });
+
+        await writer.patch(id, { payload: bytesOf(3, 2, 1) });
+
+        await expect(bytes(id)).resolves.toEqual([3, 2, 1]);
+
+        await writer.replace(id, { ...(await read(id)), label: "b" });
+
+        await expect(bytes(id)).resolves.toEqual([3, 2, 1]);
+    });
+});
+
+describe("insertManyUnsafe stores a v.from column as its parsed output", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("applies the transform, so a later patch of another field leaves it alone", async () => {
+        expect.assertions(3);
+
+        const [first, second] = await writer.insertManyUnsafe!("items", [input({ score: "42" }), input({ maybeScore: "7", score: "8" })]);
+
+        await expect(read(first!)).resolves.toMatchObject({ score: 42 });
+        await expect(read(second!)).resolves.toMatchObject({ maybeScore: 7, score: 8 });
+        await expect(writer.patch(first!, { label: "b" })).resolves.toBeUndefined();
+    });
+
+    it("stays unvalidated: only the transform columns are touched", async () => {
+        expect.assertions(2);
+
+        // `label` is declared `v.string()`; the unsafe path does not check it.
+        const [id] = await writer.insertManyUnsafe!("items", [input({ label: 5 })]);
+
+        await expect(stored(id!, "label")).resolves.toBe(5);
+        await expect(stored(id!, "score")).resolves.toBe(42);
+    });
+
+    it("a trusted replay keeps the output it already holds", async () => {
+        expect.assertions(1);
+
+        const [id] = await writer.insertManyUnsafe!("items", [input({ _id: "r1", score: 42 })], { allowExplicitId: true });
+
+        await expect(stored(id!, "score")).resolves.toBe(42);
+    });
+
+    it("leaves a table with no transform column as it was", async () => {
+        expect.assertions(1);
+
+        const [id] = await writer.insertManyUnsafe!("plain", [{ label: "x" }]);
+
+        await expect(stored(id!, "label")).resolves.toBe("x");
     });
 });

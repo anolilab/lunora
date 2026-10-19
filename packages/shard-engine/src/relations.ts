@@ -765,7 +765,25 @@ const hasTransform = (validator: ValidatorLike): boolean => {
     return result;
 };
 
-/** Structural equality over what a column stores: primitives, dates, arrays and plain objects. */
+const isPlain = (value: object): boolean => {
+    const prototype: unknown = Object.getPrototypeOf(value);
+
+    return prototype === Object.prototype || prototype === null;
+};
+
+const bytesOf = (value: unknown): Uint8Array | undefined => {
+    if (value instanceof ArrayBuffer) {
+        return new Uint8Array(value);
+    }
+
+    return ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : undefined;
+};
+
+/**
+ * Structural equality over what a column stores: primitives, dates, byte buffers (by content),
+ * arrays and plain objects. Any other object (a `Map`, a class instance) is never equal to
+ * another, so a value of that kind is parsed rather than trusted as stored output.
+ */
 const sameValue = (a: unknown, b: unknown): boolean => {
     if (Object.is(a, b)) {
         return true;
@@ -773,6 +791,19 @@ const sameValue = (a: unknown, b: unknown): boolean => {
 
     if (a instanceof Date && b instanceof Date) {
         return a.getTime() === b.getTime();
+    }
+
+    const leftBytes = bytesOf(a);
+    const rightBytes = bytesOf(b);
+
+    if (leftBytes !== undefined || rightBytes !== undefined) {
+        return (
+            leftBytes !== undefined &&
+            rightBytes !== undefined &&
+            Object.getPrototypeOf(a) === Object.getPrototypeOf(b) &&
+            leftBytes.length === rightBytes.length &&
+            leftBytes.every((byte, index) => byte === rightBytes[index])
+        );
     }
 
     if (Array.isArray(a) || Array.isArray(b)) {
@@ -783,11 +814,35 @@ const sameValue = (a: unknown, b: unknown): boolean => {
         return false;
     }
 
+    if (!isPlain(a) || !isPlain(b)) {
+        return false;
+    }
+
     const left = a as Record<string, unknown>;
     const right = b as Record<string, unknown>;
     const keys = Object.keys(left);
 
     return keys.length === Object.keys(right).length && keys.every((key) => key in right && sameValue(left[key], right[key]));
+};
+
+const transformShapeCache = new WeakMap<TableDefinitionLike, TableDefinitionLike | undefined>();
+
+/**
+ * The table narrowed to its transform columns (see {@link hasTransform}), or `undefined` when it has none.
+ * Running `runRowValidators` over it adopts the parsed output of those columns without validating the
+ * rest — the shape `insertManyUnsafe` needs. Computed once per table.
+ */
+const transformOnlyDefinition = (definition: TableDefinitionLike): TableDefinitionLike | undefined => {
+    if (transformShapeCache.has(definition)) {
+        return transformShapeCache.get(definition);
+    }
+
+    const shape = Object.fromEntries(Object.entries(definition.shape).filter(([, validator]) => hasTransform(validator)));
+    const narrowed = Object.keys(shape).length > 0 ? { ...definition, shape } : undefined;
+
+    transformShapeCache.set(definition, narrowed);
+
+    return narrowed;
 };
 
 interface RowValidatorOptions {
@@ -803,7 +858,9 @@ interface RowValidatorOptions {
      * The row being overwritten (`patch` and `replace`), read lazily. A transform
      * column whose value deep-equals the stored one is that stored OUTPUT handed
      * back — `{ ...(await db.get(id)), x: 1 }` — so it is passed through unparsed;
-     * only a value that differs from what is stored is treated as new input.
+     * only a value that differs from what is stored is treated as new input. That cannot tell
+     * a read-back spread from an explicit re-entry of the same value, so for a non-idempotent
+     * transform an explicit write equal to the stored output is kept as is, not re-parsed.
      */
     previous?: () => Readonly<Record<string, unknown>> | undefined;
 
@@ -964,5 +1021,15 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
     return parsed ?? document;
 };
 
-export { applyInsertDefaults, applyOnDelete, distinctValues, fanOutScalarCounts, MAX_LINK_ROWS, relationHooks, resolveWith, runRowValidators };
+export {
+    applyInsertDefaults,
+    applyOnDelete,
+    distinctValues,
+    fanOutScalarCounts,
+    MAX_LINK_ROWS,
+    relationHooks,
+    resolveWith,
+    runRowValidators,
+    transformOnlyDefinition,
+};
 export type { ApplyOnDeleteOptions };
