@@ -98,6 +98,18 @@ describe("createSensitiveScope", () => {
         expect(collected.attributes).toEqual({ note: `code ${SENSITIVE_ARG_MASK} rejected` });
     });
 
+    it("masks a one- or two-character value inside a JSON-serialized log, and leaves its bare prose occurrence alone", () => {
+        expect.assertions(2);
+
+        // `ab` is below every text threshold, so only its JSON string form (`"ab"`) can be
+        // masked, and only where a serializer quoted it.
+        const scope = createSensitiveScope(sensitiveValues({ value: { token: "ab", note: "n" } }, new Set(["value"])));
+        const logged = JSON.stringify({ label: "primary", value: { token: "ab" } });
+
+        expect(scope.text(logged)).toBe(JSON.stringify({ label: "primary", value: { token: SENSITIVE_ARG_MASK } }));
+        expect(scope.text("the ab side of the ledger")).toBe("the ab side of the ledger");
+    });
+
     it("masks a value of exactly the substring threshold inside other text", () => {
         expect.assertions(2);
 

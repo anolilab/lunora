@@ -469,7 +469,8 @@ const sensitiveNames = (args: Record<string, unknown>, sensitive: ReadonlySet<st
  * A whole-text match is masked at any length. Inside longer text a value of
  * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more is replaced wherever it
  * occurs; one of {@link SENSITIVE_TOKEN_MIN_LENGTH} or more only as a whole token;
- * shorter ones not at all. Longest first, so a value that contains another is masked whole.
+ * shorter ones only in their JSON string form. Longest first, so a value that contains
+ * another is masked whole.
  */
 const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {
     if (secrets.includes(text)) {
@@ -481,8 +482,16 @@ const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): strin
     for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
         if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
             scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
-        } else if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH && scrubbed.includes(secret)) {
-            scrubbed = scrubbed.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK);
+        } else if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH) {
+            if (scrubbed.includes(secret)) {
+                scrubbed = scrubbed.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK);
+            }
+        } else {
+            // Bare, a one- or two-character value matches ordinary prose, so only its JSON string
+            // form is masked: a logged `JSON.stringify({ token })` quotes it, and no prose does.
+            const quoted = JSON.stringify(secret);
+
+            scrubbed = scrubbed.replaceAll(quoted, JSON.stringify(SENSITIVE_ARG_MASK));
         }
     }
 
