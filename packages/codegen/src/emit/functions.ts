@@ -748,6 +748,13 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
     return getLoadedFunction(functionPath);
 };
 
+`
+        : "";
+
+    // The smoke check looks for this export, so it exists only when there is at least one lazy entry to check.
+    const smokeLoaderPrelude =
+        lazyFunctions && manifestBody !== ""
+            ? `
 /**
  * Evaluate every lazy module now and report the ones that fail, keyed by function path. A lazy
  * registry defers a broken module's error to its first call; \`lunora build\` and \`deploy\` run this
@@ -768,7 +775,7 @@ export const loadAllFunctions = async (): Promise<{ checked: number; failures: R
     return { checked: functionPaths.length, failures };
 };
 `
-        : "";
+            : "";
 
     return relocateBaseQualifiers(
         `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}${rooms.typeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
@@ -818,7 +825,7 @@ ${rooms.channelField}    /**
      */
     x402?: { readonly price: number | string };
 }
-${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}
+${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}${smokeLoaderPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).

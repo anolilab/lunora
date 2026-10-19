@@ -164,6 +164,16 @@ describe("lazy function registry", () => {
         expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
     });
 
+    it("emits the smoke loader only when there is a lazy entry for it to check", () => {
+        expect.assertions(2);
+
+        const withoutLazyEntries = emitFunctions({ functions: [], lazyFunctions: true });
+        const withLazyEntries = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
+
+        expect(withoutLazyEntries).not.toContain("loadAllFunctions");
+        expect(withLazyEntries).toContain("export const loadAllFunctions");
+    });
+
     it("keeps eager output unchanged unless lazy mode is selected", () => {
         expect.assertions(3);
 
