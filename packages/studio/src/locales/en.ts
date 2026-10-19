@@ -231,6 +231,7 @@ const MESSAGE_IDS = [
     "SVG",
     "Export / Import",
     "Exported {count} rows.",
+    "Importing rows {from}–{to} of {total}…",
     "Facets",
     "file:function",
     "Files",
