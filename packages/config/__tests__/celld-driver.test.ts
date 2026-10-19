@@ -193,7 +193,7 @@ describe("celld config projection on disk", () => {
 
     // `wrangler dev --var WORKER_ENV:development` on Cloudflare; without it the
     // runtime treats the dev worker as production (live mail, no capture).
-    it("marks the dev projection as development, without overriding a configured value", () => {
+    it("marks the dev projection as development, over a configured value as wrangler's --var does", () => {
         expect.assertions(2);
 
         writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { API: "x" } }), "utf8");
@@ -204,7 +204,7 @@ describe("celld config projection on disk", () => {
         writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { WORKER_ENV: "staging" } }), "utf8");
         resolveDeployDriver("celld").projectConfig?.(root, "dev").write();
 
-        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "staging" } });
+        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "development" } });
     });
 
     it("refuses a source entry outside the project, which celld would resolve against the wrong root", () => {

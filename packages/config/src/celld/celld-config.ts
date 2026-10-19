@@ -423,12 +423,13 @@ const adjustBuildOutput = (
 /**
  * What `wrangler dev --var WORKER_ENV:development` marks on Cloudflare:
  * without it the runtime treats the dev worker as production (live mail, no
- * queue capture). `vars` from the config win, and `.dev.vars` beats both.
+ * queue capture). It beats a `WORKER_ENV` in the config's `vars`, as wrangler's
+ * `--var` does; `.dev.vars` still beats it, because celld reads that file last.
  */
 const markDevelopment = (projected: Config): Config => {
     const variables = isRecord(projected["vars"]) ? projected["vars"] : {};
 
-    return { ...projected, vars: { WORKER_ENV: "development", ...variables } };
+    return { ...projected, vars: { ...variables, WORKER_ENV: "development" } };
 };
 
 /**
