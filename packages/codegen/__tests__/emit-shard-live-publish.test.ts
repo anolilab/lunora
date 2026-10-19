@@ -1,3 +1,4 @@
+import { transform } from "esbuild";
 import { describe, expect, it } from "vitest";
 
 import { emitShard } from "../src/emit";
@@ -25,6 +26,43 @@ describe("emitShard — declared live streams", () => {
 
         expect(emitted).toContain('return { ["__proto__"]: liveStream_feed };');
         expect(emitted).not.toContain('{ "__proto__": liveStream_feed }');
+    });
+});
+
+describe("emitShard — declared live streams on a lazy shard", () => {
+    const lazy = emitShard({
+        lazyFunctions: true,
+        liveStreamDeclarations: [{ exportName: "posts", filePath: "live", id: "posts", topics: [] }],
+        liveStreams: true,
+        schema: { tables: [], vectorIndexes: [] },
+    });
+
+    it("loads a stream's module on its first publish and keeps it out of the shard's imports", () => {
+        expect.assertions(4);
+
+        expect(lazy).not.toContain("liveStream_posts");
+        expect(lazy).not.toMatch(/^import .* from "\.\.\/live\.js";$/mu);
+        expect(lazy).toContain('["posts", () => import("../live.js").then((module) => module.posts)],');
+        expect(lazy).toContain("protected override loadLiveStream(stream: string): Promise<void> | undefined {");
+    });
+
+    it("emits a shard that parses", async () => {
+        expect.assertions(1);
+
+        await expect(transform(lazy, { loader: "ts" })).resolves.toBeDefined();
+    });
+
+    it("imports the stream's module statically on an eager shard, with no loader", () => {
+        expect.assertions(2);
+
+        const eager = emitShard({
+            liveStreamDeclarations: [{ exportName: "posts", filePath: "live", id: "posts", topics: [] }],
+            liveStreams: true,
+            schema: { tables: [], vectorIndexes: [] },
+        });
+
+        expect(eager).toContain('import { posts as liveStream_posts } from "../live.js";');
+        expect(eager).not.toContain("loadLiveStream");
     });
 });
 

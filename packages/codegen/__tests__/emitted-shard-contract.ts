@@ -133,6 +133,11 @@ class EmittedShardContract extends ShardDO {
      * The emitted `liveStreams()` override (declared streams only) returns the `defineLiveStream`
      * values keyed by id; the base checks each publish against them.
      */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the emitted lazy override, which imports the stream's module on first publish
+    protected override loadLiveStream(_stream: string): Promise<void> | undefined {
+        return Promise.resolve();
+    }
+
     // eslint-disable-next-line class-methods-use-this -- mirrors the emitted override, which returns module constants
     protected override liveStreams(): Readonly<Record<string, { validatePublish: (topic: string, payload: unknown) => unknown }>> {
         return { s: { validatePublish: (_topic: string, payload: unknown) => payload } };

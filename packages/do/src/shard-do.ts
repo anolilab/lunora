@@ -1858,6 +1858,22 @@ const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, gr
 };
 
 /**
+ * The refusals a live publish needs nothing but the topic for, so they run before a lazy shard loads a stream's module.
+ * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room or route topic, `BAD_REQUEST` (400) for a topic over the control bound
+ */
+const assertLiveTopicPublishable = (topic: string): void => {
+    // A room or route topic is reserved for its own dispatch; a live publish must not forge into it.
+    if (topic.startsWith(ROOM_TOPIC_PREFIX) || topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+        throw new LunoraError("FORBIDDEN_TOPIC", "a room or route topic cannot be published to", { status: 403 });
+    }
+
+    // The same bound a control call applies: a topic is held in memory and framed to every subscriber, so an unbounded one is wasted work.
+    if (topic.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+        throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
+    }
+};
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -6407,15 +6423,7 @@ abstract class ShardDO {
      * @returns the number of LOCAL SSE connections the frame was written to
      */
     protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number {
-        // A room or route topic is reserved for its own dispatch; a live publish must not forge into it.
-        if (topic.startsWith(ROOM_TOPIC_PREFIX) || topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-            throw new LunoraError("FORBIDDEN_TOPIC", "a room or route topic cannot be published to", { status: 403 });
-        }
-
-        // The same bound a control call applies: a topic is held in memory and framed to every subscriber, so an unbounded one is wasted work.
-        if (topic.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
-            throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
-        }
+        assertLiveTopicPublishable(topic);
 
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
         const dataJson = JSON.stringify(this.declaredLivePayload(stream, topic, wireData) ?? null);
@@ -6429,6 +6437,16 @@ abstract class ShardDO {
         }
 
         return this.broadcastLiveTopic(stream, topic, dataJson);
+    }
+
+    /**
+     * Make `stream`'s declaration available to {@link liveStreams} before a publish checks it. The default has nothing to load. A
+     * shard that does not hold its streams' modules at start (the generated lazy shard) imports the stream's module here, and
+     * answers `undefined` once it has, or for a stream it does not know, so a warm or eager publish never yields.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the lazy generated subclass loads the stream's module
+    protected loadLiveStream(_stream: string): Promise<void> | undefined {
+        return undefined;
     }
 
     /**
@@ -6501,7 +6519,7 @@ abstract class ShardDO {
 
         try {
             // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
-            return Promise.resolve(this.publishLiveEvent(options.stream, topic, encodeWire(payload ?? null)));
+            return Promise.resolve(this.publishLiveWhenLoaded(options.stream, topic, encodeWire(payload ?? null)));
         } catch (error) {
             return Promise.reject(error instanceof Error ? error : new LunoraError("INTERNAL", String(error), { status: 500 }));
         }
@@ -17335,6 +17353,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Publish once the stream's declaration is available: the entry both async publishers (the HTTP route and an in-shard action)
+     * go through. {@link loadLiveStream} yields a promise only when something must load first, so an eager shard publishes without
+     * yielding, in the same turn as before.
+     * @returns the number of LOCAL SSE connections the frame was written to, or a promise of it
+     */
+    private publishLiveWhenLoaded(stream: string, topic: string, wireData: unknown): number | Promise<number> {
+        // Refused before anything loads, so a forged topic cannot make a lazy shard import a module.
+        assertLiveTopicPublishable(topic);
+
+        const loading = this.loadLiveStream(stream);
+
+        return loading === undefined ? this.publishLiveEvent(stream, topic, wireData) : loading.then(() => this.publishLiveEvent(stream, topic, wireData));
+    }
+
+    /**
      * Server-side publish: the worker's `ctx.live.publish` lands here, on an
      * endpoint no browser can reach through `defineLiveStream`'s control route.
      * Fans the event out via {@link ShardDO.broadcastLiveTopic}.
@@ -17356,7 +17389,7 @@ abstract class ShardDO {
         }
 
         try {
-            return jsonResponse({ delivered: this.publishLiveEvent(stream, topic, body.data) });
+            return jsonResponse({ delivered: await this.publishLiveWhenLoaded(stream, topic, body.data) });
         } catch (error) {
             if (isLunoraError(error)) {
                 return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);

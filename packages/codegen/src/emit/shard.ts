@@ -358,20 +358,48 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     });
 
     // The declared streams the shard checks every publish against. Value imports (the validators run here), so this is
-    // the server graph and not the client-safe `_generated/live.ts`.
+    // the server graph and not the client-safe `_generated/live.ts`. A lazy shard keeps that graph out of its startup, the
+    // way it does for functions: each stream's module is imported on the first publish to it, through `loadLiveStream`.
     const declaredStreams = liveStreams ? liveStreamDeclarations : [];
-    const liveStreamImports = declaredStreams.map((stream) => {
-        assertIdentifier(stream.exportName, "live stream export name");
 
-        return `import { ${stream.exportName} as liveStream_${stream.exportName} } from "../${stream.filePath}.js";`;
-    });
-    const liveStreamsOverride =
-        declaredStreams.length > 0
-            ? `        protected override liveStreams() {
+    for (const stream of declaredStreams) {
+        assertIdentifier(stream.exportName, "live stream export name");
+    }
+
+    const liveStreamImports = lazyFunctions
+        ? []
+        : declaredStreams.map((stream) => `import { ${stream.exportName} as liveStream_${stream.exportName} } from "../${stream.filePath}.js";`);
+    const eagerLiveStreamsOverride = `        protected override liveStreams() {
             return { ${declaredStreams.map((stream) => `${renderObjectKey(stream.id)}: liveStream_${stream.exportName}`).join(", ")} };
         }
-`
-            : "";
+`;
+    const lazyLiveStreamsOverride = `        private readonly liveStreamLoaders = new Map<string, () => Promise<{ validatePublish: (topic: string, payload: unknown) => unknown }>>([
+${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, () => import(${JSON.stringify(`../${stream.filePath}.js`)}).then((module) => module.${stream.exportName})],`).join("\n")}
+        ]);
+
+        private readonly loadedLiveStreams = new Map<string, { validatePublish: (topic: string, payload: unknown) => unknown }>();
+
+        protected override loadLiveStream(stream: string): Promise<void> | undefined {
+            const load = this.loadedLiveStreams.has(stream) ? undefined : this.liveStreamLoaders.get(stream);
+
+            return load === undefined
+                ? undefined
+                : load().then((declaration) => {
+                      this.loadedLiveStreams.set(stream, declaration);
+                  });
+        }
+
+        // Only the streams a publish has already loaded: a stream not yet loaded was either never published to or is
+        // unknown, and either way \`declaredLivePayload\` refuses what this does not hold.
+        protected override liveStreams() {
+            return Object.fromEntries(this.loadedLiveStreams);
+        }
+`;
+    let liveStreamsOverride = "";
+
+    if (declaredStreams.length > 0) {
+        liveStreamsOverride = lazyFunctions ? lazyLiveStreamsOverride : eagerLiveStreamsOverride;
+    }
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
         `import { applyCdcChanges, createStableIdFactory, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}${hasVectorIndexes ? "backfillVectorIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,

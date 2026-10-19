@@ -1060,6 +1060,85 @@ describe("shardDO live publish against declared streams", () => {
     });
 });
 
+/**
+ * A shard that holds no stream until a publish asks for it, the way the generated lazy shard does: `loadLiveStream` stands in
+ * for the dynamic import of the stream's module, and counts how often it ran.
+ */
+class LazyLiveShard extends LiveShard {
+    public readonly loads: string[] = [];
+
+    private readonly loaded = new Map<string, { validatePublish: (topic: string, payload: unknown) => unknown }>();
+
+    protected override loadLiveStream(stream: string): Promise<void> | undefined {
+        if (stream !== "s" || this.loaded.has(stream)) {
+            return undefined;
+        }
+
+        this.loads.push(stream);
+
+        const load = async (): Promise<void> => {
+            this.loaded.set(stream, { validatePublish: (_topic: string, payload: unknown) => payload });
+        };
+
+        return load();
+    }
+
+    protected override liveStreams() {
+        return Object.fromEntries(this.loaded);
+    }
+}
+
+describe("shardDO live publish against lazily loaded streams", () => {
+    const lazy = (): LazyLiveShard => {
+        const state = { acceptWebSocket() {}, getWebSockets: () => [], storage: { sql: {} } } as unknown as ShardDOState;
+
+        return new LazyLiveShard(state, {});
+    };
+
+    it("loads a stream's declaration on the first publish to it, once, and delivers", async () => {
+        expect.assertions(4);
+
+        const shard = lazy();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        const first = await publish(shard, { data: encodeWire({ n: 1 }), stream: "s", topic: "feed" });
+
+        expect(first.status).toBe(200);
+        await expect(reader.next()).resolves.toMatchObject({ data: { data: { n: 1 }, topic: "feed" } });
+
+        await publish(shard, { data: encodeWire({ n: 2 }), stream: "s", topic: "feed" });
+        await reader.next();
+
+        expect(shard.loads).toStrictEqual(["s"]);
+        await expect(shard.publishFromAction("feed", { n: 3 }, { stream: "s" })).resolves.toBe(1);
+    });
+
+    it("refuses an unknown stream without loading anything", async () => {
+        expect.assertions(2);
+
+        const shard = lazy();
+        const refused = await publish(shard, { data: encodeWire(1), stream: "typo", topic: "feed" });
+
+        expect(refused.status).toBe(400);
+        expect(shard.loads).toStrictEqual([]);
+    });
+
+    it("refuses a room topic before it loads the stream", async () => {
+        expect.assertions(3);
+
+        const shard = lazy();
+        const refused = await publish(shard, { data: encodeWire(1), stream: "s", topic: "room:abc" });
+
+        expect(refused.status).toBe(403);
+        await expect(shard.publishFromAction("room:abc", 1, { stream: "s" })).rejects.toMatchObject({ code: "FORBIDDEN_TOPIC" });
+        expect(shard.loads).toStrictEqual([]);
+    });
+});
+
 /** Read every byte of an SSE body that is already complete, up to `stop` (the first occurrence ends the read). */
 const readUntil = async (response: Response, stop: string): Promise<string> => {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
