@@ -2872,6 +2872,24 @@ describe("lunoraClient", () => {
             await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: "row moved" });
         });
 
+        it("ignores a non-string why on an admin error envelope", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: { nested: true } } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: undefined });
+        });
+
         it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
             expect.assertions(4);
 

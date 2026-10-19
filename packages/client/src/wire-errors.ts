@@ -94,7 +94,14 @@ const errorEnvelopeOf = (
 ): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string; why?: string } | undefined => {
     const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
 
-    return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
+    if (typeof slot !== "object" || slot === null || Array.isArray(slot)) {
+        return undefined;
+    }
+
+    // `why` is typed as a string on the wire, so a malformed one is dropped rather than passed on.
+    const { why, ...rest } = slot as { why?: unknown };
+
+    return typeof why === "string" ? { ...rest, why } : rest;
 };
 
 /**
@@ -189,7 +196,7 @@ const reconstructError = (errorBody: {
         error.docsUrl = errorBody.docsUrl;
     }
 
-    if (errorBody.why !== undefined) {
+    if (typeof errorBody.why === "string") {
         error.why = errorBody.why;
     }
 
