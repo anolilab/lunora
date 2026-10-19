@@ -97,6 +97,7 @@ export const advisorEvidenceOf = (project: Project, lunoraDirectory: string, inp
         containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
         containers,
         countReads: discoverCountReads(project, lunoraDirectory, schema.tables),
+        crons,
         cronTargets: crons.flatMap((job) => (job.functionPath === undefined ? [] : [job.functionPath])),
         exportSinks: discoverExportSinks(project, lunoraDirectory),
         staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),

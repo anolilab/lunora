@@ -62,7 +62,8 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.220"
+        "@lunora/server": "1.0.0-alpha.220",
+        "@visulima/cron-parser": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
