@@ -589,6 +589,25 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         expect(describeInternal(error)).toBeUndefined();
     });
 
+    it("still delivers the event when reading the internal accessor on the error throws", () => {
+        expect.assertions(2);
+
+        const { events, sink } = collectEvents();
+        const error = {
+            code: "INTERNAL",
+            get internal(): Record<string, unknown> {
+                throw new Error("accessor exploded");
+            },
+            message: "boom",
+            status: 500,
+        };
+
+        emitRpcEvent(sink, { durationMs: 1, error, functionPath: "orders:place", ok: false });
+
+        expect(events).toHaveLength(1);
+        expect(events[0]?.error?.internal).toBeUndefined();
+    });
+
     it("still delivers the event when a getter in the operator context throws", () => {
         expect.assertions(2);
 

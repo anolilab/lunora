@@ -34,6 +34,31 @@ const operatorContextFor = (internal: Record<string, unknown>): Record<string, u
 };
 
 /**
+ * The RPC event a sink receives, with its operator context masked. Reading `internal` can
+ * throw (an accessor), and then only that context is dropped: the sink still gets the event.
+ */
+const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
+    if (event.error === undefined) {
+        return event;
+    }
+
+    let internal: Record<string, unknown> | undefined;
+
+    try {
+        internal = event.error.internal;
+    } catch {
+        // Copy the descriptors, not the values: a spread would read the throwing accessor again.
+        const descriptors = Object.getOwnPropertyDescriptors(event.error);
+
+        delete descriptors.internal;
+
+        return { ...event, error: Object.create(Object.getPrototypeOf(event.error) as object | null, descriptors) as ObservabilityEvent["error"] };
+    }
+
+    return internal === undefined ? event : { ...event, error: { ...event.error, internal: operatorContextFor(internal) } };
+};
+
+/**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
  * fan-outs set `fanOut` with the table being aggregated, shard count, and
  * per-shard failure count.
@@ -313,6 +338,7 @@ export interface ObservabilitySink {
  * `decision` and an absent `sampling` keep everything, so all are
  * backward-compatible.
  */
+
 export const emitRpcEvent = (
     sink: ObservabilitySink | undefined,
     event: ObservabilityEvent,
@@ -335,11 +361,7 @@ export const emitRpcEvent = (
     try {
         // The one place `error.internal` is redacted on its way to a sink: every RPC event
         // (single-shard, batch, fan-out, worker-side) passes through here.
-        const internal = event.error?.internal;
-        const outgoing =
-            event.error === undefined || internal === undefined ? event : { ...event, error: { ...event.error, internal: operatorContextFor(internal) } };
-
-        sink.onRpc(outgoing, context);
+        sink.onRpc(rpcEventForSink(event), context);
     } catch {
         // Swallow — a buggy sink must not break user-facing dispatch. We
         // deliberately do not console.error here either: in a Workers runtime
