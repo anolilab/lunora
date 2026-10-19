@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.401...@lunora/cli@1.0.0-alpha.402) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.328
+* **@lunora/config:** upgraded to 1.0.0-alpha.378
+
 ## @lunora/cli [1.0.0-alpha.401](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.400...@lunora/cli@1.0.0-alpha.401) (2026-10-18)
 
 ### Features
