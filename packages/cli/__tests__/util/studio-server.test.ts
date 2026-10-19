@@ -307,6 +307,32 @@ describe("startStudioServer", () => {
         }
     });
 
+    it("serves the new admin token after `.dev.vars` changes mid-session", async () => {
+        expect.assertions(2);
+
+        const cwd = mkdtempSync(join(tmpdir(), "lunora-studio-token-"));
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd, port, workerOrigin: "http://localhost:8787" });
+
+        try {
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenA\n");
+
+            const first = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenB\n");
+
+            const second = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            expect(first.body).toContain("tokenA");
+            expect(second.body).toContain("tokenB");
+        } finally {
+            await studio.close();
+            rmSync(cwd, { force: true, recursive: true });
+        }
+    });
+
     it("refuses a forwarded request even with a localhost Host (shared transport guard), naming the header and logging it", async () => {
         expect.assertions(6);
 

@@ -32,6 +32,7 @@ import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
     applyStudioAssetCache,
     assetContentType,
+    devVariablesStamp,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -183,19 +184,22 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // doesn't).
     let assets = loadStudioAssets(options.logger, import.meta.url);
     let assetsStamp = studioAssetsStamp(import.meta.url);
-    const html = renderStudioHtml({
-        // The admin token grants full read/write over the local worker. Only embed
-        // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
-        // hand the token to any network client that GETs `/`.
-        adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
-        basePath: "/",
-        dataEditable: isLoopback,
-        rulesInstalled: detectAgentRules(options.cwd).installed,
-        runAsIdentity: isLoopback,
-        schemaEditable: isLoopback,
-        scriptSrc: "/studio.js",
-        styleHref: "/styles.css",
-    });
+    // Re-rendered when `.dev.vars` changes, so a rotated admin token is never
+    // served stale (see `currentDocument`).
+    const renderDocument = (): string =>
+        renderStudioHtml({
+            // The admin token grants full read/write over the local worker. Only embed
+            // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
+            // hand the token to any network client that GETs `/`.
+            adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
+            basePath: "/",
+            dataEditable: isLoopback,
+            rulesInstalled: detectAgentRules(options.cwd).installed,
+            runAsIdentity: isLoopback,
+            schemaEditable: isLoopback,
+            scriptSrc: "/studio.js",
+            styleHref: "/styles.css",
+        });
 
     const sendAsset = (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string): void => {
         // The entry + stylesheet sit at stable, unhashed URLs, so without cache
@@ -289,7 +293,21 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         return true;
     };
 
-    const document = Buffer.from(html);
+    let document = Buffer.from(renderDocument());
+    let documentStamp = devVariablesStamp(options.cwd);
+
+    // Per `/` request: cheap stat, re-render only when `.dev.vars` changed.
+    const currentDocument = (): Buffer => {
+        const stamp = devVariablesStamp(options.cwd);
+
+        if (stamp !== documentStamp) {
+            documentStamp = stamp;
+            document = Buffer.from(renderDocument());
+        }
+
+        return document;
+    };
+
     const server: Server = createServer((request, response) => {
         const pathname = requestPathname(request.url ?? "/");
 
@@ -387,7 +405,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
         // Everything else is an SPA route → serve the document (history fallback),
         // so a hard load of a deep link like `/data` boots the router there.
-        sendStudioDocument(response, document);
+        sendStudioDocument(response, currentDocument());
     });
 
     server.on("upgrade", (request, socket, head) => {
