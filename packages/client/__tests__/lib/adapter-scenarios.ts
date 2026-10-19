@@ -197,9 +197,12 @@ const queryReplaysHeldValueSynchronously = async (driver: AdapterDriver): Promis
 const disposeStopsPresence = async (driver: AdapterDriver): Promise<void> => {
     vi.useFakeTimers();
 
+    let mounted: ReturnType<AdapterDriver["presence"]> | undefined;
+
     try {
         const fake = createParityClient();
-        const mounted = driver.presence(fake.client, { intervalMs: 1000 });
+
+        mounted = driver.presence(fake.client, { intervalMs: 1000 });
 
         vi.advanceTimersByTime(1000);
 
@@ -208,6 +211,7 @@ const disposeStopsPresence = async (driver: AdapterDriver): Promise<void> => {
         expect(fake.subscribeCalls.map((call) => call.ref)).toContain(PRESENCE.listPresent.__lunoraRef);
 
         mounted.dispose();
+        mounted = undefined;
 
         const subscribesAtDispose = fake.subscribeCalls.length;
 
@@ -217,6 +221,8 @@ const disposeStopsPresence = async (driver: AdapterDriver): Promise<void> => {
         expect(fake.subscribeCalls).toHaveLength(subscribesAtDispose);
         expect(fake.subscribeCalls.every((call) => call.unsubscribed)).toBe(true);
     } finally {
+        // A failed assertion above must not leave the mount live for later tests.
+        mounted?.dispose();
         vi.useRealTimers();
     }
 };
