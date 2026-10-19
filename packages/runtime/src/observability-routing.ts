@@ -143,17 +143,14 @@ const wrapSink = (sink: ObservabilitySink, rewrite: SinkRewrite): ObservabilityS
  * `undefined` when there is nothing to add (no bag, an empty bag, or a throw).
  */
 const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSignalKind): LogFields | undefined => {
-    let derived: LogFields | undefined;
-
     try {
-        derived = enrich(event, signal);
+        // Redact before normalizing: normalizing turns nested objects into JSON strings,
+        // which the key-aware redactor can no longer see into. A throw anywhere here,
+        // including in normalizing, leaves the event unchanged rather than dropped.
+        return normalizeLogFields(redactArgs(enrich(event, signal)) as LogFields | undefined);
     } catch {
         return undefined;
     }
-
-    const normalized = normalizeLogFields(derived);
-
-    return normalized === undefined ? undefined : (redactArgs(normalized) as LogFields);
 };
 
 /**

@@ -212,6 +212,21 @@ describe("enrichSink", () => {
 
         expect(JSON.stringify(received.logs[0]?.fields)).not.toContain("user@example.com");
     });
+
+    it("delivers the event unchanged when normalizing the enricher's output throws", () => {
+        expect.hasAssertions();
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {return (({
+                get boom(): never {
+                    throw new Error("getter exploded");
+                },
+            }))});
+
+        wrapped.onLog?.(log);
+
+        expect(received.logs[0]).toBe(log);
+    });
 });
 
 describe("filterSink", () => {
