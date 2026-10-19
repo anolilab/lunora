@@ -217,15 +217,47 @@ describe("enrichSink", () => {
         expect.hasAssertions();
 
         const { received, sink } = recordingSink();
-        const wrapped = enrichSink(sink, () => {return (({
+        const wrapped = enrichSink(sink, () => {
+            return {
                 get boom(): never {
                     throw new Error("getter exploded");
                 },
-            }))});
+            };
+        });
 
         wrapped.onLog?.(log);
 
         expect(received.logs[0]).toBe(log);
+    });
+
+    it("keeps ids and URLs on metric attributes, which the log PII rules would mask", () => {
+        expect.assertions(2);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { id: "order-7", url: "https://shop.example/orders/7" };
+        });
+
+        wrapped.onMetric?.(metric);
+
+        expect(received.metrics[0]?.attributes).toMatchObject({ id: "order-7", url: "https://shop.example/orders/7" });
+        expect(received.metrics[0]?.attributes).toMatchObject({ plan: "pro" });
+    });
+
+    it("reports a throwing enricher, so a broken one is not silent", () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const { sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            throw new Error("enricher exploded");
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(spy).toHaveBeenCalledWith(expect.stringContaining("enrichSink's enricher threw"), expect.any(Error));
+
+        spy.mockRestore();
     });
 });
 

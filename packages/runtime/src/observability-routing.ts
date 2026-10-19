@@ -13,7 +13,7 @@
  * it, so an absent `onSpan` stays absent. Errors thrown by the wrapped sink are
  * swallowed, as `combineSinks` does.
  */
-import { redactArgs } from "@lunora/observability";
+import { redactArgs, redactSecrets } from "@lunora/observability";
 
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
@@ -30,14 +30,15 @@ type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
  * Derives extra attributes for one event. Return `undefined` (or an empty bag)
  * to add nothing.
  *
- * The result is normalized to JSON-safe primitives and then run through the same
- * default redaction (`redactArgs`) the sinks apply to log fields, so a derived
- * value can never carry more than a logged field could. It is merged UNDER the
- * event's own attributes: a key the event already sets keeps its value.
+ * The result is normalized to JSON-safe primitives and redacted the way the signal's
+ * own fields are: `redactArgs` for log lines, and the credential-only `redactSecrets`
+ * for metrics, spans and RPC events, whose ids and URLs the PII rules would erase. It
+ * is merged UNDER the event's own attributes: a key the event already sets keeps its value.
  *
- * If the enricher throws, the event is delivered unchanged. Enrichment only adds
- * fields and never removes or reveals anything, so failing open is safe here.
- * Unlike a `postProcessor`, which fails closed because it is a privacy control.
+ * If the enricher throws, the event is delivered unchanged and the failure is logged
+ * (a bounded number of times per isolate). Enrichment only adds fields and never removes
+ * or reveals anything, so failing open is safe here. Unlike a `postProcessor`, which fails
+ * closed because it is a privacy control.
  */
 type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | undefined;
 
@@ -138,6 +139,23 @@ const wrapSink = (sink: ObservabilitySink, rewrite: SinkRewrite): ObservabilityS
     return wrapped;
 };
 
+/** Enricher failures logged on this isolate; the cap keeps a broken enricher from flooding the log. */
+const MAX_ENRICHER_FAILURE_REPORTS = 5;
+let enricherFailureReports = 0;
+
+const reportEnricherFailure = (error: unknown): void => {
+    if (enricherFailureReports >= MAX_ENRICHER_FAILURE_REPORTS) {
+        return;
+    }
+
+    enricherFailureReports += 1;
+
+    const silencing = enricherFailureReports === MAX_ENRICHER_FAILURE_REPORTS ? " Further enricher failures are silenced until the isolate restarts." : "";
+
+    // eslint-disable-next-line no-console
+    console.error(`[lunora:observability] enrichSink's enricher threw; delivering the event without its extra attributes.${silencing}`, error);
+};
+
 /**
  * Run the enricher over one event and return the normalized, redacted bag, or
  * `undefined` when there is nothing to add (no bag, an empty bag, or a throw).
@@ -147,8 +165,13 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // Redact before normalizing: normalizing turns nested objects into JSON strings,
         // which the key-aware redactor can no longer see into. A throw anywhere here,
         // including in normalizing, leaves the event unchanged rather than dropped.
-        return normalizeLogFields(redactArgs(enrich(event, signal)) as LogFields | undefined);
-    } catch {
+        const derived = enrich(event, signal);
+        const redacted = signal === "log" ? redactArgs(derived) : redactSecrets(derived);
+
+        return normalizeLogFields(redacted as LogFields | undefined);
+    } catch (error) {
+        reportEnricherFailure(error);
+
         return undefined;
     }
 };

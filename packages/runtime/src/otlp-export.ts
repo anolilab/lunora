@@ -115,13 +115,14 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
         );
     }
 
-    // The enricher's bag follows the shared wire contract (`encodeSignalAttributes`):
-    // a caller key overrides a reserved key of the same name, never a duplicate KeyValue.
+    // A caller key never replaces a built-in span field. The enricher's bag merges under the
+    // reserved attributes, as `SinkEnricher` documents, and a duplicate KeyValue would be
+    // resolved ambiguously by a collector, so a colliding caller key is dropped.
     if (event.attributes !== undefined) {
+        const reserved = new Set(attributes.map((attribute) => attribute.key));
         const caller = encodeAttributes(Object.fromEntries(Object.entries(event.attributes).map(([key, value]) => [key, coerceFieldValue(value)])));
-        const overridden = new Set(caller.map((attribute) => attribute.key));
 
-        attributes.splice(0, attributes.length, ...attributes.filter((attribute) => !overridden.has(attribute.key)), ...caller);
+        attributes.push(...caller.filter((attribute) => !reserved.has(attribute.key)));
     }
 
     const span: Record<string, unknown> = {
@@ -166,17 +167,26 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
  * Build the OTLP attribute list shared by every signal: the reserved `lunora.*`
  * keys, then the caller's own attributes.
  *
- * Keyed by name so a caller key that collides with a reserved one **overrides**
- * it rather than emitting a duplicate `KeyValue` (which a collector resolves
- * ambiguously). That precedence is a wire contract, and it was previously
- * re-implemented in the span, log, and metric encoders — three copies of one
- * rule, free to drift apart. One implementation, asserted once.
+ * Keyed by name so a caller key that collides with a reserved one never emits a
+ * duplicate `KeyValue` (which a collector resolves ambiguously). The reserved value
+ * wins: a caller key cannot replace `functionPath`, `shardKey` and the other built-in
+ * fields. That precedence is a wire contract, and it was previously re-implemented in
+ * the span, log, and metric encoders, three copies of one rule. One implementation.
  */
 const encodeSignalAttributes = (
     reserved: { errorType?: string; functionPath: string; rayId?: string; shardKey?: string; userId?: string },
     caller: Record<string, unknown> | undefined,
 ): OtlpAttribute[] => {
-    const byKey = new Map<string, OtlpAttribute>([[LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath)]]);
+    const byKey = new Map<string, OtlpAttribute>();
+
+    // Caller values arrive pre-normalized to JSON-safe primitives;
+    // `coerceFieldValue` re-applies for a sink fed a raw event.
+    for (const [key, value] of Object.entries(caller ?? {})) {
+        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+    }
+
+    // Written last, so a caller key can never replace a reserved one.
+    byKey.set(LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath));
 
     if (reserved.shardKey !== undefined) {
         byKey.set(LUNORA_ATTR.shardKey, encodeAttribute(LUNORA_ATTR.shardKey, reserved.shardKey));
@@ -193,12 +203,6 @@ const encodeSignalAttributes = (
     if (reserved.errorType !== undefined) {
         // `error.type` is the OTel semantic-convention key.
         byKey.set(LUNORA_ATTR.errorType, encodeAttribute(LUNORA_ATTR.errorType, reserved.errorType));
-    }
-
-    // Caller values arrive pre-normalized to JSON-safe primitives;
-    // `coerceFieldValue` re-applies for a sink fed a raw event.
-    for (const [key, value] of Object.entries(caller ?? {})) {
-        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
     }
 
     return [...byKey.values()];

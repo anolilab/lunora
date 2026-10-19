@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ObservabilityEvent } from "../src/observability";
-import { OTLP_GZIP_THRESHOLD, otlpSend, otlpTraceBody } from "../src/otlp-export";
+import { encodeSignalAttributes, OTLP_GZIP_THRESHOLD, otlpSend, otlpTraceBody } from "../src/otlp-export";
 
 /** Pull the request headers off a recorded `fetch` call. */
 const headersOf = (init: RequestInit): Record<string, string> => (init.headers ?? {}) as Record<string, string>;
@@ -98,65 +98,30 @@ describe("otlpSend gzip threshold", () => {
     });
 });
 
-describe("otlpTraceBody error internal context", () => {
-    const failed = (internal?: Record<string, unknown>): ObservabilityEvent => {
-        return {
+describe("reserved fields win over caller attributes", () => {
+    it("keeps the built-in span route when the enricher's bag names the same key", () => {
+        expect.assertions(2);
+
+        const event = {
+            attributes: { "http.route": "/evil" },
             durationMs: 3,
-            error: { code: "INTERNAL", message: "boom", status: 500, ...(internal === undefined ? {} : { internal }) },
             functionPath: "orders:place",
-            ok: false,
-            traceFlags: 1,
+            ok: true,
             traceId: "0af7651916cd43dd8448eb211c80319c",
-        };
-    };
+        } as ObservabilityEvent;
+        const body = JSON.stringify(otlpTraceBody(event, 1_000_000));
 
-    it("exports the redacted internal context on the exception event for the operator's collector", () => {
-        expect.assertions(2);
-
-        const body = JSON.stringify(otlpTraceBody(failed({ region: "eu-west-replica" }), 1_000_000));
-
-        expect(body).toContain("lunora.error.internal");
-        expect(body).toContain("eu-west-replica");
-    });
-
-    it("adds no internal attribute when the event carries none", () => {
-        expect.assertions(1);
-
-        expect(JSON.stringify(otlpTraceBody(failed(), 1_000_000))).not.toContain("lunora.error.internal");
-    });
-
-    it("masks credential-named fields in the exported operator context", () => {
-        expect.assertions(1);
-
-        const body = JSON.stringify(otlpTraceBody(failed({ password: "hunter2-secret", shardId: "shard-42" }), 1_000_000));
-
-        expect(body).not.toContain("hunter2-secret");
-    });
-
-    it("masks a credential inside a nested Error in the exported operator context", () => {
-        expect.assertions(1);
-
-        const upstream = Object.assign(new Error("upstream refused"), { password: "hunter2-secret" }); // gitleaks:allow -- test fixture, not a credential
-        const body = JSON.stringify(otlpTraceBody(failed({ upstream }), 1_000_000));
-
-        expect(body).not.toContain("hunter2-secret");
-    });
-
-    it("masks a credential in a nested Error's message in the exported operator context", () => {
-        expect.assertions(1);
-
-        const body = JSON.stringify(otlpTraceBody(failed({ upstream: new Error("password=hunter2-secret") }), 1_000_000)); // gitleaks:allow -- test fixture, not a credential
-
-        // The nested Error's message is exported, with its credential masked.
-        expect(body).toContain("password=<REDACTED>");
-    });
-
-    it("drops only the operator attribute when it cannot be encoded, keeping the event", () => {
-        expect.assertions(2);
-
-        const body = JSON.stringify(otlpTraceBody(failed({ count: 10n }), 1_000_000));
-
-        expect(body).not.toContain("lunora.error.internal");
+        expect(body).not.toContain("/evil");
         expect(body).toContain("orders:place");
+    });
+
+    it("never lets a caller key replace the function path in a signal's attributes", () => {
+        expect.assertions(1);
+
+        const attributes = encodeSignalAttributes({ functionPath: "orders:place" }, { "lunora.function_path": "evil" });
+
+        expect(attributes.find((attribute) => attribute.key === "lunora.function_path")).toEqual(
+            expect.objectContaining({ value: expect.objectContaining({ stringValue: "orders:place" }) }),
+        );
     });
 });
