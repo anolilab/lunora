@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.230...@lunora/do@1.0.0-alpha.231) (2026-10-19)
+
+### Bug Fixes
+
+* **do:** bound subscription work and apply replica pages atomically ([#1265](https://github.com/anolilab/lunora/issues/1265)) ([d3b5c5c](https://github.com/anolilab/lunora/commit/d3b5c5ccc5c1c7ca72636cd4b2d8232143f79547))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/observability:** upgraded to 1.0.0-alpha.155
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+
 ## @lunora/do [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.229...@lunora/do@1.0.0-alpha.230) (2026-10-19)
 
 ### Features
