@@ -1004,6 +1004,63 @@ describe("relay hub", () => {
         });
     });
 
+    describe("relay index validation", () => {
+        const relaysRows = (): number[] =>
+            database.sql
+                .exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relays ORDER BY idx")
+                .toArray()
+                .map((row) => Number(row.idx));
+
+        it("rejects an attach, detach, unsubscribe or room event that omits relayIndex", async () => {
+            expect.assertions(5);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const frames = [
+                { type: "relay_attach" },
+                { type: "relay_detach" },
+                { connectionId: "c1", type: "relay_shape_unsubscribe" },
+                { attachment: {}, connectionId: "c1", kind: "join", topic: "t", type: "relay_room_event" },
+            ];
+
+            for (const frame of frames) {
+                // eslint-disable-next-line no-await-in-loop -- each frame is checked in order against the same owner
+                const response = await deliver(owner, JSON.stringify(frame));
+
+                expect(response.status).toBe(400);
+            }
+
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it.each([1.5, -1, Number.NaN, 8])("rejects a frame carrying relayIndex %s and leaves the relay set untouched", async (relayIndex) => {
+            expect.assertions(6);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const frames = [
+                { relayIndex, type: "relay_attach" },
+                { relayIndex, type: "relay_detach" },
+                { connectionId: "c1", relayIndex, type: "relay_shape_unsubscribe" },
+                { attachment: {}, connectionId: "c1", kind: "join", relayIndex, topic: "t", type: "relay_room_event" },
+                { ...OPEN_SHAPE, connectionId: "c1", relayIndex, subId: "s1", type: "relay_shape_subscribe" },
+            ];
+
+            for (const frame of frames) {
+                // eslint-disable-next-line no-await-in-loop -- each frame is checked in order against the same owner
+                const response = await deliver(owner, JSON.stringify(frame));
+
+                expect(response.status).toBe(400);
+            }
+
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+    });
+
     describe("live publish and grant fan-out", () => {
         /** The owner side of the tier: `createRelayLink` is typed as either role, and only the owner forwards live frames. */
         const ownerOf = (relays: Map<number, RelayDouble>): OwnerRelay => {

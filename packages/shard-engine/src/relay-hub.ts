@@ -253,6 +253,37 @@ interface RelayPokeDelivery {
 /** Build a JSON `Response` (the owner's seed reply on the control channel). */
 const jsonRelayResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" } });
 
+/** The frames whose `relayIndex` is required: each one is meaningless without the relay slot it came from. */
+const FRAMES_NAMING_A_RELAY = new Set<OwnerRelayFrame["type"]>(["relay_attach", "relay_detach", "relay_room_event", "relay_shape_unsubscribe"]);
+
+/**
+ * Parse a control frame, or `undefined` when it is not JSON, or names (or omits a required) relay slot this shard cannot have.
+ * Every frame carrying `relayIndex` (attach/detach, shape subscribe/unsubscribe, room event) is checked here,
+ * once: an out-of-range or non-integer index would otherwise be persisted to `__lunora_relays` and addressed
+ * as a sibling DO name on every forward.
+ */
+const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | undefined => {
+    let message: OwnerRelayFrame;
+
+    try {
+        message = JSON.parse(raw) as OwnerRelayFrame;
+    } catch {
+        return undefined;
+    }
+
+    const { relayIndex } = message as { relayIndex?: unknown };
+    const valid =
+        relayIndex === undefined
+            ? !FRAMES_NAMING_A_RELAY.has(message.type)
+            : Number.isSafeInteger(relayIndex) && (relayIndex as number) >= 0 && (relayIndex as number) < maxRelays;
+
+    if (!valid) {
+        return undefined;
+    }
+
+    return message;
+};
+
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
@@ -311,11 +342,9 @@ abstract class RelayLink {
             return new Response("forbidden", { status: 403 });
         }
 
-        let message: OwnerRelayFrame;
+        const message = parseControlFrame(raw, this.maxRelays());
 
-        try {
-            message = JSON.parse(raw) as OwnerRelayFrame;
-        } catch {
+        if (message === undefined) {
             return new Response("bad request", { status: 400 });
         }
 
