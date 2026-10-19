@@ -142,6 +142,8 @@ class TelemetryShard extends ShardDO {
 
     public captured: SensitiveScope | undefined;
 
+    public retained: { info: (message: string, fields?: Record<string, unknown>) => void } | undefined;
+
     public release: Promise<void> = Promise.resolve();
 
     public override async handleRpc(
@@ -200,6 +202,13 @@ class TelemetryShard extends ShardDO {
 
             // The dispatch itself fails with the same text, so the request-log row carries it too.
             throw new Error(`failed ${serialized}`);
+        }
+
+        if (functionPath === "vault:retain") {
+            // A handler that keeps its logger and writes through it after it has returned.
+            this.retained = log;
+
+            return { ok: true };
         }
 
         if (functionPath === "vault:hold") {
@@ -391,18 +400,26 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
         }
     });
 
-    it("scrubs nothing once the dispatch has settled, so a retained handle cannot leak a later record", async () => {
-        expect.assertions(2);
+    it("masks a marked value that a retained ctx.log writes after the handler has returned", async () => {
+        expect.assertions(3);
 
         const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
 
         try {
             const shard = new TelemetryShard(makeState(database), {});
 
-            await shard.fetch(telemetryRpc("vault:record", { label: "primary", value: SECRET }));
+            shard.sink = { onLog: (event) => logs.push(event) };
 
-            expect(shard.captured?.text(SECRET)).toBe(SECRET);
-            expect(shard.captured?.fields({ value: SECRET })).toEqual({ value: SECRET });
+            await shard.fetch(telemetryRpc("vault:retain", { label: "primary", value: SECRET }));
+
+            shard.retained?.info(`late ${SECRET}`, { label: "primary", value: SECRET });
+
+            const late = logs.find((event) => event.message.startsWith("late "));
+
+            expect(late?.message).toBe(`late ${SENSITIVE_ARG_MASK}`);
+            expect(late?.fields).toStrictEqual({ label: "primary", value: SENSITIVE_ARG_MASK });
+            expect(JSON.stringify(logs)).not.toContain(SECRET);
         } finally {
             database.close();
         }

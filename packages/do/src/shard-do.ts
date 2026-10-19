@@ -7398,6 +7398,10 @@ abstract class ShardDO {
         boundFields?: Record<string, unknown>,
         scope: SensitiveScope = NO_SENSITIVE_SCOPE,
     ): ContextLogger {
+        // A handler may keep its logger and write through it after it has returned. The
+        // hold keeps the invocation's values for those writes; they go with the logger.
+        scope.hold();
+
         // Every part of the line is scrubbed before it is recorded: the arguments
         // reach the buffer and the sink raw, and the message, fields and error do too.
         const at =
