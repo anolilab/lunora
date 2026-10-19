@@ -107,7 +107,7 @@ const val PAYLOAD_TOO_LARGE: String = "PAYLOAD_TOO_LARGE"
 const val DEFAULT_MAX_ITEMS: Int = 1000
 
 /** A coded, queue-scoped failure. */
-class OfflineException(val code: String, message: String) : RuntimeException(message)
+class OfflineException(val code: String, message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 /**
  * Who made a queued write.

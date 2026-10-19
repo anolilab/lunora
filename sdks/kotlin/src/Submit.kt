@@ -98,8 +98,9 @@ class SubmitOptions(val functionPath: String, val args: WireValue? = null) {
      * Never queued, persisted or replayed. Where a normal write would be queued, submit throws an
      * [OfflineException] coded [OFFLINE_NOT_QUEUED] before any optimistic layer is installed, so
      * the arguments never reach the queue or the persistence adapter. It does not wait for a queue
-     * flush or queue behind pending writes, so it may overtake them. For a credential or a
-     * one-time token.
+     * flush or queue behind pending writes, so it may overtake them. A transport failure sent
+     * directly while the connection is down is refused the same way, with the transport error as
+     * the cause. For a credential or a one-time token.
      */
     var onlineOnly: Boolean = false
 
@@ -141,9 +142,7 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
         val queueIt = send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect)
 
         // Refused before any layer is installed, so no overlay outlives the call.
-        if (queueIt && options.onlineOnly) {
-            throw OfflineException(OFFLINE_NOT_QUEUED, "'${options.functionPath}' is online-only and the connection is not live, so it was not queued")
-        }
+        if (queueIt && options.onlineOnly) throw notQueued(options.functionPath)
 
         val installed = recorded.map { Optimistic.install(it, deferred) }
 
@@ -166,6 +165,15 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
     } catch (error: Exception) {
         rollbackLayers(handles)
 
+        // An online-only write is never queued, so a transport failure while the shard has no
+        // open connection is refused as the queued path refuses it. A coded reply is the
+        // server's verdict, and an ApiException is the only error carrying one.
+        val wireFailure = error !is ApiException && Client.isTransient(error)
+
+        if (options.onlineOnly && wireFailure && synchronized(lock) { send == null }) {
+            throw notQueued(options.functionPath, error)
+        }
+
         throw error
     }
 
@@ -177,6 +185,10 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
 
     return MutationOutcome(MutationStatus.COMMITTED, writeId, reply.value(), reply.commitCursor)
 }
+
+/** The refusal an online-only write gets when it cannot go out over a live connection. */
+private fun notQueued(functionPath: String, cause: Throwable? = null): OfflineException =
+    OfflineException(OFFLINE_NOT_QUEUED, "'$functionPath' is online-only and the connection is not live, so it was not queued", cause)
 
 /**
  * Replays one shard's queued writes, in order, over HTTP. Call it when that

@@ -394,6 +394,59 @@ private fun onlineOnlyWriteIsSentWhenConnected() {
     check(store.appended.isEmpty(), "and is never persisted")
 }
 
+/**
+ * A client that never connected sends an online-only write directly, and the transport fails
+ * before any reply. That is refused as OFFLINE_NOT_QUEUED with the transport error as its cause,
+ * with the overlay rolled back. A coded reply to the same write surfaces as itself.
+ */
+private fun onlineOnlyTransportFailureIsRefused() {
+    covers("offline_online_only_transport_failure_refused")
+    val transport = IOException("connection refused")
+    var posts = 0
+    val store = MemoryStore()
+    val seen = mutableListOf<WireValue>()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        throw transport
+    })
+
+    client.offlineQueue = OfflineQueue(persistence = store)
+
+    // No socket is ever attached, so the shard never connected and the write goes direct.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val base = WireValue.Arr(listOf(WireValue.Text("a")))
+
+    client.subscribe("auth:setPassword", args, { seen.add(it) })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + WireValue.Text("c")) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
+
+    check(posts == 1, "the write reaches the wire once, on the direct path")
+    check(refused?.code == OFFLINE_NOT_QUEUED, "a transport failure is refused with OFFLINE_NOT_QUEUED")
+    check(refused?.cause === transport, "and the transport error rides along as its cause")
+    check(client.pendingMutationCount() == 0, "and nothing is queued")
+    check(store.appended.isEmpty(), "the persistence adapter never sees the write")
+    check(seen.last() == base, "the overlay is rolled back to the server value")
+    check(client.subscriptions.getValue("sub_1").state.layers.isEmpty(), "and no layer survives")
+
+    // A coded reply is the server's verdict, so it is not a transport failure, even for a
+    // transient code.
+    val rejecting = Client("https://app.example", { _, _, _ ->
+        HttpResponse(503, "{\"error\":{\"code\":\"SHARD_UNAVAILABLE\",\"message\":\"busy\"}}")
+    })
+
+    rejecting.offlineQueue = OfflineQueue(persistence = MemoryStore())
+
+    val verdict = runCatching { rejecting.submit(SubmitOptions("auth:setPassword", args).apply { onlineOnly = true }) }.exceptionOrNull()
+
+    check(verdict is ApiException && verdict.code == "SHARD_UNAVAILABLE", "a coded server rejection surfaces as itself, not as OFFLINE_NOT_QUEUED")
+}
+
 /** A normal write made with the socket down still queues beside an online-only one. */
 private fun normalWriteStillQueuesBesideAnOnlineOnlyOne() {
     covers("offline_online_only_leaves_normal_writes_queued")
@@ -1932,6 +1985,7 @@ internal fun runOptimisticOfflineCases() {
     offlineFlushReplaysAndConfirmsOptimistic()
     onlineOnlyWriteIsRefusedWhenDisconnected()
     onlineOnlyWriteIsSentWhenConnected()
+    onlineOnlyTransportFailureIsRefused()
     normalWriteStillQueuesBesideAnOnlineOnlyOne()
     offlineFlushBatchesMultipleWrites()
     batchEntryCapMatchesProtocol()
