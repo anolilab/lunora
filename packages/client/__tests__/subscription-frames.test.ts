@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { refoldSubscription } from "../src/optimistic-layers";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "../src/subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition, isStaleDataFrame } from "../src/subscription-frames";
 
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
 const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
@@ -100,6 +100,39 @@ describe("commitDataFrame", () => {
 
         expect(onCheckpoint).not.toHaveBeenCalled();
         expect(state.lastMutationId).toBe(3);
+    });
+});
+
+describe("isStaleDataFrame", () => {
+    const held = (overrides: Partial<SubscriptionState> = {}) => subscription({ serverBase: "v", serverCursor: 10, serverEpoch: "e1", ...overrides });
+
+    it("flags a lower cursor of the same epoch", () => {
+        expect.assertions(2);
+
+        expect(isStaleDataFrame(held(), { cursor: 5, epoch: "e1" })).toBe(true);
+        expect(isStaleDataFrame(held(), { cursor: 9, epoch: "e1" })).toBe(true);
+    });
+
+    it("accepts an equal or higher cursor", () => {
+        expect.assertions(2);
+
+        expect(isStaleDataFrame(held(), { cursor: 10, epoch: "e1" })).toBe(false);
+        expect(isStaleDataFrame(held(), { cursor: 11, epoch: "e1" })).toBe(false);
+    });
+
+    it("accepts a frame it cannot compare: no cursor, another or no epoch", () => {
+        expect.assertions(3);
+
+        expect(isStaleDataFrame(held(), { epoch: "e1" })).toBe(false);
+        expect(isStaleDataFrame(held(), { cursor: 1, epoch: "e2" })).toBe(false);
+        expect(isStaleDataFrame(held(), { cursor: 1 })).toBe(false);
+    });
+
+    it("accepts the first value of a subscription whose cursor a settled frame advanced", () => {
+        expect.assertions(2);
+
+        expect(isStaleDataFrame(held({ serverBase: undefined }), { cursor: 5, epoch: "e1" })).toBe(false);
+        expect(isStaleDataFrame(held({ serverCursor: undefined }), { cursor: 5, epoch: "e1" })).toBe(false);
     });
 });
 
