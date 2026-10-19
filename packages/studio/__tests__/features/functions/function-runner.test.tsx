@@ -497,6 +497,32 @@ describe("functionRunner with a v.sensitive argument", () => {
         expect(screen.getByTestId("error").textContent).toContain("«sensitive»");
     });
 
+    it("shows and records a failure thrown as a string, with the sensitive value masked", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            mutation: () => {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- a rejection need not be an Error, which is the case under test
+                throw `rejected ${SECRET}`;
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={VAULT_FUNCTIONS} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ label: "primary", value: SECRET }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        expect(screen.getByTestId("fn-history").textContent).not.toContain(SECRET);
+        expect(screen.getByTestId("error").textContent).not.toContain(SECRET);
+        expect(screen.getByTestId("error").textContent).toContain("rejected «sensitive»");
+    });
+
     it("masks a sensitive value nested in an object or array, and a sensitive number, in a failed run's message", async () => {
         expect.assertions(5);
 

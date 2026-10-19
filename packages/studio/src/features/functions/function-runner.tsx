@@ -326,7 +326,7 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
             record("success");
         } catch (runError) {
             setResult(undefined);
-            setError(scrubSensitiveValues((runError as Error).message, parsedArgs, sensitive));
+            setError(scrubSensitiveValues(errorMessage(runError), parsedArgs, sensitive));
             setStatus("error");
             record("error");
         }
