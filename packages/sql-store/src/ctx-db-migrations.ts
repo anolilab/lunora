@@ -480,9 +480,65 @@ const globalTableIndexSpecs = (tableName: string, definition: SchemaLike["tables
     return specs;
 };
 
+const UNIQUE_INDEX_STATEMENT = /^\s*create\s+unique\s/iu;
+
+/**
+ * The names, among the indexes a table holds, of those this module created for a declaration the schema no longer has.
+ *
+ * `CREATE INDEX IF NOT EXISTS` only ever adds, so a `.unique()` taken off a column kept rejecting duplicates for good.
+ * Only what this module could have created is a candidate: named `<table>_<something>`, and either UNIQUE or ending in the
+ * {@link indexSortKeys} suffix. An index added by hand under another shape, and the implicit indexes the engine makes for
+ * constraints (`sql` is NULL), are left alone — the DO twin (`dropUndeclaredIndexes`) draws the same line. SQLite only,
+ * like the rest of the shape checks: the engine that backs `.global()` is D1.
+ */
+const undeclaredFrameworkIndexes = (
+    dialect: SqlDialect,
+    tableName: string,
+    specs: ReadonlyArray<GlobalIndexSpec>,
+    held: ReadonlyArray<{ name: string; sql: string | undefined }>,
+): string[] => {
+    if (dialect.name !== "sqlite") {
+        return [];
+    }
+
+    const prefix = `${tableName.toLowerCase()}_`;
+    const declared = new Set(specs.map((spec) => spec.name.toLowerCase()));
+    const sortKeys = indexSortKeys(dialect);
+    const sortKeysTail = sortKeys === undefined ? undefined : `, ${dialect.render(sortKeys).sql})`;
+
+    return held
+        .filter(({ name, sql: statement }) => {
+            if (statement === undefined || !name.toLowerCase().startsWith(prefix) || declared.has(name.toLowerCase())) {
+                return false;
+            }
+
+            return UNIQUE_INDEX_STATEMENT.test(statement) || (sortKeysTail !== undefined && statement.trimEnd().endsWith(sortKeysTail));
+        })
+        .map(({ name }) => name);
+};
+
+/** Drop the indexes a global table holds for declarations it no longer has (see {@link undeclaredFrameworkIndexes}). */
+const dropUndeclaredGlobalIndexes = async (exec: SqlCtxExec, tableName: string, specs: ReadonlyArray<GlobalIndexSpec>, dialect: SqlDialect): Promise<void> => {
+    if (dialect.name !== "sqlite") {
+        return;
+    }
+
+    const rows = await queryAll(exec, dialect, sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName}`);
+    const held = rows.map((row) => {
+        return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
+    });
+
+    for (const name of undeclaredFrameworkIndexes(dialect, tableName, specs, held)) {
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
+    }
+};
+
 /** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
 const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    for (const spec of globalTableIndexSpecs(tableName, definition, dialect)) {
+    const specs = globalTableIndexSpecs(tableName, definition, dialect);
+
+    for (const spec of specs) {
         if (spec.kind === "default-order") {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
             await createIndexIfNotExists(exec, dialect, spec);
@@ -497,6 +553,8 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await createIndexGuarded(exec, dialect, spec);
     }
+
+    await dropUndeclaredGlobalIndexes(exec, tableName, specs, dialect);
 };
 
 /**
@@ -1259,6 +1317,41 @@ const rankSortColumnDefs = (dialect: SqlDialect, index: RankIndexDefinitionLike,
         return sql`${sql.identifier(sortColumnName(i))} ${sql.raw(columnType)}`;
     });
 
+const SORT_COLUMN_NAME = /__sort_k\d+__/gu;
+
+/**
+ * Drop a rank companion whose `__sort_k<i>__` columns no longer match the declared `sortBy`. `CREATE TABLE IF NOT EXISTS`
+ * never reshapes a table that exists, so a `sortBy` that gained a key leaves the companion without the column its rebuild
+ * INSERTs into, and every write to the source table fails with "no such column". The companion is derived data, rebuilt
+ * from the source rows on the next touch (`ensureRankBackfilled`); dropping the table takes its btree index with it.
+ *
+ * SQLite only, read from the stored `CREATE TABLE` text because D1's authorizer refuses `PRAGMA table_info`.
+ */
+const dropRankCompanionIfColumnsChanged = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    rankTable: string,
+    sortColumns: ReadonlyArray<string>,
+): Promise<void> => {
+    if (dialect.name !== "sqlite") {
+        return;
+    }
+
+    const rows = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${rankTable}`);
+    const statement = rows[0]?.["sql"];
+
+    // An absent table has nothing to drop.
+    if (typeof statement !== "string") {
+        return;
+    }
+
+    const held = statement.match(SORT_COLUMN_NAME) ?? [];
+
+    if (held.length !== sortColumns.length || held.some((name, i) => name !== sortColumns[i])) {
+        await queryRun(exec, dialect, sql`DROP TABLE ${sql.identifier(rankTable)}`);
+    }
+};
+
 /**
  * Materialize the `__rank_<index>` companion tables for every declared
  * `rankIndex` on a global table. Mirrors `runSqlAggregateMigrations` — same
@@ -1279,6 +1372,15 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
         for (const index of indexes) {
             const rankTable = rankTableName(tableName, index.name);
             const sortColumnDefs = rankSortColumnDefs(dialect, index, definition);
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection; a reshaped companion goes before its CREATE below.
+            await dropRankCompanionIfColumnsChanged(
+                exec,
+                dialect,
+                rankTable,
+                index.sortBy.map((_, i) => sortColumnName(i)),
+            );
+
             const columnPart = sortColumnDefs.length > 0 ? sql`, ${sql.join(sortColumnDefs, sql`, `)}` : sql``;
 
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection; the table must exist before its index below.
@@ -1291,13 +1393,13 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
             const orderedColumns = rankBtreeColumns(dialect, index, definition);
             const btreeName = `${tableName}__rank_${index.name}__btree`;
 
+            const btree = { columns: sql.join(orderedColumns, sql`, `), name: btreeName, refs: [], table: rankTable, unique: false };
+
+            // A flipped sort direction changes the btree's column list under the same name.
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
-            await createIndexIfNotExists(exec, dialect, {
-                columns: sql.join(orderedColumns, sql`, `),
-                name: btreeName,
-                table: rankTable,
-                unique: false,
-            });
+            await dropIndexIfShapeChanged(exec, dialect, btree);
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
+            await createIndexIfNotExists(exec, dialect, btree);
         }
     }
 };
@@ -1316,5 +1418,6 @@ export {
     provisionGlobalTablesSequentially,
     runSqlAggregateMigrations,
     runSqlRankMigrations,
+    undeclaredFrameworkIndexes,
     wantedGlobalColumns,
 };

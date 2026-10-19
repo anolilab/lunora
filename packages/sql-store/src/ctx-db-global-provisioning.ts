@@ -13,6 +13,7 @@
  *
  * - a table that needs an `ALTER` (a missing column, with its backfill),
  * - an index whose stored column list differs from the declared one (drop-and-recreate with a duplicate probe),
+ * - an index the schema no longer declares (dropped),
  * - an existing table whose legacy storage rewrites have not recorded their completion marker,
  * - a catalog read the engine refuses.
  *
@@ -38,6 +39,7 @@ import {
     legacyRowPredicate,
     MIGRATION_STATE_TABLE,
     provisionGlobalTablesSequentially,
+    undeclaredFrameworkIndexes,
     wantedGlobalColumns,
 } from "./ctx-db-migrations";
 import type { SqlDialect } from "./dialect";
@@ -62,6 +64,8 @@ interface Catalog {
     columns: ReadonlyMap<string, ReadonlySet<string>>;
     /** Stored `CREATE INDEX` text per existing index name (`undefined` for an implicit index the engine made). */
     indexes: ReadonlyMap<string, string | undefined>;
+    /** The indexes each existing table holds, by folded table name. */
+    indexesByTable: ReadonlyMap<string, { name: string; sql: string | undefined }[]>;
     /** Names recorded in {@link MIGRATION_STATE_TABLE}. */
     markers: ReadonlySet<string>;
     tables: ReadonlySet<string>;
@@ -167,10 +171,11 @@ const columnNamesOfCreateTable = (statement: string): Set<string> => {
 /** The catalog, or `undefined` when the engine will not answer (the caller then provisions sequentially). */
 const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catalog | undefined> => {
     try {
-        const objects = await queryAll(exec, dialect, sql`SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index')`);
+        const objects = await queryAll(exec, dialect, sql`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table', 'index')`);
         const tables = new Set<string>();
         const columns = new Map<string, Set<string>>();
         const indexes = new Map<string, string | undefined>();
+        const indexesByTable = new Map<string, { name: string; sql: string | undefined }[]>();
 
         for (const row of objects) {
             const name = String(row["name"]);
@@ -189,6 +194,10 @@ const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catal
                 );
             } else {
                 indexes.set(foldIdentifier(name), statement);
+
+                const owner = foldIdentifier(String(row["tbl_name"]));
+
+                indexesByTable.set(owner, [...(indexesByTable.get(owner) ?? []), { name, sql: statement }]);
             }
         }
 
@@ -200,7 +209,7 @@ const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catal
             }
         }
 
-        return { columns, indexes, markers, tables };
+        return { columns, indexes, indexesByTable, markers, tables };
     } catch {
         return undefined;
     }
@@ -256,6 +265,11 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
     }
 
     if (rewrites.some((rewrite) => !catalog.markers.has(rewrite.marker))) {
+        return undefined;
+    }
+
+    // An index left behind by a declaration the schema dropped is removed by the sequential path.
+    if (undeclaredFrameworkIndexes(dialect, tableName, specs, catalog.indexesByTable.get(foldIdentifier(tableName)) ?? []).length > 0) {
         return undefined;
     }
 
