@@ -1,3 +1,19 @@
+## @lunora/runtime [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.221...@lunora/runtime@1.0.0-alpha.222) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.156
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+
 ## @lunora/runtime [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.220...@lunora/runtime@1.0.0-alpha.221) (2026-10-19)
 
 
