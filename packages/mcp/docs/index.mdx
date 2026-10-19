@@ -747,6 +747,8 @@ outlasts the budget, the tool returns a **pending** result (`{ status:
 to the generic `lunora_agent_status` tool to poll for the final answer once the
 run finishes.
 
+**Limit:** a run paused for a secret request (`requestSecretTool`) cannot be resumed through MCP. MCP has no operation to supply or decline the value, so the run waits for its owner to answer it in the app and otherwise expires. The status reports it as `awaiting_input`, and the pending result says the decision belongs in the app.
+
 <Callout type="warn">
     Agent runs are **owner-scoped** to the identity the configured `token` resolves to — the deployment's **admin** identity, since that is the only token every
     tool works with. Every thread this server starts therefore shares one owner; run a separate MCP server per deployment to keep threads isolated. If the token

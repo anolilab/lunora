@@ -251,7 +251,7 @@ const readTerminal = async (client: LunoraClient, threadKey: string, status: str
         // that can unblock it, so the caller stops polling instead of waiting
         // out a budget that can never expire into an answer.
         return ok({
-            hint: "This run is paused on a human-in-the-loop tool approval. Approve or reject it in the app that owns the agent; MCP cannot supply the input. Poll lunora_agent_status with this threadKey afterwards.",
+            hint: "This run is paused on a human-in-the-loop decision: a tool approval, or a secret the owner has to supply. Answer it in the app that owns the agent; MCP cannot answer it. Poll lunora_agent_status with this threadKey afterwards.",
             status,
             text: finalAnswer(messages),
             threadKey,
