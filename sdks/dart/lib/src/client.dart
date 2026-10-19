@@ -402,7 +402,16 @@ class LunoraClient {
 
     final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
-    if (queues) {
+    // The optimistic callbacks are user code and may drop this shard's socket, so the decision above can
+    // be stale. The write is decided again now, and an online-only one that would queue is refused.
+    final queuesNow = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queuesNow && onlineOnly) {
+      rollbackOptimistic(handles);
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    if (queuesNow) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 

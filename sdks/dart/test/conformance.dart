@@ -140,6 +140,7 @@ Future<void> main() async {
   await run(caseWholeBatchRejectionIsTerminal);
   await run(casePreconditionFailureDiscardsBeforeReplay);
   await run(caseOnlineOnlyRefusedWhenDisconnected);
+  await run(caseOnlineOnlyRefusedWhenDisconnectedInCallback);
   await run(caseOnlineOnlySendsWhenConnected);
   await run(caseOnlineOnlyTransportFailureRefused);
   await run(caseOnlineOnlyLeavesNormalWritesQueued);
