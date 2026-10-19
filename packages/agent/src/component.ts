@@ -1447,7 +1447,13 @@ export const agentComponent = (): AgentComponent => {
 
             await context.db.patch(request["_id"] as never, { status: "declined", updatedAt: Date.now() });
             await context.db.delete(marker["_id"] as never);
-            await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
+
+            try {
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
+            } catch {
+                // Deliberately not rethrown, as in supply: the decline is committed, and the wait
+                // settles at its deadline and reads it. Failing here would roll the decline back.
+            }
 
             return { resolved: true };
         });
