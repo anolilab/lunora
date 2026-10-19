@@ -134,17 +134,20 @@ const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.
 };
 
 /**
- * Whether a transient failure came back FROM a server or an edge — a retryable
- * code, or a status `unparseableResponseError` had to classify itself —
- * rather than from a `fetch` that never landed.
+ * Whether a transient failure needs a retry of its own scheduled: a retryable
+ * code, a status `unparseableResponseError` had to classify itself, or a
+ * codeless failure — a `fetch` that rejected before any reply.
  *
- * The two need different treatment: the socket stays open through a 429 or a
- * 503, so nothing else will ever schedule the flush again, whereas a `fetch`
- * that never landed means the device is offline and the reconnect that follows
- * flushes the queue anyway.
+ * The socket is independent of the HTTP path: it stays open through a 429, a 503,
+ * and equally through a `fetch` that never landed (an unreachable HTTP origin, a
+ * dropped request), so nothing else will ever flush the queue again. A device
+ * that is truly offline costs only a bounded, backed-off probe per interval.
  */
-const isAnsweredReplayFailure = (error: unknown): boolean =>
-    error instanceof TransportError || TRANSIENT_REPLAY_ERROR_CODES.has((error as { code?: string } | null | undefined)?.code ?? "");
+const needsReplayRetry = (error: unknown): boolean => {
+    const code = (error as { code?: string } | null | undefined)?.code;
+
+    return error instanceof TransportError || code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code);
+};
 
 /**
  * How long a transient replay should wait before trying again, given how many
@@ -152,13 +155,13 @@ const isAnsweredReplayFailure = (error: unknown): boolean =>
  *
  * A hint the server sent wins: the `data.retryAfterMs` the error carries — its
  * own, or a `Retry-After` header folded on via `retryAfterData` — clamped
- * to {@link REPLAY_MAX_DELAY_MS}. Without one, a failure that was still
- * ANSWERED gets {@link defaultReplayRetryDelayMs}, because a hintless 429 or 503
- * arrives over a socket that stays open: with nothing scheduled the queued write
- * waits for a reconnect that a healthy connection never makes.
+ * to {@link REPLAY_MAX_DELAY_MS}. Without one, a transient failure gets
+ * {@link defaultReplayRetryDelayMs}, because it arrives over a socket that stays
+ * open: with nothing scheduled the queued write waits for a reconnect that a
+ * healthy connection never makes.
  *
- * `undefined` for a failure that never reached a server, which is the one case
- * the reconnect already covers.
+ * `undefined` for a coded verdict that is not transient, which settles the write
+ * instead of retrying it.
  */
 const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => number): number | undefined => {
     const hint = getRetryAfterMs(error);
@@ -167,7 +170,7 @@ const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => numb
         return Math.min(hint, REPLAY_MAX_DELAY_MS);
     }
 
-    return isAnsweredReplayFailure(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
+    return needsReplayRetry(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
 };
 
 /**

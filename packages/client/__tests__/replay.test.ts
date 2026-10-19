@@ -134,12 +134,14 @@ describe("hintless backoff", () => {
         expect(replayRetryDelayMs({ code: "RATE_LIMITED" }, 1, () => 0)).toBe(500);
     });
 
-    it("schedules nothing for a `fetch` that never reached a server", () => {
-        expect.assertions(1);
+    it("schedules a retry for a `fetch` that never reached a server", () => {
+        expect.assertions(2);
 
-        // Offline: the reconnect that follows flushes the queue anyway, so a
-        // timer here would only re-run a request that cannot leave the device.
-        expect(replayRetryDelayMs(new TypeError("Failed to fetch"), 1)).toBeUndefined();
+        // The socket can stay open while HTTP is unreachable, so no reconnect is
+        // guaranteed to flush the queue again.
+        expect(replayRetryDelayMs(new TypeError("Failed to fetch"), 1, () => 0)).toBe(500);
+        // A coded verdict that is not transient settles the write instead.
+        expect(replayRetryDelayMs({ code: "FORBIDDEN" }, 1)).toBeUndefined();
     });
 
     it("keeps a delivery-fenced write eligible for same-key recovery", () => {

@@ -9029,13 +9029,12 @@ class LunoraClient {
      * Consume this shard's retry delay and re-flush it once the delay has
      * elapsed.
      *
-     * Two things record a delay for it to consume: a failure the server or an
-     * edge ANSWERED (see {@link replayRetryDelayMs}) and a flush that HELD every
-     * entry it drained (see {@link LunoraClient.noteHeldRetryDelay}). Both happen
-     * over a socket that stays open, so without this the writes sit queued
-     * indefinitely; a `fetch` that never landed records nothing, because the
-     * reconnect that follows flushes the queue anyway. One pending timer per
-     * shard; a second delay replaces it rather than stacking flushes.
+     * Two things record a delay for it to consume: a transient failure (a server
+     * or edge answer, or a `fetch` that rejected; see {@link replayRetryDelayMs})
+     * and a flush that HELD every entry it drained (see
+     * {@link LunoraClient.noteHeldRetryDelay}). Both happen over a socket that
+     * stays open, so without this the writes sit queued indefinitely. One pending
+     * timer per shard; a second delay replaces it rather than stacking flushes.
      *
      * Nothing left to retry on this key (drained, closed, or no delay) drops its
      * backoff state, which is both the reset after progress and what bounds the
@@ -9622,12 +9621,10 @@ class LunoraClient {
                 }
             }));
         } catch (error) {
-            // Transport failure (offline mid-flush, or the exchange timed out) —
-            // nothing is known to have committed; retry all. A timeout happened over
-            // a socket that is still open, so no reconnect will re-flush: schedule one.
-            if (error instanceof TransportError) {
-                this.noteReplayRetryDelay(shardKey, error, authToken);
-            }
+            // Transport failure (a `fetch` that rejected, or the exchange timed out) —
+            // nothing is known to have committed; retry all. The socket may well be
+            // open, so no reconnect will re-flush: schedule one.
+            this.noteReplayRetryDelay(shardKey, error, authToken);
 
             return { requeue: this.keepUnexhaustedAmbiguousWrites(items, error), stop: true };
         }

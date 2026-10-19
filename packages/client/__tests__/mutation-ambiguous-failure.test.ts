@@ -191,6 +191,98 @@ describe("direct mutation whose response was lost", () => {
         client.close();
     });
 
+    it("keeps retrying on the backoff schedule while the socket stays open and the replay's fetch rejects", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const attemptTimes: number[] = [];
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            attemptTimes.push(Date.now());
+
+            // The direct send and the first two replays never land; the fourth attempt does.
+            if (attemptTimes.length < 4) {
+                throw new TypeError("fetch failed");
+            }
+
+            return jsonResponse({ result: { ok: true } });
+        });
+        const client = await createConnectedClient(fetchImpl);
+        const write = client.mutation(fnRef("todos.set"), { text: "a" });
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        await expect(write).resolves.toStrictEqual({ ok: true });
+        expect(fetchImpl).toHaveBeenCalledTimes(4);
+
+        // Each retry waits on the doubling ramp (1s, 2s, ... jittered to the top half), not for a reconnect.
+        const gaps = attemptTimes.slice(1).map((time, index) => time - (attemptTimes[index] ?? 0));
+
+        expect(gaps.every((gap, index) => gap >= 500 * 2 ** index && gap <= 1000 * 2 ** index)).toBe(true);
+
+        client.close();
+    });
+
+    it("keeps retrying a batched replay whose fetch rejects while the socket stays open", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        let batchCalls = 0;
+        const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+            if (!(url as string).endsWith("/_lunora/rpc-batch")) {
+                throw new TypeError("fetch failed");
+            }
+
+            batchCalls += 1;
+
+            if (batchCalls < 3) {
+                throw new TypeError("fetch failed");
+            }
+
+            return jsonResponse({
+                results: [
+                    { body: { result: { n: 1 } }, id: 0 },
+                    { body: { result: { n: 2 } }, id: 1 },
+                ],
+            });
+        });
+        const client = await createConnectedClient(fetchImpl);
+        const first = client.mutation(fnRef("todos.set"), { text: "a" });
+        const second = client.mutation(fnRef("todos.set"), { text: "b" });
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        await expect(first).resolves.toStrictEqual({ n: 1 });
+        await expect(second).resolves.toStrictEqual({ n: 2 });
+        expect(batchCalls).toBe(3);
+
+        client.close();
+    });
+
+    it("settles the caller after the attempt cap when every replay's fetch rejects", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            throw new TypeError("fetch failed");
+        });
+        const client = await createConnectedClient(fetchImpl);
+        const outcome = client.mutation(fnRef("todos.set"), { text: "a" }).then(
+            () => "resolved",
+            (error: unknown) => (error as Error).name,
+        );
+
+        await vi.advanceTimersByTimeAsync(300_000);
+
+        await expect(outcome).resolves.toBe("TypeError");
+        expect(fetchImpl).toHaveBeenCalledTimes(MAX_AMBIGUOUS_SEND_ATTEMPTS + 1);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
     it("leaves an outbox app's failed write to reject as before", async () => {
         expect.assertions(2);
 
