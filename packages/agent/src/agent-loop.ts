@@ -569,10 +569,11 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
  */
 const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, turn: number): Promise<void> => {
     const { instanceId, persist } = turnContext;
-    const messageKey = `${instanceId}:tool:${call.id}`;
-    const stepName = `tool:${call.name}:${call.id}`;
-    const label = secretLabelOf(call.input);
+    // Keyed on the slot, not the provider's call id: a reused id would otherwise dedupe this result onto the earlier turn's row.
     const slot = secretSlotOf(turn, call.id);
+    const messageKey = `${instanceId}:tool:${slot}`;
+    const stepName = `tool:${call.name}:${slot}`;
+    const label = secretLabelOf(call.input);
 
     // The owner decides from this label, so a request without one is refused, as a bad argument is.
     if (label === undefined) {
