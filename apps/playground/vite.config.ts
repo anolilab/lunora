@@ -15,8 +15,7 @@ export default defineConfig(({ command, mode }) => {
     const ports = devPortsFor(loadEnv(mode, process.cwd(), ""));
 
     if (command === "serve") {
-        // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
-        console.info(`[playground] ${describeDevPorts(ports)}`);
+        process.stdout.write(`[playground] ${describeDevPorts(ports)}\n`);
 
         const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
         const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, ports.playground);

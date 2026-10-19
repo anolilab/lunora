@@ -34,8 +34,7 @@ export default defineConfig(({ command, mode }) => {
     const ports = devPortsFor(env);
 
     if (command === "serve") {
-        // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
-        console.info(`[studio] ${describeDevPorts(ports)}`);
+        process.stdout.write(`[studio] ${describeDevPorts(ports)}\n`);
     }
 
     // The local Lunora worker the studio's same-origin `/_lunora/*` calls (HTTP +
