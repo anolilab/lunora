@@ -91,6 +91,7 @@ RLS, masking & output shape:
 | `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                |
 | `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                           |
 | `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                     |
+| `open_shard_access`                          | `ERROR` | `allowUnauthenticatedShardAccess: true` in the app; `lunora deploy` refuses it without `--allow-open-shards`     |
 | `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                       |
 | `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                         |
 | `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                      |
