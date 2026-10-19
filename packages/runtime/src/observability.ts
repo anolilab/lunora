@@ -67,8 +67,9 @@ const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
 export interface ObservabilityEvent {
     /**
      * Extra attributes for this dispatch, e.g. derived by an `enrichSink` enricher.
-     * `otlpSink` exports them as span attributes. Precedence follows the shared OTLP
-     * contract: a key here overrides a reserved attribute of the same name.
+     * `otlpSink` exports them as span attributes. A reserved attribute of the same name
+     * wins: a key here never replaces a built-in field such as `http.route` or
+     * `lunora.shard_key`, and the colliding key is dropped.
      */
     attributes?: LogFields;
 

@@ -244,6 +244,19 @@ describe("enrichSink", () => {
         expect(received.metrics[0]?.attributes).toMatchObject({ plan: "pro" });
     });
 
+    it("masks a credential in an enriched Error's message as the sink receives it", () => {
+        expect.assertions(1);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { diagnostic: new Error("password=hunter2-secret") }; // gitleaks:allow -- test fixture, not a credential
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(JSON.stringify(received.logs[0]?.fields)).not.toContain("hunter2-secret");
+    });
+
     it("reports a throwing enricher, so a broken one is not silent", () => {
         expect.assertions(1);
 
@@ -255,7 +268,8 @@ describe("enrichSink", () => {
 
         wrapped.onLog?.(log);
 
-        expect(spy).toHaveBeenCalledWith(expect.stringContaining("enrichSink's enricher threw"), expect.any(Error));
+        // The error's name, not the error: its message is never logged.
+        expect(spy).toHaveBeenCalledWith(expect.stringContaining("enrichSink's enricher threw"), "Error");
 
         spy.mockRestore();
     });

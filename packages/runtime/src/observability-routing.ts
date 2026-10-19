@@ -152,9 +152,27 @@ const reportEnricherFailure = (error: unknown): void => {
 
     const silencing = enricherFailureReports === MAX_ENRICHER_FAILURE_REPORTS ? " Further enricher failures are silenced until the isolate restarts." : "";
 
+    // Only the error's name is logged: its message can carry the very credential the
+    // enricher was handling, and the event itself is delivered unchanged either way.
     // eslint-disable-next-line no-console
-    console.error(`[lunora:observability] enrichSink's enricher threw; delivering the event without its extra attributes.${silencing}`, error);
+    console.error(
+        `[lunora:observability] enrichSink's enricher threw; delivering the event without its extra attributes.${silencing}`,
+        error instanceof Error ? error.name : typeof error,
+    );
 };
+
+/**
+ * Turn a top-level `Error` value into a record of its name, message and enumerable fields,
+ * so redaction sees its message. `normalizeLogFields` serializes nested objects as JSON,
+ * which already leaves a nested message out.
+ */
+const flattenErrorValues = (bag: LogFields): LogFields =>
+    Object.fromEntries(
+        Object.entries(bag).map(([key, value]) => [
+            key,
+            value instanceof Error ? { ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name } : value,
+        ]),
+    );
 
 /**
  * Run the enricher over one event and return the normalized, redacted bag, or
@@ -166,7 +184,8 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // which the key-aware redactor can no longer see into. A throw anywhere here,
         // including in normalizing, leaves the event unchanged rather than dropped.
         const derived = enrich(event, signal);
-        const redacted = signal === "log" ? redactArgs(derived) : redactSecrets(derived);
+        const flat = derived === undefined ? undefined : flattenErrorValues(derived);
+        const redacted = signal === "log" ? redactArgs(flat) : redactSecrets(flat);
 
         return normalizeLogFields(redacted as LogFields | undefined);
     } catch (error) {
