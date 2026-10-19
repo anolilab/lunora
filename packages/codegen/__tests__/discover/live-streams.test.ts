@@ -62,6 +62,39 @@ describe("discoverLiveStreams", () => {
         expect(discover()).toStrictEqual([]);
     });
 
+    it.each([
+        [
+            "an aliased import",
+            `import { defineLiveStream as stream, v } from "@lunora/server";\n\nexport const posts = stream({ id: "posts", topics: { a: { payload: v.null() } } });\n`,
+        ],
+        [
+            "a namespace import",
+            `import * as server from "@lunora/server";\n\nexport const posts = server.defineLiveStream({ id: "posts", topics: { a: { payload: server.v.null() } } });\n`,
+        ],
+        [
+            "the umbrella package",
+            `import { defineLiveStream, v } from "lunorash/server";\n\nexport const posts = defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } });\n`,
+        ],
+    ])("finds a stream declared through %s", (_label, source) => {
+        expect.assertions(1);
+
+        write("live.ts", source);
+
+        expect(discover().map((found) => found.id)).toStrictEqual(["posts"]);
+    });
+
+    it.each([
+        ["declared locally", `const defineLiveStream = (options: unknown) => options;\n\nexport const posts = defineLiveStream({ id: "posts" });\n`],
+        ["imported from another package", `import { defineLiveStream } from "./helpers";\n\nexport const posts = defineLiveStream({ id: "posts" });\n`],
+        ["a member of another namespace", `import * as helpers from "./helpers";\n\nexport const posts = helpers.defineLiveStream({ id: "posts" });\n`],
+    ])("ignores a defineLiveStream that is %s", (_label, source) => {
+        expect.assertions(1);
+
+        write("live.ts", source);
+
+        expect(discover()).toStrictEqual([]);
+    });
+
     it.each(["as LiveStream", "satisfies LiveStream", "!"])("reads a named export whose call is wrapped with `%s`", (wrapper) => {
         expect.assertions(1);
 

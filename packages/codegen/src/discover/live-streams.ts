@@ -7,14 +7,8 @@ import { diagnosticAt } from "../diagnostics";
 import type { LiveStreamIR, LiveTopicIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { addressableExportNameOf } from "./attribution";
+import { callsServerFactory } from "./callee";
 import { propertyKeyName } from "./property-name";
-
-/** Whether `call` is `defineLiveStream(…)`, bare or through a namespace (`server.defineLiveStream`). */
-const isDefineLiveStream = (call: CallExpression): boolean => {
-    const callee = call.getExpression();
-
-    return (Node.isPropertyAccessExpression(callee) ? callee.getName() : callee.getText()) === "defineLiveStream";
-};
 
 /** A spread member, or a computed key, hides names from a static read. */
 const hidesNames = (literal: ObjectLiteralExpression): boolean =>
@@ -168,7 +162,7 @@ const ownerOf = (call: CallExpression): MorphNode | undefined => {
 const streamsIn = (sourceFile: SourceFile, lunoraDirectory: string): LiveStreamIR[] =>
     sourceFile
         .getDescendantsOfKind(SyntaxKind.CallExpression)
-        .filter((call) => isDefineLiveStream(call))
+        .filter((call) => callsServerFactory(call, "defineLiveStream"))
         .map((call) => {
             const declaration = ownerOf(call);
             const exportName = Node.isVariableDeclaration(declaration) ? addressableExportNameOf(declaration, "binding") : undefined;

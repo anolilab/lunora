@@ -319,6 +319,14 @@ describe("discoverPlatformSignals", () => {
         expect(signals().liveStreams).toBe(true);
     });
 
+    it("flags a defineLiveStream imported under another name as liveStreams", () => {
+        expect.assertions(1);
+
+        write("posts.ts", `import { defineLiveStream as stream } from "@lunora/server";\n\nexport const posts = stream({ id: "posts" });\n`);
+
+        expect(signals().liveStreams).toBe(true);
+    });
+
     it("detects a ctx.live read whose publish takes a generated topic ref, not a topic string", () => {
         expect.assertions(1);
 
