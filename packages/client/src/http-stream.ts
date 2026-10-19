@@ -397,6 +397,26 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
  * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
  * and only the latest resume position may be sent.
  */
+
+/**
+ * The coded error a non-2xx stream response carries: the flat `{ code, error, why }` envelope the
+ * HTTP routes send before a stream opens. `undefined` for any other body, so the caller keeps its
+ * generic status error.
+ */
+const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { code, error, why } = body as { code?: unknown; error?: unknown; why?: unknown };
+
+    if (typeof code !== "string" || typeof error !== "string") {
+        return undefined;
+    }
+
+    return new LunoraError(code, error, { status, why: typeof why === "string" ? why : undefined });
+};
+
 const attemptHeaders = (extra: Record<string, string> | undefined, lastEventId: string | undefined): Record<string, string> => {
     const kept = Object.entries(extra ?? {}).filter(([name]) => lastEventId === undefined || name.toLowerCase() !== "last-event-id");
 
@@ -549,16 +569,15 @@ const httpStream = <Ref extends HttpStreamRef>(
             const response = await fetchImpl(url, { headers, method: route.method, signal: ac.signal });
 
             if (!response.ok) {
-                // A bad status is a real answer, not a transport drop — release
-                // the body and fail WITHOUT reconnecting.
-                await response.body?.cancel().catch(() => {
-                    /* body already closed/unusable — nothing to release */
-                });
+                // A bad status is a real answer, not a transport drop — read its error
+                // envelope, if it has one, and fail WITHOUT reconnecting.
+                const body: unknown = await response.json().catch(() => undefined);
 
                 handle.fail(
-                    new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
-                        status: response.status,
-                    }),
+                    statusErrorOf(body, response.status) ??
+                        new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
+                            status: response.status,
+                        }),
                 );
 
                 return undefined;

@@ -51,6 +51,10 @@ class ConcreteShard extends ShardDO {
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.outer.lastRpcCall = { args, functionPath };
 
+        if (this.outer.rpcError !== undefined) {
+            throw this.outer.rpcError;
+        }
+
         return this.outer.rpcResult;
     }
 
@@ -60,6 +64,8 @@ class ConcreteShard extends ShardDO {
 }
 
 class TestShardDO extends DurableObject<Env> {
+    public rpcError: Error | undefined;
+
     public rpcResult: unknown = { ok: true };
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
