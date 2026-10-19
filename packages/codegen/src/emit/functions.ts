@@ -761,16 +761,22 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
  * inside workerd so the error surfaces before the Worker ships instead of in front of a user.
  */
 export const loadAllFunctions = async (): Promise<{ checked: number; failures: ReadonlyArray<{ functionPath: string; message: string }> }> => {
-    const failures: { functionPath: string; message: string }[] = [];
     const functionPaths = Object.keys(LUNORA_FUNCTION_MANIFEST);
+    // Concurrent, so the total is bounded by the slowest module rather than by all of them added up. A module
+    // shared by several functions is evaluated once (loadFunction keeps its pending promise), and failures keep manifest order.
+    const failures = (
+        await Promise.all(
+            functionPaths.map(async (functionPath) => {
+                try {
+                    await loadFunction(functionPath);
 
-    for (const functionPath of functionPaths) {
-        try {
-            await loadFunction(functionPath);
-        } catch (error) {
-            failures.push({ functionPath, message: error instanceof Error ? error.message : String(error) });
-        }
-    }
+                    return undefined;
+                } catch (error) {
+                    return { functionPath, message: error instanceof Error ? error.message : String(error) };
+                }
+            }),
+        )
+    ).filter((failure) => failure !== undefined);
 
     return { checked: functionPaths.length, failures };
 };
