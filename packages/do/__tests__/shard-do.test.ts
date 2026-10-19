@@ -2040,8 +2040,9 @@ describe("shardDO operator-only error.internal never reaches a client", () => {
         expect.assertions(3);
 
         class ThrowingSubShard extends ReexecShard {
-            // eslint-disable-next-line class-methods-use-this -- override stub that always throws; it never reads the instance
             protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+                // Count the attempt as the base class does, so the stub reads instance state.
+                this.execCount += 1;
                 await Promise.resolve();
 
                 throw failure();
