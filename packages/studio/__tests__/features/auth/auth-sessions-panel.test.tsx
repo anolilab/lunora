@@ -121,4 +121,60 @@ describe("authSessionsPanel", () => {
             vi.useRealTimers();
         }
     });
+
+    it("waits for a slow poll to settle before scheduling the next one", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const mock = createMockClient();
+
+            mock.listAuthSessions.mockReturnValueOnce(
+                new Promise<AuthPage<AuthSession>>((resolve) => {
+                    setTimeout(() => {
+                        resolve({ rows: SESSIONS, total: SESSIONS.length });
+                    }, 12_000);
+                }),
+            );
+
+            render(renderPanel(mock));
+
+            // The 5s poll joins the mount read, which settles at 12s; a 15s tick would start a second read.
+            await vi.advanceTimersByTimeAsync(16_000);
+
+            expect(mock.listAuthSessions).toHaveBeenCalledTimes(1);
+
+            // The next poll is scheduled one interval after the first settled: 12s + 5s.
+            await vi.advanceTimersByTimeAsync(2000);
+
+            expect(mock.listAuthSessions).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("stops polling when the read is rejected as UNAUTHORIZED", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        try {
+            const mock = createMockClient();
+
+            mock.listAuthSessions.mockRejectedValue(Object.assign(new Error("no token"), { code: "UNAUTHORIZED" }));
+
+            render(renderPanel(mock));
+
+            await vi.advanceTimersByTimeAsync(5000);
+
+            const callsAfterFirstPoll = mock.listAuthSessions.mock.calls.length;
+
+            await vi.advanceTimersByTimeAsync(120_000);
+
+            expect(mock.listAuthSessions).toHaveBeenCalledTimes(callsAfterFirstPoll);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });
