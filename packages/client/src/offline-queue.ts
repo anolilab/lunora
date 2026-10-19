@@ -186,8 +186,15 @@ class OfflineQueue {
     /** Appends still in flight, by write id, each resolving to whether the record landed. Anything that touches a record durably waits on its append first. */
     private readonly appending = new Map<string, Promise<boolean>>();
 
-    /** Records whose append was rejected (a quota error, a closed connection), kept to be tried again — see {@link OfflineQueue.flushUnpersisted}. */
-    private readonly unpersisted = new Map<string, PersistedMutation>();
+    /**
+     * Writes enqueued this session and not yet settled (see {@link OfflineQueue.discard}). Unlike `items`
+     * this survives a replay temporarily draining the queue, so a failed append is tracked for as long as
+     * the write is unsettled, and a retry derives its record from the entry as it is NOW.
+     */
+    private readonly unsettled = new Map<string, QueuedMutation>();
+
+    /** Ids whose append was rejected (a quota error, a closed connection), kept to be tried again — see {@link OfflineQueue.flushUnpersisted}. */
+    private readonly unpersisted = new Set<string>();
 
     public constructor(options: OfflineQueueOptions = {}, deps: OfflineQueueDeps = {}) {
         this.maxItems = options.maxItems ?? 1000;
@@ -208,6 +215,7 @@ class OfflineQueue {
 
         item.id ??= nextId();
         this.items.push(item);
+        this.unsettled.set(item.id, item);
 
         this.persist(this.recordOf(item, item.id));
 
@@ -223,6 +231,7 @@ class OfflineQueue {
      * landed behind it and replayed in the next session.
      */
     public discard(id: string): void {
+        this.unsettled.delete(id);
         this.unpersisted.delete(id);
 
         const { persistence } = this;
@@ -242,10 +251,18 @@ class OfflineQueue {
      * Try again to persist every write whose append was rejected. Called when the
      * page is being hidden: the last chance to get a still-queued write into
      * durable storage before a reload or a discard of the tab loses it.
+     *
+     * A write whose append is still in flight is skipped: `visibilitychange` and `pagehide` fire
+     * back to back, and a second append for the same id would hit a unique-id constraint (or store
+     * the record twice) and leave the write wrongly tracked as unpersisted.
      */
     public flushUnpersisted(): void {
-        for (const record of this.unpersisted.values()) {
-            this.persist(record);
+        for (const id of this.unpersisted) {
+            const item = this.unsettled.get(id);
+
+            if (item && !this.appending.has(id)) {
+                this.persist(this.recordOf(item, id));
+            }
         }
     }
 
@@ -378,14 +395,8 @@ class OfflineQueue {
                 continue;
             }
 
-            const record = this.recordOf(item, id);
-
-            // Not durable yet: the retry must carry the new stamp too.
-            if (this.unpersisted.has(id)) {
-                this.unpersisted.set(id, record);
-            }
-
-            this.rewriteStamp(id, record).catch((error: unknown) => {
+            // A retry of an append that fails later derives its record from `item`, so it carries this stamp too.
+            this.rewriteStamp(id, this.recordOf(item, id)).catch((error: unknown) => {
                 // `rewriteStamp` reports and contains every failure of the durable
                 // write itself; what reaches here is a failure of the REPORTING (an
                 // `onPersistenceError` handler that throws and a `console.warn` that
@@ -521,6 +532,9 @@ class OfflineQueue {
         }
 
         this.items.length = 0;
+        // Nobody is left to retry these appends, and their closures must not outlive the client.
+        this.unsettled.clear();
+        this.unpersisted.clear();
         this.notifySize();
     }
 
@@ -553,9 +567,10 @@ class OfflineQueue {
 
                 return true;
             } catch (error: unknown) {
-                // Only a write still queued is worth retrying; one settled meanwhile is gone for good.
-                if (this.items.some((item) => item.id === record.id)) {
-                    this.unpersisted.set(record.id, record);
+                // Only an unsettled write is worth retrying; one settled meanwhile is gone for good. It stays
+                // so while a replay holds it out of `items`.
+                if (this.unsettled.has(record.id)) {
+                    this.unpersisted.add(record.id);
                 }
 
                 reportPersistenceError(this.onPersistenceError, "append", error, record.id);
