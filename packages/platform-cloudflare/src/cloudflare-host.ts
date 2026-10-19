@@ -414,6 +414,14 @@ const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () 
                     return undefined;
                 }
 
+                // `open` is asynchronous: the record may have run out while it decrypted. An expired value is
+                // neither returned nor bound, and is removed as the check above would have removed it.
+                if (record.expiresAt <= now()) {
+                    await txn.delete(key);
+
+                    return undefined;
+                }
+
                 if (record.claimant === undefined) {
                     await txn.put(key, { ...record, claimant: take.claimant } satisfies SecretRecord);
                 }
