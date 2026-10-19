@@ -114,7 +114,7 @@ describe("offlineQueue", () => {
         expect(error.code).toBe("CLIENT_CLOSED");
     });
 
-    it("clear() rejects a write a replay has drained, once, still reporting it persisted", async () => {
+    it("clear() rejects a write a replay has drained, once, without promising it will replay", async () => {
         expect.assertions(5);
 
         const persistence = createInMemoryPersistence();
@@ -135,9 +135,10 @@ describe("offlineQueue", () => {
         const error = rejected.mock.calls[0]?.[0] as Error & { code?: string; persisted?: boolean };
 
         expect(error.code).toBe("CLIENT_CLOSED");
-        expect(error.persisted).toBe(true);
+        // An in-flight replay may still settle it and remove the record, so the caller is not told it will replay.
+        expect(error.persisted).toBe(false);
         expect(queue.replaying).toBe(0);
-        // The record stays for the next session.
+        // Closing does not remove the record itself.
         await expect(persistence.load()).resolves.toHaveLength(1);
     });
 });

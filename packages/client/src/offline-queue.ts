@@ -545,7 +545,11 @@ class OfflineQueue {
             };
             const landing = this.appending.get(id);
 
-            if (landing === undefined) {
+            if (this.replayingIds.has(id)) {
+                // The in-flight replay can still settle the write and `discard` its record, and the server may commit it
+                // meanwhile: its fate is the replay's (and the idempotent mutation id's), so promise nothing.
+                reject(false);
+            } else if (landing === undefined) {
                 reject(this.persistence !== undefined && !this.unpersisted.has(id));
             } else {
                 // An append in flight is in neither `unpersisted` nor storage yet, so the only honest
