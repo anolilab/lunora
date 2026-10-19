@@ -1,4 +1,4 @@
-import type { ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
+import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
@@ -432,17 +432,52 @@ const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile)
 };
 
 /** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
-const readsNamespaceMember = (file: SourceFile, namespace: string, names: ReadonlySet<string>): boolean =>
-    file.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
-        const expression = access.getExpression().getText();
+/** The member a destructured binding reads: `{ name }` and `{ name: local }` both read `name`. */
+const boundMemberName = (element: BindingElement): string => {
+    const key = element.getPropertyNameNode();
 
-        // `ns.name`, or `ns.inner.name` through a nested namespace, which `names` records as `inner.name`.
+    if (key === undefined) {
+        return element.getName();
+    }
+
+    return Node.isStringLiteral(key) ? key.getLiteralValue() : key.getText();
+};
+
+const readsNamespaceMember = (file: SourceFile, namespace: string, names: ReadonlySet<string>): boolean => {
+    // `ns.name`, or `ns.inner.name` through a nested namespace, which `names` records as `inner.name`.
+    const readsMember = (expression: string, name: string): boolean => {
         if (expression === namespace) {
-            return names.has(access.getName());
+            return names.has(name);
         }
 
-        return expression.startsWith(`${namespace}.`) && names.has(`${expression.slice(namespace.length + 1)}.${access.getName()}`);
+        return expression.startsWith(`${namespace}.`) && names.has(`${expression.slice(namespace.length + 1)}.${name}`);
+    };
+
+    const viaAccess = file
+        .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
+        .some((access) => readsMember(access.getExpression().getText(), access.getName()));
+
+    // `ns["name"]` reads the same member as `ns.name`; a computed key that is not a literal cannot be resolved.
+    const viaElement = file.getDescendantsOfKind(SyntaxKind.ElementAccessExpression).some((access) => {
+        const key = access.getArgumentExpression();
+
+        return Node.isStringLiteral(key) && readsMember(access.getExpression().getText(), key.getLiteralValue());
     });
+
+    // `const { name } = ns` and `const { name: local } = ns` bind the member off the namespace.
+    const viaDestructuring = file.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+        const initializer = declaration.getInitializer();
+        const binding = declaration.getNameNode();
+
+        return (
+            initializer !== undefined &&
+            Node.isObjectBindingPattern(binding) &&
+            binding.getElements().some((element) => readsMember(initializer.getText(), boundMemberName(element)))
+        );
+    });
+
+    return viaAccess || viaElement || viaDestructuring;
+};
 
 /**
  * Whether a named import wires the tool: it imports a name the module exports the tool under, or a namespace

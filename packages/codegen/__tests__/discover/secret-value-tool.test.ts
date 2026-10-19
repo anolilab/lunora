@@ -211,6 +211,41 @@ describe("discover/secret-value-tool", () => {
         expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
     });
 
+    it("detects a tool a namespace import binds by destructuring", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import * as agent from "@lunora/agent";
+            const { requestSecretTool } = agent;
+            export const support = { ask: requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a tool a namespace import reads by a string-literal element access", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import * as agent from "@lunora/agent";
+            export const support = { ask: agent["requestSecretTool"]({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("ignores a namespace import that destructures a different member", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import * as agent from "@lunora/agent";
+            const { defineAgent } = agent;
+            export const support = defineAgent({ model: "m", tools: {} });
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
     it("does not treat a type-only reference to the tool as runtime use", () => {
         expect.assertions(1);
 
