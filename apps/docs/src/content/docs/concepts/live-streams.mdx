@@ -65,6 +65,11 @@ names, and each topic's `key` field names in the order you wrote them. A non-lit
 declaration elsewhere is refused with `LIVE_STREAM_NOT_LITERAL`. Two streams may not
 share an `id` or an export name (`LIVE_STREAM_DUPLICATE`).
 
+Codegen recognises `defineLiveStream` by its import from `@lunora/server` (or `lunorash/server`), so an alias
+(`import { defineLiveStream as stream }`) and a namespace member (`server.defineLiveStream`) both work. A
+function of the same name declared locally or imported from another module is not read as a stream, and
+neither is one your own barrel file re-exports: import it from the package directly.
+
 A topic name and a key field must be plain identifiers: letters, digits and `_`,
 starting with a letter. A topic named `room` is refused, because its wire topic would
 start with the reserved `room:` prefix. A key value is a string on the wire, so a key
