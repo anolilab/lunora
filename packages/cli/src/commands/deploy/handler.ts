@@ -900,7 +900,7 @@ const runBeforeSpawnSteps = async (
  */
 const smokeLoadLazyModules = async (
     cwd: string,
-    options: DeployCommandOptions,
+    options: Pick<DeployCommandOptions, "env" | "logger" | "smokeLauncher" | "smokeLoad">,
     driver: DeployDriver,
     wranglerPath: string | undefined,
 ): Promise<string | undefined> => {
@@ -1147,4 +1147,4 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
 export { execute };
 // `provisionBindings` is shared with `lunora dev`'s wrangler flavor, which has
 // no `@lunora/vite` to reconcile bindings for it on startup.
-export { provisionBindings, runDeployCommand, runPreDeployPipeline };
+export { provisionBindings, runDeployCommand, runPreDeployPipeline, smokeLoadLazyModules };

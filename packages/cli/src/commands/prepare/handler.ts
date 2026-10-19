@@ -6,7 +6,7 @@
  * second implementation: it was one, and the copies had drifted so that prepare
  * checked LESS than the deploy it precedes.
  */
-import { resolveLazyFunctions } from "@lunora/config";
+import { resolveDeployDriver, resolveLazyFunctions } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -15,7 +15,7 @@ import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
-import { runPreDeployPipeline } from "../deploy/handler";
+import { runPreDeployPipeline, smokeLoadLazyModules } from "../deploy/handler";
 import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
@@ -101,6 +101,19 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
             validation: pipeline.validation,
         };
+    }
+
+    // The lazy smoke check runs here too, so a module that throws at load fails the CI gate rather than the
+    // deploy that follows it. Deploy runs the same check in its own preflight.
+    const smokeError = await smokeLoadLazyModules(
+        cwd,
+        { env: undefined, logger: options.logger },
+        resolveDeployDriver(pipeline.target),
+        pipeline.validation.wranglerPath,
+    );
+
+    if (smokeError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: smokeError, validation: pipeline.validation };
     }
 
     // Prepare fully succeeded — safe to advance the committed schema baseline.

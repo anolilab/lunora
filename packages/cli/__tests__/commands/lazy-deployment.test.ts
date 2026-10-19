@@ -148,6 +148,18 @@ describe("lazy deployment", () => {
             expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
         });
 
+        it("refuses prepare, the CI gate, when a lazy module fails to load", async () => {
+            expect.assertions(2);
+
+            vi.mocked(runLazySmokeLoad).mockResolvedValueOnce("1 of 3 lazy function(s) fail to load: posts:list: boom");
+
+            const { spawner } = createRecordingSpawner();
+            const result = await runPrepareCommand({ cwd: projectRoot, lazyFunctions: true, logger, spawner, strictAdvisories: false });
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toContain("fail to load");
+        });
+
         it("refuses to build, before wrangler runs, when a lazy module fails to load", async () => {
             expect.assertions(3);
 
