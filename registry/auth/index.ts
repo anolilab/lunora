@@ -35,27 +35,10 @@
  * headers: request.headers })` inside it.
  */
 import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, DEFAULT_AUTH_BASE_PATH, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, DEFAULT_AUTH_BASE_PATH, handleAuthRequest, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
 import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import { uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
-
-/**
- * Env-name values that mark a development deployment, and the vars they live in.
- * `lunora dev` sets `WORKER_ENV=development`; a real deploy that sets none of
- * these stays production (fail closed). Used to gate dev-only behaviour below —
- * console-logging auth links and running schema migrations on cold start.
- */
-const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
-const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
-
-/**
- * Whether the Worker is running in development. Defaults to FALSE so a real
- * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
- * dev-only conveniences (logging links, auto-migrating) never leak there.
- */
-const isDevEnvironment = (env: Record<string, unknown>): boolean =>
-    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
