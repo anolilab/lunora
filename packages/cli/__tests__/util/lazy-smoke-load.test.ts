@@ -50,13 +50,13 @@ describe(runLazySmokeLoad, () => {
     const stop = vi.fn<() => Promise<void>>(async () => {});
 
     /** Answers the probe as this run's Worker would: the result plus the run id of the entry written for the latest `wrangler dev`. */
-    const respondWith = (body: unknown): void => {
+    const respondWith = (body: object): void => {
         vi.stubGlobal(
             "fetch",
             vi.fn<() => Promise<Response>>(async () => {
                 const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
 
-                return Response.json({ ...(body as object), run: runIdOf(entry) });
+                return Response.json({ ...body, run: runIdOf(entry) });
             }),
         );
     };
@@ -96,11 +96,7 @@ describe(runLazySmokeLoad, () => {
                         body: options.cwd === other ? broken : clean,
                         runId: runIdOf(resolve(options.cwd, options.args.find((arg) => arg.endsWith("entry.ts")) ?? "")),
                     });
-
-                    return { crashed: new Promise(() => {}), stop };
-                }
-
-                if (losingWranglerExits) {
+                } else if (losingWranglerExits) {
                     throw new Error("wrangler dev (smoke-load) exited with code 1 before it was ready");
                 }
 
