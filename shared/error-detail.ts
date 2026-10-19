@@ -53,6 +53,14 @@ export const describeError = (error: unknown): ErrorDetail => {
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
+ * Encoded-size cap. The detail rides a response header and Cloudflare caps a
+ * response's headers at 128 KiB in total, so an unbounded message (or a
+ * non-ASCII one, which URI-encoding inflates up to 9×) would fail the very
+ * response it describes.
+ */
+const MAX_ENCODED_LENGTH = 16_384;
+
+/**
  * The operator-only `internal` context of a thrown `Error` (a `LunoraError`'s), for the
  * detail header alone. `undefined` unless it is a plain object that survives
  * `JSON.stringify`: a bigint or a cycle would otherwise throw inside the header encode,
@@ -70,9 +78,17 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
             return undefined;
         }
 
+        const json = JSON.stringify(internal);
+
+        // Over the cap the header would drop this context anyway, since URI-encoding only
+        // grows it. Refusing it here skips copying and encoding a large record twice.
+        if (json.length > MAX_ENCODED_LENGTH) {
+            return undefined;
+        }
+
         // Return the JSON copy, not the original: a getter that answers differently on
         // a second read would pass this check and then throw in the header encode.
-        return JSON.parse(JSON.stringify(internal)) as Record<string, unknown>;
+        return JSON.parse(json) as Record<string, unknown>;
     } catch {
         return undefined;
     }
@@ -100,14 +116,6 @@ export const findLoggedError = (args: readonly unknown[]): ErrorDetail | undefin
 
     return undefined;
 };
-
-/**
- * Encoded-size cap. The detail rides a response header and Cloudflare caps a
- * response's headers at 128 KiB in total, so an unbounded message (or a
- * non-ASCII one, which URI-encoding inflates up to 9×) would fail the very
- * response it describes.
- */
-const MAX_ENCODED_LENGTH = 16_384;
 
 /** How much of the message survives when the full detail is over the cap. */
 const TRUNCATED_MESSAGE_LENGTH = 1024;
