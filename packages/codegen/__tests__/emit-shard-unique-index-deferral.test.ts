@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+
+import { ts } from "ts-morph";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { emitShard } from "../src/emit";
 
@@ -48,5 +51,150 @@ describe("emitShard — blocked unique index", () => {
 
         expect(body).toContain("this.ensureMigrated();");
         expect(body).not.toContain("ensureServable");
+    });
+});
+
+/** The whole method (signature through closing brace), so it can be compiled on its own. */
+const methodSource = (signature: string): string => `${methodBody(signature)}\n        }`;
+
+/**
+ * The emitted migration state machine, compiled on its own: the three fields and
+ * the three methods that gate a blocked index, run against a stubbed
+ * `runShardMigrations` so the scan can be counted. The rest of the shard (the DO
+ * base, the SQL handle) is not what is under test.
+ */
+const compileShard = () => {
+    const fields = [...emitted.matchAll(/^ {8}private (?:blockedUniqueIndexes|migrated|migrationRetryAt)\b[^;\n]*;/gm)].map((match) => match[0]).join("\n");
+    const retryMs = Number(/const BLOCKED_MIGRATION_RETRY_MS = ([\d_]+);/.exec(emitted)?.[1]?.replaceAll("_", ""));
+    const source = [
+        "class Shard extends Base {",
+        fields,
+        methodSource("protected override ensureMigrated()"),
+        methodSource("private ensureServable()"),
+        methodSource("protected override async runShardDataMigration("),
+        "}",
+        "Shard;",
+    ].join("\n");
+    const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } });
+
+    return {
+        build: (runShardMigrations: () => string[], onDataMigration: () => void = () => {}) => {
+            class Base {
+                public readonly sql = {};
+
+                public adminWriter(): object {
+                    return this.sql;
+                }
+
+                public flushMigrationProgress(): object {
+                    return this.sql;
+                }
+            }
+            class LunoraError extends Error {
+                public constructor(_code: string, message: string) {
+                    super(message);
+                }
+            }
+            // eslint-disable-next-line sonarjs/code-eval -- runs the emitter's own output in a sandbox of stubs
+            const Shard = runInNewContext(outputText, {
+                // The host's Date, so the fake timers drive the emitted clock reads.
+                Date,
+                BLOCKED_MIGRATION_RETRY_MS: retryMs,
+                Base,
+                buildReprojectionMigration: () => {},
+                config: {},
+                LUNORA_MIGRATIONS: { dedupe: {} },
+                LunoraError,
+                runDataMigration: async () => {
+                    onDataMigration();
+
+                    return {};
+                },
+                runShardMigrations,
+                schema: {},
+            }) as new () => {
+                ensureMigrated: () => void;
+                ensureServable: () => void;
+                runShardDataMigration: (args: { id: string }) => Promise<unknown>;
+            };
+
+            return new Shard();
+        },
+        retryMs,
+    };
+};
+
+describe("emitShard — blocked unique index retry", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("does not rescan on every refused call, only once per retry interval", () => {
+        expect.assertions(8);
+
+        const { build, retryMs } = compileShard();
+        const scan = vi.fn<() => string[]>(() => ["unique index users_email blocked by duplicates"]);
+        const shard = build(scan);
+
+        // Cold start migrates, then the next calls inside the interval answer from the cached diagnostic.
+        for (let call = 0; call < 5; call += 1) {
+            expect(() => {
+                shard.ensureServable();
+            }).toThrow("blocked by duplicates");
+        }
+
+        expect(scan).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(retryMs + 1);
+
+        expect(() => {
+            shard.ensureServable();
+        }).toThrow("blocked by duplicates");
+        expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops migrating once nothing is blocked", () => {
+        expect.assertions(2);
+
+        const { build, retryMs } = compileShard();
+        const scan = vi.fn<() => string[]>(() => []);
+        const shard = build(scan);
+
+        shard.ensureServable();
+        vi.advanceTimersByTime(retryMs * 10);
+        shard.ensureServable();
+
+        expect(scan).toHaveBeenCalledTimes(1);
+        expect(() => {
+            shard.ensureServable();
+        }).not.toThrow();
+    });
+
+    it("retries at once after an admin data migration, whatever the interval", async () => {
+        expect.assertions(4);
+
+        const { build } = compileShard();
+        let duplicates = true;
+        const scan = vi.fn<() => string[]>(() => (duplicates ? ["unique index users_email blocked by duplicates"] : []));
+        const shard = build(scan, () => {
+            duplicates = false;
+        });
+
+        expect(() => {
+            shard.ensureServable();
+        }).toThrow("blocked by duplicates");
+        expect(scan).toHaveBeenCalledTimes(1);
+
+        // The de-dup migration is an admin call: it must not rescan, but must unblock the next dispatch immediately.
+        await shard.runShardDataMigration({ id: "dedupe" });
+
+        expect(scan).toHaveBeenCalledTimes(1);
+        expect(() => {
+            shard.ensureServable();
+        }).not.toThrow();
     });
 });

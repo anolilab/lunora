@@ -100,6 +100,9 @@ const LUNORA_STORAGE_RULES = ((): (() => StorageRulesResult) => { let cached: St
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ((): (() => StudioFeaturesResult) => { let cached: StudioFeaturesResult | undefined; return () => (cached ??= JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"privacy\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult); })();
 
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
+
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "07dfcb7ffeadcad9", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"comments\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"content\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"ref\": \"feedback\"\n        },\n        \"isOfficial\": {\n          \"kind\": \"boolean\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_feedback\": {\n          \"fields\": [\n            \"feedbackId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"feedback\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"authorEmail\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"authorName\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"commentCount\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"description\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"members\": [\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"closed\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"completed\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"in-progress\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"open\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"planned\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"under-review\\\"\"\n            }\n          ]\n        },\n        \"tags\": {\n          \"kind\": \"array\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false,\n          \"of\": {\n            \"kind\": \"string\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false\n          }\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"upvoteCount\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_status\": {\n          \"fields\": [\n            \"status\"\n          ],\n          \"unique\": false\n        },\n        \"by_upvotes\": {\n          \"fields\": [\n            \"upvoteCount\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"summaries\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"feedbackIds\": {\n          \"kind\": \"array\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"of\": {\n            \"kind\": \"id\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false,\n            \"ref\": \"feedback\"\n          }\n        },\n        \"generatedAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"summary\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_generated\": {\n          \"fields\": [\n            \"generatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"votes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"feedbackId\": {\n          \"kind\": \"id\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"ref\": \"feedback\"\n        },\n        \"voterEmail\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_feedback_and_voter\": {\n          \"fields\": [\n            \"feedbackId\",\n            \"voterEmail\"\n          ],\n          \"unique\": true\n        },\n        \"by_voter\": {\n          \"fields\": [\n            \"voterEmail\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
@@ -294,6 +297,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;
+        private migrationRetryAt = 0;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown> {
             // A dispatch that did not come through the shard's `/rpc` (a scheduled call,
@@ -694,19 +698,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const writer = this.adminWriter();
 
-            return runDataMigration({
-                ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
-                ...(args.direction === undefined ? {} : { direction: args.direction }),
-                ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-                ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
-                migration: migration as unknown as DataMigrationLike,
-                // Flush after each batch so live migrationStatus subscribers see
-                // progress mid-run (the base method records the reserved state
-                // table the raw-SQL progress write is invisible to the tracker).
-                onBatch: () => this.flushMigrationProgress(),
-                sql: this.sql as SqlExec,
-                writer,
-            });
+            try {
+                return await runDataMigration({
+                    ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
+                    ...(args.direction === undefined ? {} : { direction: args.direction }),
+                    ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+                    ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                    migration: migration as unknown as DataMigrationLike,
+                    // Flush after each batch so live migrationStatus subscribers see
+                    // progress mid-run (the base method records the reserved state
+                    // table the raw-SQL progress write is invisible to the tracker).
+                    onBatch: () => this.flushMigrationProgress(),
+                    sql: this.sql as SqlExec,
+                    writer,
+                });
+            } finally {
+                // The de-dup that unblocks a deferred UNIQUE index runs through here;
+                // let the next call rebuild it now instead of after the retry interval.
+                this.migrationRetryAt = 0;
+            }
         }
 
         protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -877,16 +887,27 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * is deferred, not thrown: the rest of the pass completes so the admin path
          * (including the data migration that de-duplicates the table) keeps working.
          * User dispatch goes through `ensureServable`, which refuses until the
-         * index exists. `migrated` stays false while one is outstanding, so every
-         * call retries the build.
+         * index exists. `migrated` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per `BLOCKED_MIGRATION_RETRY_MS`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
          */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
             this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }
 
         private ensureServable(): void {

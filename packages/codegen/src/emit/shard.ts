@@ -975,6 +975,9 @@ const LUNORA_STORAGE_RULES = ${renderLazyJsonData(storageRulesData, "StorageRule
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioFeaturesResult")};
+
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
 ${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
@@ -1004,7 +1007,8 @@ ${dispatchRun}
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {${constructorOverride}
         private blockedUniqueIndexes: readonly string[] = [];
-        private migrated = false;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
+        private migrated = false;
+        private migrationRetryAt = 0;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
 ${relationFanout.override}
 ${subscriptionMethods}
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
@@ -1115,16 +1119,27 @@ ${ADMIN_WRITE_METHODS}
          * is deferred, not thrown: the rest of the pass completes so the admin path
          * (including the data migration that de-duplicates the table) keeps working.
          * User dispatch goes through \`ensureServable\`, which refuses until the
-         * index exists. \`migrated\` stays false while one is outstanding, so every
-         * call retries the build.
+         * index exists. \`migrated\` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per \`BLOCKED_MIGRATION_RETRY_MS\`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
          */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true${snapshotArgument} });
             this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }
 
         private ensureServable(): void {

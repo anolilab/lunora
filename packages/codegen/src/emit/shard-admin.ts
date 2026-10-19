@@ -70,19 +70,25 @@ const ADMIN_WRITE_METHODS: string = `${adminWriterMethod}
 
 ${adminWriterPrelude()}
 
-            return runDataMigration({
-                ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
-                ...(args.direction === undefined ? {} : { direction: args.direction }),
-                ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-                ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
-                migration: migration as unknown as DataMigrationLike,
-                // Flush after each batch so live migrationStatus subscribers see
-                // progress mid-run (the base method records the reserved state
-                // table the raw-SQL progress write is invisible to the tracker).
-                onBatch: () => this.flushMigrationProgress(),
-                sql: this.sql as SqlExec,
-                writer,
-            });
+            try {
+                return await runDataMigration({
+                    ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
+                    ...(args.direction === undefined ? {} : { direction: args.direction }),
+                    ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+                    ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                    migration: migration as unknown as DataMigrationLike,
+                    // Flush after each batch so live migrationStatus subscribers see
+                    // progress mid-run (the base method records the reserved state
+                    // table the raw-SQL progress write is invisible to the tracker).
+                    onBatch: () => this.flushMigrationProgress(),
+                    sql: this.sql as SqlExec,
+                    writer,
+                });
+            } finally {
+                // The de-dup that unblocks a deferred UNIQUE index runs through here;
+                // let the next call rebuild it now instead of after the retry interval.
+                this.migrationRetryAt = 0;
+            }
         }
 
         protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
