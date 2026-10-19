@@ -469,6 +469,17 @@ describe("defineLiveStream topic declaration", () => {
         expect(onSubscribe).not.toHaveBeenCalled();
     });
 
+    it("accepts a bounded key validator, and denies a key past the bound without calling onSubscribe", async () => {
+        expect.assertions(3);
+
+        const onSubscribe = vi.fn<() => boolean>(() => true);
+        const stream = defineLiveStream({ id: "posts", onSubscribe, topics: { post: { key: { postId: v.string().max(64) }, payload: v.null() } } });
+
+        await expect(subscribe(stream, `post:${"a".repeat(64)}`)).resolves.toBe(200);
+        await expect(subscribe(stream, `post:${"a".repeat(65)}`)).resolves.toBe(403);
+        expect(onSubscribe).toHaveBeenCalledTimes(1);
+    });
+
     it("rejects a declaration whose topics could alias or never publish", () => {
         expect.assertions(5);
 

@@ -69,7 +69,9 @@ A topic name and a key field must be plain identifiers: letters, digits and `_`,
 starting with a letter. A topic named `room` is refused, because its wire topic would
 start with the reserved `room:` prefix. A key value is a string on the wire, so a key
 field must be a string validator such as `v.string()`, `v.id(...)` or `v.literal(...)`.
-`defineLiveStream` and codegen both refuse a declaration that breaks these rules.
+`defineLiveStream` refuses a declaration that breaks any of these rules when it runs,
+and codegen refuses a bad name or key field at build time. Only `defineLiveStream` checks
+the validator kinds, since codegen does not read validators.
 
 Codegen writes `_generated/live.ts`, a module of typed topic references. It imports the
 stream as a type only, so it pulls no server code into a client bundle:
