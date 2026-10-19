@@ -167,7 +167,18 @@ const parseEnvelope = (stored: string): SealedEnvelope | undefined => {
 const encryptingSecretValueHost = (raw: SecretValueStore, options: SecretValueKeyOptions): SecretValueHost => {
     let ring: Promise<KeyRing> | undefined;
     const keys = (): Promise<KeyRing> => {
-        ring ??= loadKeyRing(options);
+        if (ring === undefined) {
+            const pending = loadKeyRing(options);
+
+            ring = pending;
+            // A failed load is not kept: the next call loads again, so a key that is configured later is used
+            // without a restart. A load that succeeded stays cached.
+            pending.catch(() => {
+                if (ring === pending) {
+                    ring = undefined;
+                }
+            });
+        }
 
         return ring;
     };
