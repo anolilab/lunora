@@ -80,7 +80,10 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
         const mark = captchaSpends();
 
         try {
-            store.update({ status: "idle", ...(await work()) });
+            const next = await work();
+
+            resetCaptchaIfSpent(mark);
+            store.update({ status: "idle", ...next });
         } catch (error) {
             context.onError?.(error);
             resetCaptchaIfSpent(mark);

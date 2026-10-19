@@ -695,6 +695,54 @@ describe("captcha re-arm", () => {
         view();
     });
 
+    it("still settles the form when a provider's reset throws", async () => {
+        const { api, view } = await mountSolvedWidget();
+
+        api.reset.mockImplementation(() => {
+            throw new Error("widget gone");
+        });
+
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return ok({ status: true });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("success");
+        expect(captchaHeaders()).toStrictEqual({});
+
+        api.reset.mockReset();
+        view();
+    });
+
+    it("re-arms the widget after a code request that spent the token", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const client = stubClient({
+            emailOtp: {
+                sendVerificationOtp: vi.fn(() => {
+                    captchaHeaders();
+
+                    return ok({ success: true });
+                }),
+            },
+        });
+        const controller = createEmailOtpController(makeContext(client).context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+
+        expect(controller.getState().step).toBe("verify");
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
     it("leaves a solved widget alone when the request never carried its token", async () => {
         const { api, view } = await mountSolvedWidget();
         const failing = createSignInController(makeContext(stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } })).context);

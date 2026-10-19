@@ -217,11 +217,18 @@ const widgets = new Set<{ api: CaptchaGlobal; id: unknown }>();
  * user is asked to solve again instead.
  */
 const resetCaptcha = (): void => {
-    for (const widget of widgets) {
-        widget.api.reset?.(widget.id);
-    }
-
+    // The token goes first and a throwing provider is skipped: this runs from
+    // controller catch blocks, where an escaping error would leave the form
+    // stuck in "submitting".
     store.set({});
+
+    for (const widget of widgets) {
+        try {
+            widget.api.reset?.(widget.id);
+        } catch {
+            // A widget that cannot reset (script blocked, element gone) must not stop the others.
+        }
+    }
 };
 
 /**

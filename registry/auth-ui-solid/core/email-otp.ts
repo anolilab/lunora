@@ -96,6 +96,8 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         try {
             assertOk(await context.authClient.emailOtp.sendVerificationOtp({ email: state.email.value.trim(), type: "sign-in" }));
 
+            // The code request spent the token; the widget stays mounted across steps, so ask again.
+            resetCaptchaIfSpent(mark);
             sentTo = state.email.value.trim();
             store.update({
                 resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
