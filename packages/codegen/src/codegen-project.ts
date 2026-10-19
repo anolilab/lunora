@@ -76,14 +76,23 @@ const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfi
 const moduleFileCache = new Map<string, { isModule: boolean; key: string }>();
 
 /**
+ * A file's cache key. Taken BEFORE its text is read: a write in between then leaves the
+ * text newer than the key, which only costs a re-parse. Taken after, a stale parse would
+ * be cached under the new key and kept.
+ */
+const fileKey = (path: string): string => {
+    const stats = statSync(path);
+
+    return `${String(stats.mtimeMs)}:${String(stats.size)}`;
+};
+
+/**
  * Whether a file is a module, which is what keeps its declarations out of the program (a
  * script's are global). Asked of the TypeScript parser, which knows what is module syntax
  * and what is not: an `import` or `export` in a comment, string, regex, JSX text or
  * property name does not count, and neither does one inside a namespace.
  */
-const isModuleFile = (path: string, text: string): boolean => {
-    const stats = statSync(path);
-    const key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
+const isModuleFile = (path: string, text: string, key: string): boolean => {
     const cached = moduleFileCache.get(path);
 
     if (cached?.key === key) {
@@ -119,9 +128,10 @@ const globalDeclarationFiles = (tsconfigSources: string[], lunoraDirectory: stri
             return false;
         }
 
+        const key = fileKey(path);
         const text = readFileSync(path, "utf8");
 
-        if (GLOBAL_DECLARATION_RE.test(text) || !isModuleFile(path, text)) {
+        if (GLOBAL_DECLARATION_RE.test(text) || !isModuleFile(path, text, key)) {
             return true;
         }
 
