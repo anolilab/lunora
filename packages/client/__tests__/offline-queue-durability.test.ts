@@ -1,31 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import type { PersistenceAdapter } from "../src/types";
-import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
-
-const createClient = (
-    persistence: PersistenceAdapter,
-    { subscribe = true }: { subscribe?: boolean } = {},
-    fetchImpl: typeof fetch = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } })),
-) => {
-    const { sockets, WebSocket } = createSocketHarness();
-    const client = new LunoraClient({
-        fetch: fetchImpl,
-        heartbeatIntervalMs: 0,
-        offlineQueue: { queueBeforeFirstConnect: true },
-        persistence,
-        url: "http://app.test",
-        WebSocket,
-    });
-
-    if (subscribe) {
-        client.subscribe(fnRef("todos.list"), {}, () => undefined);
-    }
-
-    return { client, fetchImpl, sockets };
-};
+import { createQueueingClient, fnRef, settle } from "./lib/harness";
 
 describe("offline queue durability", () => {
     afterEach(() => {
@@ -50,7 +27,7 @@ describe("offline queue durability", () => {
                 await inner.append(mutation);
             },
         };
-        const { client, sockets } = createClient(slow);
+        const { client, sockets } = createQueueingClient(slow);
         const write = client.mutation(fnRef("todos.set"), { text: "a" });
 
         await settle();
@@ -93,7 +70,7 @@ describe("offline queue durability", () => {
                 await inner.append(mutation);
             },
         };
-        const { client } = createClient(flaky);
+        const { client } = createQueueingClient(flaky);
         const write = client.mutation(fnRef("todos.set"), { text: "a" });
 
         write.catch(() => undefined);

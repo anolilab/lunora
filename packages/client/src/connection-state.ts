@@ -104,7 +104,6 @@ interface ShardConnection {
      */
     providerAttempt?: symbol;
     reconnect: ReconnectCalculator;
-
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
@@ -143,7 +142,6 @@ interface ShardConnection {
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
      */
     roomsRejoined?: boolean;
-
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;

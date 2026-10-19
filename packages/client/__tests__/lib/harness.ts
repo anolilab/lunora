@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 
-import type { FunctionReference } from "../../src/types";
+import { LunoraClient } from "../../src/lunora-client";
+import type { FunctionReference, PersistenceAdapter } from "../../src/types";
 
 /** A scriptable WebSocket double: the test decides when it opens, what it receives and when it drops. */
 export interface HarnessSocket {
@@ -108,4 +109,27 @@ export const createSocketHarness = (): { sockets: HarnessSocket[]; WebSocket: ty
     }
 
     return { sockets, WebSocket: WS as unknown as typeof WebSocket };
+};
+
+/** A client that queues writes before its first connect, persisting them to `persistence`. Subscribes to `todos.list` unless `subscribe` is false. */
+export const createQueueingClient = (
+    persistence: PersistenceAdapter,
+    { subscribe = true }: { subscribe?: boolean } = {},
+    fetchImpl: typeof fetch = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } })),
+): { client: LunoraClient; fetchImpl: typeof fetch; sockets: HarnessSocket[] } => {
+    const { sockets, WebSocket } = createSocketHarness();
+    const client = new LunoraClient({
+        fetch: fetchImpl,
+        heartbeatIntervalMs: 0,
+        offlineQueue: { queueBeforeFirstConnect: true },
+        persistence,
+        url: "http://app.test",
+        WebSocket,
+    });
+
+    if (subscribe) {
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+    }
+
+    return { client, fetchImpl, sockets };
 };

@@ -601,7 +601,6 @@ export interface LunoraClientOptions {
      * {@link LunoraClientOptions.persistence}.
      */
     queryCache?: QueryCacheAdapter | false;
-
     reconnect?: ReconnectOptions;
 
     /**

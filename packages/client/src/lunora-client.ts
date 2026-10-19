@@ -5446,7 +5446,11 @@ class LunoraClient {
      * a runtime without them (SSR, workers, React Native) installs nothing.
      */
     private installPageHideFlush(): void {
-        const target = globalThis as { addEventListener?: EventTarget["addEventListener"]; document?: EventTarget & { visibilityState?: string } };
+        const target = globalThis as {
+            addEventListener?: EventTarget["addEventListener"];
+            document?: EventTarget & { visibilityState?: string };
+            removeEventListener?: EventTarget["removeEventListener"];
+        };
 
         // `document` is what tells a page from a worker, which also has `addEventListener` but no page lifecycle.
         if ((!this.persistence && !this.queryCache) || !("document" in globalThis) || typeof target.addEventListener !== "function") {
@@ -5471,7 +5475,7 @@ class LunoraClient {
         target.document?.addEventListener("visibilitychange", onVisibilityChange);
 
         this.releasePageHideFlush = (): void => {
-            (globalThis as { removeEventListener?: EventTarget["removeEventListener"] }).removeEventListener?.("pagehide", flush);
+            target.removeEventListener?.("pagehide", flush);
             target.document?.removeEventListener("visibilitychange", onVisibilityChange);
         };
     }
@@ -6302,23 +6306,23 @@ class LunoraClient {
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
         const sentToken = flags.authToken === undefined ? this.authToken : flags.authToken;
+        // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
+        // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
+        // encodes byte-identically, so a pre-codec server still interops.
         const requestBody = JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey });
 
         // The deadline covers the body read as well as the connection: a stalled
         // response holds the shard's whole write chain just as a stalled connect does.
-        const { body, readable, response } = await withinRpcDeadline<{ body: RpcEnvelopeBody; readable: boolean; response: Response }>(
+        const { body, response } = await withinRpcDeadline<{ body: RpcEnvelopeBody | undefined; response: Response }>(
             flags.unbounded ? 0 : this.rpcTimeoutMs,
             flags.signal,
             async (signal) => {
-                // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
-                // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
-                // encodes byte-identically, so a pre-codec server still interops.
                 const reply = await fetchImpl(joinUrl(this.url, RPC_PATH), { body: requestBody, headers, method: "POST", signal });
 
                 try {
-                    return { body: await reply.json(), readable: true, response: reply };
+                    return { body: await reply.json(), response: reply };
                 } catch {
-                    return { body: undefined as unknown as RpcEnvelopeBody, readable: false, response: reply };
+                    return { body: undefined, response: reply };
                 }
             },
         );
@@ -6331,7 +6335,7 @@ class LunoraClient {
             }
         }
 
-        if (!readable) {
+        if (body === undefined) {
             // Not a Lunora envelope at all — an edge's HTML page, a captive
             // portal, a truncated body. The HTTP status is the only verdict
             // there is, and `unparseableResponseError` is where the outbox's
@@ -7170,9 +7174,11 @@ class LunoraClient {
             const conn = this.getConnection(shardKey);
 
             if (conn) {
-                this.releaseResubscribeSlot(conn, (message as { id: string }).id);
-                clearTimeout(conn.unackedRetryTimers.get((message as { id: string }).id));
-                conn.unackedRetryTimers.delete((message as { id: string }).id);
+                const { id } = message as { id: string };
+
+                this.releaseResubscribeSlot(conn, id);
+                clearTimeout(conn.unackedRetryTimers.get(id));
+                conn.unackedRetryTimers.delete(id);
             }
         }
 
@@ -9520,10 +9526,7 @@ class LunoraClient {
                     signal,
                 });
 
-                // The body cap the client measured against is not the one that counts —
-                // the header framing rides along, and a proxy may impose its own. A `413`
-                // is a verdict on the REQUEST, not on the writes inside it, so it is not
-                // read as a batch reply here (see the halving below).
+                // A `413` is not a batch reply; the halving below handles it.
                 if (reply.status === 413 && items.length > 1) {
                     return { payload: undefined, response: reply };
                 }
@@ -9551,8 +9554,10 @@ class LunoraClient {
             this.bookmark.set(bookmark);
         }
 
-        // A `413` is a verdict on the REQUEST, not on the writes inside it, so halve
-        // and retry; only a lone write that is itself over the cap falls through to
+        // The body cap the client measured against is not the one that counts —
+        // the header framing rides along, and a proxy may impose its own. A `413`
+        // is a verdict on the REQUEST, not on the writes inside it, so halve and
+        // retry; only a lone write that is itself over the cap falls through to
         // the terminal envelope below (replaying it can never succeed).
         if (response.status === 413 && items.length > 1) {
             return await this.replayBatchedHalves(items, shardKey, authToken);
