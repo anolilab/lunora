@@ -46,7 +46,14 @@ const sourceReturnTypeOf = (constantName: string): string => {
         throw new Error(`test: expected to find a variable declaration named "${constantName}" in component.ts`);
     }
 
-    const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => arrow.getReturnTypeNode() !== undefined);
+    // The handler is the arrow passed straight to `.query(...)` or `.mutation(...)`. A typed
+    // helper declared inside the handler (`const assertStillOwned = (request): void => …`) is
+    // not one, so it must not count.
+    const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => {
+        const call = arrow.getParentIfKind(SyntaxKind.CallExpression);
+
+        return arrow.getReturnTypeNode() !== undefined && call !== undefined && /\.(?:query|mutation)$/.test(call.getExpression().getText());
+    });
 
     if (typedArrows.length !== 1) {
         throw new Error(`test: expected exactly one typed handler arrow for "${constantName}", found ${String(typedArrows.length)}`);
