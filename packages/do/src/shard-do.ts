@@ -1260,6 +1260,28 @@ const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise
 const AFTER_COMMIT_WAIT_MS = 15_000;
 
 /**
+ * Wait for `work`, at most `ms`. `true` when it settled in time, `false` when the
+ * deadline won. The work is left RUNNING when the deadline wins (the post still
+ * lands or fails on its own), and a rejection that arrives after it is swallowed
+ * rather than surfacing as an unhandled one.
+ */
+const settleWithin = async (work: Promise<unknown>, ms: number): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<boolean>((resolve) => {
+        timer = setTimeout(resolve, ms, false);
+    });
+
+    try {
+        return await Promise.race([work.then(() => true), deadline]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+};
+
+/**
  * Wait for `link`, at most {@link AFTER_COMMIT_WAIT_MS}. `true` when it settled
  * in time, `false` when the deadline won.
  *
@@ -1274,21 +1296,7 @@ const AFTER_COMMIT_WAIT_MS = 15_000;
  * call that is already in flight. So the ordering obligation is kept and only the
  * dispatch stops waiting.
  */
-const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const deadline = new Promise<boolean>((resolve) => {
-        timer = setTimeout(resolve, AFTER_COMMIT_WAIT_MS, false);
-    });
-
-    try {
-        return await Promise.race([link.then(() => true), deadline]);
-    } finally {
-        if (timer !== undefined) {
-            clearTimeout(timer);
-        }
-    }
-};
+const waitForAfterCommit = (link: Promise<void>): Promise<boolean> => settleWithin(link, AFTER_COMMIT_WAIT_MS);
 
 /**
  * How long socket teardown waits on a sibling DO's answer to a relay release or
@@ -1297,27 +1305,6 @@ const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
  * cleanup behind it) on a sibling that has stopped answering.
  */
 const RELAY_CLOSE_WAIT_MS = 2000;
-
-/**
- * Wait for `work`, at most `ms`. The work is left RUNNING when the deadline wins
- * (the post still lands or fails on its own), and a rejection that arrives after
- * it is swallowed rather than surfacing as an unhandled one.
- */
-const settleWithin = async (work: Promise<unknown>, ms: number): Promise<void> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, ms);
-    });
-
-    try {
-        await Promise.race([work, deadline]);
-    } finally {
-        if (timer !== undefined) {
-            clearTimeout(timer);
-        }
-    }
-};
 
 const DIGITS = /^\d+$/u;
 
