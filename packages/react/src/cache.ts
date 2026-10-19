@@ -58,6 +58,12 @@ const blankQuery = (query: Query | undefined): void => {
  * core runs its `queryFn` before it attaches.
  */
 interface LiveValue {
+    /**
+     * Whether the subscription errored before its first defined value. A
+     * `queryFn` that runs after that error (the hydration gate held it) has no
+     * settle left to wait for, so it reads this and goes straight to HTTP.
+     */
+    errored: boolean;
     /** Whether a defined value has been pushed since the subscription opened or last blanked. */
     pushed: boolean;
     /** Settled with `true` on the first defined push, `false` when the subscription errors before one. */
@@ -174,7 +180,7 @@ class LunoraSubscriptionRegistry {
             return current;
         }
 
-        if (await nextPush(live, signal)) {
+        if (!live.errored && (await nextPush(live, signal))) {
             return this.liveValue(queryClient, queryKey, signal, fetch);
         }
 
@@ -296,6 +302,7 @@ class LunoraSubscriptionRegistry {
                             // A blank is not a value: a refetch after a user switch must
                             // wait for the new identity's first push, not read this one.
                             live.pushed = false;
+                            live.errored = false;
                             blankQuery(queryClient.getQueryCache().find({ exact: true, queryKey }));
 
                             return;
@@ -303,6 +310,7 @@ class LunoraSubscriptionRegistry {
 
                         queryClient.setQueryData(queryKey, value);
                         live.pushed = true;
+                        live.errored = false;
                         settle(live, true);
                     },
                     {
@@ -310,6 +318,7 @@ class LunoraSubscriptionRegistry {
                             const live = this.liveFor(key);
 
                             if (!live.pushed) {
+                                live.errored = true;
                                 settle(live, false);
                             }
 
@@ -378,7 +387,7 @@ class LunoraSubscriptionRegistry {
         let live = this.live.get(key);
 
         if (!live) {
-            live = { pushed: false, waiters: new Set() };
+            live = { errored: false, pushed: false, waiters: new Set() };
             this.live.set(key, live);
         }
 
@@ -400,6 +409,7 @@ class LunoraSubscriptionRegistry {
         if (live.waiters.size === 0) {
             this.live.delete(key);
         } else {
+            live.errored = false;
             live.pushed = false;
         }
     }

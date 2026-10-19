@@ -354,6 +354,48 @@ describe("useQuery", () => {
             expect(mock.query).toHaveBeenCalledTimes(1);
         });
 
+        it("falls back to HTTP when the subscription errors while the hydration gate holds the fetch", async () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => "http snapshot", { live: true });
+
+            let releaseHydration = (): void => undefined;
+            const hydration = new Promise<void>((resolve) => {
+                releaseHydration = resolve;
+            });
+            const pending = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                isReady: false,
+                whenReady: async () => hydration,
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={pending}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            await waitFor(() => {
+                expect(mock.subscribe).toHaveBeenCalledTimes(1);
+            });
+
+            // The error lands before any `queryFn` waits on the subscription.
+            await act(async () => {
+                mock.emitError("posts:list", { message: "boom" });
+            });
+
+            await act(async () => {
+                releaseHydration();
+                await hydration;
+            });
+
+            await waitFor(() => {
+                expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("http snapshot"));
+            });
+
+            expect(mock.query).toHaveBeenCalledTimes(1);
+        });
+
         it("a remount after unmounting mid-wait resolves from the new subscription", async () => {
             expect.hasAssertions();
 
