@@ -475,6 +475,24 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         expect(JSON.stringify(events[0]?.error?.internal)).not.toContain("hunter2-secret");
     });
 
+    it("masks a credential in a nested Error's message as the sink receives it", () => {
+        expect.assertions(1);
+
+        const { events, sink } = collectEvents();
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: { code: "INTERNAL", internal: { upstream: new Error("password=hunter2-secret") }, message: "boom", status: 500 }, // gitleaks:allow -- test fixture, not a credential
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        // Read the property the sink receives: an Error's message is not JSON-enumerable.
+        const upstream = events[0]?.error?.internal?.upstream as { message?: unknown } | undefined;
+
+        expect(upstream?.message).toBe("password=<REDACTED>");
+    });
+
     it("still delivers the event when a getter in the operator context throws", () => {
         expect.assertions(2);
 

@@ -142,6 +142,15 @@ describe("otlpTraceBody error internal context", () => {
         expect(body).not.toContain("hunter2-secret");
     });
 
+    it("masks a credential in a nested Error's message in the exported operator context", () => {
+        expect.assertions(1);
+
+        const body = JSON.stringify(otlpTraceBody(failed({ upstream: new Error("password=hunter2-secret") }), 1_000_000)); // gitleaks:allow -- test fixture, not a credential
+
+        // The nested Error's message is exported, with its credential masked.
+        expect(body).toContain("password=<REDACTED>");
+    });
+
     it("drops only the operator attribute when it cannot be encoded, keeping the event", () => {
         expect.assertions(2);
 

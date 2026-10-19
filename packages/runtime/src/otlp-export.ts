@@ -16,6 +16,7 @@
  */
 import { redactSecrets } from "@lunora/observability";
 
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import { coerceFieldValue } from "../../../shared/log-fields";
 import type { OtlpAttribute } from "../../../shared/otlp";
 import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
@@ -34,12 +35,9 @@ const UNSAMPLED_TRACE_FLAG = 0;
  * whole buffered flush the event belongs to.
  */
 const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
-    try {
-        // The clone first: it flattens nested objects, so their credential fields are masked too.
-        return [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(structuredClone(internal))))];
-    } catch {
-        return [];
-    }
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(plain)))];
 };
 
 /**

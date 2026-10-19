@@ -15,6 +15,7 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import { redactSecrets } from "@lunora/observability";
 
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
@@ -22,17 +23,14 @@ import { resolveTraceSampling, shouldExportTrace } from "../../../shared/samplin
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
- * The operator context a sink receives: a plain copy with credentials masked. The copy
- * flattens nested objects, so an `Error`'s enumerable credential fields are not passed
- * through opaque by the key-aware redactor. `undefined` when it cannot be cloned, so a
- * throwing getter drops only this context and the event still reaches the sink.
+ * The operator context a sink receives: a plain copy with credentials masked, nested
+ * `Error`s included. `undefined` when it cannot be encoded, so a throwing getter drops only
+ * this context and the event still reaches the sink.
  */
 const operatorContextFor = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
-    try {
-        return redactSecrets(structuredClone(internal)) as Record<string, unknown>;
-    } catch {
-        return undefined;
-    }
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? undefined : (redactSecrets(plain) as Record<string, unknown>);
 };
 
 /**

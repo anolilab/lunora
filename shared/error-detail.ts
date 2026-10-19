@@ -95,6 +95,22 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
 };
 
 /**
+ * A plain copy of an operator context for the sinks: nested `Error`s become records of their
+ * name, message and enumerable fields. Credential redaction keys on field names and on text
+ * inside strings, but it passes an `Error` through opaque, so its message would otherwise reach
+ * a sink unredacted. `undefined` when the context cannot be encoded.
+ */
+export const toPlainOperatorContext = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
+    try {
+        return JSON.parse(
+            JSON.stringify(internal, (_key, value: unknown) => (value instanceof Error ? { ...value, message: value.message, name: value.name } : value)),
+        ) as Record<string, unknown>;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
  * The first `Error` a `ctx.log.*` call was handed — as an argument
  * (`ctx.log.error("failed", err)`) or as a value of a fields bag
  * (`ctx.log.error("failed", { err })`) — described for a log event's `error`.
