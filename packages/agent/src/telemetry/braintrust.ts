@@ -126,7 +126,9 @@ export const braintrustTelemetry = (options: BraintrustTelemetryOptions): Teleme
             // Stamped on every call, so an unreported usage shows as `unavailable` rather than as a missing key.
             fields.metadata = { "lunora.usage.status": status };
 
-            if (usage !== undefined && status !== "unavailable") {
+            // The status grades pricing, so it does not decide what is counted: a total the provider reported alone is
+            // still a token count, and the metric mapping skips every bucket that is absent.
+            if (usage !== undefined) {
                 fields.metrics = braintrustMetrics(usage);
             }
 

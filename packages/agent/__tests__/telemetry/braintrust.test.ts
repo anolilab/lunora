@@ -186,7 +186,7 @@ describe(braintrustTelemetry, () => {
         expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
     });
 
-    it("does not log a bare total as metrics: a total with no split is not a reported usage", async () => {
+    it("logs a total the provider reported alone as a token count, while its usage stays unavailable for pricing", async () => {
         expect.assertions(2);
 
         // Driven by hand, not through `generateText`: the SDK never hands over a total
@@ -204,7 +204,7 @@ describe(braintrustTelemetry, () => {
 
         await settle();
 
-        expect(merged(calls[0] as TracedCall)).not.toHaveProperty("metrics");
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ tokens: 15 });
         expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
     });
 
