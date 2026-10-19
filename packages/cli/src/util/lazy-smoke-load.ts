@@ -145,7 +145,7 @@ const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeL
  * (a response that is not ours) throws a plain error and the caller skips the check.
  */
 const probeLazyModules = async (port: number): Promise<{ checked: number; failures: ModuleFailure[] }> => {
-    const response = await fetch(`http://127.0.0.1:${String(port)}/__lunora_smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
+    const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
         (error: unknown) => {
             if (error instanceof Error && error.name === "TimeoutError") {
                 throw new SmokeLoadError(
