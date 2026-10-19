@@ -612,13 +612,14 @@ describe(createAnonymousController, () => {
     });
 });
 
-describe("captcha after a failed submit", () => {
+describe("captcha re-arm", () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
 
-    it("resets the widget and drops the token the failed request spent", async () => {
+    /** Mount a solved hCaptcha widget; returns its API stub and the teardown. */
+    const mountSolvedWidget = async (): Promise<{ api: { reset: ReturnType<typeof vi.fn> }; view: () => void }> => {
         let solve: ((token: string) => void) | undefined;
         const api = {
             render: vi.fn((_element: Element, parameters: { callback: (token: string) => void }) => {
@@ -646,6 +647,11 @@ describe("captcha after a failed submit", () => {
 
         solve?.("solved-token");
 
+        return { api, view };
+    };
+
+    it("resets the widget and drops the token the failed request spent", async () => {
+        const { api, view } = await mountSolvedWidget();
         const client = stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } });
         const controller = createSignInController(makeContext(client).context);
 
@@ -655,6 +661,19 @@ describe("captcha after a failed submit", () => {
 
         expect(controller.getState().status).toBe("error");
         expect(captchaHeaders()).toStrictEqual({});
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
+    it("resets the widget after a successful resendable request, so the resend asks again", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const controller = createForgotPasswordController(makeContext(stubClient()).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("success");
         expect(api.reset).toHaveBeenCalledWith("widget-1");
 
         view();

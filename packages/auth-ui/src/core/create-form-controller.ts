@@ -175,6 +175,11 @@ const createFormController = <TField extends string>(context: ControllerContext,
         try {
             const result = (await options.submit(values(), context)) ?? {};
 
+            if (options.resendCooldown) {
+                // The form stays up for a resend, but this request spent the captcha token.
+                resetCaptcha();
+            }
+
             store.set({
                 ...state(),
                 fields: { ...state().fields },
