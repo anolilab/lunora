@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { get, writable } from "svelte/store";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -107,17 +107,18 @@ describe("subscription store", () => {
 
     it("routes a subscription error into the error store and the onError callback", () => {
         const { client, emitError } = createFakeClient();
-        const onError = vi.fn<(error: Error) => void>();
+        const onError = vi.fn<SubscriptionErrorCallback>();
         const { data, error } = subscription(client, fnRef, args, { onError });
 
         // Subscribe both stores so the data store's start callback wires onError.
         const stopData = data.subscribe(() => {});
         const stopError = error.subscribe(() => {});
 
-        emitError("boom");
+        emitError("boom", "FORBIDDEN");
 
         expect(onError).toHaveBeenCalledTimes(1);
-        expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+        // The raw wire error, not the normalised `Error` the store holds.
+        expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: "FORBIDDEN", message: "boom" });
 
         const captured = get(error);
 

@@ -555,7 +555,7 @@ interface SubscriptionHandle<T> {
 
 ```ts
 interface SubscriptionStoreOptions {
-    onError?: (error: Error) => void;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
