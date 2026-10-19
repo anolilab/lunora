@@ -275,13 +275,13 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
     const connectPath = liveConnectPath(config.id);
     const controlPath = liveControlPath(config.id);
     const fieldsByTopic: Record<string, ReadonlyArray<string>> = Object.fromEntries(
-        Object.entries(config.topics as LiveTopics).map(([name, topic]) => [name, Object.keys(topic.key ?? {})]),
+        Object.entries(config.topics).map(([name, topic]) => [name, Object.keys(topic.key ?? {})]),
     );
 
     /** The declared `(name, key)` behind a wire topic, or `undefined` when it is not one this stream carries. */
     const parseTopic = (raw: string): undefined | { declaration: LiveTopicDeclaration; key: Record<string, string>; name: string } => {
         const parsed = parseLiveTopic(raw, fieldsByTopic);
-        const declared = parsed === undefined ? undefined : (config.topics as LiveTopics)[parsed.name];
+        const declared = parsed === undefined ? undefined : config.topics[parsed.name];
 
         if (parsed === undefined || declared === undefined) {
             return undefined;
