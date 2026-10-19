@@ -141,7 +141,9 @@ describe(makeDiffEmit, () => {
         const syncedJson = new Map<string, string>();
         const { ops, writer } = recordingWriter();
         const emit = makeDiffEmit(syncedJson, writer);
-        const toJSON = vi.fn(() => {return { _id: "a", text: "1" }});
+        const toJSON = vi.fn<() => Row>(() => {
+            return { _id: "a", text: "1" };
+        });
         const rows = new Map<string, Row>([["a", { _id: "a", text: "1", toJSON }]]);
 
         emit(rows);

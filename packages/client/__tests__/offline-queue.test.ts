@@ -121,7 +121,7 @@ describe("offlineQueue — drainConflict", () => {
 
         const queue = new OfflineQueue();
         const thrown = new Error("precondition blew up");
-        const reject = vi.fn<(error: Error) => void>();
+        const reject = vi.fn<(error: unknown) => void>();
 
         for (const path of ["a", "b", "c"]) {
             queue.enqueue({
