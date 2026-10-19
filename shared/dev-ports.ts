@@ -8,8 +8,11 @@
  * `LUNORA_DEV_PORT_OFFSET` (an integer; `0` forces the legacy pair) overrides both.
  *
  * Both ports of the pair move together, and so does every other port in
- * {@link PINNED_PORT_BASES}. An offset that puts any of them on a browser-blocked
- * port (Fetch spec "bad ports") or out of range is skipped forward. Vite keeps `strictPort`: a taken port fails loudly, it never drifts.
+ * {@link PINNED_PORT_BASES}. A derived offset is a multiple of {@link OFFSET_STRIDE}: no two
+ * pinned ports are a multiple of the stride apart, so no two checkouts (the main one included)
+ * ever land a port on the same number, which a plain hash cannot promise. An explicit
+ * `LUNORA_DEV_PORT_OFFSET` is checked for browser-blocked (Fetch spec "bad ports") and
+ * out-of-range ports. Vite keeps `strictPort`: a taken port fails loudly, it never drifts.
  *
  * Zero-dependency (node built-ins and the sibling {@link file://./fnv1a.ts}), so
  * consumers import it by relative path and the bundler inlines it.
@@ -29,10 +32,17 @@ export const LEGACY_STUDIO_PORT = 5174;
  */
 export const PINNED_PORT_BASES: readonly number[] = [5175, 5273, 5274, 5275, 5276, 5277, 5278, 9229, 9230, 9231, 9232, 9233];
 
-/** Derived offsets fall in `1..OFFSET_RANGE`; `0` is reserved for the legacy pair. */
-const OFFSET_RANGE = 2999;
-
 const MAX_PORT = 65535;
+
+/**
+ * The gap between derived offsets. The pinned ports' pairwise distances (1, 2, 98, 100..105,
+ * 3951..4060, ...) never include a multiple of 200, so shifting by multiples of it keeps every
+ * checkout's ports distinct from every other's.
+ */
+const OFFSET_STRIDE = 200;
+
+/** Derived offsets are `1..OFFSET_SLOTS` strides; the highest pinned port still fits in range. */
+const OFFSET_SLOTS = Math.floor((MAX_PORT - Math.max(LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES)) / OFFSET_STRIDE);
 
 /** Fetch spec "bad ports": browsers refuse to load these, so a dev server on one looks broken. */
 export const BLOCKED_PORTS: ReadonlySet<number> = new Set([
@@ -76,23 +86,8 @@ const withOffset = (offset: number, source: DevPorts["source"]): DevPorts => ({
     studio: LEGACY_STUDIO_PORT + offset,
 });
 
-/** The stable offset for `root`, before skipping blocked pairs. Same path, same value, across restarts. */
-export const hashPortOffset = (root: string): number => (Number.parseInt(fnv1aHex(root), 16) % OFFSET_RANGE) + 1;
-
-/** The offset for `root` once blocked or out-of-range pairs are skipped forward (wrapping inside `1..OFFSET_RANGE`). */
-export const derivePortOffset = (root: string): number => {
-    let offset = hashPortOffset(root);
-
-    for (let attempt = 0; attempt < OFFSET_RANGE; attempt += 1) {
-        if (isUsablePair(offset)) {
-            return offset;
-        }
-
-        offset = (offset % OFFSET_RANGE) + 1;
-    }
-
-    throw new Error("[dev-ports] no usable dev port offset exists");
-};
+/** The stable offset for `root`. Same path, same value, across restarts. */
+export const derivePortOffset = (root: string): number => ((Number.parseInt(fnv1aHex(root), 16) % OFFSET_SLOTS) + 1) * OFFSET_STRIDE;
 
 /** Resolve the pair from explicit inputs. Pure: no filesystem or process access. */
 export const resolveDevPorts = ({ env, linked, root }: DevPortInputs): DevPorts => {
