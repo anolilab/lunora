@@ -9,8 +9,9 @@
  *
  * Both ports of the pair move together, and so does every other port in
  * {@link PINNED_PORT_BASES}. A derived offset is a multiple of {@link OFFSET_STRIDE}: no two
- * pinned ports are a multiple of the stride apart, so no two checkouts (the main one included)
- * ever land a port on the same number, which a plain hash cannot promise. An explicit
+ * pinned ports are a multiple of the stride apart, so two checkouts with different offsets never
+ * share a port. The hash has only a fixed number of slots, though, so two linked worktrees can
+ * hash to the same slot and get the same pair; set `LUNORA_DEV_PORT_OFFSET` on one of them. An explicit
  * `LUNORA_DEV_PORT_OFFSET` is checked for browser-blocked (Fetch spec "bad ports") and
  * out-of-range ports. Vite keeps `strictPort`: a taken port fails loudly, it never drifts.
  *
