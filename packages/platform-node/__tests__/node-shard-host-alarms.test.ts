@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createNodeShardHost } from "../src/node-shard-host";
 
@@ -133,6 +137,49 @@ describe("createNodeShardHost alarms", () => {
             expect(fired).toBe(1);
         } finally {
             dispose();
+        }
+    });
+
+    it("keeps an alarm a transaction rescheduled while the previous timer fired", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-platform-node-alarm-"));
+        const path = join(workdir, "shard.sqlite");
+
+        try {
+            const first = createNodeShardHost({ path });
+            const t1 = Date.now() + 10;
+            const t2 = Date.now() + 10_000;
+
+            try {
+                await first.host.alarms.set(t1);
+                await first.host.transaction(async () => {
+                    await first.host.alarms.set(t2);
+                    // T1's timer is still armed (the reschedule defers to commit) and fires now.
+                    await vi.advanceTimersByTimeAsync(50);
+                });
+
+                const row = first.database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm").get();
+
+                expect(row?.scheduled_for).toBe(t2);
+                expect(first.host.alarms.get()).toBe(t2);
+            } finally {
+                first.dispose();
+            }
+
+            // A restart over the same file re-arms the rescheduled alarm.
+            const second = createNodeShardHost({ path });
+
+            try {
+                expect(second.host.alarms.get()).toBe(t2);
+            } finally {
+                second.dispose();
+            }
+        } finally {
+            vi.useRealTimers();
+            rmSync(workdir, { force: true, recursive: true });
         }
     });
 });
