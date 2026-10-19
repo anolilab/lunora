@@ -1,4 +1,4 @@
-import { CELLD_CAPABILITIES, SecretValueKeyError } from "@lunora/platform";
+import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCelldShardPlatform, createCelldWorkerPlatform } from "../src/celld-platform";
@@ -70,13 +70,14 @@ describe("createCelldWorkerPlatform", () => {
 });
 
 describe("createCelldShardPlatform", () => {
-    it("holds no sealing key by default, so the secret host refuses to store a value", async () => {
-        expect.assertions(1);
+    it("omits the secret-value host, since celld rates secretValues unsupported", () => {
+        expect.assertions(2);
 
-        const { secretValues } = createCelldShardPlatform(createStateDouble());
+        const platform = createCelldShardPlatform(createStateDouble());
 
-        // celld rates `secretValues` unsupported: a cell never falls back to plaintext.
-        await expect(secretValues.put("a value", { scope: "thread-1", ttlMs: 60_000 })).rejects.toBeInstanceOf(SecretValueKeyError);
+        // The surface is absent, not present and refusing: a cell never offers a store it cannot seal.
+        expect(platform).not.toHaveProperty("secretValues");
+        expect(Object.keys(platform).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["kv", "shard", "sockets"]);
     });
 
     it("runs sql.exec straight through to the cell's storage.sql", () => {

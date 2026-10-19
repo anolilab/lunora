@@ -12,8 +12,8 @@
  */
 
 import { CELLD_CAPABILITIES } from "@lunora/platform";
-import type { WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
-import { createWorkerPlatform } from "@lunora/platform-cloudflare";
+import type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
+import { createShardPlatform as createCloudflareShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
 
 /**
  * Compose every Worker-scoped contract from a celld worker's `env`: the
@@ -25,12 +25,14 @@ const createCelldWorkerPlatform = (env: unknown, options: WorkerPlatformOptions 
 };
 
 /**
- * Compose every shard-scoped contract from a celld cell's `DurableObjectState`.
- * The Cloudflare composition root as-is, re-exported under the target's name
- * so a celld app's composition root reads like its target. celld rates
- * `secretValues` as unsupported, so a cell passes no `env` and holds no sealing
- * key: the secret host refuses every put and take rather than store plaintext.
+ * Compose every shard-scoped contract from a celld cell's `DurableObjectState`: the
+ * Cloudflare composition without its secret-value host. celld rates `secretValues`
+ * unsupported, so the surface is absent rather than present and refusing every call.
  */
-export { createShardPlatform as createCelldShardPlatform } from "@lunora/platform-cloudflare";
+export const createCelldShardPlatform = (state: unknown): Omit<ShardPlatform, "secretValues"> => {
+    const { kv, shard, sockets } = createCloudflareShardPlatform(state);
+
+    return { kv, shard, sockets };
+};
 
 export { createCelldWorkerPlatform };
