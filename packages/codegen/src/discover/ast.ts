@@ -20,7 +20,6 @@ import type {
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { CodegenProgramScope } from "../project-config-file";
 import { readProjectConfigLiterals } from "../project-config-file";
 import { findProjectConfigFile } from "../project-config-path";
 import { propertyKeyName, propertyNameText } from "./property-name";
@@ -72,30 +71,19 @@ const isTestPath = (relativePath: string): boolean => {
 const isSkippedEntry = (entry: string, isDirectory: boolean, includeTests: boolean): boolean =>
     isDirectory ? SKIPPED_DIRECTORIES.has(entry) || (!includeTests && TEST_DIRECTORIES.has(entry)) : !includeTests && TEST_FILE_RE.test(entry);
 
-/** What the nearest `lunora.config.*` says about codegen: the compiled `codegen.exclude` matcher and the `codegen.program` scope. */
-interface ConfiguredCodegen {
-    isExcluded: (relativePath: string) => boolean;
-    program: CodegenProgramScope;
-}
-
-/** The parsed `codegen` settings per config file, keyed on mtime + size so an edit is picked up. */
-const codegenCache = new Map<string, { configured: ConfiguredCodegen; key: string }>();
+/** The compiled `codegen.exclude` matcher per config file, keyed on mtime + size so an edit is picked up. */
+const excludeCache = new Map<string, { isExcluded: (relativePath: string) => boolean; key: string }>();
 
 const NOTHING_EXCLUDED = (): boolean => false;
 
-/** `codegen.program` when the config does not say: build the program from the `lunora/` sources alone. */
-const DEFAULT_PROGRAM_SCOPE: CodegenProgramScope = "lunora";
-
-const DEFAULTS: ConfiguredCodegen = { isExcluded: NOTHING_EXCLUDED, program: DEFAULT_PROGRAM_SCOPE };
-
 /**
- * The `codegen` settings of the `lunora.config.*` nearest above
- * `lunoraDirectory` (stopping at the project's `package.json`). Every discoverer
- * walks the source tree, so the config is parsed once per edit rather than once
- * per walk — and an unreadable value is reported once, never silently treated as
- * "unset" without a word.
+ * The `codegen.exclude` globs of the `lunora.config.*` nearest above
+ * `lunoraDirectory` (stopping at the project's `package.json`), compiled to a
+ * matcher. Every discoverer walks the source tree, so the config is parsed once
+ * per edit rather than once per walk — and an unreadable value is reported once,
+ * never silently treated as "no excludes" without a word.
  */
-const configuredCodegen = (lunoraDirectory: string): ConfiguredCodegen => {
+const configuredExcludes = (lunoraDirectory: string): ((relativePath: string) => boolean) => {
     // The project root (its `package.json`, or the repo root) ends the search: a
     // config above it belongs to another project.
     const configFile = findUpSync(
@@ -108,43 +96,29 @@ const configuredCodegen = (lunoraDirectory: string): ConfiguredCodegen => {
     const stats = configFile === undefined ? undefined : statSync(configFile, { throwIfNoEntry: false });
 
     if (configFile === undefined || stats === undefined) {
-        return DEFAULTS;
+        return NOTHING_EXCLUDED;
     }
 
     const key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
-    const cached = codegenCache.get(configFile);
+    const cached = excludeCache.get(configFile);
 
     if (cached?.key === key) {
-        return cached.configured;
+        return cached.isExcluded;
     }
 
     const { codegen } = readProjectConfigLiterals(dirname(configFile));
 
-    if (codegen?.excludeUnreadable) {
+    if (codegen?.unreadable) {
         // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
         console.warn("@lunora/codegen: `codegen.exclude` in lunora.config is not an array of string literals without `!` negations — ignoring it.");
     }
 
-    if (codegen?.programUnreadable) {
-        // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
-        console.warn(`@lunora/codegen: \`codegen.program\` in lunora.config is not the literal "lunora" or "tsconfig" — using "${DEFAULT_PROGRAM_SCOPE}".`);
-    }
+    const isExcluded = codegen?.exclude?.length ? matcher(codegen.exclude) : NOTHING_EXCLUDED;
 
-    const configured: ConfiguredCodegen = {
-        isExcluded: codegen?.exclude?.length ? matcher(codegen.exclude) : NOTHING_EXCLUDED,
-        program: codegen?.program ?? DEFAULT_PROGRAM_SCOPE,
-    };
+    excludeCache.set(configFile, { isExcluded, key });
 
-    codegenCache.set(configFile, { configured, key });
-
-    return configured;
+    return isExcluded;
 };
-
-/** The `codegen.exclude` matcher for `lunoraDirectory`'s project. */
-const configuredExcludes = (lunoraDirectory: string): ((relativePath: string) => boolean) => configuredCodegen(lunoraDirectory).isExcluded;
-
-/** The `codegen.program` scope for `lunoraDirectory`'s project. */
-const configuredProgramScope = (lunoraDirectory: string): CodegenProgramScope => configuredCodegen(lunoraDirectory).program;
 
 /**
  * The top-level `lunora/schema.ts` ONLY — `discoverSchema` loads that one
@@ -903,7 +877,6 @@ export {
     collectCallRows,
     collectNodeRows,
     collectSecurityCallRows,
-    configuredProgramScope,
     defaultExportExpression,
     findObjectProperty,
     functionKeyOf,

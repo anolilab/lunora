@@ -73,7 +73,7 @@ export default {
     target: "cloudflare",
     remote: true,
     advisor: { minSeverity: "warn" },
-    codegen: { exclude: ["seed/**", "**/*.fixture.ts"], program: "lunora" },
+    codegen: { exclude: ["seed/**", "**/*.fixture.ts"] },
 } satisfies LunoraConfig;
 ```
 
@@ -89,17 +89,14 @@ module may carry those names. Secret scanning is
 the one exception: it still reads test and excluded files, because a live
 vendor key committed anywhere is still a leak.
 
-`codegen.program` picks which files the TypeScript program codegen resolves
-types over starts from. `"lunora"` (the default) loads the `lunora/` sources,
-the worker entry and the ambient `.d.ts` files your `tsconfig.json` includes,
-and reaches everything else by import — the tsconfig's compiler options and path
-aliases still apply. `"tsconfig"` loads every file the tsconfig includes first,
-so a frontend and its tests are parsed before codegen reads a single function:
-slower on a cold run, and only worth it when a type in `lunora/` depends on a
-global that a tsconfig-included _source_ file (not a `.d.ts`) declares without
-anything importing it. A project whose tsconfig includes a large `src/` is where
-the default saves the most, and unless you rely on that case the generated
-output is the same either way.
+Codegen does not parse your whole tsconfig. Its TypeScript program starts from
+the `lunora/` sources, the worker entry, the `.d.ts` files your `tsconfig.json`
+includes, and any other tsconfig-included file whose declarations apply to the
+whole program: a script, a `declare global` block, or a triple-slash directive.
+A `declare module "x"` in such a file counts only when a `lunora/` source imports
+`x`. Everything else (your UI, your tests) is reached only by import, and the
+tsconfig's compiler options and path aliases still apply. A project whose
+tsconfig includes a large `src/` no longer pays to parse it on a cold run.
 
 `lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
 not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
@@ -157,14 +154,13 @@ Three things are worth knowing about this file:
   will throw, and the build warns that the hook was not composed. `import type`
   is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Write `target`, `remote`, `advisor.minSeverity`, `advisor.accept`, `codegen.exclude` and `codegen.program` as literals.** `lunora codegen` resolves the
+- **Write `target`, `remote`, `advisor.minSeverity`, `advisor.accept` and `codegen.exclude` as literals.** `lunora codegen` resolves the
   target synchronously, by parsing this file rather than running it, so a computed
   value, a getter or a spread is not seen. It is not silently defaulted either —
   `lunora verify` reports `platform_unreadable_target`, and an unreadable
   `minSeverity` reports `advisor_min_severity_invalid` and filters nothing, an
   unreadable `advisor.accept` reports `advisor_accept_invalid` and accepts nothing,
-  an unreadable `codegen.exclude` logs a warning and excludes nothing extra, and an
-  unreadable `codegen.program` logs a warning and uses the default. A
+  and an unreadable `codegen.exclude` logs a warning and excludes nothing extra. A
   `const` in the same file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than

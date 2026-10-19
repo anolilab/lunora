@@ -716,10 +716,10 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return false;
                 }
 
-                // `codegen.program` in lunora.config decides which files a Project is built
-                // from, and the output with it, so a config save drops the cached Project
-                // and runs codegen. Every key is treated alike: reading just `program` out
-                // of the file here would need the parse `createCodegenProject` does anyway.
+                // `codegen.exclude` in lunora.config decides which `lunora/` files a Project
+                // is seeded with, so a config save drops the cached Project and runs codegen.
+                // Every key is treated alike: reading just `exclude` out of the file here
+                // would need the parse `createCodegenProject` does anyway.
                 if (PROJECT_CONFIG_FILENAMES.some((name) => normalized === resolve(options.projectRoot, name))) {
                     cachedProject = undefined;
 

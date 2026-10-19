@@ -261,8 +261,8 @@ interface LunoraConfig<Env extends object = object> {
     advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
-    /** Codegen's source walk and type program. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. `program` selects the files codegen builds its TypeScript program from: `"lunora"` (default) uses the `lunora/` sources, the files they import, and the tsconfig's ambient `.d.ts` files; `"tsconfig"` uses every file the tsconfig includes (the app's UI and tests too — slower, only needed when `lunora/` types depend on a global that only a tsconfig-included source file declares). Literals, for the same reason as `target`. */
-    codegen?: { exclude?: string[]; program?: "lunora" | "tsconfig" };
+    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
+    codegen?: { exclude?: string[] };
     /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */

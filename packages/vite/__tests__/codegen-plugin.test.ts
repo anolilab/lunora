@@ -1222,7 +1222,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(createCalls).toHaveBeenCalledTimes(before + 2);
         });
 
-        it("a lunora.config.ts save drops the cached Project — `codegen.program` decides what it is built from", async () => {
+        it("a lunora.config.ts save drops the cached Project — `codegen.exclude` changes which files it is seeded with", async () => {
             expect.assertions(3);
 
             writeFixture(workdir);
@@ -1242,7 +1242,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             expect(createCalls).toHaveBeenCalledTimes(before + 1);
 
-            // The config save regenerates, so the new program scope is applied at once.
+            // The config save regenerates, so a changed `exclude` is applied at once.
             changeListener!(join(workdir, "lunora.config.ts"));
             await vi.runAllTimersAsync();
 

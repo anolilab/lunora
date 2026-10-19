@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Project } from "ts-morph";
+import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodegenProject, listLunoraSourceFiles, refreshCodegenProject, runCodegen } from "../src/index";
@@ -21,12 +21,11 @@ const writeConfig = (source: string): void => {
 };
 
 /**
- * `codegen.program` decides which files the TypeScript program codegen resolves
- * types over starts from. The tsconfig below includes a whole `src/` (a React
- * component, an ambient declaration) next to `lunora/`; the setting is whether
- * codegen loads that `src/` before it reads a single function.
+ * Which files the TypeScript program codegen resolves types over starts from. The
+ * tsconfig below includes a whole `src/` (a React component, an ambient declaration)
+ * next to `lunora/`; the default program loads the declaration and not the component.
  */
-describe("codegen.program", () => {
+describe("codegen program seeding", () => {
     let componentPath: string;
     let ambientPath: string;
     let validatorsPath: string;
@@ -84,71 +83,15 @@ export const listItems = query({
         expect(runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] }).generated.functions).toContain("title: string");
     });
 
-    it('loads every file the tsconfig includes under `codegen.program: "tsconfig"`', () => {
-        expect.assertions(1);
-
-        writeConfig(`export default { codegen: { program: "tsconfig" } };\n`);
-
-        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
-    });
-
-    it("lets a caller's scope override lunora.config", () => {
+    it("warns about an unreadable `exclude` and seeds the program as if it were absent", () => {
         expect.assertions(2);
 
-        writeConfig(`export default { codegen: { program: "tsconfig" } };\n`);
-
-        expect(loaded(createCodegenProject(lunoraDirectory, "lunora"), componentPath)).toBe(false);
-        expect(loaded(createCodegenProject(lunoraDirectory, "tsconfig"), componentPath)).toBe(true);
-    });
-
-    it("emits the same output from either program", () => {
-        expect.assertions(1);
-
-        const fromLunora = runCodegen({
-            dryRun: true,
-            lint: false,
-            project: createCodegenProject(lunoraDirectory, "lunora"),
-            projectRoot: workdir,
-            wranglerQueueProducers: [],
-        });
-        const fromTsconfig = runCodegen({
-            dryRun: true,
-            lint: false,
-            project: createCodegenProject(lunoraDirectory, "tsconfig"),
-            projectRoot: workdir,
-            wranglerQueueProducers: [],
-        });
-
-        expect(fromLunora.generated).toStrictEqual(fromTsconfig.generated);
-    });
-
-    it("warns and falls back to the default for a `program` it cannot read, without dropping a readable `exclude`", () => {
-        expect.assertions(4);
-
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-        mkdirSync(join(lunoraDirectory, "seed"), { recursive: true });
-        writeFileSync(join(lunoraDirectory, "seed", "rows.ts"), "export const rows = 1;\n", "utf8");
-        writeConfig(`export default { codegen: { exclude: ["seed/**"], program: process.env["PROGRAM"] } };\n`);
+        writeConfig(`export default { codegen: { exclude: ["!seed/**"] } };\n`);
 
-        const files = listLunoraSourceFiles(lunoraDirectory).map((path) => path.slice(lunoraDirectory.length + 1));
-
-        expect(files).not.toContain(join("seed", "rows.ts"));
         expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(false);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("codegen.program"));
-        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("codegen.exclude"));
-    });
-
-    it("warns about an unreadable `exclude` without losing a readable `program`", () => {
-        expect.assertions(3);
-
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-        writeConfig(`export default { codegen: { exclude: ["!seed/**"], program: "tsconfig" } };\n`);
-
-        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("codegen.exclude"));
-        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("codegen.program"));
     });
 
     it("follows a file a lunora/ source starts importing mid-session, so a later edit to it is not served stale", () => {
@@ -199,7 +142,7 @@ export const listItems = query({
         writeFileSync(join(workdir, "src", "server", "index.ts"), "export default { fetch: () => new Response() };\n", "utf8");
         writeFileSync(join(workdir, "vite.config.ts"), "export default { plugins: [] };\n", "utf8");
 
-        const project = createCodegenProject(lunoraDirectory, "lunora");
+        const project = createCodegenProject(lunoraDirectory);
         const seeded = new Set(project.getSourceFiles().map((file) => file.getFilePath()));
 
         runCodegen({ dryRun: true, lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
@@ -212,14 +155,6 @@ export const listItems = query({
                 .map((file) => file.getFilePath())
                 .filter((path) => !seeded.has(path)),
         ).toStrictEqual([]);
-    });
-
-    it("reads a `program` wrapped in `as const` as written", () => {
-        expect.assertions(1);
-
-        writeConfig(`export default { codegen: { program: "tsconfig" as const } };\n`);
-
-        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
     });
 
     it("does not crash on a tsconfig `files` entry for a declaration that is not on disk yet", () => {
@@ -256,7 +191,7 @@ export const listItems = query({
         runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         const generatedPath = join(lunoraDirectory, "_generated", "api.ts");
-        const project = createCodegenProject(lunoraDirectory, "lunora");
+        const project = createCodegenProject(lunoraDirectory);
 
         refreshCodegenProject(project, lunoraDirectory);
 
@@ -285,12 +220,14 @@ export const listItems = query({
         expect(loaded(project, generatedDeclaration)).toBe(true);
     });
 
-    it("takes the last of duplicate `program` keys, as the runtime config does", () => {
+    it("takes the last of duplicate `exclude` keys, as the runtime config does", () => {
         expect.assertions(1);
 
-        writeConfig(`export default { codegen: { program: "lunora", program: "tsconfig" } };\n`);
+        mkdirSync(join(lunoraDirectory, "seed"), { recursive: true });
+        writeFileSync(join(lunoraDirectory, "seed", "rows.ts"), "export const rows = 1;\n", "utf8");
+        writeConfig(`export default { codegen: { exclude: ["other/**"], exclude: ["seed/**"] } };\n`);
 
-        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
+        expect(listLunoraSourceFiles(lunoraDirectory).map((path) => path.slice(lunoraDirectory.length + 1))).not.toContain(join("seed", "rows.ts"));
     });
 
     it("registers a file an outside source starts importing on the refresh that adds the import", () => {
@@ -326,5 +263,99 @@ export const listItems = query({
         refreshCodegenProject(project, lunoraDirectory);
 
         expect(loaded(project, entryPath)).toBe(true);
+    });
+});
+
+/**
+ * A global a `lunora/` source uses that only a file outside `lunora/` declares, with
+ * no import edge from `lunora/` to it. The whole tsconfig program is the oracle: the
+ * seeded program must produce the same output for every case.
+ */
+describe("globals declared outside lunora/", () => {
+    const cases: { expected: string; files: Record<string, string>; handler: string; name: string; probeImports?: string }[] = [
+        {
+            name: "a script's global declaration",
+            files: { "src/globals.ts": "declare var __APP_VERSION__: string;\n" },
+            handler: "{ version: __APP_VERSION__ }",
+            expected: "version: string",
+        },
+        {
+            name: "a declare global block",
+            files: { "src/augment.ts": "export {};\n\ndeclare global {\n    var __FLAG__: boolean;\n}\n" },
+            handler: "{ enabled: __FLAG__ }",
+            expected: "enabled: boolean",
+        },
+        {
+            name: "a declare module for a specifier the lunora source imports",
+            files: { "src/virtual.ts": 'declare module "virtual-mode" {\n    export const mode: "dev" | "prod";\n}\n' },
+            probeImports: 'import { mode } from "virtual-mode";\n',
+            handler: "{ mode }",
+            expected: 'mode: "dev" | "prod"',
+        },
+        {
+            name: "a triple-slash types reference in a program file",
+            files: {
+                "node_modules/@types/virtual-env/index.d.ts": "declare var __ENV__: string;\n",
+                "src/main.ts": '/// <reference types="virtual-env" />\n\nexport const main = 1;\n',
+            },
+            handler: "{ env: __ENV__ }",
+            expected: "env: string",
+        },
+    ];
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-globals-"));
+        lunoraDirectory = join(workdir, "lunora");
+
+        cpSync(join(fixtureRoot, "lunora"), lunoraDirectory, { recursive: true });
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true }, include: ["src/**/*", "lunora/**/*"] }), "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it.each(cases)("emits the whole tsconfig program's output for $name", ({ files, probeImports = "", handler, expected }) => {
+        expect.assertions(2);
+
+        for (const [relativePath, source] of Object.entries(files)) {
+            mkdirSync(dirname(join(workdir, relativePath)), { recursive: true });
+            writeFileSync(join(workdir, relativePath), source, "utf8");
+        }
+
+        writeFileSync(
+            join(lunoraDirectory, "probe.ts"),
+            `import { query } from "@lunora/server";\n${probeImports}\nexport const probe = query({\n    args: {},\n    handler: async () => (${handler}),\n});\n`,
+            "utf8",
+        );
+
+        const generate = (project: Project) => runCodegen({ dryRun: true, lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
+        // The whole tsconfig program, built the way a plain `new Project` would be.
+        const oracle = generate(new Project({ tsConfigFilePath: join(workdir, "tsconfig.json"), useInMemoryFileSystem: false }));
+
+        expect(oracle.functions).toContain(expected);
+        expect(generate(createCodegenProject(lunoraDirectory))).toStrictEqual(oracle);
+    });
+
+    it("does not load a module augmentation of a module no lunora/ source names, nor the files it pulls in", () => {
+        expect.assertions(3);
+
+        // A router augmentation: the file imports the route tree, which imports the
+        // whole frontend. `lunora/` names `reactive` in a comment, which must not count
+        // as naming `react`.
+        const routerPath = join(workdir, "src", "router.tsx");
+        const routesPath = join(workdir, "src", "routes.ts");
+
+        writeFileSync(routesPath, "export const routes = 1;\n", "utf8");
+        writeFileSync(routerPath, 'import "./routes";\n\ndeclare module "@tanstack/react-router" {\n    interface Register {}\n}\n', "utf8");
+        writeFileSync(join(workdir, "src", "react-augment.ts"), 'import "./routes";\n\ndeclare module "react" {\n    interface Attributes {}\n}\n', "utf8");
+        writeFileSync(join(lunoraDirectory, "probe.ts"), "// reactive queries\nexport const probe = 1;\n", "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, routerPath)).toBe(false);
+        expect(loaded(project, join(workdir, "src", "react-augment.ts"))).toBe(false);
+        expect(loaded(project, routesPath)).toBe(false);
     });
 });

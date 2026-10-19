@@ -242,9 +242,8 @@ class LunoraRspackPlugin {
             // creating one is an edit too — the fix for "wrangler.jsonc not found", or a
             // `wrangler.jsonc` that now outranks an existing `wrangler.json`. A file
             // dependency cannot name a file that does not exist yet, so an absent
-            // candidate is watched as a missing one. The config's `codegen.program`
-            // decides what the cached Project is built from, and nothing under
-            // `lunora/` changes with it.
+            // candidate is watched as a missing one. The config's `codegen.exclude`
+            // decides which `lunora/` files the cached Project is seeded with.
             for (const candidate of [...WRANGLER_FILES, ...PROJECT_CONFIG_FILENAMES]) {
                 const path = resolve(this.#options.projectRoot, candidate);
 
@@ -328,9 +327,9 @@ class LunoraRspackPlugin {
         if (projectInputs !== this.#lastProjectInputs) {
             // `refreshCodegenProject` only re-reads files the program already knows
             // about, so a changed `paths`/`include` is invisible to it, and so is a
-            // changed `codegen.program` in lunora.config (it decides which files the
-            // Project is built from). Forget the fingerprint too, so this pass runs
-            // rather than being skipped below.
+            // changed `codegen.exclude` in lunora.config (it decides which `lunora/`
+            // files the Project is seeded with). Forget the fingerprint too, so this
+            // pass runs rather than being skipped below.
             this.#project.drop();
             this.#lastProjectInputs = projectInputs;
             this.#lastFingerprint = undefined;

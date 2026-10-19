@@ -586,7 +586,7 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
-        "re-runs the pass when lunora.config changes, since `codegen.program` decides what the cached Project is built from",
+        "re-runs the pass when lunora.config changes, since `codegen.exclude` decides which files the cached Project is seeded with",
         async () => {
             expect.assertions(1);
 
@@ -603,7 +603,7 @@ describe("rspack watch (real compiler)", () => {
                     // Cleared AFTER build 1, whose pass always runs the hook: only a second
                     // pass, started by the config edit, can bring the file back.
                     rmSync(join(root, ".hook-runs"), { force: true });
-                    writeFileSync(join(root, "lunora.config.ts"), 'export default { codegen: { program: "tsconfig" } };\n', "utf8");
+                    writeFileSync(join(root, "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
                 },
                 { expectedBuilds: 2, settleMs: 2500 },
             );
