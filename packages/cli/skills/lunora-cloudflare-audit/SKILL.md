@@ -34,7 +34,8 @@ alerts setup` from an audit. Show the change and get explicit approval first.
 ## Workflow
 
 1. **Scope.** Which wrangler environments (read each `env.<name>` block in
-   `wrangler.jsonc`; the scan commands below take no `--env`), and which paths
+   `wrangler.jsonc` or `wrangler.json`, the two files Lunora reads; the scan
+   commands below take no `--env`), and which paths
    are hot: public queries/mutations, HTTP actions, crons, queue consumers,
    workflows.
 2. **Preflight signal** (read-only; never pass `--fix`):
