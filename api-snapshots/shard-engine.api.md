@@ -2413,6 +2413,7 @@ interface RenderedSql {
 ```ts
 interface ReplicaFollowerHost extends ShardSiblingHost {
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    exportRows: () => Promise<ExportRow[]>;
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{
         errors: ReadonlyArray<unknown>;
     }>;
