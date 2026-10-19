@@ -17,11 +17,33 @@ interface CrawlClient {
     crawlResult: (jobId: string, resultOptions?: CrawlResultOptions) => Promise<CrawlJob>;
 }
 
+/** Package default ceilings; `createBrowser({ maxCrawlPages, maxCrawlDepth })` raises them. */
+const DEFAULT_MAX_CRAWL_PAGES = 100;
+const DEFAULT_MAX_CRAWL_DEPTH = 3;
+
+interface CrawlPolicy {
+    allowPrivateTargets: boolean;
+    hasAllowlist: boolean;
+    maxCrawlDepth?: number;
+    maxCrawlPages?: number;
+}
+
+const requirePositiveInteger = (name: string, value: number): number => {
+    if (!Number.isInteger(value) || value < 1) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: ${name} must be an integer >= 1, got ${String(value)}`);
+    }
+
+    return value;
+};
+
 const createCrawlClient = (
     restApi: BrowserRestApiOptions | undefined,
-    hasAllowlist: boolean,
+    { allowPrivateTargets, hasAllowlist, maxCrawlDepth = DEFAULT_MAX_CRAWL_DEPTH, maxCrawlPages = DEFAULT_MAX_CRAWL_PAGES }: CrawlPolicy,
     assertTargetAllowed: (url: string) => Promise<string>,
 ): CrawlClient => {
+    requirePositiveInteger("maxCrawlDepth", maxCrawlDepth);
+    requirePositiveInteger("maxCrawlPages", maxCrawlPages);
+
     const requireRestApi = (): BrowserRestApiOptions => {
         if (!restApi) {
             throw new LunoraError(
@@ -59,15 +81,30 @@ const createCrawlClient = (
         crawl: async (url, crawlOptions = {}) => {
             requireRestApi();
 
-            if (hasAllowlist && (crawlOptions.options?.includeExternalLinks === true || crawlOptions.options?.includeSubdomains === true)) {
-                throw new LunoraError(
-                    "FORBIDDEN",
-                    "@lunora/browser: includeExternalLinks / includeSubdomains would crawl hosts outside the configured allowedHosts allowlist",
-                );
+            if (crawlOptions.options?.includeExternalLinks === true || crawlOptions.options?.includeSubdomains === true) {
+                if (hasAllowlist) {
+                    throw new LunoraError(
+                        "FORBIDDEN",
+                        "@lunora/browser: includeExternalLinks / includeSubdomains would crawl hosts outside the configured allowedHosts allowlist",
+                    );
+                }
+
+                // Only the starting URL is validated, so an unbounded crawl needs the caller to have opted out of the SSRF guard.
+                if (!allowPrivateTargets) {
+                    throw new LunoraError(
+                        "FORBIDDEN",
+                        "@lunora/browser: includeExternalLinks / includeSubdomains would crawl hosts the SSRF guard never checks; pass createBrowser({ …, allowPrivateTargets: true }) to allow it",
+                    );
+                }
             }
 
             const target = await assertTargetAllowed(url);
-            const jobId = await crawlRequest("", { body: JSON.stringify({ ...crawlOptions, url: target }), method: "POST" });
+            const bounded: CrawlOptions = {
+                ...crawlOptions,
+                ...(crawlOptions.depth === undefined ? {} : { depth: Math.min(requirePositiveInteger("depth", crawlOptions.depth), maxCrawlDepth) }),
+                ...(crawlOptions.limit === undefined ? {} : { limit: Math.min(requirePositiveInteger("limit", crawlOptions.limit), maxCrawlPages) }),
+            };
+            const jobId = await crawlRequest("", { body: JSON.stringify({ ...bounded, url: target }), method: "POST" });
 
             if (typeof jobId !== "string") {
                 throw new LunoraError("BROWSER_RUN_ERROR", "@lunora/browser: Browser Run accepted the crawl but returned no job id");
