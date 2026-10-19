@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@lunora/codegen";
+import type { DevProcessSpawner } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,7 +140,7 @@ describe("lazy deployment", () => {
             expect.assertions(1);
 
             vi.mocked(runLazySmokeLoad).mockClear();
-            const smokeLauncher = vi.fn<(command: string, args: ReadonlyArray<string>, options: { cwd: string; shell: boolean }) => never>();
+            const smokeLauncher = vi.fn<DevProcessSpawner>();
             const { spawner } = createRecordingSpawner();
 
             await runBuildCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLauncher, spawner, strictAdvisories: false });

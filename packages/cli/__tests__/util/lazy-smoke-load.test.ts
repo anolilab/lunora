@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-import type { DevProcess, DevProcessOptions, DriverToolchain } from "@lunora/config";
+import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
@@ -287,7 +287,7 @@ describe(runLazySmokeLoad, () => {
         expect.assertions(1);
 
         respondWith({ checked: 1, failures: [] });
-        const launcher = vi.fn<(command: string, args: ReadonlyArray<string>, options: { cwd: string; shell: boolean }) => never>();
+        const launcher = vi.fn<DevProcessSpawner>();
 
         await run({ launcher });
 
