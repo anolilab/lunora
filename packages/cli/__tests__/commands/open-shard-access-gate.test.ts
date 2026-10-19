@@ -79,6 +79,16 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("authorizeShard"))).toBe(true);
     });
 
+    it("refuses the flag written as a quoted key", async () => {
+        expect.assertions(1);
+
+        writeAppConfig('"allowUnauthenticatedShardAccess": true');
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
     it("refuses the flag set in a root lunora.config app hook", async () => {
         expect.assertions(2);
 

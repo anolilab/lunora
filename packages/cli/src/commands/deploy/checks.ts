@@ -13,7 +13,7 @@ import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } 
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { join, relative } from "@visulima/path";
-import { Project, SyntaxKind } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
@@ -399,7 +399,13 @@ const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
         return project
             .createSourceFile(relative(cwd, file), text, { overwrite: true })
             .getDescendantsOfKind(SyntaxKind.PropertyAssignment)
-            .filter((property) => property.getName() === "allowUnauthenticatedShardAccess" && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword)
+            .filter((property) => {
+                const nameNode = property.getNameNode();
+                // `getName()` keeps a string-literal key's quotes, so a quoted key would slip past it.
+                const name = Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
+
+                return name === "allowUnauthenticatedShardAccess" && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword;
+            })
             .map((property) => {
                 return { file: relative(cwd, file), line: property.getStartLineNumber() };
             });
