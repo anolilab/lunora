@@ -281,6 +281,35 @@ describe("shardDO socket routes", () => {
         expect(entries.some((entry) => entry.functionPath === "sockets:chat" && /encode/iu.test(entry.message))).toBe(true);
     });
 
+    it("keeps a v.sensitive message out of the log when the handler rejects it", async () => {
+        expect.assertions(2);
+
+        const secret = "hunter2-the-real-secret";
+
+        class VaultShard extends SocketShard {
+            // eslint-disable-next-line class-methods-use-this -- test double: the handler always rejects with the secret
+            public override handleRpc(): Promise<unknown> {
+                return Promise.reject(new Error(`rejected ${secret}`));
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- test double: the marked name is fixed
+            protected override sensitiveArgNames(): ReadonlySet<string> {
+                return new Set(["message"]);
+            }
+        }
+
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const state = { acceptWebSocket: () => undefined, getWebSockets: () => [a], storage: { sql: {} } } as unknown as ShardDOState;
+        const shard = new VaultShard(state, CHAT_ROUTE);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: secret })));
+
+        const entries = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+
+        expect(entries.some((entry) => entry.functionPath === "sockets:chat" && entry.message.startsWith("rejected"))).toBe(true);
+        expect(JSON.stringify(entries)).not.toContain(secret);
+    });
+
     it("refuses a frame from an anonymous socket once its route requires auth", async () => {
         expect.assertions(3);
 

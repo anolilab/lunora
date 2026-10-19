@@ -16907,26 +16907,40 @@ abstract class ShardDO {
             userId: info.event.userId,
         };
 
+        // Declared out here so the `catch` scrubs with it and the `finally` releases it.
+        let sensitive: SensitiveScope | undefined;
+
         try {
             // The inbound frame is wire-encoded; decoding it here keeps a malformed
             // payload inside the logged dispatch instead of throwing out of the socket handler.
             const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
 
-            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(route.functionPath, args)));
+            sensitive = this.openSensitiveScope(route.functionPath, args);
+
+            const scope = sensitive;
+
+            await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                this.withSystemDispatch(() => this.handleRpc(route.functionPath, args, undefined, undefined, undefined, scope)),
+            );
         } catch (error: unknown) {
             // A failure after the handler's writes committed (a deferred step that would not run) leaves those
             // writes durable, so the frames announcing them are still owed, as for a room. Only a failure before
             // the commit drops them.
             if (!this.absorbCommittedFailure(route.functionPath, error)) {
+                const thrownText = error instanceof Error ? error.message : String(error);
+
                 this.logs.push({
                     functionPath: route.functionPath,
                     level: "error",
-                    message: error instanceof Error ? error.message : String(error),
+                    // A handler's own message can quote a `v.sensitive` argument it rejected.
+                    message: sensitive?.text(thrownText) ?? thrownText,
                     timestamp: Date.now(),
                 });
 
                 return;
             }
+        } finally {
+            sensitive?.clear();
         }
 
         // The mutation has committed, so every queued frame is still owed. One that cannot
