@@ -18,9 +18,9 @@ const TOOL_FAILED_PATTERN = /failed and will not be retried\. the secret is no l
 const THREAD = "thread-1";
 const INSTANCE = "wf-1";
 const OWNER = "user-a";
-/** The agent's default `approvalTimeout`: the request's deadline, which the wait outlasts by the grace. */
-const DEADLINE_MS = 3 * 24 * 60 * 60 * 1000;
 const WAIT_GRACE_MS = 60 * 1000;
+/** The request's deadline, which the wait outlasts by the grace. The agent's default `approvalTimeout` is longer, so it is the host's value lifetime less the grace. */
+const DEADLINE_MS = 24 * 60 * 60 * 1000 - WAIT_GRACE_MS;
 /** Past the value's lifetime: it is takeable until the request's deadline plus the grace, within the store's ceiling. */
 const PAST_VALUE_LIFETIME_MS = DEADLINE_MS + WAIT_GRACE_MS + 1;
 
@@ -249,8 +249,9 @@ const storedRef = (host: SecretHost): string => {
     return String(row?.["ref"]);
 };
 
-const secretAgent = (used: string[]): AgentDefinition =>
+const secretAgent = (used: string[], approvalTimeout?: string): AgentDefinition =>
     defineAgent({
+        ...(approvalTimeout === undefined ? {} : { approvalTimeout: approvalTimeout as "7 days" }),
         model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         tools: {
             charge: defineAgentTool({
@@ -351,6 +352,20 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         expect(journal.persisted()).not.toContain(SECRET);
         expect(journal.invoked.join("\n")).not.toContain(ref);
+    });
+
+    it("holds a request open for less than the host keeps a supplied value, however long approvalTimeout is", async () => {
+        expect.assertions(2);
+
+        const agent = secretAgent([], "7 days");
+        const { journal, runtime } = await setup();
+
+        await pauseAt(agent, journal, runtime, scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("done")]));
+
+        const request = runtime.dispatches.find((dispatch) => dispatch.path === "agents:agentOpenSecretRequest");
+
+        expect(journal.waitOptions.get("secret:call_1")?.timeout).toBe(DEADLINE_MS + WAIT_GRACE_MS);
+        expect((request?.args as { expiresAt: number }).expiresAt - Date.now()).toBeLessThanOrEqual(DEADLINE_MS);
     });
 
     it("does not re-run the consuming tool, or re-take the value, when the instance replays", async () => {
