@@ -1,0 +1,9 @@
+{
+  "info": {
+    "description": "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
+    "title": "Lunora RPC",
+    "version": "0.0.0"
+  },
+  "methods": [],
+  "openrpc": "1.3.2"
+}

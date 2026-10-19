@@ -159,6 +159,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `LiveTopicOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -320,6 +324,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `liveQuery` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `liveTopic` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

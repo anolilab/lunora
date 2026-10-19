@@ -14,9 +14,17 @@
  * as logged in, and every candidate directory wrangler might resolve on any
  * platform is searched. A false "logged in" only keeps today's behaviour; a false
  * "logged out" would switch Workers AI off for a user who has it.
+ *
+ * A login file alone can be stale (a keychain-backed `.enc` whose keyring entry is
+ * gone or whose ciphertext is invalid), so when the project has its own wrangler it
+ * is asked: `wrangler whoami --json` prints `{"loggedIn":false}` from local state
+ * alone, before any network call. Only that exact answer counts as logged out;
+ * being offline, a timeout, or a missing wrangler all still count as logged in.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 
 import join from "../path";
 
@@ -42,6 +50,18 @@ const EXPORT_PREFIX = /^export\s+/u;
 
 /** A `.env` file's line break. */
 const LINE_BREAK = /\r?\n/u;
+
+/** What `wrangler whoami --json` prints when no usable login exists. */
+const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
+
+/** What `wrangler whoami --json` prints when the login works. */
+const LOGGED_IN = /"loggedIn"\s*:\s*true/u;
+
+/** How long a "logged out" answer is reused, so the workers of one dev start ask once. */
+const LOGGED_OUT_TTL_MS = 10_000;
+
+/** Per project, the last explicit answer from `wrangler whoami`. */
+const answers = new Map<string, { at: number; loggedOut: boolean }>();
 
 /** A value wrapped in matching single or double quotes. */
 const QUOTED_VALUE = /^(["'])(.*)\1$/u;
@@ -69,6 +89,57 @@ const hasEntries = (directory: string): boolean => {
     } catch {
         return false;
     }
+};
+
+/** The wrangler entry script the project installed, found the way node resolves a package: nearest `node_modules` upwards. */
+const findWrangler = (projectRoot: string): string | undefined => {
+    for (let directory = projectRoot; ; directory = dirname(directory)) {
+        const script = join(directory, "node_modules", "wrangler", "bin", "wrangler.js");
+
+        if (existsSync(script)) {
+            return script;
+        }
+
+        if (dirname(directory) === directory) {
+            return undefined;
+        }
+    }
+};
+
+/**
+ * Whether the project's own wrangler says its on-disk login is unusable. Everything
+ * short of that exact answer (no wrangler installed, a timeout, no network) is
+ * `false`, so this can only ever switch Workers AI off for a login that is dead.
+ * Only an explicit answer is remembered: a working login for the process, a dead one
+ * for a few seconds, so a fresh `wrangler login` is picked up without restarting.
+ */
+const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string | undefined>): boolean => {
+    const known = answers.get(projectRoot);
+
+    if (known !== undefined && (!known.loggedOut || Date.now() - known.at < LOGGED_OUT_TTL_MS)) {
+        return known.loggedOut;
+    }
+
+    const script = findWrangler(projectRoot);
+
+    if (script === undefined) {
+        return false;
+    }
+
+    const { stdout } = spawnSync(process.execPath, [script, "whoami", "--json"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: { ...env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+    });
+    const loggedOut = LOGGED_OUT.test(stdout);
+
+    if (loggedOut || LOGGED_IN.test(stdout)) {
+        answers.set(projectRoot, { at: Date.now(), loggedOut });
+    }
+
+    return loggedOut;
 };
 
 /**
@@ -125,7 +196,9 @@ const hasCloudflareCredentials = (probe: CloudflareCredentialProbe = {}): boolea
         return true;
     }
 
-    return wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+    const hasLoginFile = wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+
+    return hasLoginFile && (probe.projectRoot === undefined || !wranglerSaysLoggedOut(probe.projectRoot, env));
 };
 
 export type { CloudflareCredentialProbe };

@@ -82,6 +82,27 @@ liveQuery(api.messages.list, () => ({ channelId: this.channelId() }), {
 });
 ```
 
+## Live topics
+
+`liveTopic` follows one topic on the connection shared by its URL, and mirrors
+the last payload and any refusal into two signals: `lastEvent` and `error`. It
+subscribes when the component is created and unsubscribes on `DestroyRef`.
+
+```ts
+import { input } from "@angular/core";
+import { liveTopic } from "@lunora/angular";
+
+export class PostComponent {
+    readonly postId = input.required<string>();
+
+    readonly comments = liveTopic(() => ({ url: "/live/posts/connect", topic: `comments:${this.postId()}` }));
+}
+```
+
+A new topic resubscribes; a new `onEvent` or `onError` callback is read at call
+time and does not. Pass `{ destroyRef, injector }` as the second argument when
+calling outside an injection context, as with `liveQuery`.
+
 ## Mutations
 
 ```ts

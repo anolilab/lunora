@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.376...@lunora/config@1.0.0-alpha.377) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/seed:** upgraded to 1.0.0-alpha.238
+* **@lunora/studio:** upgraded to 1.0.0-alpha.318
+
+## @lunora/config [1.0.0-alpha.376](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.375...@lunora/config@1.0.0-alpha.376) (2026-10-18)
+
+### Bug Fixes
+
+* **config:** treat a stale wrangler login as logged out in dev ([#1256](https://github.com/anolilab/lunora/issues/1256)) ([8883eb4](https://github.com/anolilab/lunora/commit/8883eb4e90a4021395a121373afa119db6886be5))
+
 ## @lunora/config [1.0.0-alpha.375](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.374...@lunora/config@1.0.0-alpha.375) (2026-10-18)
 
 ### Features

@@ -319,6 +319,14 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `UseLiveTopicOptions` (type)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseLiveTopicResult` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `UseMultipartUploadOptions` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -540,6 +548,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useInfiniteQuery` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useLiveTopic` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
