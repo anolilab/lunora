@@ -96,13 +96,13 @@ describe(runLazySmokeLoad, () => {
         expect(logger.success).toHaveBeenCalledWith("12 lazy function(s) evaluate cleanly");
     });
 
-    it("warns instead of failing when the Worker cannot run locally", async () => {
+    it("blocks when the Worker does not start, so a broken entry cannot ship", async () => {
         expect.assertions(2);
 
         startDevProcess.mockRejectedValue(new Error("wrangler dev exited with code 1 before it was ready"));
 
-        await expect(run()).resolves.toBeUndefined();
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("smoke-load skipped: could not run the Worker locally"));
+        await expect(run()).resolves.toContain("the smoke Worker did not start (wrangler dev exited with code 1 before it was ready)");
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("did not start"));
     });
 
     it("warns instead of passing silently when the entry is not a file", async () => {

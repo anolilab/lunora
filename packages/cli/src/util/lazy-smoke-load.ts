@@ -95,8 +95,18 @@ const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): st
     });
 };
 
-/** A condition that is the project's fault, not the environment's: reported as an error, not a skipped check. */
-class SmokeLoadFailure extends Error {}
+/**
+ * A failed smoke check. `skipped` marks a check that says nothing about the project (something other than
+ * the smoke Worker answered): it warns and never blocks. Otherwise the project's modules or entry failed.
+ */
+class SmokeLoadError extends Error {
+    public readonly skipped: boolean;
+
+    public constructor(message: string, skipped = false) {
+        super(message);
+        this.skipped = skipped;
+    }
+}
 
 /** `main` and `containers` of the config `deploy` runs against, with `--env` applied the way deploy validation applies it. */
 const readWorkerConfig = (cwd: string, environment: string | undefined): { hasContainers: boolean; main: string | undefined } => {
@@ -138,7 +148,7 @@ const probeLazyModules = async (port: number): Promise<{ checked: number; failur
     const response = await fetch(`http://127.0.0.1:${String(port)}/__lunora_smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
         (error: unknown) => {
             if (error instanceof Error && error.name === "TimeoutError") {
-                throw new SmokeLoadFailure(
+                throw new SmokeLoadError(
                     `the smoke Worker booted but did not finish evaluating the lazy modules within ${String(SMOKE_TIMEOUT_MS / 1000)}s — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
                 );
             }
@@ -154,12 +164,38 @@ const probeLazyModules = async (port: number): Promise<{ checked: number; failur
     }
 
     if (response.status >= 500) {
-        throw new SmokeLoadFailure(
+        throw new SmokeLoadError(
             `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
         );
     }
 
-    throw new Error(`unexpected response (HTTP ${String(response.status)})`);
+    throw new SmokeLoadError(`unexpected response (HTTP ${String(response.status)})`, true);
+};
+
+/**
+ * What a failed smoke check means. A failure of the project's modules or entry blocks, with the cause. A
+ * check that could not say anything (skipped) warns. Anything else means the Worker did not start, which
+ * blocks: a broken entry throws at load time, and that must not ship just because local wrangler could not confirm it.
+ */
+const reportSmokeError = (error: unknown, output: string[], logger: Logger): string | undefined => {
+    if (error instanceof SmokeLoadError && !error.skipped) {
+        logger.error(error.message);
+
+        return error.message;
+    }
+
+    if (error instanceof SmokeLoadError) {
+        logger.warn(`smoke-load skipped: ${error.message}`);
+
+        return undefined;
+    }
+
+    const tail = output.slice(-5).join("\n");
+    const message = `the smoke Worker did not start (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}. Fix the entry, or pass --no-smoke-load to ship anyway.`;
+
+    logger.error(message);
+
+    return message;
 };
 
 /**
@@ -256,7 +292,7 @@ export default {
             const lines = formatFailures(cwd, failures);
             const more = lines.length > MAX_LISTED_MODULES ? [`  …and ${String(lines.length - MAX_LISTED_MODULES)} more module(s)`] : [];
 
-            throw new SmokeLoadFailure(
+            throw new SmokeLoadError(
                 [
                     `${String(failures.length)} of ${String(checked)} lazy function(s) fail to load:`,
                     ...lines.slice(0, MAX_LISTED_MODULES),
@@ -268,19 +304,7 @@ export default {
             await server.stop();
         }
     } catch (error) {
-        if (error instanceof SmokeLoadFailure) {
-            logger.error(error.message);
-
-            return error.message;
-        }
-
-        const tail = output.slice(-5).join("\n");
-
-        logger.warn(
-            `smoke-load skipped: could not run the Worker locally (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}`,
-        );
-
-        return undefined;
+        return reportSmokeError(error, output, logger);
     } finally {
         if (directory !== undefined) {
             try {
