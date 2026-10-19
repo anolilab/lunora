@@ -368,6 +368,30 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect((request?.args as { expiresAt: number }).expiresAt - Date.now()).toBeLessThanOrEqual(DEADLINE_MS);
     });
 
+    it("changes the thread's status around the wait only while this run still owns the thread", async () => {
+        expect.assertions(1);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        const waitPatches = runtime.dispatches
+            .filter((dispatch) => dispatch.path === "agents:agentPatchThread")
+            .map((dispatch) => dispatch.args as { ifInstanceId?: string; status?: string })
+            .filter((args) => args.status === "awaiting_input" || args.status === "running");
+
+        // A replacement run that took the thread over while this one waited must keep its own status.
+        expect(waitPatches.filter((args) => args.ifInstanceId !== INSTANCE)).toStrictEqual([]);
+    });
+
     it("does not re-run the consuming tool, or re-take the value, when the instance replays", async () => {
         expect.assertions(3);
 
