@@ -253,6 +253,22 @@ public final class Submit {
             return new MutationOutcome(MutationStatus.QUEUED, writeId, null, null);
         }
 
+        // The callbacks above are consumer code, and one may have dropped the socket. An online-only write that would
+        // now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+        if (options.onlineOnly) {
+            boolean wouldQueue;
+
+            synchronized (client.lock) {
+                wouldQueue = client.sender == null && (client.wasEverConnected || client.offlineQueue.queueBeforeFirstConnect);
+            }
+
+            if (wouldQueue) {
+                settleLayers(client, List.of(), rollbacks, null);
+
+                throw notQueued(options.functionPath, null);
+            }
+        }
+
         RpcReply reply;
 
         try {

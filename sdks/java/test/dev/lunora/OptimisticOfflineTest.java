@@ -62,6 +62,7 @@ final class OptimisticOfflineTest {
         onlineOnlyWriteIsRefusedWhenDisconnected();
         onlineOnlyWriteIsSentWhenConnected();
         onlineOnlyTransportFailureIsRefused();
+        onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused();
         normalWriteStillQueuesBesideAnOnlineOnlyOne();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
@@ -707,6 +708,55 @@ final class OptimisticOfflineTest {
     }
 
     /** With the socket down, an online-only write is refused before anything is queued or sent. */
+    private static void onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused() {
+        covers("offline_online_only_refused_when_disconnected_in_callback");
+        int[] posts = {0};
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(new MemoryStore()).queueBeforeFirstConnect(true));
+
+        // The subscriber sees the overlay, and the connection goes down inside its notification.
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {});
+        client.subscribe(
+                "auth:setPassword",
+                args,
+                value -> {
+                    if (value instanceof List && ((List<?>) value).contains("c")) {
+                        client.detachSocket();
+                    }
+                },
+                null,
+                null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write whose callback drops the socket is refused with OFFLINE_NOT_QUEUED");
+        check(posts[0] == 0, "a refused write never reaches the wire");
+    }
+
     private static void onlineOnlyWriteIsRefusedWhenDisconnected() {
         covers("offline_online_only_refused_when_disconnected");
         int[] posts = {0};
