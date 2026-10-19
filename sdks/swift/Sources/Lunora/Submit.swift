@@ -97,9 +97,10 @@ public struct LunoraSubmitOptions {
 
     /// Never queued, persisted or replayed. Where a normal write would be queued,
     /// `submit` throws `LunoraOfflineCode.notQueued` before the write reaches the
-    /// queue or the persistence adapter. It does not wait for a queue flush or
-    /// queue behind pending writes, so it may overtake them. For a credential or a
-    /// one-time token.
+    /// queue or the persistence adapter. A send that gets no reply while the socket
+    /// is down throws the same error, with the transport error as `underlying`. It
+    /// does not wait for a queue flush or queue behind pending writes, so it may
+    /// overtake them. For a credential or a one-time token.
     public var onlineOnly: Bool
 
     /// Reports the eventual verdict on a queued write.
@@ -128,12 +129,22 @@ public struct LunoraSubmitOptions {
     }
 }
 
-/// The refusal of an online-only write that would be queued.
-private func onlineOnlyNotQueued(_ functionPath: String) -> LunoraAPIError {
+/// The refusal of an online-only write that would be queued. `underlying` is the
+/// transport failure when the write was sent and got no reply, nil when it was
+/// refused before anything was sent.
+private func onlineOnlyNotQueued(_ functionPath: String, underlying: Error? = nil) -> LunoraAPIError {
     LunoraAPIError(
         code: LunoraOfflineCode.notQueued,
-        message: "'\(functionPath)' is online-only and the connection is not live, so it was not queued"
+        message: "'\(functionPath)' is online-only and the connection is not live, so it was not queued",
+        underlying: underlying
     )
+}
+
+/// Whether a failed direct send got no HTTP reply: the injected poster threw. A
+/// coded reply and an unconfigured poster are both ``LunoraAPIError``, and
+/// arguments the codec refuses fail before anything is sent, so none of those count.
+private func isTransportFailure(_ error: Error, args: Any?) -> Bool {
+    !(error is LunoraAPIError) && (try? Wire.encode(args ?? [String: Any]())) != nil
 }
 
 // MARK: - The write path
@@ -227,6 +238,13 @@ extension LunoraClient {
             )
         } catch {
             settleLayers(confirm: [], rollback: handles, commitCursor: nil)
+
+            // An online-only write that got no reply while the socket is down is refused
+            // as a queued write would have been, the transport failure as its cause. A
+            // coded reply, and any failure while connected, surface as they are.
+            if options.onlineOnly, !withLock({ send != nil }), isTransportFailure(error, args: options.args) {
+                throw onlineOnlyNotQueued(options.functionPath, underlying: error)
+            }
 
             throw error
         }
