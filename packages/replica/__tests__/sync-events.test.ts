@@ -752,22 +752,28 @@ describe("fetch timeout", () => {
         vi.useRealTimers();
     });
 
+    /** A transport that never answers, but gives up when it is told to. */
+    const abortAware = (signal: AbortSignal | undefined) =>
+        new Promise<ReadonlyArray<EventLogEntry>>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+                reject(new Error("aborted"));
+            });
+        });
+
     it("ends a cycle whose fetch never answers, so later syncs are not stuck behind it", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         vi.useFakeTimers();
 
         const { mirror } = createMockMirror();
         const onError = vi.fn<(error: unknown) => void>();
-        let calls = 0;
+        const signals: (AbortSignal | undefined)[] = [];
         const sync = new EventsSync({
             applyEvents: () => undefined,
-            fetchEventsSince: async () => {
-                calls += 1;
+            fetchEventsSince: async (_sinceSeq, signal) => {
+                signals.push(signal);
 
-                return new Promise<ReadonlyArray<EventLogEntry>>(() => {
-                    /* a transport that never answers */
-                });
+                return abortAware(signal);
             },
             fetchTimeoutMs: 100,
             getTableDiffs: () => [],
@@ -780,6 +786,8 @@ describe("fetch timeout", () => {
 
         await expect(first).resolves.toBe(0);
         expect(onError).toHaveBeenCalledTimes(1);
+        // The timed-out request was told to stop.
+        expect(signals[0]?.aborted).toBe(true);
 
         const second = sync.sync();
 
@@ -787,7 +795,54 @@ describe("fetch timeout", () => {
         await second;
 
         // The second cycle started its own fetch instead of awaiting the dead one.
-        expect(calls).toBe(2);
+        expect(signals).toHaveLength(2);
         expect(onError).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts no new fetch while a timed-out one is still unresolved", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const { mirror } = createMockMirror();
+        let calls = 0;
+        let answerLate: (events: ReadonlyArray<EventLogEntry>) => void = (_events) => undefined;
+        const sync = new EventsSync({
+            applyEvents: () => undefined,
+            // Ignores its signal: the request stays pending until the test answers it.
+            fetchEventsSince: async () => {
+                calls += 1;
+
+                return calls === 1
+                    ? new Promise<ReadonlyArray<EventLogEntry>>((resolve) => {
+                          answerLate = resolve;
+                      })
+                    : [];
+            },
+            fetchTimeoutMs: 100,
+            getTableDiffs: () => [],
+            mirror,
+            onError: () => undefined,
+            pollInterval: 1000,
+        });
+
+        sync.start();
+        await vi.advanceTimersByTimeAsync(1000);
+        // The first tick's fetch timed out; the next ticks find it still pending.
+        await vi.advanceTimersByTimeAsync(5000);
+
+        expect(calls).toBe(1);
+
+        answerLate([]);
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        // Once it settles, polling resumes.
+        expect(calls).toBe(2);
+
+        await expect(sync.sync()).resolves.toBe(0);
+        expect(calls).toBe(3);
+
+        sync.stop();
     });
 });

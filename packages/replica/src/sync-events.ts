@@ -112,8 +112,11 @@ export interface EventsSyncOptions {
      * event log, or read from an IndexedDB cache.
      *
      * Return an empty array when there are no new events.
+     *
+     * `signal` is aborted when the call outlives {@link EventsSyncOptions.fetchTimeoutMs}; pass it to
+     * the underlying request so it is cancelled rather than left running.
      */
-    fetchEventsSince: (sinceSeq: number) => Promise<ReadonlyArray<EventLogEntry>>;
+    fetchEventsSince: (sinceSeq: number, signal?: AbortSignal) => Promise<ReadonlyArray<EventLogEntry>>;
 
     /**
      * Longest a single `fetchEventsSince` call may take, in milliseconds. A
@@ -121,7 +124,9 @@ export interface EventsSyncOptions {
      * forever, and every later `sync()` and timer tick awaits that cycle. On
      * timeout the cycle ends through `onError`, the watermark stays where it
      * was, and the next poll fetches again; an answer that arrives late is
-     * discarded. `0` disables the bound.
+     * discarded. A timed-out call cannot be cancelled by {@link EventsSync}
+     * itself, so no new fetch starts (the poll is skipped) until it settles —
+     * honouring the `signal` is what lets polling resume promptly. `0` disables the bound.
      * @default 30000
      */
     fetchTimeoutMs?: number;
@@ -208,6 +213,9 @@ export class EventsSync {
      */
     #inFlight: Promise<number> | undefined;
 
+    /** The last fetch that timed out, until it settles: while set, no further fetch starts, so a transport that ignores its `signal` cannot pile up requests. */
+    #timedOutFetch: Promise<unknown> | undefined;
+
     // ── Constructor ─────────────────────────────────────────────────────
 
     public constructor(options: EventsSyncOptions) {
@@ -291,15 +299,25 @@ export class EventsSync {
     /** `fetchEventsSince`, failing with a timeout error when the transport does not answer in `fetchTimeoutMs`. */
     async #fetchWithinTimeout(sinceSeq: number): Promise<ReadonlyArray<EventLogEntry>> {
         const timeoutMs = this.#options.fetchTimeoutMs ?? 30_000;
-        const pending = this.#options.fetchEventsSince(sinceSeq);
 
         if (timeoutMs <= 0) {
-            return pending;
+            return this.#options.fetchEventsSince(sinceSeq);
         }
 
+        const controller = new AbortController();
+        const pending = this.#options.fetchEventsSince(sinceSeq, controller.signal);
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => {
+                this.#timedOutFetch = pending;
+                pending
+                    .finally(() => {
+                        if (this.#timedOutFetch === pending) {
+                            this.#timedOutFetch = undefined;
+                        }
+                    })
+                    .catch(() => undefined);
+                controller.abort();
                 reject(new Error(`EventsSync: fetchEventsSince timed out after ${timeoutMs.toString()}ms`));
             }, timeoutMs);
         });
@@ -356,6 +374,11 @@ export class EventsSync {
      * advances past a diff the mirror never received.
      */
     async #pollOnce(): Promise<number> {
+        // A fetch that timed out is still running: starting another would stack requests behind it.
+        if (this.#timedOutFetch !== undefined) {
+            return 0;
+        }
+
         let total = 0;
 
         try {
