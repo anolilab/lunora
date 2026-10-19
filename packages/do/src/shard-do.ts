@@ -1643,6 +1643,9 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
  */
 const MAX_STMT_SAMPLES_PER_DISPATCH = 200;
 
+/** Dispatches per durable metric write by default; an evicted DO loses at most 7 of them. */
+const DEFAULT_METRICS_FLUSH_EVERY = 8;
+
 /**
  * `event.name` of the per-dispatch wide event. Namespaced so it never collides
  * with an application's own `ctx.log.event(...)` names, and stable because
@@ -3062,7 +3065,7 @@ abstract class ShardDO {
     /**
      * Exact per-path metric deltas not yet written to `__lunora_metrics*`. Every
      * dispatch folds in here; {@link ShardDO.maybeFlushMetrics} writes the sum once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 1), so rates stay exact
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 8), so rates stay exact
      * and only write frequency drops. In memory only: an evicted DO loses at most
      * N-1 dispatches of counters (no alarm flush).
      */
@@ -9662,7 +9665,7 @@ abstract class ShardDO {
      * The durable write is COALESCED, not per-dispatch: the call is folded into
      * {@link ShardDO.pendingFunctionMetrics} (exact counts, durations, scans and
      * index hits) and {@link ShardDO.maybeFlushMetrics} writes the whole delta once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 1 = every dispatch),
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 8; 1 = every dispatch),
      * so the durable counters stay exact and only the write frequency drops.
      */
     private recordFunctionCall(
@@ -9960,9 +9963,10 @@ abstract class ShardDO {
 
     /**
      * Dispatches per durable metric write (env `LUNORA_METRICS_FLUSH_EVERY`): a positive
-     * integer, default 1 (write on every dispatch). Unset, blank, fractional,
-     * non-numeric or < 1 values fall back to 1. An evicted DO loses at most N-1
-     * dispatches of un-flushed counters.
+     * integer, default {@link DEFAULT_METRICS_FLUSH_EVERY} (8). Unset, blank, fractional,
+     * non-numeric or < 1 values fall back to the default. An evicted DO loses at most N-1
+     * dispatches of un-flushed counters (7 by default); errored or conflicted dispatches
+     * and minute-boundary crossings still flush immediately. Set 1 to write every dispatch.
      */
     private metricsFlushEvery(): number {
         // A bare number in wrangler config arrives as a number, not a string.
@@ -9975,7 +9979,7 @@ abstract class ShardDO {
             value = Number(raw);
         }
 
-        return Number.isInteger(value) && value >= 1 ? value : 1;
+        return Number.isInteger(value) && value >= 1 ? value : DEFAULT_METRICS_FLUSH_EVERY;
     }
 
     /**
