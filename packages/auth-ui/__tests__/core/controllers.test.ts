@@ -660,3 +660,47 @@ describe("captcha after a failed submit", () => {
         view();
     });
 });
+
+describe("resend cooldown", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("refuses a second reset email within the cooldown and allows it after", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+        await controller.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+        expect(controller.getState().resendAvailableAt).toBe(Date.now() + 30_000);
+
+        vi.advanceTimersByTime(30_000);
+        await controller.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a second one-time code within the cooldown, even from the request step again", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const controller = createEmailOtpController(makeContext(client).context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+        controller.actions.back();
+        await controller.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(30_000);
+        await controller.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+});

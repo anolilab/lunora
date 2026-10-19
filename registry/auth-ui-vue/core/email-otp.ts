@@ -6,6 +6,7 @@
  */
 import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
+import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import { statusAfterEdit } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
 import { postAuthDestination } from "./redirect-to";
@@ -17,6 +18,8 @@ interface EmailOtpState {
     code: FieldState;
     email: FieldState;
     formError?: string;
+    /** Epoch ms before which `sendCode` is refused (see `cooldown.ts`). */
+    resendAvailableAt?: number;
     status: FlowStatus;
     /** `request` collects the email; `verify` collects the code. */
     step: "request" | "verify";
@@ -70,7 +73,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
     const sendCode = async (): Promise<void> => {
         const state = store.get();
 
-        if (state.status === "submitting") {
+        if (state.status === "submitting" || cooldownActive(state.resendAvailableAt)) {
             return;
         }
 
@@ -87,7 +90,12 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         try {
             assertOk(await context.authClient.emailOtp.sendVerificationOtp({ email: state.email.value.trim(), type: "sign-in" }));
 
-            store.update({ status: "idle", step: "verify", successMessage: context.localization.emailOtpSent });
+            store.update({
+                resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
+                status: "idle",
+                step: "verify",
+                successMessage: context.localization.emailOtpSent,
+            });
         } catch (error_) {
             context.onError?.(error_);
             resetCaptcha();

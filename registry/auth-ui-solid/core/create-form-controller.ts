@@ -15,6 +15,7 @@
  */
 import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
+import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import type { Localization } from "./localization";
 import { mapAuthError } from "./map-error";
 import { createStore } from "./store";
@@ -60,6 +61,12 @@ interface FormControllerOptions<TField extends string> {
      * an unreachable server shouldn't block the user from typing.
      */
     prefill?: (context: ControllerContext) => Promise<Partial<Record<TField, string>>>;
+
+    /**
+     * The submit sends something the user can ask for again (a link, a code):
+     * a success starts the resend cooldown, and `submit` is refused until it ends.
+     */
+    resendCooldown?: boolean;
     /** Whether a successful submit changed the session (triggers `onSessionChange`). */
     sessionChanging?: boolean;
     /** Perform the flow. Throw to surface an error; return a result to enter success. */
@@ -139,7 +146,7 @@ const createFormController = <TField extends string>(context: ControllerContext,
     };
 
     const submit = async (): Promise<void> => {
-        if (state().status === "submitting") {
+        if (state().status === "submitting" || cooldownActive(state().resendAvailableAt)) {
             return;
         }
 
@@ -171,6 +178,7 @@ const createFormController = <TField extends string>(context: ControllerContext,
             store.set({
                 ...state(),
                 fields: { ...state().fields },
+                ...(options.resendCooldown ? { resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS } : {}),
                 status: "success",
                 successMessage: result.successMessage,
             });

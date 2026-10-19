@@ -8,6 +8,7 @@
  */
 import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
+import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
 import { postAuthDestination, withRedirectTo } from "./redirect-to";
@@ -40,6 +41,8 @@ interface PhoneVerifyState {
     error?: string;
     /** The number a code was sent to, once `send` succeeds. */
     phoneNumber: string;
+    /** Epoch ms before which `send` is refused (see `cooldown.ts`). */
+    resendAvailableAt?: number;
     status: FlowStatus;
     step: "request" | "verify";
     successMessage?: string;
@@ -83,9 +86,14 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
     return {
         actions: {
             restart: () => {
-                store.set({ phoneNumber: "", status: "idle", step: "request" });
+                // Keeps the cooldown: restarting is how this flow resends.
+                store.set({ phoneNumber: "", resendAvailableAt: store.get().resendAvailableAt, status: "idle", step: "request" });
             },
             send: async (phoneNumber: string) => {
+                if (cooldownActive(store.get().resendAvailableAt)) {
+                    return;
+                }
+
                 const trimmed = phoneNumber.trim();
 
                 if (trimmed === "") {
@@ -97,7 +105,12 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                 await run(async () => {
                     assertOk(await context.authClient.phoneNumber.sendOtp({ phoneNumber: trimmed }));
 
-                    return { phoneNumber: trimmed, step: "verify", successMessage: context.localization.phoneOtpSent };
+                    return {
+                        phoneNumber: trimmed,
+                        resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
+                        step: "verify",
+                        successMessage: context.localization.phoneOtpSent,
+                    };
                 }, context.localization.genericError);
             },
             verify: async (code: string) => {
