@@ -1992,7 +1992,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         for (const edge of checkedForeignKeys.get(tableName) ?? []) {
             const value = document[edge.column];
 
-            if (typeof value !== "string" || stored?.[edge.column] === value || document["_id"] === value) {
+            if (typeof value !== "string" || stored?.[edge.column] === value || (edge.targetTable === tableName && document["_id"] === value)) {
                 continue;
             }
 

@@ -159,6 +159,14 @@ describe("ctx.db enforces v.id foreign keys on the same shard", () => {
         await expect(writer.get(clientId)).resolves.toMatchObject({ parentId: clientId });
     });
 
+    it("does not let a row's own id stand in for a parent in another table", async () => {
+        expect.assertions(1);
+
+        const clientId = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
+        await expect(codeOf(writer.insert("orders", { customerId: clientId, note: "x" }, { clientId }))).resolves.toBe("VALIDATION_ERROR");
+    });
+
     it("insert with a client id still rejects a reference to a different missing row", async () => {
         expect.assertions(1);
 
