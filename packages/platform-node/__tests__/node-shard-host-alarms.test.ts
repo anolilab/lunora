@@ -182,4 +182,36 @@ describe("createNodeShardHost alarms", () => {
             rmSync(workdir, { force: true, recursive: true });
         }
     });
+
+    it("delivers an alarm once when two hosts share one database file", async () => {
+        expect.assertions(1);
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-"));
+        const path = join(directory, "shard.sqlite3");
+        let delivered = 0;
+        const onAlarm = (): void => {
+            delivered += 1;
+        };
+        const first = createNodeShardHost({ onAlarm, path });
+
+        try {
+            await first.host.alarms.set(Date.now() + 50);
+
+            // Constructed over the same file, so it restores and arms the same row.
+            const second = createNodeShardHost({ onAlarm, path });
+
+            try {
+                await sleep(300);
+
+                expect(delivered).toBe(1);
+            } finally {
+                second.dispose();
+                second.database.close();
+            }
+        } finally {
+            first.dispose();
+            first.database.close();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
 });

@@ -69,10 +69,19 @@ const DEFAULT_RETRY = {
  */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
+/**
+ * How long a claimed job stays invisible to other processes sharing the
+ * database file. A claimer that dies mid-dispatch leaves its row claimed; once
+ * the lease lapses the next construction (or a waiting process's re-arm)
+ * delivers it again, which is the at-least-once contract.
+ */
+const CLAIM_LEASE_MS = 60_000;
+
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
     args: Buffer;
     attempts: number;
+    claimed_at: number | null;
     function_path: string;
     id: string;
     retry: Buffer | null;
@@ -162,6 +171,17 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             state TEXT NOT NULL DEFAULT 'pending'
         )`,
     );
+
+    // Databases created before the claim lease existed lack the column.
+    if (
+        !database
+            .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
+            .all()
+            .some((column) => column.name === "claimed_at")
+    ) {
+        database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+    }
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_crons (
             key TEXT PRIMARY KEY,
@@ -178,8 +198,15 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
     const deleteJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ?");
     const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const updateAttempt = database.prepare<[number, number, string]>("UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ? WHERE id = ?");
-    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ? WHERE id = ?");
+    const updateAttempt = database.prepare<[number, number, string]>(
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ?",
+    );
+    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ?");
+    // One statement, so two processes on one file cannot both take the row: the
+    // loser's WHERE no longer matches and it gets zero rows back.
+    const claimJob = database.prepare<[number, string, number], JobRow>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND state = 'pending' AND (claimed_at IS NULL OR claimed_at < ?) RETURNING *",
+    );
     const requeueJob = database.prepare<[number, string]>(
         "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, scheduled_for = ? WHERE id = ? AND state = 'dead'",
     );
@@ -291,9 +318,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return;
         }
 
-        const row = selectJob.get(id);
+        const now = Date.now();
+        const row = claimJob.get(now, id, now - CLAIM_LEASE_MS);
 
-        if (row?.state !== "pending") {
+        if (row === undefined) {
+            // Gone, not pending, or held by another process. In the last case
+            // wait out its lease so a claimer that died does not strand the row.
+            const held = selectJob.get(id);
+
+            if (!closed && held?.state === "pending" && held.claimed_at !== null) {
+                armJob(id, held.claimed_at + CLAIM_LEASE_MS);
+            }
+
             return;
         }
 
