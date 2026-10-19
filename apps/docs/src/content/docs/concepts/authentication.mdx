@@ -213,10 +213,14 @@ cases. The four states and what each one means are tabulated in the
 worth knowing about, and it gates as **authenticated**.
 
 `setToken(jwt)` stamps the bearer on every later **query, mutation and action**;
-`setToken(null)` signs out. It does **not** re-authenticate an open
-subscription: the WebSocket credential is fixed at upgrade time and lives in the
-URL, so rotating it is `client.setWsToken(token)`, which closes the shard
-sockets to force a reconnect. `user` is resolved from better-auth's
+`setToken(null)` signs out. A socket is authenticated once, at upgrade: on
+React Native the session bearer rides the upgrade's `Authorization` header, and
+in a browser the session cookie does. So `setAuthToken` reconnects the sockets
+when a credential arrives on a signed-out client or replaces another user's,
+and a same-user token refresh leaves the open socket as it is.
+`client.setWsToken` is not for the session: its value rides the upgrade URL as
+`?token=`, where it lands in access logs, so it is only for the
+`LUNORA_WS_BEARER` gate value or a short-lived ticket. `user` is resolved from better-auth's
 `get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are
