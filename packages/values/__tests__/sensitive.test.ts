@@ -386,6 +386,23 @@ describe("v.sensitive — JSON Schema", () => {
     });
 });
 
+describe("v.sensitive — a literal's expected value", () => {
+    const SECRET_LITERAL = "open-sesame-2026";
+
+    it("stays out of the message and `expected`, directly and inside a union", () => {
+        expect.assertions(4);
+
+        const direct = rejection(() => v.sensitive(v.literal(SECRET_LITERAL)).parse("wrong"));
+        const inUnion = rejection(() => v.union(v.sensitive(v.literal(SECRET_LITERAL)), v.number()).parse("wrong"));
+
+        expect(JSON.stringify([direct.message, direct.expected])).not.toContain(SECRET_LITERAL);
+        expect(JSON.stringify([inUnion.message, inUnion.expected])).not.toContain(SECRET_LITERAL);
+        // An unmarked literal still names itself, for diagnostics.
+        expect(rejection(() => v.literal(SECRET_LITERAL).parse("wrong")).expected).toBe(`literal(${SECRET_LITERAL})`);
+        expect(direct.expected).toBe("literal");
+    });
+});
+
 describe("v.sensitive — keeps the wrapped validator's own methods", () => {
     it("lets a sensitive object be stripped and keeps the stripped copy sensitive", () => {
         expect.assertions(3);
