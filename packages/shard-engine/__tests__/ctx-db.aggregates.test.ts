@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { clearCompanionSignatures } from "../src/ctx-db-companion-state";
 import type { AggregateIndexDefinitionLike } from "../src/schema-types";
@@ -1031,12 +1031,11 @@ describe("ctx-db aggregates", () => {
         /** Count the marker lookups a writer built over `memo` pays on its first write. */
         const markerLookups = async (schema: SchemaLike, memo?: Set<string>): Promise<number> => {
             const statements: string[] = [];
-            const spied = {
-                ...harness.sql,
-                exec: (query: string, ...bindings: unknown[]) => {
+            const spied: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]): SqlCursor<Row> => {
                     statements.push(query);
 
-                    return harness.sql.exec(query, ...bindings);
+                    return harness.sql.exec<Row>(query, ...bindings);
                 },
             };
             const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, companionMemo: memo, schema, sql: spied });
