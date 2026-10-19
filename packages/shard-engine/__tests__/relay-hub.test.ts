@@ -26,6 +26,8 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 
 /** A relay whose control-channel POSTs are recorded, and optionally made to fail the way an unreachable sibling DO does. */
 interface RelayDouble {
+    /** When set, every answer carries a body stream, and this records whether the owner cancelled it. */
+    body?: { cancelled: boolean };
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
     /** The status this relay answers a forwarded whisper, live frame or shape poke with; `410` when it holds no sockets. Defaults to `204`. */
@@ -82,7 +84,17 @@ const ownerFor = (
                     status = relay.frameStatus ?? 204;
                 }
 
-                return (relay.gate ?? Promise.resolve()).then(() => new Response(undefined, { status }));
+                const { body } = relay;
+                const stream =
+                    body === undefined
+                        ? undefined
+                        : new ReadableStream({
+                              cancel: () => {
+                                  body.cancelled = true;
+                              },
+                          });
+
+                return (relay.gate ?? Promise.resolve()).then(() => new Response(stream, { status }));
             },
         };
     };
@@ -1188,6 +1200,33 @@ describe("relay hub", () => {
 
             expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
             expect(relayAt(relays, 0).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+        });
+
+        it("cancels the bodies of every relay answer but the winner's", async () => {
+            expect.assertions(4);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { body: { cancelled: false }, down: false, liveStatus: 404, posts: [] }],
+                [1, { body: { cancelled: false }, down: false, liveStatus: 200, posts: [] }],
+                [2, { body: { cancelled: false }, down: false, liveStatus: 404, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+            await attach(owner, 2);
+
+            const winner = await owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+            // The loser bodies are released off the winner's path; let those callbacks run.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect([relayAt(relays, 0).body?.cancelled, relayAt(relays, 2).body?.cancelled]).toStrictEqual([true, true]);
+            expect(winner?.status).toBe(200);
+            expect(relayAt(relays, 1).body?.cancelled).toBe(false);
+            expect(winner?.bodyUsed).toBe(false);
         });
 
         it("resolves a grant on the first relay that answers, without waiting for a stalled one", async () => {

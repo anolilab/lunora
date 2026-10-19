@@ -289,6 +289,14 @@ const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | un
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
+/** Once `pending` lands, cancel its body unless it is the `kept` response, so an unread cross-DO stream is released rather than held until GC. */
+const releaseUnread = (pending: Promise<Response | undefined>, kept: Response | undefined): void => {
+    pending
+        .then(async (response) => (response === kept ? undefined : response?.body?.cancel()))
+        // The request failed or the body is already released: nothing left to cancel.
+        .catch(() => undefined);
+};
+
 /**
  * How long a relay remembers the sequence of a live control call it applied. The race the sequence guards against is a late frame: a call
  * the owner stopped waiting on after {@link RELAY_LIVE_CONTROL_TIMEOUT_MS} that still lands. A record older than this is pruned, so a
@@ -687,9 +695,11 @@ class OwnerRelay extends RelayLink {
 
         // The first non-404 answer names the holder. `Promise.any` settles on it without waiting for the other relays; a 404 rejects, so
         // the wait goes on, and only when every relay has refused to hold the socket does it settle as `undefined`.
+        const legs = [...targets].map((index) => this.liveControlAnswer(index, control));
+
         return Promise.any(
-            [...targets].map(async (index) => {
-                const response = await this.liveControlAnswer(index, control);
+            legs.map(async (leg) => {
+                const response = await leg;
 
                 if (response === undefined || response.status === 404) {
                     throw new Error("relay does not hold the socket");
@@ -697,7 +707,16 @@ class OwnerRelay extends RelayLink {
 
                 return response;
             }),
-        ).catch(() => undefined);
+        )
+            .catch(() => undefined)
+            .then((winner) => {
+                // Only the winner's answer is read: release every other leg's body, now or when it lands.
+                for (const leg of legs) {
+                    releaseUnread(leg, winner);
+                }
+
+                return winner;
+            });
     }
 
     /**
@@ -1684,9 +1703,18 @@ class OwnerRelay extends RelayLink {
             }, RELAY_LIVE_CONTROL_TIMEOUT_MS);
         });
 
-        return Promise.race([answer, deadline]).finally(() => {
-            clearTimeout(timer);
-        });
+        return Promise.race([answer, deadline])
+            .then((response) => {
+                // Past the deadline the answer is dropped unread; release its body whenever it lands.
+                if (response === undefined) {
+                    releaseUnread(answer, undefined);
+                }
+
+                return response;
+            })
+            .finally(() => {
+                clearTimeout(timer);
+            });
     }
 }
 
