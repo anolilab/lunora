@@ -29,7 +29,8 @@ const lunoraSeedFiles = (lunoraDirectory: string): string[] => {
 };
 
 /**
- * The `_generated/*.ts` files already on disk. `syncProjectFile` overwrites them in
+ * The `.ts` files under `_generated/` at any depth, already on disk (lazy function
+ * modules under `_generated/fn/`, service declarations). `syncProjectFile` overwrites them in
  * place, a no-op when the content is unchanged, instead of creating them (a change)
  * when absent. Listed here so a cold start and a warm refresh hold the same set.
  */
@@ -37,7 +38,7 @@ const generatedSeedFiles = (lunoraDirectory: string): string[] => {
     const generatedDirectory = join(lunoraDirectory, "_generated");
 
     return existsSync(generatedDirectory)
-        ? readdirSync(generatedDirectory)
+        ? readdirSync(generatedDirectory, { encoding: "utf8", recursive: true })
               .filter((name) => name.endsWith(".ts"))
               .map((name) => join(generatedDirectory, name))
               .filter((path) => statSync(path).isFile())

@@ -185,6 +185,23 @@ export const listItems = query({
         expect(loaded(project, commonPath)).toBe(true);
     });
 
+    it("keeps a nested `_generated/` file (a lazy function module, a service declaration) through a warm refresh", () => {
+        expect.assertions(2);
+
+        const nestedPath = join(lunoraDirectory, "_generated", "fn", "shim.ts");
+
+        mkdirSync(join(lunoraDirectory, "_generated", "fn"), { recursive: true });
+        writeFileSync(nestedPath, "export const shim = 1;\n", "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, nestedPath)).toBe(true);
+
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, nestedPath)).toBe(true);
+    });
+
     it("ignores a directory named like a `_generated/` file instead of crashing on it", () => {
         expect.assertions(2);
 
