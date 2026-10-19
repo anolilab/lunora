@@ -6,8 +6,16 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
 
 /**
  * Read the current better-auth session token from an Expo auth client, for use
- * as a **bearer** credential on the Lunora client — `client.setAuthToken(token)`
- * for HTTP RPC and `client.setWsToken(token ?? undefined)` for the live socket.
+ * as a **bearer** credential on the Lunora client: `client.setAuthToken(token)`.
+ * That one call covers both transports — HTTP RPC sends it as `Authorization`,
+ * and on native `createLunoraClient` sends it as the WebSocket upgrade's
+ * `Authorization` header (a sign-in reconnects the socket to present it).
+ *
+ * Do NOT pass it to `client.setWsToken`: that value rides the upgrade URL as
+ * `?token=`, where it lands in access logs. `setWsToken` is for the
+ * `LUNORA_WS_BEARER` gate value or a short-lived ticket. Under
+ * `react-native-web` the browser socket cannot carry a header; the cookie
+ * session authenticates it there.
  *
  * The Expo plugin persists the session as a cookie in `SecureStore`;
  * `getCookie()` exposes it, and this pulls the `session_token` value out.
@@ -30,7 +38,6 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * ```ts
  * const token = await expoBearerToken(authClient);
  * client.setAuthToken(token);
- * client.setWsToken(token ?? undefined);
  * ```
  * @experimental
  */

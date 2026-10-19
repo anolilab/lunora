@@ -1183,7 +1183,10 @@ class LunoraClient {
      * Does NOT update the WebSocket auth — the WS token is fixed at upgrade
      * time and lives in the URL. To refresh live WS auth, call
      * {@link setWsToken} explicitly, which closes existing shard sockets to
-     * force a reconnect with the new credential.
+     * force a reconnect with the new credential. A sign-in from signed-out (a
+     * token where there was none) does reconnect the sockets, cold, so a
+     * transport that sends this bearer on the upgrade — React Native's
+     * `Authorization` header — presents it.
      */
     public setAuthToken(token: string | null, subject?: string | null): void {
         const tokenChanged = this.authToken !== token;
@@ -1276,8 +1279,8 @@ class LunoraClient {
                 // Only when there WAS a previous identity, the same test
                 // `rejectQueuedForIdentityChange` applies to the read cache: a
                 // sign-in from signed-out has no other user's session to retire,
-                // and bouncing every socket there would cost a reconnect on the
-                // most common auth transition there is.
+                // so nothing is evicted there (a bearer sign-in still reconnects,
+                // below).
                 //
                 // Except under a cookie session the server said was nobody's:
                 // its socket is authenticated by the cookie as it was at the
@@ -1285,6 +1288,14 @@ class LunoraClient {
                 // who signed in since, until it is replaced.
                 if (leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
                     this.evictPreviousIdentitySession();
+                } else if (previousToken === null && token !== null) {
+                    // A bearer sign-in from signed-out. No other user's session
+                    // to retire, but the open sockets upgraded anonymously, and a
+                    // transport that carries the bearer on the upgrade (React
+                    // Native's `Authorization` header) presents it only on a new
+                    // socket. Cold, so no view resumes from an anonymous cursor.
+                    this.resetRoomSends();
+                    this.reconnectCold();
                 }
             }
 
@@ -1719,6 +1730,10 @@ class LunoraClient {
      * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
      * for short-lived credentials like the minted ephemeral admin sub-token.
      * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
+     *
+     * The value is sent in the upgrade URL, where it lands in access logs,
+     * browser history and `Referer`: it is for the `LUNORA_WS_BEARER` gate
+     * value or a short-lived ticket, and must never be a session credential.
      */
     public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
@@ -8281,35 +8296,7 @@ class LunoraClient {
         // gate decides whether they are ever shown again, rather than being
         // dropped outright — `revokeCacheSeededValues` also blanks their state.
         this.revokeCacheSeededValues();
-
-        for (const state of this.subscriptions.all()) {
-            state.serverBase = undefined;
-            state.serverCursor = undefined;
-            state.serverEpoch = undefined;
-            // The resubscribe rides the next socket, so this one is no longer
-            // acknowledged by anything.
-            state.acked = false;
-            this.subscribeInFlight.delete(state);
-
-            refoldSubscription(state, undefined);
-        }
-
-        // Shapes are the same rows by another protocol, and were left untouched
-        // here: their `rows` map kept the previous user's membership (which
-        // every shape callback goes on exposing) and their `serverCursor` /
-        // `serverEpoch` kept that user's checkpoint, so the reconnect resumed
-        // from it under the NEW identity — asking the server for the diff since
-        // a cursor this view was never at, and splicing it onto rows that are
-        // not this user's. Cleared, so the resubscribe below is a cold one and
-        // the server re-seeds the membership the new identity can actually see.
-        for (const shapeState of this.shapeSubscriptions.values()) {
-            shapeState.rows.clear();
-            shapeState.serverCursor = undefined;
-            shapeState.serverEpoch = undefined;
-            emitShapeRows(shapeState);
-        }
-
-        this.bounceShardSockets();
+        this.reconnectCold();
 
         // Last: a listener reads the retired state (every value blanked).
         this.retiredIdentities += 1;
@@ -8355,6 +8342,44 @@ class LunoraClient {
         for (const reset of this.roomIdentityResets) {
             reset();
         }
+    }
+
+    /**
+     * Blank every live subscription and shape, forget their resume cursors, and
+     * reconnect every socket, so each resubscribe is a cold one the server
+     * re-seeds for the identity the new socket carries. Used when the socket's
+     * credential changes: resuming from a cursor taken under the previous one
+     * would splice a diff onto rows that identity was never shown.
+     */
+    private reconnectCold(): void {
+        for (const state of this.subscriptions.all()) {
+            state.serverBase = undefined;
+            state.serverCursor = undefined;
+            state.serverEpoch = undefined;
+            // The resubscribe rides the next socket, so this one is no longer
+            // acknowledged by anything.
+            state.acked = false;
+            this.subscribeInFlight.delete(state);
+
+            refoldSubscription(state, undefined);
+        }
+
+        // Shapes are the same rows by another protocol, and were left untouched
+        // here: their `rows` map kept the previous user's membership (which
+        // every shape callback goes on exposing) and their `serverCursor` /
+        // `serverEpoch` kept that user's checkpoint, so the reconnect resumed
+        // from it under the NEW identity — asking the server for the diff since
+        // a cursor this view was never at, and splicing it onto rows that are
+        // not this user's. Cleared, so the resubscribe below is a cold one and
+        // the server re-seeds the membership the new identity can actually see.
+        for (const shapeState of this.shapeSubscriptions.values()) {
+            shapeState.rows.clear();
+            shapeState.serverCursor = undefined;
+            shapeState.serverEpoch = undefined;
+            emitShapeRows(shapeState);
+        }
+
+        this.bounceShardSockets();
     }
 
     /**

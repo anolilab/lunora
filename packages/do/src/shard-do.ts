@@ -15657,12 +15657,13 @@ abstract class ShardDO {
      * 403 on a configuration the CORS side documents as supported, and a
      * browser sends its real `Origin`, never `*`, so nothing else matched.
      * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
-     * must present a matching token. We accept either an
-     * `Authorization: Bearer <token>` header (preferred) or a
-     * `?token=<token>` query parameter (the only escape hatch for
-     * browsers, which can't customise headers on the WebSocket
-     * constructor). The match runs in constant time to avoid leaking
-     * the token via response-timing differences.
+     * must present a matching token in either an
+     * `Authorization: Bearer <token>` header or a `?token=<token>` query
+     * parameter (the only escape hatch for browsers, which can't customise
+     * headers on the WebSocket constructor) — a match in either passes, so a
+     * client whose header carries its session bearer can still present the
+     * gate value in the query. Each match runs in constant time to avoid
+     * leaking the token via response-timing differences.
      *
      * The `?token=` path is a real risk surface: the token ends up in
      * server logs, browser history, and `Referer` headers on any
@@ -15701,17 +15702,25 @@ abstract class ShardDO {
         const expectedBearer = env.LUNORA_WS_BEARER;
 
         if (expectedBearer && expectedBearer.length > 0) {
-            const supplied = this.suppliedWsToken(request);
+            const headerBearer = extractBearerToken(request.headers.get("authorization"));
+            const queryToken = new URL(request.url).searchParams.get("token") ?? undefined;
             const adminToken = env.LUNORA_ADMIN_TOKEN;
 
             // The master token in `?token=` is refused even when it matches the bearer:
             // the query string is where it leaks (see `isAdminSocket`).
             const masterInQuery =
-                supplied !== undefined &&
+                queryToken !== undefined &&
                 adminToken !== undefined &&
                 adminToken.length > 0 &&
-                extractBearerToken(request.headers.get("authorization")) === undefined &&
-                constantTimeEqual(supplied, adminToken);
+                headerBearer === undefined &&
+                constantTimeEqual(queryToken, adminToken);
+
+            // Either channel may carry the gate value: a signed-in native client sends
+            // its SESSION bearer in `Authorization` (which the worker resolves to an
+            // identity) and the gate value in `?token=`, and a header-only client
+            // sends the gate value in the header. Gating passes on a match in either;
+            // it grants nothing beyond admission.
+            const matchesGate = [headerBearer, queryToken].some((token) => token !== undefined && constantTimeEqual(token, expectedBearer));
 
             // The admin credential is accepted as an alternate so a studio can open
             // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
@@ -15719,29 +15728,12 @@ abstract class ShardDO {
             // in the `Authorization` header only. The socket is flagged admin
             // separately (see `isAdminSocket`); matching the bearer alone never
             // grants it.
-            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
+            if (masterInQuery || (!matchesGate && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
 
         return true;
-    }
-
-    /**
-     * Token presented on a WS upgrade: the `Authorization: Bearer` header when
-     * present, else the `?token=` query parameter (the only channel a browser
-     * `WebSocket` constructor can use). Returns `undefined` when neither is set.
-     * @returns the bearer token string, or `undefined` when no token was supplied
-     */
-    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the upgrade-auth helpers; reads only the request
-    private suppliedWsToken(request: Request): string | undefined {
-        const fromHeader = extractBearerToken(request.headers.get("authorization"));
-
-        if (fromHeader !== undefined) {
-            return fromHeader;
-        }
-
-        return new URL(request.url).searchParams.get("token") ?? undefined;
     }
 
     /**

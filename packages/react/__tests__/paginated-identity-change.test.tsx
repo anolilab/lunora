@@ -36,6 +36,8 @@ describe("usePaginatedQuery across an identity change", () => {
                     identityListeners.delete(listener);
                 };
             },
+            // No socket: pages are HTTP snapshots, which a switch cancels.
+            getWebSocketImpl: () => undefined,
             query,
             subscribe: (): Unsubscribe => () => undefined,
         } as unknown as LunoraClient;

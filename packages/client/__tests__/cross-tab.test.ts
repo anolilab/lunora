@@ -1174,7 +1174,9 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             probeOnAnon.postMessage({ data: "stale-anon-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
             await delay(30);
 
-            expect(received).toStrictEqual(["anon-row"]);
+            // The sign-in blanked the anonymous view (a bearer sign-in reconnects
+            // cold); nothing from the old channel followed it.
+            expect(received).toStrictEqual(["anon-row", undefined]);
 
             // The NEW channel is live.
             const probeOnSignedIn = new BroadcastChannel(signedInChannel);
@@ -1182,7 +1184,7 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             probeOnSignedIn.postMessage({ data: "signed-in-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
             await delay(30);
 
-            expect(received).toStrictEqual(["anon-row", "signed-in-row"]);
+            expect(received).toStrictEqual(["anon-row", undefined, "signed-in-row"]);
 
             probeOnAnon.close();
             probeOnSignedIn.close();

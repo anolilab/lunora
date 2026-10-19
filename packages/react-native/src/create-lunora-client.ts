@@ -39,7 +39,7 @@ const isNativeRuntime = (): boolean => typeof document === "undefined";
  * happens to hold the session cookie that launch — which is what let it hide.
  *
  * `credentials: "omit"` is the fix, and it costs nothing on native: the session
- * is a bearer there (`setAuthToken` / `setWsToken`), so the cookie was never the
+ * is a bearer there (`setAuthToken`), so the cookie was never the
  * credential — only an accident of transport riding along. Wrapped INNERMOST by
  * {@link createLunoraClient}, so it runs after every other layer and also
  * overrides the `credentials: "include"` `@lunora/client` sends on its
@@ -133,8 +133,9 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
  * Third, credentialed requests: the session is a bearer on this platform, so the
  * returned `fetch` is wrapped in {@link withoutAmbientCookies} (React Native's
  * cookie jar is real, and a stray session cookie 403s every state-changing RPC —
- * see there), and passing `getAuthHeaders` additionally rides its headers on both
- * the HTTP RPC path and the WebSocket upgrade.
+ * see there), the `setAuthToken` bearer rides the WebSocket upgrade as an
+ * `Authorization` header on native, and passing `getAuthHeaders` additionally
+ * rides its headers on both the HTTP RPC path and the WebSocket upgrade.
  *
  * Everything on `LunoraClientOptions` is still accepted and passed through; an
  * explicit `persistence`, `queryCache`, `fetch`, or `WebSocket` replaces the
@@ -175,10 +176,34 @@ export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraCl
     // injecting it on the WS upgrade — the two halves disagreed.
     const authedFetch = getAuthHeaders && baseFetch ? withAuthHeaders(baseFetch, getAuthHeaders) : baseFetch;
 
-    const authedWebSocket =
-        getAuthHeaders && rest.WebSocket === undefined && typeof WebSocket === "function" ? withAuthWebSocket(WebSocket, getAuthHeaders) : rest.WebSocket;
+    // On native the session bearer rides the upgrade's `Authorization` header —
+    // the one header channel a React Native socket has — read from the client
+    // at every (re)connect, so `setAuthToken` alone authenticates the socket
+    // (its sign-in reconnect presents a fresh token). Never the URL: a
+    // `?token=` lands in access logs. The client's bearer wins over a
+    // same-named `getAuthHeaders` key, as it does on the HTTP path. Under
+    // `react-native-web` the browser socket takes no headers; the cookie
+    // session authenticates it there.
+    let client: LunoraClient | undefined;
+    const socketHeaders: AuthHeadersFactory = () => {
+        const extra = getAuthHeaders?.();
+        const token = client?.getAuthToken();
 
-    return new LunoraClient({
+        if (!token) {
+            return extra;
+        }
+
+        const headers = Object.fromEntries(Object.entries(extra ?? {}).filter(([name]) => name.toLowerCase() !== "authorization"));
+
+        return { ...headers, Authorization: `Bearer ${token}` };
+    };
+
+    const authedWebSocket =
+        rest.WebSocket === undefined && typeof WebSocket === "function" && (getAuthHeaders !== undefined || isNativeRuntime())
+            ? withAuthWebSocket(WebSocket, socketHeaders)
+            : rest.WebSocket;
+
+    client = new LunoraClient({
         ...rest,
         // Auto-wire AsyncStorage persistence and the durable read cache unless
         // the caller passed an explicit adapter (including `false` to opt out —
@@ -188,4 +213,6 @@ export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraCl
         fetch: authedFetch,
         WebSocket: authedWebSocket,
     });
+
+    return client;
 };

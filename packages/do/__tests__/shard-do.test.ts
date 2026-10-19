@@ -972,6 +972,25 @@ describe("shardDO upgrade gating", () => {
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
     });
+
+    // A signed-in native client sends its session bearer in `Authorization` (for
+    // identity) and the gate value via `setWsToken` in `?token=`.
+    it("accepts the gate value in ?token when the header carries a session bearer", async () => {
+        expect.hasAssertions();
+
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
+
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret", { headers: { Authorization: "Bearer session-token" } }));
+    });
+
+    it("rejects with 403 when neither the header nor ?token matches the gate", async () => {
+        expect.assertions(1);
+
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/?token=wrong", { headers: { Authorization: "Bearer session-token" } }));
+
+        expect(response.status).toBe(403);
+    });
 });
 
 describe("shardDO subscription re-execution", () => {

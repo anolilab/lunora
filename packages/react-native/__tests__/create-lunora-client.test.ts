@@ -337,3 +337,97 @@ describe("createLunoraClient", () => {
         expect(reads).not.toContain("lunora:query-cache");
     });
 });
+
+// The session bearer reaches the live socket as the upgrade's `Authorization`
+// header on native, never as `?token=` in the URL (where it lands in logs).
+describe("createLunoraClient — socket credential", () => {
+    const upgrades: { options?: unknown; url: string }[] = [];
+
+    class RecordingWebSocket {
+        public readyState = 0;
+
+        private readonly listeners: unknown[] = [];
+
+        public constructor(url: string, _protocols?: string | string[], options?: unknown) {
+            upgrades.push({ options, url });
+        }
+
+        public addEventListener(_type: string, listener: unknown): void {
+            this.listeners.push(listener);
+        }
+
+        public close(): void {
+            this.readyState = 3;
+        }
+    }
+
+    const withGlobalWebSocket = (run: () => void): void => {
+        const original = globalThis.WebSocket;
+
+        upgrades.length = 0;
+        globalThis.WebSocket = RecordingWebSocket as unknown as typeof WebSocket;
+
+        try {
+            run();
+        } finally {
+            globalThis.WebSocket = original;
+        }
+    };
+
+    const ref = { __lunoraRef: "todos:list" };
+
+    it("sends the setAuthToken bearer on the native upgrade header, not in the URL", () => {
+        expect.assertions(2);
+
+        withGlobalWebSocket(() => {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+            client.subscribe(ref, {}, () => undefined);
+            client.close();
+        });
+
+        expect(upgrades[0]!.options).toStrictEqual({ headers: { Authorization: "Bearer tok-a" } }); // secret-scanner:allow -- test fixture, not a real credential
+        expect(upgrades[0]!.url).not.toContain("token=");
+    });
+
+    it("lets the client's bearer win over a same-named getAuthHeaders key", () => {
+        expect.assertions(1);
+
+        withGlobalWebSocket(() => {
+            const client = createLunoraClient({
+                getAuthHeaders: () => {
+                    return { authorization: "Bearer from-factory", "X-App": "demo" }; // secret-scanner:allow -- test fixture, not a real credential
+                },
+                url: "https://api.example.com",
+            });
+
+            client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+            client.subscribe(ref, {}, () => undefined);
+            client.close();
+        });
+
+        expect(upgrades[0]!.options).toStrictEqual({ headers: { Authorization: "Bearer tok-a", "X-App": "demo" } }); // secret-scanner:allow -- test fixture, not a real credential
+    });
+
+    it("leaves the browser socket unwrapped under react-native-web", () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            withGlobalWebSocket(() => {
+                const client = createLunoraClient({ url: "https://api.example.com" });
+
+                client.setAuthToken("tok-a"); // secret-scanner:allow -- test fixture, not a real credential
+                client.subscribe(ref, {}, () => undefined);
+                client.close();
+            });
+        } finally {
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // The browser socket takes no headers; the cookie session authenticates it.
+        expect(upgrades[0]!.options).toBeUndefined();
+    });
+});
