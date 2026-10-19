@@ -6604,17 +6604,13 @@ class LunoraClient {
         // forever — `ensureSocket` returns early while it is. Bound the wait by the
         // same budget as the socket handshake and fail the attempt the way a
         // provider rejection does, so the reconnect backoff re-mints.
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const deadline = new Promise<never>((_resolve, reject) => {
-            if (this.connectTimeoutMs > 0) {
-                timer = setTimeout(() => {
-                    reject(new Error("LunoraClient: wsToken provider timed out"));
-                }, this.connectTimeoutMs);
-            }
-        });
-
         try {
-            token = await Promise.race([provider(), deadline]);
+            token = await withinRpcDeadline(
+                this.connectTimeoutMs,
+                undefined,
+                async () => provider(),
+                () => new Error("LunoraClient: wsToken provider timed out"),
+            );
         } catch {
             if (conn.providerAttempt === attempt) {
                 // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
@@ -6623,8 +6619,6 @@ class LunoraClient {
             }
 
             return;
-        } finally {
-            clearTimeout(timer);
         }
 
         if (conn.providerAttempt !== attempt) {

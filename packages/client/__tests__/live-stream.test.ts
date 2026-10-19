@@ -76,7 +76,7 @@ const setup = (controlStatus?: (body: ControlCall) => number) => {
 
 const liveFrame = (topic: string, payload: unknown): string => `event: live\ndata: ${JSON.stringify({ data: encodeWire(payload), topic })}\n\n`;
 
-const flush = async (turns = 6): Promise<void> => {
+const flush = async (turns = 12): Promise<void> => {
     for (let index = 0; index < turns; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- drain queued microtasks so the pump advances
         await Promise.resolve();

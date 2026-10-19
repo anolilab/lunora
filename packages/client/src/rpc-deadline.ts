@@ -22,9 +22,15 @@ const abortReason = (signal: AbortSignal): Error =>
  * server is unknown — the write may well have committed — so it is the same
  * "retry under the same idempotency key" failure an unreadable edge page is,
  * where a bare `AbortError` would read as a verdict. `timeoutMs <= 0` disables
- * the deadline.
+ * the deadline. A caller whose deadline means something else (a poll, an idle
+ * stream, a token mint) names its own error with `timeoutError`.
  */
-const withinRpcDeadline = async <T>(timeoutMs: number, signal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+const withinRpcDeadline = async <T>(
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<T>,
+    timeoutError: () => Error = () => new TransportError(`LunoraClient: request timed out after ${timeoutMs.toString()}ms`),
+): Promise<T> => {
     if (signal?.aborted) {
         throw abortReason(signal);
     }
@@ -34,8 +40,9 @@ const withinRpcDeadline = async <T>(timeoutMs: number, signal: AbortSignal | und
     const interruption = new Promise<never>((_resolve, reject) => {
         if (timeoutMs > 0) {
             const timer = setTimeout(() => {
+                // Reject before aborting: a `run` that fails synchronously on abort must not beat the deadline's own error.
+                reject(timeoutError());
                 controller.abort();
-                reject(new TransportError(`LunoraClient: request timed out after ${timeoutMs.toString()}ms`));
             }, timeoutMs);
 
             cleanup.push(() => {

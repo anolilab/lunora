@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
+import { withinRpcDeadline } from "./rpc-deadline";
+
 /**
  * Read the next chunk, or fail with `STREAM_IDLE` when nothing arrives within `idleMs`.
  *
@@ -13,18 +15,12 @@ const readOrIdle = async <T>(reader: ReadableStreamDefaultReader<T>, idleMs: num
         return reader.read();
     }
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const idle = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-            reject(new LunoraError("STREAM_IDLE", `stream received nothing for ${idleMs.toString()}ms`));
-        }, idleMs);
-    });
-
-    try {
-        return await Promise.race([reader.read(), idle]);
-    } finally {
-        clearTimeout(timer);
-    }
+    return withinRpcDeadline(
+        idleMs,
+        undefined,
+        async () => reader.read(),
+        () => new LunoraError("STREAM_IDLE", `stream received nothing for ${idleMs.toString()}ms`),
+    );
 };
 
 export default readOrIdle;
