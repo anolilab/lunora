@@ -438,6 +438,18 @@ describe("telemetry names under a sensitive scope, beyond the event and span han
         expect(scope.text("an ordinary {} stays")).toBe("an ordinary {} stays");
     });
 
+    it("masks a byte value that holds a marked text as a structured field, and leaves other bytes as they are", () => {
+        expect.assertions(2);
+
+        const bytes = new TextEncoder().encode(SECRET).buffer;
+        const scope = createSensitiveScope(sensitiveValues({ value: bytes }, new Set(["value"])));
+        const other = new Uint8Array([1, 2, 3]);
+        const scrubbed = scope.fields({ label: "primary", raw: bytes, other });
+
+        expect(scrubbed).toStrictEqual({ label: "primary", raw: SENSITIVE_ARG_MASK, other });
+        expect(scrubbed.other).toBe(other);
+    });
+
     it("registers nothing for a marked byte argument that is not UTF-8", () => {
         expect.assertions(1);
 

@@ -389,9 +389,14 @@ const decodeUtf8 = (bytes: Uint8Array): string | undefined => {
  * The spellings of a byte value's UTF-8 text. A byte value keeps its content in its buffer, which a
  * property walk never reaches, and its text is what a handler that decodes it logs.
  */
-const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
+const bytesTextOf = (value: ArrayBuffer | ArrayBufferView): string | undefined => {
     const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    const text = decodeUtf8(bytes);
+
+    return decodeUtf8(bytes);
+};
+
+const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
+    const text = bytesTextOf(value);
 
     return text === undefined || text.length === 0 ? [] : stringSpellings(text);
 };
@@ -595,6 +600,14 @@ const scrubContainer = (value: object, secrets: SecretSet, scrubChild: (child: u
 const scrubValue = (value: unknown, secrets: SecretSet, depth: number, ancestors = new Set<object>()): unknown => {
     if (typeof value === "string") {
         return scrubSensitiveText(value, secrets.texts);
+    }
+
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        // A byte value is masked whole when its text holds a sensitive value. Its bytes are never walked as numbers:
+        // no single byte equals a registered text, so a walk would write every one of them out.
+        const text = bytesTextOf(value);
+
+        return text !== undefined && secrets.texts.some((secret) => text.includes(secret)) ? SENSITIVE_ARG_MASK : value;
     }
 
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
