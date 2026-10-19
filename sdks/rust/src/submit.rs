@@ -225,7 +225,18 @@ impl Client {
 
         let layers = self.apply_optimistic(&options);
 
-        if queue_it {
+        // The optimistic transforms are user code and may drop the socket, so the decision above can be
+        // stale. It is taken again now: an online-only write that would queue is refused, and its overlay
+        // is rolled back, rather than sent or queued.
+        let queue_now = self.send.is_none() && (self.was_ever_connected || self.offline_queue.queue_before_first_connect);
+
+        if queue_now && options.online_only {
+            self.rollback_layers(&layers);
+
+            return Err(not_queued(&options.function_path, None));
+        }
+
+        if queue_now {
             self.enqueue_write(options, write_id.clone(), layers);
 
             return Ok(MutationOutcome {
