@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAutoRefresh } from "../../src/hooks/use-auto-refresh";
 
-const Harness = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => void }): ReactElement => {
+const Harness = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => unknown }): ReactElement => {
     useAutoRefresh(onTick, enabled, intervalMs);
 
     return <div />;
@@ -75,5 +75,57 @@ describe("useAutoRefresh", () => {
         vi.advanceTimersByTime(1000);
 
         expect(onTick).toHaveBeenCalledTimes(1);
+    });
+
+    it("doubles the delay after each rejection and resets it after a success", async () => {
+        expect.assertions(4);
+
+        let fail = true;
+        const onTick = vi.fn<() => Promise<void>>(async () => {
+            if (fail) {
+                throw new Error("boom");
+            }
+        });
+
+        render(<Harness enabled intervalMs={1000} onTick={onTick} />);
+
+        // Fails at 1s, then waits 2s, fails again, then waits 4s.
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(2000);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(3999);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
+
+        // The third tick succeeds, so the next one is back on the 1s interval.
+        fail = false;
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(4);
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(5);
+    });
+
+    it("stops polling on UNAUTHORIZED until enabled toggles", async () => {
+        expect.assertions(2);
+
+        const onTick = vi.fn<() => Promise<void>>(() => Promise.reject(Object.assign(new Error("no session"), { code: "UNAUTHORIZED" })));
+
+        const { rerender } = render(<Harness enabled intervalMs={1000} onTick={onTick} />);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(onTick).toHaveBeenCalledTimes(1);
+
+        rerender(<Harness enabled={false} intervalMs={1000} onTick={onTick} />);
+        rerender(<Harness enabled intervalMs={1000} onTick={onTick} />);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
     });
 });
