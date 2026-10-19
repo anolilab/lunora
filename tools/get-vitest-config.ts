@@ -36,7 +36,7 @@ const VITEST_SEQUENCE_SEED = Date.now();
  * exists to prevent.
  */
 const visTaskSlots = Number.parseInt(process.env["VIS_TASK_SLOTS"] ?? "", 10);
-const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
+export const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
 
 export interface CoverageThresholds {
     branches?: number;

@@ -1,6 +1,8 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
+import { MAX_WORKERS } from "../../tools/get-vitest-config";
+
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers pool
 // relies on `defineConfig` (not the shared helper, which would break the
 // `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
@@ -78,6 +80,8 @@ const nodeProject = {
 export default defineConfig({
     test: {
         coverage,
+        // Shared VIS_TASK_SLOTS cap; undefined on standalone runs (vitest default).
+        ...(MAX_WORKERS === undefined ? {} : { maxWorkers: MAX_WORKERS }),
         projects: runWorkerd
             ? [
                   nodeProject,
