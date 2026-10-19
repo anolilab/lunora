@@ -141,8 +141,8 @@ const globalDeclarationFiles = (tsconfigSources: string[], lunoraDirectory: stri
 };
 
 /**
- * The source files one `runCodegen` reads or syncs, so a `"lunora"`-scope Project
- * holds them before the first type query: the sources under `lunora/`, the worker
+ * The source files one `runCodegen` reads or syncs, so the Project holds them before
+ * the first type query: the sources under `lunora/`, the worker
  * entries and `lunora.config.*` the security lints scan, the `_generated/` files, and
  * the tsconfig's declarations and global declarations (see `globalDeclarationFiles`).
  * A file added AFTER the program exists throws the program (and its type checker,
@@ -222,7 +222,7 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
     }
 
     // Registers the local files those import (a validator shared from `src/`) as
-    // Project files, which is what a tsconfig-scope Project gets from `include`.
+    // Project files, which a full tsconfig program gets from `include`.
     // Without it `refreshCodegenProject` cannot see them, and a reused Project
     // keeps serving the first copy it parsed. It builds the program here instead
     // of on the first type query — the same work, in a different place.
@@ -310,8 +310,8 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
     }
 
     // A file that gained an import since the Project was built is only registered
-    // once its importer's text is current, so this runs after the pass above. Under
-    // `"lunora"` scope nothing else registers it. A file added here is read from
+    // once its importer's text is current, so this runs after the pass above. Nothing
+    // else registers it. A file added here is read from
     // disk at that moment, so it is current too.
     project.resolveSourceFileDependencies();
 };
