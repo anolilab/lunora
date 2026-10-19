@@ -129,4 +129,58 @@ describe("subscribe frame dedup", () => {
         expect(second).not.toBe(first);
         expect(subscribeFrames(second)).toHaveLength(1);
     });
+
+    it("re-sends the frame once on a new leader socket after a demotion before the ack", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ crossTabSync: true, url: "https://app.example", WebSocket: createMockWebSocket() });
+        const rogue = new BroadcastChannel(`lunora-bridge::https://app.example::${client.currentIdentity() ?? "anon"}`);
+
+        try {
+            // Solo self-promotion after the default leader-timeout window.
+            await vi.advanceTimersByTimeAsync(3100);
+
+            client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+            const first = latestSocket();
+
+            first.open();
+
+            // A smaller tab id takes over before the ack arrives, then yields straight back.
+            rogue.postMessage({ tabId: "aaa-earlier-tab", ts: Date.now(), type: "heartbeat" });
+            await vi.advanceTimersByTimeAsync(20);
+            rogue.postMessage({ tabId: "aaa-earlier-tab", type: "yield-leadership" });
+            await vi.advanceTimersByTimeAsync(3100);
+
+            const second = latestSocket();
+
+            second.open();
+
+            expect(second).not.toBe(first);
+            expect(subscribeFrames(second)).toHaveLength(1);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("lets a later subscribe re-send a frame whose ack was lost once the pacing slot times out", () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        const socket = latestSocket();
+
+        socket.open();
+
+        expect(subscribeFrames(socket)).toHaveLength(1);
+
+        // No ack ever arrives; the pacing watchdog gives up on the frame.
+        vi.advanceTimersByTime(10_000);
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        expect(subscribeFrames(socket)).toHaveLength(2);
+    });
 });

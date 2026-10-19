@@ -4320,6 +4320,9 @@ class LunoraClient {
         // none of them needs a message.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
+        // `handleDisconnect` never runs for this socket (see above), so un-ack its
+        // subscriptions here: a frame in flight on it will never be answered.
+        this.markShardPendingAck(conn.shardKey);
         this.clearResubscribeQueue(conn);
         this.clearConnectionTimers(conn);
         clearTimeout(conn.idleTimer);
@@ -6726,6 +6729,8 @@ class LunoraClient {
             conn.resubscribePending.set(
                 state.id,
                 setTimeout(() => {
+                    // The frame is presumed lost: let a later `subscribe()` re-send it.
+                    this.subscribeInFlight.delete(state);
                     this.releaseResubscribeSlot(conn, state.id);
                 }, RESUBSCRIBE_ACK_TIMEOUT_MS),
             );
