@@ -58,6 +58,7 @@ import type {
 import {
     aggregateSqlFunction,
     aggregateTableName,
+    applyInsertDefaults,
     applyOnDelete,
     applySelect,
     assertFlatPredicate,
@@ -376,43 +377,6 @@ interface SqlCtxDbOptions {
 
 /** Cap on re-entrant trigger writes before we treat it as a self-triggering loop. */
 const MAX_TRIGGER_DEPTH = 50;
-
-/**
- * Fill any field absent from `document` that declares a `.default()` literal or
- * `.$defaultFn()` factory. The factory wins when both are present; a literal is
- * applied on presence so `null`/`false`/`0` defaults survive.
- *
- * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
- * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
- * be set by the client.
- */
-const applyInsertDefaults = (
-    definition: TableDefinitionLike,
-    document: Record<string, unknown>,
-    auth: ServerDefaultContextLike["auth"],
-): Record<string, unknown> => {
-    const result = { ...document };
-
-    for (const [field, column] of tableColumns(definition)) {
-        if (column.serverDefault) {
-            result[field] = column.serverDefault({ auth });
-
-            continue;
-        }
-
-        if (result[field] !== undefined) {
-            continue;
-        }
-
-        if (column.defaultFn) {
-            result[field] = column.defaultFn();
-        } else if ("defaultValue" in column) {
-            result[field] = column.defaultValue;
-        }
-    }
-
-    return result;
-};
 
 /**
  * One `EXPLAIN` row as a line of text. SQLite and D1 report a `detail` column, Postgres one
@@ -2715,16 +2679,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // Atomic field operators resolve against THIS read; the version check below
         // rejects the write if the row has moved since, and `patch` re-reads.
         const effectivePatch = resolvePatch(definition, patch, existing);
-        const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
+        const mergedRow: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
 
-        applyOnUpdate(definition, effectivePatch, merged, auth);
+        applyOnUpdate(definition, effectivePatch, mergedRow, auth);
 
         // The caller's authorization verdict, taken on the row this attempt actually produces.
-        assertPatchAllowed(patchOptions, existing, merged);
+        assertPatchAllowed(patchOptions, existing, mergedRow);
 
         // Refinement checks fire on the merged row so a patch that flips
-        // a field to an invalid value is rejected before D1 sees it.
-        runRowValidators(definition, merged, { tolerateStoredNull: true });
+        // a field to an invalid value is rejected before D1 sees it. A `v.from`
+        // column is stored as its parsed output, and is parsed only when the patch
+        // sets it: the rest of the row is stored output, which its own transform
+        // would reject or transform a second time.
+        const merged = runRowValidators(definition, mergedRow, { only: new Set(Object.keys(effectivePatch)), tolerateStoredNull: true });
 
         if (hasMatchingTrigger(tableName, "before", "update")) {
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -3604,11 +3571,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             assertStorableStrings(dialect.name, document);
 
-            const withDefaults = applyInsertDefaults(definition, document, auth);
-
-            // Refinements declared via `.check(predicate)` fire on the
-            // post-default row so a defaulted value still passes its checks.
-            runRowValidators(definition, withDefaults);
+            // Refinements declared via `.check(predicate)` fire on the post-default
+            // row so a defaulted value still passes its checks. A `v.from` column is
+            // stored as its parsed output; a trusted replay already holds that output.
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), {
+                trusted: insertOptions?.allowExplicitId === true,
+            });
 
             let id: string;
             // Whether the id was pinned by the caller (validated `clientId` or the
@@ -4327,13 +4295,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // `clock()` is the last resort, for a row with no readable stored
             // timestamp; the `??` chain keeps it unevaluated on the normal paths.
             const creationTime = replayed ?? stored ?? clock();
-            const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
+            const replacement: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
-            applyOnUpdate(definition, document, replaced, auth);
+            applyOnUpdate(definition, document, replacement, auth);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
-            // field still has to satisfy its `.check()` predicate.
-            runRowValidators(definition, replaced);
+            // field still has to satisfy its `.check()` predicate. A `v.from` column
+            // is stored as its parsed output, except on a trusted replay, whose
+            // document already holds it.
+            const replaced = runRowValidators(definition, replacement, { trusted: replaceOptions?.allowExplicitId === true });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });

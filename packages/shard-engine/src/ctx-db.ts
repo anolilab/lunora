@@ -101,7 +101,7 @@ import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
-import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
@@ -1634,49 +1634,6 @@ const buildReader = (
     };
 
     return reader;
-};
-
-/**
- * Fill any field absent from `document` that declares a `.default()` literal or
- * `.$defaultFn()` factory. The factory wins when both are present; a literal is
- * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
- * defaults survive.
- *
- * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
- * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
- * be set by the client.
- */
-const applyInsertDefaults = (
-    definition: TableDefinitionLike,
-    document: Record<string, unknown>,
-    auth: ServerDefaultContextLike["auth"],
-): Record<string, unknown> => {
-    const result = { ...document };
-
-    for (const [field, column] of tableColumns(definition)) {
-        if (column.serverDefault) {
-            result[field] = column.serverDefault({ auth });
-
-            continue;
-        }
-
-        if (result[field] !== undefined) {
-            continue;
-        }
-
-        if (column.defaultFn) {
-            result[field] = column.defaultFn();
-        } else if ("defaultValue" in column) {
-            // The literal is declared once in the schema. An object or array handed out by
-            // reference lets a hook that mutates one inserted row rewrite the default of
-            // every insert after it.
-            const { defaultValue } = column;
-
-            result[field] = typeof defaultValue === "object" && defaultValue !== null ? structuredClone(defaultValue) : defaultValue;
-        }
-    }
-
-    return result;
 };
 
 /**

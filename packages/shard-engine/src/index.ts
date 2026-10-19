@@ -334,7 +334,7 @@ export {
 export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo } from "./relation-writes";
 export { describeRelationWrites } from "./relation-writes";
 export type { ApplyOnDeleteOptions } from "./relations";
-export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+export { applyInsertDefaults, applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
     LiveSocketControlCall,
     OwnerRelayFrame,
