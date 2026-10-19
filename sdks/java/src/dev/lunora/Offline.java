@@ -163,7 +163,11 @@ public final class Offline {
         public final String code;
 
         public OfflineException(String code, String message) {
-            super(message);
+            this(code, message, null);
+        }
+
+        public OfflineException(String code, String message, Throwable cause) {
+            super(message, cause);
             this.code = code;
         }
     }
