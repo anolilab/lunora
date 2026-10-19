@@ -153,13 +153,24 @@ const assertUnique = (streams: ReadonlyArray<LiveStreamIR>): void => {
     }
 };
 
+/** The node that owns `call`, looking through the wrappers that do not change its runtime value (`as`, `satisfies`, `!`, parentheses). */
+const ownerOf = (call: CallExpression): MorphNode | undefined => {
+    let owner = call.getParent();
+
+    while (Node.isAsExpression(owner) || Node.isSatisfiesExpression(owner) || Node.isNonNullExpression(owner) || Node.isParenthesizedExpression(owner)) {
+        owner = owner.getParent();
+    }
+
+    return owner;
+};
+
 /** Every `defineLiveStream` call in one source file, each bound to the named export it must be. */
 const streamsIn = (sourceFile: SourceFile, lunoraDirectory: string): LiveStreamIR[] =>
     sourceFile
         .getDescendantsOfKind(SyntaxKind.CallExpression)
         .filter((call) => isDefineLiveStream(call))
         .map((call) => {
-            const declaration = call.getParent();
+            const declaration = ownerOf(call);
             const exportName = Node.isVariableDeclaration(declaration) ? addressableExportNameOf(declaration, "binding") : undefined;
 
             // Nothing can import a stream that is not a named export, so no reference could ever be typed for it, and the shard

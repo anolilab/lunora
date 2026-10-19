@@ -62,6 +62,20 @@ describe("discoverLiveStreams", () => {
         expect(discover()).toStrictEqual([]);
     });
 
+    it.each(["as LiveStream", "satisfies LiveStream", "!"])("reads a named export whose call is wrapped with `%s`", (wrapper) => {
+        expect.assertions(1);
+
+        write(
+            "live.ts",
+            `import { defineLiveStream, v } from "@lunora/server";\nimport type { LiveStream } from "@lunora/server";\n\nexport const posts = (defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } }) ${wrapper});\n`.replace(
+                ") !)",
+                ")!)",
+            ),
+        );
+
+        expect(discover().map((found) => found.exportName)).toStrictEqual(["posts"]);
+    });
+
     it("reads a stream whose onSubscribe is method shorthand", () => {
         expect.assertions(1);
 
