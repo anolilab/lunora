@@ -318,7 +318,7 @@ describe("callTool", () => {
 
         await proposeAndConfirm(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
 
-        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { onlineOnly: true, shardKey: undefined });
     });
 
     it("coerces an empty-string shardKey to undefined so the unsharded default is used", async () => {
@@ -696,7 +696,7 @@ describe("write confirmation handshake", () => {
         const result = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
 
         expect(result.isError).toBeUndefined();
-        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { roomId: "r1", text: "hi" }, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { roomId: "r1", text: "hi" }, { onlineOnly: true, shardKey: undefined });
         expect(parseResult(result)).toStrictEqual({ id: "m1" });
     });
 
@@ -1041,8 +1041,25 @@ describe("write confirmation with a v.sensitive argument", () => {
 
         await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
 
-        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store", sensitive: true }, input.args, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store", sensitive: true }, input.args, { onlineOnly: true, shardKey: undefined });
         expect(mock.mutation.mock.calls[0]?.[1]).toStrictEqual({ label: "primary", value: SECRET });
+    });
+
+    it("never queues a write, even when the cached descriptor does not yet mark the argument sensitive", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        // The descriptor read before a redeploy: `value` is not marked yet.
+        const stale: FunctionDescriptor = { ...VAULT_FUNCTION, args: VAULT_FUNCTION.args?.map(({ sensitive: _sensitive, ...rest }) => rest) };
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, stale]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+        await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store" }, input.args, { onlineOnly: true, shardKey: undefined });
+        expect(mock.mutation.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
     });
 
     it("refuses a confirmation that resends the masked placeholder in place of the value", async () => {
