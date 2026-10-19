@@ -1492,7 +1492,23 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
 
     return asColumn(
         createValidator<InferStandardOutput<S>>("from", (value, context) => {
-            const result = validate(value);
+            // A third-party validator may throw an error that quotes the value it was given. Under `sensitive` that
+            // error is replaced by the generic wording, as a returned issue's message is; otherwise it propagates.
+            const result = (() => {
+                try {
+                    return validate(value);
+                } catch (error: unknown) {
+                    if (context.redact === true) {
+                        throw new ValidationError("Standard Schema validation failed", {
+                            expected: "valid value",
+                            path: [...context.path],
+                            received: describeRedacted(value),
+                        });
+                    }
+
+                    throw error;
+                }
+            })();
 
             // Sync-only. Reject native Promises AND non-native thenables — a
             // thenable slips past `instanceof Promise` and would otherwise fall

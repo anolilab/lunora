@@ -208,6 +208,27 @@ describe("v.from()", () => {
         expect(result.error.message).toMatch(/non-object result/u);
     });
 
+    it("replaces an error a third-party validator throws, when it quotes the value, with the generic wording under v.sensitive", () => {
+        expect.assertions(2);
+
+        const throwing = {
+            "~standard": {
+                validate: (value: unknown): never => {
+                    throw new Error(`cannot read ${String(value)}`);
+                },
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.sensitive(v.from(throwing as unknown as Parameters<typeof v.from>[0])).safeParse("hunter2-secret") as {
+            error: ValidationError;
+            ok: false;
+        };
+
+        expect(result.ok).toBe(false);
+        expect(JSON.stringify(result.error) + result.error.message).not.toContain("hunter2-secret");
+    });
+
     it("withholds a primitive result's literal from ValidationError.received under v.sensitive", () => {
         expect.assertions(2);
 
