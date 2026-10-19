@@ -1352,6 +1352,22 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(packages).not.toContain("@lunora/notify");
     });
 
+    it("keys the secret-value key to a tool imported through a relative barrel inside lunora/", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        write(
+            "lunora/agent.ts",
+            `import { requestSecretTool } from "./tools";\nexport const ask = requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
+
+        const bindings = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(bindings)).toContain("@lunora/agent:requestSecretTool");
+    });
+
     it("keys the secret-value key to a value import of requestSecretTool, not to @lunora/agent alone", async () => {
         expect.assertions(4);
 

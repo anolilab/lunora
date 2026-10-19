@@ -398,6 +398,9 @@ const createScanProject = (): ScanProject => {
  * (`.tsx` / `.jsx` vs `.ts` / `.js`); the TypeScript parser recovers from a
  * mid-edit syntax error.
  */
+/** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
+const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
+
 const parseSourceSignals = (code: string, fileName: string, scanProject: ScanProject): SourceCapabilitySignals => {
     const project = scanProject();
     const sourceFile = project.createSourceFile(fileName, code, { overwrite: true });
@@ -504,7 +507,9 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
 
-            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && mayReadCapabilityContext(code))) {
+            // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
+            // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
+            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
                 (inLunora ? lunoraFiles : otherFiles).push(parseSourceSignals(code, file, scanProject));
             }
         }
