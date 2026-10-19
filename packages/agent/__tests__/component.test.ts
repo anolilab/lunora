@@ -900,6 +900,7 @@ describe("approval resolution", () => {
 
         await callMutation(functions.agentAppendMessage, context, {
             content: `Awaiting approval to run tool "${toolName}".`,
+            expiresAt: Date.now() + 60_000,
             messageKey: "wf-1:approval:call_1",
             role: "tool",
             status: "awaiting_approval",
@@ -951,6 +952,7 @@ describe("approval resolution", () => {
         await stageMarker(ctx, "charge");
         await callMutation(functions.agentAppendMessage, ctx, {
             content: 'Awaiting approval to run tool "charge".',
+            expiresAt: Date.now() + 60_000,
             messageKey: "wf-1:approval:call_2",
             role: "tool",
             status: "awaiting_approval",
@@ -1051,6 +1053,32 @@ describe("approval resolution", () => {
         await expect(
             callMutation(functions.agentResolveApproval, ctx, { decision: "approve_for_thread", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
         ).rejects.toThrow("has timed out");
+
+        expect(sent).toStrictEqual([]);
+        await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
+    });
+
+    it("approve_for_thread on a legacy marker with no deadline is refused: nothing proves its window is open", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+        // A marker written before deadlines were recorded: the same pending row, with no expiresAt.
+        await callMutation(functions.agentAppendMessage, ctx, {
+            content: 'Awaiting approval to run tool "charge".',
+            messageKey: "wf-1:approval:call_1",
+            role: "tool",
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_1",
+            toolName: "charge",
+        });
+
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "approve_for_thread", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).rejects.toThrow("no recorded deadline");
 
         expect(sent).toStrictEqual([]);
         await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);

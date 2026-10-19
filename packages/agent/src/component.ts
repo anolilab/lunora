@@ -389,9 +389,18 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
     // A timeout ends the wait without running any mutation, so the marker can still read
     // "awaiting_approval" after the run has already rejected the call. The deadline is the only
     // thing that closes that window.
+    // A marker with no deadline (one written before deadlines were recorded) cannot show its window is still open,
+    // so it grants nothing: every marker this code writes carries one.
     const { expiresAt } = marker;
 
-    if (typeof expiresAt === "number" && Date.now() >= expiresAt) {
+    if (typeof expiresAt !== "number") {
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has no recorded deadline, so it cannot be granted for the thread`,
+        );
+    }
+
+    if (Date.now() >= expiresAt) {
         throw new LunoraError("CONFLICT", `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has timed out`);
     }
 
