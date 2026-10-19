@@ -247,4 +247,39 @@ describe(runLazySmokeLoad, () => {
         expect(isAbsolute(request.extraArgs[0] ?? "")).toBe(false);
         expect(request.configPath).toBe("wrangler.jsonc");
     });
+
+    it("blocks a 5xx even when its body has the result shape", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<() => Promise<Response>>(async () => Response.json({ checked: 3, failures: [] }, { status: 500 })),
+        );
+
+        await expect(run()).resolves.toContain("failed while evaluating the lazy modules (HTTP 500)");
+    });
+
+    it("keeps the check's storage in its own run directory, not the project's .wrangler/state", async () => {
+        expect.assertions(3);
+
+        respondWith({ checked: 1, failures: [] });
+
+        await run();
+
+        const extraArgs = dev.mock.calls[0]?.[0].extraArgs ?? [];
+        const flag = extraArgs.indexOf("--persist-to");
+
+        expect(flag).toBeGreaterThanOrEqual(0);
+        expect(extraArgs[flag + 1]).toMatch(/^\.lunora\/smoke-/u);
+        expect(extraArgs[flag + 1]).not.toContain(".wrangler");
+    });
+
+    it("warns, not blocks, when the run directory cannot be created", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(cwd, ".lunora"), "a file, not a directory");
+
+        await expect(run()).resolves.toBeUndefined();
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("could not create a directory for the check"));
+    });
 });

@@ -156,17 +156,17 @@ const probeLazyModules = async (port: number): Promise<{ checked: number; failur
             throw error;
         },
     );
+    if (response.status >= 500) {
+        throw new SmokeLoadError(
+            `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
+        );
+    }
+
     const body = (await response.json().catch(() => undefined)) as Partial<{ checked: number; failures: unknown[] }> | undefined;
     const { checked, failures } = body ?? {};
 
     if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
         return { checked, failures };
-    }
-
-    if (response.status >= 500) {
-        throw new SmokeLoadError(
-            `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
-        );
     }
 
     throw new SmokeLoadError(`unexpected response (HTTP ${String(response.status)})`, true);
@@ -198,14 +198,89 @@ const reportSmokeError = (error: unknown, output: string[], logger: Logger): str
     return message;
 };
 
+/** A directory of its own for one run, so two commands in the same checkout never share (or delete) an entry or its state. */
+const createRunDirectory = (cwd: string): string => {
+    try {
+        mkdirSync(join(cwd, ".lunora"), { recursive: true });
+
+        return mkdtempSync(join(cwd, ".lunora", "smoke-"));
+    } catch (error) {
+        throw new SmokeLoadError(`could not create a directory for the check (${error instanceof Error ? error.message : String(error)})`, true);
+    }
+};
+
+/**
+ * Write the re-export entry and the `wrangler dev` command for one run. Failing here is the check's problem, not the
+ * project's: it says nothing about the modules, so it is reported as skipped rather than as a failed Worker start.
+ */
+const prepareSmokeProcess = async (input: {
+    configPath: string | undefined;
+    cwd: string;
+    directory: string;
+    environment: string | undefined;
+    functionsFile: string;
+    main: string;
+    toolchain: DriverToolchain;
+}): Promise<{ args: string[]; command: string; port: number }> => {
+    const { configPath, cwd, directory, environment, functionsFile, main, toolchain } = input;
+
+    try {
+        const entry = join(directory, "entry.ts");
+
+        // The project's own entry is re-exported so Durable Object classes and bindings resolve exactly as in production.
+        writeFileSync(
+            entry,
+            `export * from ${JSON.stringify(resolve(cwd, main))};
+import { loadAllFunctions } from ${JSON.stringify(functionsFile)};
+
+export default {
+    async fetch() {
+        return Response.json(await loadAllFunctions());
+    },
+};
+`,
+        );
+
+        const port = await findAvailablePort(SMOKE_PORT);
+
+        // `--local-protocol http`: a config that sets `dev.local_protocol` to https would otherwise refuse the plain-http probe.
+        // Paths go in relative to `cwd`: on Windows the child runs through a shell that does not quote an absolute path containing a space.
+        // `--persist-to` keeps the check's storage out of the `.wrangler/state` that `lunora dev` uses, and is removed with the run.
+        const { args, command } = toolchainExecArgs(
+            detectPackageManager(cwd),
+            toolchain.dev({
+                configPath: configPath === undefined ? undefined : relative(cwd, configPath),
+                environment,
+                extraArgs: [
+                    relative(cwd, entry),
+                    "--local",
+                    "--local-protocol",
+                    "http",
+                    "--ip",
+                    "127.0.0.1",
+                    "--port",
+                    String(port),
+                    "--persist-to",
+                    relative(cwd, join(directory, "state")),
+                ],
+            }),
+        );
+
+        return { args, command, port };
+    } catch (error) {
+        throw new SmokeLoadError(`could not prepare the check (${error instanceof Error ? error.message : String(error)})`, true);
+    }
+};
+
 /**
  * A lazy registry defers a module's evaluation errors to its first call. This runs the project's
  * real Worker entry plus `loadAllFunctions()` in workerd (`wrangler dev --local`) and returns an
  * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
  *
  * A failure of the project's modules, or a Worker that starts and then fails, blocks. A check that
- * cannot run at all (no resolvable entry, a target that is not workerd, containers) warns and
- * returns `undefined`, because it says nothing about the project. See {@link reportSmokeError}.
+ * cannot run at all (no resolvable entry, a target that is not workerd, containers, or a run directory
+ * or command that cannot be prepared) warns and returns `undefined`, because it says nothing about the
+ * project. See {@link reportSmokeError}.
  */
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { configPath, cwd, environment, logger, toolchain } = options;
@@ -231,37 +306,9 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     let directory: string | undefined;
 
     try {
-        // One directory per run, so two commands in the same checkout never share (or delete) an entry.
-        mkdirSync(join(cwd, ".lunora"), { recursive: true });
-        directory = mkdtempSync(join(cwd, ".lunora", "smoke-"));
+        directory = createRunDirectory(cwd);
 
-        const entry = join(directory, "entry.ts");
-
-        // The project's own entry is re-exported so Durable Object classes and bindings resolve exactly as in production.
-        writeFileSync(
-            entry,
-            `export * from ${JSON.stringify(resolve(cwd, main))};
-import { loadAllFunctions } from ${JSON.stringify(functionsFile)};
-
-export default {
-    async fetch() {
-        return Response.json(await loadAllFunctions());
-    },
-};
-`,
-        );
-
-        const port = await findAvailablePort(SMOKE_PORT);
-        // `--local-protocol http`: a config that sets `dev.local_protocol` to https would otherwise refuse the plain-http probe.
-        // Paths go in relative to `cwd`: on Windows the child runs through a shell that does not quote an absolute path containing a space.
-        const { args, command } = toolchainExecArgs(
-            detectPackageManager(cwd),
-            toolchain.dev({
-                configPath: configPath === undefined ? undefined : relative(cwd, configPath),
-                environment,
-                extraArgs: [relative(cwd, entry), "--local", "--local-protocol", "http", "--ip", "127.0.0.1", "--port", String(port)],
-            }),
-        );
+        const { args, command, port } = await prepareSmokeProcess({ cwd, configPath, directory, environment, functionsFile, main, toolchain });
 
         logger.info("smoke-loading lazy function modules in workerd");
 
