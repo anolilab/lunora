@@ -3681,6 +3681,12 @@ const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: s
 const applyCdcChanges: (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>) => Promise<void>;
 ```
 
+### `applyInsertDefaults` (const)
+
+```ts
+const applyInsertDefaults: (definition: TableDefinitionLike, document: Record<string, unknown>, auth: ServerDefaultContextLike["auth"]) => Record<string, unknown>;
+```
+
 ### `applyOnDelete` (const)
 
 ```ts
@@ -5159,7 +5165,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean, options?: RowValidatorOptions) => Record<string, unknown>;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, options?: RowValidatorOptions) => Record<string, unknown>;
 ```
 
 ### `runShardMigrations` (const)
@@ -5835,6 +5841,7 @@ type RowPredicate = (document: Record<string, unknown>) => boolean;
 ```ts
 interface RowValidatorOptions {
     only?: ReadonlySet<string>;
+    tolerateStoredNull?: boolean;
     trusted?: boolean;
 }
 ```
