@@ -82,7 +82,8 @@ creates, or reuses, the TanStack `QueryClient` they need).
 ## `@lunora/react-native/auth`
 
 The better-auth Expo bridge. Auth is a **bearer** token: the session rides the
-`Authorization` header (HTTP RPC) and the `?token=` query param (the socket).
+`Authorization` header on HTTP RPC and, on native, on the WebSocket upgrade —
+never the URL.
 
 React Native **does** have a cookie jar — `fetch` is backed by the platform HTTP
 stack (`NSURLSession` / `OkHttp`) and its shared cookie store — so a `Set-Cookie`
@@ -95,8 +96,9 @@ every request so the jar never rides along; a caller supplying its own `fetch`
 should wrap it in `withoutAmbientCookies`.
 
 - **`expoBearerToken(authClient)`**: reads the better-auth Expo session token
-  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and
-  `client.setWsToken` (socket); returns `null` when signed out.
+  (from `getCookie()`) for use with `client.setAuthToken`, which covers HTTP and,
+  on native, the WebSocket upgrade's `Authorization` header; returns `null` when
+  signed out. Never pass it to `client.setWsToken`: that value rides the URL.
 - **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`**: re-exported
   from `@better-auth/expo/client`.
 
@@ -127,7 +129,6 @@ useEffect(() => {
         const token = await expoBearerToken(authClient);
         if (cancelled) return;
         client.setAuthToken(token);
-        client.setWsToken(token ?? undefined);
     })();
 
     return () => {
@@ -136,6 +137,13 @@ useEffect(() => {
 }, [session]);
 ```
 
-On the server, add better-auth's `expo()` **and** `bearer()` plugins, and fold
-the socket's `?token=` into an `Authorization` header in `resolveIdentity` (see
+The bearer is never sent in the URL. `setWsToken` is not for the session token:
+its value rides the upgrade as `?token=`, where it lands in access logs, so it
+is only for the `LUNORA_WS_BEARER` gate value or a short-lived ticket. Under
+`react-native-web` the browser socket cannot set a header; the better-auth
+session cookie authenticates it there, so serve the worker same-site with the
+web app.
+
+On the server, add better-auth's `expo()` **and** `bearer()` plugins and read
+the session from the request headers in `resolveIdentity` (see
 [`@lunora/auth`](/docs/packages/auth)).
