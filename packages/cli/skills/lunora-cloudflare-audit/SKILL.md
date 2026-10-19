@@ -9,8 +9,10 @@ Diagnose from evidence: name the mechanism that spends money or breaks, point at
 the line, and prescribe the smallest fix. Lunora already ships three scanners,
 so this skill is mostly the order to run them in and the judgment they lack.
 
-If nothing metered is reachable from outside and traffic is modest, say so and
-stop. Do not manufacture findings to fill a report.
+Recurring work (crons, queue consumers, workflows) has no public entry point, so
+check it before concluding costs are modest. If nothing metered is reachable
+from outside, traffic is modest and nothing recurs, say so and stop. Do not
+manufacture findings to fill a report.
 
 ## Ground rules
 
@@ -58,29 +60,29 @@ alerts setup` from an audit. Show the change and get explicit approval first.
 
 Check this table before reading code by hand. Only the last column is yours.
 
-| Risk                                         | Already flagged by                                                                                                  | Still read by hand                                                    |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Full-table reads re-sent to every subscriber | `unbounded_collect`, `unbounded_collect_on_open_range`, `filter_without_index`, `count_without_index`               | Whether the table will actually grow; `.global()` D1 cost             |
-| Runaway loops and re-arming schedules        | `unbounded_loop`, `self_reschedule_without_progress`, `dispatch_cycle`, `queue_dispatch_cycle`                      | Loops spanning a Queue → Worker → DO hop the graph cannot see         |
-| Sweeps that re-read the same rows            | `filter_after_index_scan`, `unbounded_collect_on_open_range`                                                        | —                                                                     |
-| Cron cadence                                 | `cron_every_minute`                                                                                                 | What the tick does: rows read, calls made per fire                    |
-| Queue retries losing messages                | `queue_without_dlq`                                                                                                 | Retry delay and `maxRetries` against the downstream's own rate limit  |
-| Hot shard / wide fan-out                     | `hot_shard`, `fan_out_breadth` (runtime), `privileged_fanout_from_public_procedure`                                 | Singleton shard keys (`"global"`, an env var) on `.shardBy()`         |
-| Unbounded AI use                             | `ai_unbounded_generation_public`, `ai_run_without_logging`, `ai_raw_run_escape_hatch`                               | A `ctx.ai` call inside a retry or `Promise.all` over user-sized input |
-| Browser / Containers left running            | `browser_user_url_without_allowlist`, `container_long_sleep_after`, `container_oversized_instance`                  | A browser session opened without a close path in an `action`          |
-| Public mutations with no throttle            | `public_mutation_without_ratelimit`, `ratelimit_default_memory_store`, `ratelimit_key_spoofable_or_global`          | Public _reads_ that reach a metered product                           |
-| Upload size and type                         | `storage_upload_without_max_size`, `storage_upload_without_content_type_allowlist`                                  | Egress and lifecycle on the bucket (`r2-lifecycle-unset`)             |
-| Secrets in the repo                          | `hardcoded_secret`, `plaintext_secret_in_wrangler_vars`                                                             | —                                                                     |
-| Log volume                                   | `observability-full-sampling` (doctor)                                                                              | Retention and plan                                                    |
-| Handled by construction                      | Codegen reconciles bindings, DO migrations and the compatibility date; `ShardDO` uses the WebSocket Hibernation API | Nothing, unless `wrangler.jsonc` was hand-edited                      |
+| Risk                                         | Already flagged by                                                                                                               | Still read by hand                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Full-table reads re-sent to every subscriber | `unbounded_collect`, `unbounded_collect_on_open_range`, `filter_without_index`, `count_without_index`, `filter_after_index_scan` | Whether the table will actually grow; `.global()` D1 cost             |
+| Runaway loops and re-arming schedules        | `unbounded_loop`, `self_reschedule_without_progress`, `dispatch_cycle`, `queue_dispatch_cycle`                                   | Loops spanning a Queue → Worker → DO hop the graph cannot see         |
+| Sweeps that re-read the same rows            | `unbounded_collect_on_open_range`                                                                                                | —                                                                     |
+| Cron cadence                                 | `cron_every_minute`                                                                                                              | What the tick does: rows read, calls made per fire                    |
+| Queue retries losing messages                | `queue_without_dlq`                                                                                                              | Retry delay and `maxRetries` against the downstream's own rate limit  |
+| Hot shard / wide fan-out                     | `hot_shard`, `fan_out_breadth` (runtime), `privileged_fanout_from_public_procedure`                                              | Singleton shard keys (`"global"`, an env var) on `.shardBy()`         |
+| Unbounded AI use                             | `ai_unbounded_generation_public`, `ai_run_without_logging`, `ai_raw_run_escape_hatch`                                            | A `ctx.ai` call inside a retry or `Promise.all` over user-sized input |
+| Browser / Containers left running            | `browser_user_url_without_allowlist`, `container_long_sleep_after`, `container_oversized_instance`                               | A browser session opened without a close path in an `action`          |
+| Public mutations with no throttle            | `public_mutation_without_ratelimit`, `ratelimit_default_memory_store`, `ratelimit_key_spoofable_or_global`                       | Public _reads_ that reach a metered product                           |
+| Upload size and type                         | `storage_upload_without_max_size`, `storage_upload_without_content_type_allowlist`                                               | Egress and lifecycle on the bucket (`r2-lifecycle-unset`)             |
+| Secrets in the repo                          | `hardcoded_secret`, `plaintext_secret_in_wrangler_vars`                                                                          | —                                                                     |
+| Log volume                                   | `observability-full-sampling` (doctor)                                                                                           | Retention and plan                                                    |
+| Handled by construction                      | Codegen reconciles bindings, DO migrations and the compatibility date; `ShardDO` uses the WebSocket Hibernation API              | Nothing, unless `wrangler.jsonc` was hand-edited                      |
 
 ## Gaps to trace by hand
 
 For each, find the call site, then count the billed units per user action.
 
 - **Fan-out without a cap.** `Promise.all(items.map(...))` or a loop that calls
-  `ctx.db`, `ctx.runMutation`, `ctx.scheduler.runAfter`, `ctx.queues.push` or
-  `ctx.ai` once per element of user-sized input. Cap the batch or hand the list
+  `ctx.db`, `ctx.runMutation`, `ctx.scheduler.runAfter`, a queue send
+  (`ctx.queues.<name>.send` / `sendBatch`) or `ctx.ai` once per element of user-sized input. Cap the batch or hand the list
   to a Queue/workpool with a concurrency limit.
 - **Retry storms.** A retry (hand-rolled, queue `maxRetries`, workflow step
   retry) around a call that is itself billed or rate-limited, with no backoff or
@@ -93,9 +95,10 @@ For each, find the call site, then count the billed units per user action.
 - **Preview / staging with paid bindings.** An `env.<name>` block that binds
   Workers AI, Browser, Containers or the production R2 bucket and is reachable
   without auth.
-- **List scans on hot paths.** A KV or R2 list (`ctx.storage.list`) or a
-  Vectorize query (`ctx.vectors.query`) inside a `query` that every subscriber
-  re-runs.
+- **Enumeration on hot paths.** Storage enumeration through
+  `ctx.db.system.query("_storage")` or a Vectorize query (`ctx.vectors.query`)
+  inside a `query` that every subscriber re-runs. (`ctx.storage.list` is
+  action-only.)
 - **Third-party origins.** An action that fetches a public serverless URL on
   every request instead of caching, queueing, or using a service binding.
 

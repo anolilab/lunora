@@ -17,20 +17,26 @@ describe("cron_every_minute", () => {
         expect(cronEveryMinute.run({ schema })).toHaveLength(0);
     });
 
-    it.each(["* * * * *", "*/1 * * * *", "0-59 * * * *", "0-59/1 * * * *", "  *   * * * * "])("flags %j", (cron) => {
-        expect.assertions(2);
+    it.each(["* * * * *", "*/1 * * * *", "0-59 * * * *", "0-59/1 * * * *", "  *   * * * * ", "* 0-23 * * *", "* */1 1-31 1-12 0-6", "*/1 0-23/1 * * *"])(
+        "flags %j",
+        (cron) => {
+            expect.assertions(2);
 
-        const findings = cronEveryMinute.run({ crons: [job(cron)], schema });
+            const findings = cronEveryMinute.run({ crons: [job(cron)], schema });
 
-        expect(findings).toHaveLength(1);
-        expect(findings[0]).toMatchObject({ cacheKey: "cron_every_minute:sweep", level: "INFO", name: "cron_every_minute" });
-    });
+            expect(findings).toHaveLength(1);
+            expect(findings[0]).toMatchObject({ cacheKey: "cron_every_minute:sweep", level: "INFO", name: "cron_every_minute" });
+        },
+    );
 
-    it.each(["*/5 * * * *", "0 * * * *", "30 9 * * *", "* 9 * * *", "* * 1 * *", "* * * * 1", "* * * *", "* * * * * *"])("leaves %j alone", (cron) => {
-        expect.assertions(1);
+    it.each(["*/5 * * * *", "0 * * * *", "30 9 * * *", "* 9 * * *", "* * 1 * *", "* * * * 1", "* * * *", "* * * * * *", "* 9-17 * * 1-5", "* 0-12 * * *"])(
+        "leaves %j alone",
+        (cron) => {
+            expect.assertions(1);
 
-        expect(cronEveryMinute.run({ crons: [job(cron)], schema })).toHaveLength(0);
-    });
+            expect(cronEveryMinute.run({ crons: [job(cron)], schema })).toHaveLength(0);
+        },
+    );
 
     it("names a workflow target by its export", () => {
         expect.assertions(1);
