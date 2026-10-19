@@ -1085,6 +1085,12 @@ const useStream: <F extends FunctionReference<"stream">>(function_: F, args: "sk
 const useSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => UseSubscriptionResult<ReturnOf<F>>;
 ```
 
+### `useSuspenseQuery` (const)
+
+```ts
+const useSuspenseQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: UseQueryOptions) => ReturnOf<F>;
+```
+
 ### `useTusUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.

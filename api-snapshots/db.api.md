@@ -211,6 +211,17 @@ interface LunoraCollectionOptions<TRow extends Row> {
     checkpoints: CheckpointRegistry;
     config: CollectionConfig<TRow, string>;
     scope: (args?: Record<string, unknown>) => void;
+    utils: LunoraCollectionUtils;
+}
+```
+
+### `LunoraCollectionUtils` (interface)
+
+```ts
+interface LunoraCollectionUtils {
+    error: () => SubscriptionError | undefined;
+    isError: () => boolean;
+    subscribeError: (listener: () => void) => () => void;
 }
 ```
 

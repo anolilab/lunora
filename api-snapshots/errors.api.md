@@ -845,6 +845,10 @@ const ERROR_CATALOG: {
         readonly status: 507;
         readonly title: "Durable stream exceeded its chunk ceiling";
     };
+    readonly SUBSCRIPTION_RESULT_TOO_LARGE: {
+        readonly status: 413;
+        readonly title: "Subscription result too large";
+    };
     readonly TOKEN_EXPIRED: {
         readonly hint: readonly [
             "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",
