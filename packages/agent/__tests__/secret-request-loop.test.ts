@@ -793,6 +793,21 @@ describe("withSecret — the consuming step", () => {
         );
     });
 
+    it("redacts the base64 of the secret from an error a callback throws, in its custom fields too", async () => {
+        expect.assertions(2);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
+        const step = { do: async (_name: string, callback: () => Promise<unknown>) => callback() } as unknown as AgentStepLike;
+        const context = consumerContext(host, step, [], "tool:charge:call_2", "call_2");
+        const failure = await withSecret(context, ref, () => {
+            throw Object.assign(new Error("upstream rejected the request"), { header: `Basic ${btoa(SECRET)}` });
+        }).catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(JSON.stringify(failure)).not.toContain(btoa(SECRET));
+    });
+
     it("refuses a callback result that returns the secret base64-encoded, and keeps it out of the journal", async () => {
         expect.assertions(2);
 

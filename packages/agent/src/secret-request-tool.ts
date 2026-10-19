@@ -179,7 +179,14 @@ const redactText = (text: string, secret: string): string => {
         return text;
     }
 
-    return text.split(secret).join(REDACTED).split(JSON.stringify(secret).slice(1, -1)).join(REDACTED);
+    // Every spelling the result guard knows, longest first, so a spelling that contains a shorter one is replaced whole.
+    let redacted = text;
+
+    for (const spelling of secretSpellings(secret).toSorted((a, b) => b.length - a.length)) {
+        redacted = redacted.split(spelling).join(REDACTED);
+    }
+
+    return redacted;
 };
 
 /**
