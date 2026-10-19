@@ -155,6 +155,15 @@ export interface SubscriptionState {
     readonly shardKey?: string;
 
     /**
+     * Whether a poll or the leader tab has delivered a value for this subscription on the
+     * CURRENT connection. A polling connection and a follower tab see no server `ack`, so this
+     * is their only evidence of an answer, and `serverBase` cannot stand in for it: a hydrated
+     * cache sets that before anything has arrived. A WebSocket never sets it, `acked` is its
+     * evidence.
+     */
+    valueReceived: boolean;
+
+    /**
      * The wire-encoded form of `args`, computed once at `subscribe` time (so an
      * unsupported value fails loud at the call site, not inside a reconnect's
      * open handler). Sent on every `subscribe` frame — identical to `args` for

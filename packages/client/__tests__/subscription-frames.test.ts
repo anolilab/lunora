@@ -18,6 +18,7 @@ const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionS
         lastValue: undefined,
         optimisticLayers: [],
         serverBase: undefined,
+        valueReceived: false,
         wireArgs: {},
         ...overrides,
     };

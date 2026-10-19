@@ -290,7 +290,7 @@ interface SyncStatus {
     connection: ConnectionStatus;
     /** Live queries and shapes the server has not answered yet on the current connection. */
     pendingSubscriptions: number;
-    /** Writes waiting in the built-in offline queue (not the `@lunora/db` outbox). */
+    /** Writes queued or being replayed from the built-in offline queue (not the `@lunora/db` outbox). */
     pendingWrites: number;
     /** `true` only on a live connection with every subscription answered and no write queued. */
     synced: boolean;
@@ -1133,6 +1133,9 @@ class LunoraClient {
                 this.emitItemSettled(entry, "rejected", error);
                 // The evicted write may have been what held its shard's socket open.
                 this.releaseIdleShard(entry.shardKey);
+            },
+            onReplayingChange: () => {
+                this.emitSyncStatus();
             },
             onSizeChange: (size) => {
                 this.pendingChangeListeners.emit(size);
@@ -2397,8 +2400,10 @@ class LunoraClient {
      * have no data and queued writes are still waiting to go out.
      *
      * Over the HTTP polling fallback, and on a cross-tab follower (neither sees
-     * server acknowledgements), a subscription counts as answered once it has
-     * received its first value.
+     * server acknowledgements), a subscription counts as answered once the
+     * current connection has delivered a value for it; a hydrated cache does not.
+     * A write counts as pending from the moment it is queued until the server
+     * settles it, including while its replay request is on the wire.
      */
     public syncStatus(): SyncStatus {
         const connection = this.computeStatus();
@@ -2407,7 +2412,7 @@ class LunoraClient {
         let pendingSubscriptions = 0;
 
         for (const state of this.subscriptions.all()) {
-            if (!(state.acked || (ackless && state.serverBase !== undefined))) {
+            if (!(state.acked || (ackless && state.valueReceived))) {
                 pendingSubscriptions += 1;
             }
         }
@@ -2418,7 +2423,8 @@ class LunoraClient {
             }
         }
 
-        const pendingWrites = this.offlineQueue.size;
+        // A write the flush has sent and not yet settled is still on the wire; `size` alone reads 0 for the whole round trip.
+        const pendingWrites = this.offlineQueue.size + this.offlineQueue.replaying;
 
         return { connection, pendingSubscriptions, pendingWrites, synced: isLiveStatus(connection) && pendingSubscriptions === 0 && pendingWrites === 0 };
     }
@@ -2426,13 +2432,16 @@ class LunoraClient {
     /**
      * Subscribe to {@link syncStatus} changes. Invokes `listener` immediately with
      * the current value, then whenever the connection status, the number of
-     * unanswered subscriptions or the offline-queue depth changes. Returns an
-     * unsubscribe function.
+     * unanswered subscriptions or the number of unsettled writes (queued, or
+     * being replayed) changes. Returns an unsubscribe function.
      */
     public onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe {
         const unsubscribe = this.syncStatusListeners.add(listener);
+        const status = this.syncStatus();
 
-        listener(this.syncStatus());
+        // `emitSyncStatus` computes nothing while nobody listens, so what it remembered may be stale.
+        this.lastSyncStatus = status;
+        listener(status);
 
         return unsubscribe;
     }
@@ -3809,6 +3818,7 @@ class LunoraClient {
                 serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
                 shardKey: options.shardKey,
+                valueReceived: false,
                 // Encode ONCE, here, so an unsupported arg value throws at this
                 // call site instead of inside a reconnect's open handler — and
                 // so a caller mutating its own `args` object afterwards cannot
@@ -5699,6 +5709,11 @@ class LunoraClient {
 
     /** Recompute {@link syncStatus} and notify its listeners if any field changed. */
     private emitSyncStatus(): void {
+        // The common case, and a walk over every subscription: skip it when nobody can hear the answer.
+        if (this.syncStatusListeners.size === 0) {
+            return;
+        }
+
         const next = this.syncStatus();
         const last = this.lastSyncStatus;
 
@@ -6740,7 +6755,7 @@ class LunoraClient {
                 //
                 // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
                 // also be told the previous socket's answers still stand.
-                this.markShardPendingAck(shardKey);
+                this.markShardPendingAck(shardKey, true);
                 this.emitConnectionStatus();
 
                 // Announce the connection (and its app context) before resubscribing,
@@ -6942,13 +6957,21 @@ class LunoraClient {
         /* eslint-enable no-param-reassign */
     }
 
-    /** Mark every subscription and shape bound to `shardKey` as needing a fresh answer from the server. */
-    private markShardPendingAck(shardKey: string | undefined): void {
+    /**
+     * Mark every subscription and shape bound to `shardKey` as needing a fresh answer from the server.
+     * `socketOpened` also forgets the values a poll delivered: the socket replaces that connection,
+     * whereas a socket that merely failed to open (or dropped) leaves polling, and its answers, in place.
+     */
+    private markShardPendingAck(shardKey: string | undefined, socketOpened = false): void {
         const key = connectionKey(shardKey);
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
                 state.acked = false;
+
+                if (socketOpened) {
+                    state.valueReceived = false;
+                }
             }
         }
 
@@ -7188,8 +7211,7 @@ class LunoraClient {
                 const state = this.subscriptions.getById(message.id);
 
                 if (state) {
-                    state.acked = true;
-                    this.emitSyncStatus();
+                    this.ackAndAdvanceCursor(state, undefined, undefined);
                 }
 
                 return;
@@ -7394,9 +7416,13 @@ class LunoraClient {
      * `commitPokeSlice`; this method only performs the I/O that follows it.
      */
     private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
+        const wasAnswered = state.answered;
         const outcome = commitPokeSlice(state, buffer, message);
 
-        this.emitSyncStatus();
+        if (state.answered !== wasAnswered) {
+            this.emitSyncStatus();
+        }
+
         emitShapeRows(state);
 
         if (outcome === "reseed") {
@@ -7474,12 +7500,13 @@ class LunoraClient {
         // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
 
-        // Over the polling fallback a first value is the only evidence a subscription was answered.
-        const firstValue = state.serverBase === undefined;
+        // Over the polling fallback a polled value is the only evidence a subscription was answered.
+        const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
 
         commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
 
-        if (firstValue) {
+        if (firstPolledValue) {
+            state.valueReceived = true;
             this.emitSyncStatus();
         }
 
@@ -7590,13 +7617,20 @@ class LunoraClient {
     /**
      * Mark `state` acked and, when the frame carries a newer cursor/epoch than
      * the cached position, advance the resume watermark and re-persist. Shared by
-     * the `resume` and `settled` frame handlers — both acknowledge "nothing the
-     * client must re-render changed, but the resume position may have moved".
+     * the `ack`, `resume` and `settled` frame handlers — each acknowledges the
+     * subscription ("nothing the client must re-render changed, but the resume
+     * position may have moved"; an `ack` carries no position at all). The sync
+     * status is only recomputed when this is the acknowledgement that changes it.
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
+        const newlyAcked = !state.acked;
+
         state.acked = true;
-        this.emitSyncStatus();
+
+        if (newlyAcked) {
+            this.emitSyncStatus();
+        }
 
         if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
             if (cursor !== undefined) {
@@ -8586,6 +8620,7 @@ class LunoraClient {
             // The resubscribe rides the next socket, so this one is no longer
             // acknowledged by anything.
             state.acked = false;
+            state.valueReceived = false;
 
             refoldSubscription(state, undefined);
         }

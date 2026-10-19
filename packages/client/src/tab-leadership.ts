@@ -62,10 +62,14 @@ export interface TabLeadershipHost {
 /**
  * This tab just won leadership. Reopen the sockets for every subscription and every shard
  * with a queued write, then broadcast the status once so followers stop showing the
- * previous leader's value.
+ * previous leader's value, and emit it locally: the status this tab reports moved from the
+ * mirror to its own sockets, whether or not anything is subscribed.
  */
 export const onBecomeLeader = (host: TabLeadershipHost): void => {
     for (const state of host.activeSubscriptions()) {
+        // A leader is answered by `ack`; what the previous leader delivered no longer counts.
+
+        state.valueReceived = false;
         host.ensureSocket(state.shardKey);
         host.queueResubscribe(state);
     }
@@ -75,9 +79,14 @@ export const onBecomeLeader = (host: TabLeadershipHost): void => {
     }
 
     host.broadcastStatus(host.computeStatus(), host.identityFingerprint());
+    host.emitConnectionStatus();
 };
 
-/** Another tab now leads. Close this tab's sockets and clear the mirror of the previous leader. */
+/**
+ * Another tab now leads. Close this tab's sockets and clear the mirror of the previous leader,
+ * along with the values it delivered, then emit locally: the status this tab reports moved from
+ * its own sockets back to the (now empty) mirror.
+ */
 export const onStopBeingLeader = (host: TabLeadershipHost): void => {
     host.closeConnections();
 
@@ -85,6 +94,12 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
 
     mirror.status = undefined;
     mirror.wasEverConnected = false;
+
+    for (const state of host.activeSubscriptions()) {
+        state.valueReceived = false;
+    }
+
+    host.emitConnectionStatus();
 };
 
 /**
@@ -153,9 +168,11 @@ export const onFollowerSubscriptionData = (
 
     host.dropCacheSeed(key);
 
-    // A follower sees no `ack`: the first value is the evidence its subscription was answered.
-    const firstValue = state.serverBase === undefined;
+    // A follower sees no `ack`: the leader's first value is the evidence its subscription was answered.
+    // `serverBase` is no evidence of that, a hydrated cache sets it before the leader has said anything.
+    const firstValue = !state.valueReceived;
 
+    state.valueReceived = true;
     commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
 
     if (cursor !== undefined) {

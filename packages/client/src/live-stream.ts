@@ -36,8 +36,10 @@ interface ConnectLiveStreamOptions {
 
     /**
      * Treat a connection that delivers nothing — not even a keepalive — for this many milliseconds as
-     * dead, and reconnect. The server sends a keepalive every 25s, so the default is `75000`; `0`
-     * disables the bound.
+     * dead, and reconnect. Every target that serves live streams (Cloudflare Workers, the Node host
+     * and celld) runs the same `ShardDO` live handlers, and they write a `:ka` comment every 25s
+     * while a stream is open, so the default is `75000`. Set `0` to disable the bound when a proxy
+     * or a server of your own in front of the shard does not forward comment frames.
      */
     idleTimeoutMs?: number;
     /** Ceiling for the reconnect backoff, in ms. Defaults to `30000`. */

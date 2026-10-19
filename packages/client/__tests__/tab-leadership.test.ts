@@ -55,6 +55,7 @@ const liveSubscription = (overrides: Partial<SubscriptionState> = {}): Subscript
         lastValue: undefined,
         optimisticLayers: [],
         serverBase: undefined,
+        valueReceived: false,
         wireArgs: {},
         ...overrides,
     };
@@ -74,6 +75,28 @@ describe("onBecomeLeader", () => {
         expect(host.queueResubscribe).toHaveBeenNthCalledWith(1, a);
         expect(host.queueResubscribe).toHaveBeenNthCalledWith(2, b);
         expect(host.broadcastStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("emits the status it now reports, even with nothing subscribed", () => {
+        expect.assertions(2);
+
+        const { host } = fakeHost();
+
+        onBecomeLeader(host);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(host.broadcastStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("forgets the values the previous leader delivered", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription({ valueReceived: true });
+        const { host } = fakeHost({ activeSubscriptions: () => [state] });
+
+        onBecomeLeader(host);
+
+        expect(state.valueReceived).toBe(false);
     });
 
     it("opens the socket of a shard with a queued write even when no subscription uses it", () => {
@@ -99,6 +122,18 @@ describe("onStopBeingLeader", () => {
         expect(host.closeConnections).toHaveBeenCalledTimes(1);
         expect(leader.status).toBeUndefined();
         expect(leader.wasEverConnected).toBe(false);
+    });
+
+    it("emits the status it now reports, even with nothing subscribed, and forgets the values it had delivered", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ valueReceived: true });
+        const { host } = fakeHost({ activeSubscriptions: () => [state] });
+
+        onStopBeingLeader(host);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(state.valueReceived).toBe(false);
     });
 });
 
@@ -187,6 +222,23 @@ describe("onFollowerSubscriptionData", () => {
         expect(state.serverBase).toStrictEqual([{ id: "a" }]);
         expect(state.serverCursor).toBe(5);
         expect(seen).toStrictEqual([[{ id: "a" }]]);
+    });
+
+    it("counts the leader's first value as the answer even over a hydrated cache, and only the first", () => {
+        expect.assertions(4);
+
+        const state = liveSubscription({ serverBase: { n: 0 } });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", { n: 1 }, undefined, undefined, undefined);
+
+        expect(state.valueReceived).toBe(true);
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+
+        onFollowerSubscriptionData(host, "s1", { n: 2 }, undefined, undefined, undefined);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(state.serverBase).toStrictEqual({ n: 2 });
     });
 
     it("releases an optimistic layer the frame's cursor confirms, and shows the base value", () => {

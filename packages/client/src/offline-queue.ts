@@ -94,6 +94,9 @@ type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) =>
 interface OfflineQueueDeps {
     /** Invoked when an entry is discarded on capacity overflow (carries `OFFLINE_QUEUE_OVERFLOW`). */
     onEvict?: EvictHandler;
+    /** Invoked when a write that was out for replay settles, which `onSizeChange` does not cover: the queue was already shorter. */
+    onReplayingChange?: () => void;
+
     /** Invoked with the new depth after any size change (drives the client's pending-sync count). */
     onSizeChange?: (size: number) => void;
     /** Durable store; when present, writes are mirrored and restored across reloads. */
@@ -178,10 +181,15 @@ class OfflineQueue {
 
     private readonly onSizeChange: ((size: number) => void) | undefined;
 
+    private readonly onReplayingChange: (() => void) | undefined;
+
     /** App/schema version stamped on persisted writes; mismatched records are purged on hydrate. */
     private readonly version: string | undefined;
 
     private readonly items: QueuedMutation[] = [];
+
+    /** Ids of writes a flush has {@link OfflineQueue.drain}ed and neither requeued nor discarded yet, which are on the wire or about to be. */
+    private readonly replayingIds = new Set<string>();
 
     /** Appends still in flight, by write id, each resolving to whether the record landed. Anything that touches a record durably waits on its append first. */
     private readonly appending = new Map<string, Promise<boolean>>();
@@ -203,11 +211,17 @@ class OfflineQueue {
         this.persistence = deps.persistence;
         this.onEvict = deps.onEvict;
         this.onSizeChange = deps.onSizeChange;
+        this.onReplayingChange = deps.onReplayingChange;
         this.version = deps.version;
     }
 
     public get size(): number {
         return this.items.length;
+    }
+
+    /** Writes drained for replay and not yet settled or requeued: out of {@link OfflineQueue.size}, but still unsettled. */
+    public get replaying(): number {
+        return this.replayingIds.size;
     }
 
     public enqueue<T>(entry: QueuedMutation<T>): void {
@@ -233,6 +247,10 @@ class OfflineQueue {
     public discard(id: string): void {
         this.unsettled.delete(id);
         this.unpersisted.delete(id);
+
+        if (this.replayingIds.delete(id)) {
+            this.onReplayingChange?.();
+        }
 
         const { persistence } = this;
 
@@ -432,6 +450,7 @@ class OfflineQueue {
             const drained = [...this.items];
 
             this.items.length = 0;
+            this.markReplaying(drained);
             this.notifySize();
 
             return drained;
@@ -446,6 +465,7 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.items.push(...kept);
+        this.markReplaying(drained);
         this.notifySize();
 
         return drained;
@@ -460,6 +480,12 @@ class OfflineQueue {
     public requeue(items: QueuedMutation[]): void {
         if (items.length === 0) {
             return;
+        }
+
+        for (const item of items) {
+            if (item.id !== undefined) {
+                this.replayingIds.delete(item.id);
+            }
         }
 
         this.items.unshift(...items);
@@ -532,6 +558,7 @@ class OfflineQueue {
         }
 
         this.items.length = 0;
+        this.replayingIds.clear();
         // Nobody is left to retry these appends, and their closures must not outlive the client.
         this.unsettled.clear();
         this.unpersisted.clear();
@@ -651,6 +678,14 @@ class OfflineQueue {
                 // hydrated entry's `reject` is a no-op, so without this an
                 // overflow eviction would silently drop a durable write.
                 this.onEvict?.(dropped, error);
+            }
+        }
+    }
+
+    private markReplaying(drained: QueuedMutation[]): void {
+        for (const item of drained) {
+            if (item.id !== undefined) {
+                this.replayingIds.add(item.id);
             }
         }
     }
