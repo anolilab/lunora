@@ -49,9 +49,9 @@ type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | un
  * - `exclude` always wins over `include`.
  * - An absent or empty `include` matches every path.
  *
- * Signals recorded by the platform carry synthetic paths such as `alarm:rearm`,
- * `scheduler:outbox`, `ttl:sweep` and `container:<name>`. An `include` list drops
- * them unless one of its patterns matches, so list them explicitly to keep them.
+ * Platform records use synthetic paths such as `ttl:sweep` or `scheduler:outbox`, and some
+ * are kept only in the shard's local log. Those never reach a sink, so no filter can route
+ * them; only the records a sink actually receives are matched against `include` and `exclude`.
  */
 interface SinkRouteOptions {
     /** Patterns that drop a path, even when `include` matches it. */

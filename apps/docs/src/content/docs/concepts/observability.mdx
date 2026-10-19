@@ -96,9 +96,9 @@ const routed = filterSink(
   other signals.
 - In a pattern, `*` matches any run of characters, including `:` and `/`.
   `exclude` wins over `include`. An absent or empty `include` matches every path.
-- Platform signals carry synthetic paths such as `alarm:rearm`,
-  `scheduler:outbox`, `ttl:sweep` and `container:<name>`. An `include` list drops
-  them unless one of its patterns names them.
+- Platform records use synthetic paths such as `ttl:sweep` or `scheduler:outbox`.
+  Some are kept only in the shard's local log and never reach a sink, so no filter
+  can route them. The filter applies to the records a sink receives.
 - Enriched values are normalized and redacted the same way logged fields are. An
   enricher that throws leaves the event unchanged.
 
@@ -130,7 +130,10 @@ const endpoint = `https://${env.AXIOM_DOMAIN}`;
 const traces = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-dataset": "app-traces" } });
 const metrics = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-metrics-dataset": "app-metrics" } });
 
-observability: combineSinks(traces, { flush: metrics.flush, onMetric: metrics.onMetric }),
+observability: combineSinks(
+    { flush: traces.flush, onLog: traces.onLog, onRpc: traces.onRpc, onSpan: traces.onSpan },
+    { flush: metrics.flush, onMetric: metrics.onMetric },
+),
 ```
 
 For Sentry, or any other vendor, take the endpoint, the auth header and the
