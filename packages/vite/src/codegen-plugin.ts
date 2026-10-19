@@ -8,6 +8,7 @@ import {
     fingerprintSchemaSources,
     isTestPath,
     PROJECT_CONFIG_FILENAMES,
+    projectConfigCandidatePaths,
     readServiceBindings,
     refreshCodegenProject,
     runCodegen,
@@ -716,6 +717,19 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return false;
                 }
 
+                // `codegen.exclude` in lunora.config decides which `lunora/` files a Project
+                // is seeded with, so a config save drops the cached Project. The next run
+                // seeds a fresh one. It does not regenerate here: a binding-relevant save
+                // already restarts the server, and a second pass racing that restart could
+                // invalidate the new server from the old one.
+                // The candidates codegen reads for the schema directory, so a nearer
+                // `lunora.config.*` (above a nested schema folder) counts as well.
+                if (PROJECT_CONFIG_FILENAMES.includes(basename(normalized)) && projectConfigCandidatePaths(absoluteSchemaDirectory).includes(normalized)) {
+                    cachedProject = undefined;
+
+                    return false;
+                }
+
                 // Only a file literally named `tsconfig.json` can possibly be the
                 // one `findTsconfig` would resolve, so gate its (existsSync-walk)
                 // cost on that cheap basename check instead of paying it on every
@@ -840,6 +854,8 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // built and nothing invalidates a virtual module, so an unwatched
                 // create silently did nothing until a manual restart.
                 ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(options.projectRoot, name)),
+                // Also every config codegen may read above a nested schema directory.
+                ...projectConfigCandidatePaths(absoluteSchemaDirectory),
             ]);
 
             for (const configPath of configWatchPaths) {

@@ -45,6 +45,8 @@ interface LunoraRspackOptions {
 /** Resolved options after merging defaults. */
 interface ResolvedLunoraRspackOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
+    /** The target the caller passed, if any. Kept so a `lunora.config.*` edit can re-resolve `target` in watch mode. */
+    explicitTarget: string | undefined;
     lazyFunctions: boolean;
     projectRoot: string;
     schemaDir: string;

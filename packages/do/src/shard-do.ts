@@ -178,6 +178,7 @@ import {
     diffGlobalMembership,
     DurableStreamRunner,
     envOptionalPositiveInt,
+    envPositiveInt,
     FLAGS_FUNCTION_PREFIX,
     forgetScheduleOutbox,
     gateReplicaDispatch,
@@ -396,6 +397,7 @@ import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import SubscriptionFailureLatch from "./subscription-backoff";
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
 const loadSqlAssistant = () => import("./sql-assistant");
@@ -1268,6 +1270,28 @@ const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise
 const AFTER_COMMIT_WAIT_MS = 15_000;
 
 /**
+ * Wait for `work`, at most `ms`. `true` when it settled in time, `false` when the
+ * deadline won. The work is left RUNNING when the deadline wins (the post still
+ * lands or fails on its own), and a rejection that arrives after it is swallowed
+ * rather than surfacing as an unhandled one.
+ */
+const settleWithin = async (work: Promise<unknown>, ms: number): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<boolean>((resolve) => {
+        timer = setTimeout(resolve, ms, false);
+    });
+
+    try {
+        return await Promise.race([work.then(() => true), deadline]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+};
+
+/**
  * Wait for `link`, at most {@link AFTER_COMMIT_WAIT_MS}. `true` when it settled
  * in time, `false` when the deadline won.
  *
@@ -1282,21 +1306,15 @@ const AFTER_COMMIT_WAIT_MS = 15_000;
  * call that is already in flight. So the ordering obligation is kept and only the
  * dispatch stops waiting.
  */
-const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+const waitForAfterCommit = (link: Promise<void>): Promise<boolean> => settleWithin(link, AFTER_COMMIT_WAIT_MS);
 
-    const deadline = new Promise<boolean>((resolve) => {
-        timer = setTimeout(resolve, AFTER_COMMIT_WAIT_MS, false);
-    });
-
-    try {
-        return await Promise.race([link.then(() => true), deadline]);
-    } finally {
-        if (timer !== undefined) {
-            clearTimeout(timer);
-        }
-    }
-};
+/**
+ * How long socket teardown waits on a sibling DO's answer to a relay release or
+ * drain. Both are fire-and-forget control frames, so the answer carries nothing
+ * teardown needs; waiting longer only holds the close open (and the rest of its
+ * cleanup behind it) on a sibling that has stopped answering.
+ */
+const RELAY_CLOSE_WAIT_MS = 2000;
 
 const DIGITS = /^\d+$/u;
 
@@ -1335,6 +1353,23 @@ const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: numbe
 };
 
 const UNDELIVERED_BASELINE = "<undelivered>";
+
+/**
+ * Largest subscription result (its wire-encoded JSON, measured in characters — UTF-16
+ * code units, i.e. `string.length`, not UTF-8 bytes) one frame may carry. A result past
+ * it is refused with `SUBSCRIPTION_RESULT_TOO_LARGE` instead of being sent: the frame,
+ * the encoded copy and the diff baseline all live in the isolate's memory at once.
+ * Per-deployment via `LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS`.
+ */
+const DEFAULT_SUBSCRIPTION_MAX_RESULT_CHARS = 8 * 1024 * 1024;
+
+/**
+ * Most diff-baseline text one socket's subscriptions may hold between them. Past it a
+ * subscription keeps no baseline ({@link UNDELIVERED_BASELINE}) and its next result is
+ * re-sent in full, which costs bandwidth but not memory. Per-deployment via
+ * `LUNORA_SUBSCRIPTION_MEMO_MAX_CHARS`.
+ */
+const DEFAULT_SUBSCRIPTION_MEMO_MAX_CHARS = 32 * 1024 * 1024;
 
 /** Refusal text for a delivery mode that cannot be fenced while delivery authorization is enabled. */
 const DELIVERY_MODE_UNSUPPORTED = "delivery mode unsupported with delivery authorization";
@@ -2643,6 +2678,13 @@ abstract class ShardDO {
     private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
 
     /**
+     * Subscriptions whose refresh keeps throwing, so a deterministic failure is
+     * not re-run (and re-announced) on every write flush. In memory only, like
+     * {@link ShardDO.subMemos}: a cold DO forgets and simply retries.
+     */
+    private readonly subscriptionFailures = new SubscriptionFailureLatch();
+
+    /**
      * Count of committed write batches handed to {@link ShardDO.flushChangedTables}.
      * A subscription run captures it BEFORE it reads, and the value lands on the
      * memo it produces ({@link SubscriptionMemo.generation}), so a run that parked
@@ -3247,16 +3289,33 @@ abstract class ShardDO {
         this.replica = createReplicaLink({
             ...sibling,
             applyChanges: async (changes) => {
-                const { applied } = await this.runShardApplyCdc({ changes });
+                // One storage transaction per page: the follow cursor only moves past a
+                // whole page, so a change that throws midway must not leave the rows
+                // before it applied behind a cursor that says they were not.
+                // Independent: waits for the writer gate rather than failing the page when another
+                // transaction happens to be open on this DO.
+                const { applied } = await this.runInTransaction(() => this.runShardApplyCdc({ changes }), { independent: true });
 
                 // Same post-replay step the `applyCdc` admin RPC takes: replayed
                 // rows are real writes, so any live subscriber on this DO has to
-                // see them.
-                await this.flushChangedTables();
+                // see them. The page has committed by now, so a failing refresh is
+                // reported but must not reject: the follower reads a rejection as
+                // "the page was not applied" and would leave its cursor behind rows
+                // that are already there.
+                try {
+                    await this.flushChangedTables();
+                } catch (error) {
+                    this.recordShapeError("replica.flush", error);
+                }
 
                 return applied;
             },
+            exportRows: async () => this.runShardExport({}),
             importRows: async (rows) => this.runShardImport({ rows }),
+            reportError: (scope, error) => {
+                this.recordShapeError(scope, error);
+            },
+            transactionLimits: () => this.transactionLimits(),
         });
 
         this.armWebSocketKeepalive();
@@ -3349,6 +3408,12 @@ abstract class ShardDO {
         // would tear down nothing.
         const ws = this.runner.socketFor(rawSocket);
 
+        // A socket is torn down once. An expired-credential drop runs this itself because the runtime does not
+        // deliver a close for a close the server started; if it ever does, that second call must not repeat the hooks.
+        if (this.closingSockets.has(ws)) {
+            return;
+        }
+
         // Marked before the first await, including the shard-init one below: a subscribe or
         // unsubscribe that interleaves with this close must not change membership it tears down.
         this.closingSockets.add(ws);
@@ -3425,6 +3490,7 @@ abstract class ShardDO {
             // stale memo set around if the same socket id is reused after a
             // bounce. Cheap to recompute on the next subscribe.
             this.subMemos.delete(ws);
+            this.subscriptionFailures.clearSocket(ws);
             this.shapeMemos.delete(ws);
             this.globalShapeSnapshots.delete(ws);
             this.liveGrantSockets.delete(ws);
@@ -3442,7 +3508,7 @@ abstract class ShardDO {
             // sockets never detaches, and each of its retired connections would
             // otherwise leave a permanent row pinning op-log retention.
             try {
-                await this.relay?.releaseRelayShapes(ws);
+                await settleWithin(Promise.resolve(this.relay?.releaseRelayShapes(ws)), RELAY_CLOSE_WAIT_MS);
             } catch (error) {
                 // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release; a close handler must not reject (see above)
                 console.error("[@lunora/do] relay shape release failed during socket close:", error);
@@ -3458,7 +3524,7 @@ abstract class ShardDO {
             // both break the actor and displace a dispatch failure the caller
             // still has to see.
             try {
-                await this.relay?.announceDrain(ws);
+                await settleWithin(Promise.resolve(this.relay?.announceDrain(ws)), RELAY_CLOSE_WAIT_MS);
             } catch (error) {
                 // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay detach; a close handler must not reject (see above)
                 console.error("[@lunora/do] relay drain failed during socket close:", error);
@@ -5842,6 +5908,8 @@ abstract class ShardDO {
         // is answered `settled` (or a delta against a value the client just
         // discarded) and the client never gets the snapshot it asked for.
         this.subMemos.get(ws)?.delete(subId);
+        // New args or a re-snapshot request: a subscription that was failing is retried at once.
+        this.subscriptionFailures.clear(ws, subId);
 
         return "ok";
     }
@@ -5877,6 +5945,7 @@ abstract class ShardDO {
         }
 
         this.subMemos.get(ws)?.delete(subId);
+        this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
 
@@ -13059,6 +13128,32 @@ abstract class ShardDO {
         }
     }
 
+    /** The caller identity a failing subscription is latched under; `""` (matching nothing) when the socket has no failure streak to look up. */
+    private failureIdentityKey(ws: ShardSocketLike, attachment: SocketAttachment): string {
+        return this.subscriptionFailures.hasFailures(ws) ? subscriptionIdentityKey(socketIdentity(attachment)) : "";
+    }
+
+    /**
+     * A subscription's refresh threw: count and log it, latch it for backoff, and
+     * tell the client the first time of a streak. The subscription stays
+     * registered, so it recovers by itself once a retry succeeds.
+     */
+    private noteFailingSubscription(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown, attachment: SocketAttachment): void {
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+
+        const startsStreak = this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(attachment)), Date.now());
+
+        // A guarded socket is told nothing: its delivered view stays until the authority answers again, and a
+        // refresh failure's message is not something that mode surfaces to the client.
+        if (!startsStreak || this.deliveryAuthorization) {
+            return;
+        }
+
+        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+        this.sendSubscriptionError(ws, subId, body.code, body.message);
+    }
+
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
         const sockets = [...this.runner.sockets()];
 
@@ -13099,10 +13194,20 @@ abstract class ShardDO {
             // re-derives `isAdmin` from the function path alone.
             const adminAuthorized = await this.attachmentAdminAuthorized(attachment);
 
+            // Only derived for a socket with a subscription in a failure streak: the
+            // identity decides whether a backed-off subscription may run again.
+            const identityKey = this.failureIdentityKey(ws, attachment);
+
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
             const { subs } = attachment;
 
-            const refreshQuery = async (subId: string, functionPath: string, args: Record<string, unknown>, isAdmin: boolean): Promise<void> => {
+            const refreshQuery = async (
+                subId: string,
+                functionPath: string,
+                args: Record<string, unknown>,
+                isAdmin: boolean,
+                backingOff: boolean,
+            ): Promise<void> => {
                 try {
                     // Re-run under the socket's OWN verified identity (stamped on the
                     // attachment at upgrade, unforgeable by the client) — passed BY
@@ -13115,6 +13220,11 @@ abstract class ShardDO {
                         permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, args);
                     }
                     if (this.deliveryAuthorization && permit === undefined) {
+                        return;
+                    }
+                    // Backoff skips only the failing query's execution: the authorization above has already run, so a
+                    // revocation during the window ends the subscription at once instead of at the next retry.
+                    if (backingOff) {
                         return;
                     }
                     const memo = this.subMemos.get(ws)?.get(subId);
@@ -13130,6 +13240,9 @@ abstract class ShardDO {
                     const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, isAdmin, socketIdentity(attachment), reactiveRunCache);
 
                     if (!outcome) {
+                        // A clean resolve to "nothing to deliver" still ends the failure streak.
+                        this.subscriptionFailures.clear(ws, subId);
+
                         return;
                     }
 
@@ -13142,24 +13255,30 @@ abstract class ShardDO {
                     await awaitWsDrain(ws);
 
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
+                    this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
-                    // is left untouched ("unknown deps"), so this subscription
-                    // re-runs on the next flush — but until now that failure was
-                    // silent (DO-01): a subscription whose refresh throws
-                    // DETERMINISTICALLY (a bad handler cast, say) repeated
-                    // unnoticed for the life of the socket with no signal an
-                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
+                    // is left untouched ("unknown deps"), so the subscription is
+                    // retried — but not on every flush: a failure that repeats
+                    // (a bad handler cast, say) is latched with a growing backoff
+                    // and announced to the client once. See `noteFailingSubscription`.
                     if (isDeliveryAccessDenied(error)) {
                         this.revokeSubscription(ws, subId);
                         return;
                     }
-                    if (this.deliveryAuthorization && isLunoraError(error) && error.code === "SUBSCRIPTION_PERSIST_FAILED") {
+                    // A result that grew past the cap will not shrink by retrying: end the subscription as the seed does, on
+                    // guarded sockets too (the refusal names a size and a limit, never data).
+                    if (
+                        isLunoraError(error) &&
+                        (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
+                    ) {
                         this.unsubscribe(ws, subId);
                         this.sendSubscriptionError(ws, subId, error.code, error.message, error.why);
+                        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+                        return;
                     }
-                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
+                    this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
                 }
             };
 
@@ -13208,8 +13327,15 @@ abstract class ShardDO {
                     continue;
                 }
 
+                const backingOff = this.subscriptionFailures.isBackingOff(ws, subId, identityKey, Date.now());
+
+                // An unguarded socket has no authorization to re-check, so a backed-off subscription is skipped outright.
+                if (backingOff && !this.deliveryAuthorization) {
+                    continue;
+                }
+
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin);
+                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
         };
 
@@ -15333,6 +15459,52 @@ abstract class ShardDO {
         }
     }
 
+    /** The wire-encoded JSON of `outcome`'s result, encoded once per outcome (sockets sharing a run share it). */
+    private encodeOutcome(outcome: SubscriptionOutcome): string {
+        let json = this.encodedOutcomes.get(outcome);
+
+        if (json === undefined) {
+            // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
+            json = JSON.stringify(encodeWire(outcome.result ?? null));
+            this.encodedOutcomes.set(outcome, json);
+        }
+
+        return json;
+    }
+
+    /** Refuse a result too large to send as one frame. */
+    private assertResultWithinLimit(json: string): void {
+        const limit = envPositiveInt(this.env, "LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS", DEFAULT_SUBSCRIPTION_MAX_RESULT_CHARS);
+
+        if (json.length > limit) {
+            throw new LunoraError(
+                "SUBSCRIPTION_RESULT_TOO_LARGE",
+                `subscription result is ${String(json.length)} characters, over the ${String(limit)}-character limit; narrow or paginate the query`,
+                { status: 413 },
+            );
+        }
+    }
+
+    /**
+     * The diff baseline to remember for `subId`: `json` while this socket's baselines
+     * stay within {@link DEFAULT_SUBSCRIPTION_MEMO_MAX_CHARS}, else
+     * {@link UNDELIVERED_BASELINE} — only the baseline is dropped, so the subscription
+     * keeps its dependency tracking (and its skip of unrelated writes) and just re-sends
+     * its next result in full. Summed on demand over a socket's few memos (the
+     * per-socket subscription cap), so there is nothing to keep in step.
+     */
+    private boundedBaseline(memos: Map<string, SubscriptionMemo>, subId: string, json: string): string {
+        let held = json.length;
+
+        for (const [id, memo] of memos) {
+            if (id !== subId && memo.lastJson !== UNDELIVERED_BASELINE) {
+                held += memo.lastJson.length;
+            }
+        }
+
+        return held > envPositiveInt(this.env, "LUNORA_SUBSCRIPTION_MEMO_MAX_CHARS", DEFAULT_SUBSCRIPTION_MEMO_MAX_CHARS) ? UNDELIVERED_BASELINE : json;
+    }
+
     /**
      * Record `outcome` as this socket's diff baseline for `subId` without
      * sending a frame. Used by the resume fast-path, where the client keeps its
@@ -15342,15 +15514,21 @@ abstract class ShardDO {
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
         const memos = socketMap(this.subMemos, ws);
 
-        // A refresh that started after this seed already recorded a newer baseline.
+        // A refresh that started after this seed already recorded a newer baseline. Checked BEFORE the size cap: a stale
+        // oversized result must not throw and unsubscribe a query whose newer, smaller result was already delivered.
         if ((memos.get(subId)?.generation ?? -1) > generation) {
             return;
         }
 
+        const json = this.encodeOutcome(outcome);
+
+        // A resume acknowledges a value the client already holds, but the server still retains it as the diff baseline,
+        // so it answers to the same per-result cap as a full seed.
+        this.assertResultWithinLimit(json);
+
         memos.set(subId, {
             generation,
-            // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-            lastJson: JSON.stringify(encodeWire(outcome.result ?? null)),
+            lastJson: this.boundedBaseline(memos, subId, json),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
@@ -15405,13 +15583,9 @@ abstract class ShardDO {
         // pure-JSON result encodes byte-identically, so this baseline + `data`
         // frame stay unchanged for the common case, and the delta path (which
         // encodes its next rows too) diffs against a consistently-encoded baseline.
-        let json = this.encodedOutcomes.get(outcome);
+        const json = this.encodeOutcome(outcome);
 
-        if (json === undefined) {
-            // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-            json = JSON.stringify(encodeWire(outcome.result ?? null));
-            this.encodedOutcomes.set(outcome, json);
-        }
+        this.assertResultWithinLimit(json);
 
         if (existing?.lastJson === json) {
             // An unchanged result still settles optimistic overlays at this cursor.
@@ -15491,7 +15665,7 @@ abstract class ShardDO {
             // Tracks `lastJson`: an undelivered value leaves the baseline, and so
             // its generation, where the last delivered one put it.
             generation: delivered ? generation : (existing?.generation ?? generation),
-            lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            lastJson: delivered ? this.boundedBaseline(memos, subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
@@ -15968,17 +16142,17 @@ abstract class ShardDO {
      * client-facing wire shape from one place.
      */
     private dropExpiredSocket(ws: ShardSocketLike): void {
-        // The close this drop starts is not delivered back to `webSocketClose`, so a route socket's `onClose` runs here.
-        // Queued before the close, it is the same per-socket event `dispatchCloseHooks` would have queued.
-        const route = this.routeOfSocket(this.readAttachment(ws));
+        // The close this drop starts is not delivered back to `webSocketClose` (the runtime dispatches that event
+        // for a peer's close, not a server-initiated one), so the whole teardown runs here instead: the route's
+        // `onClose` or the connection's `onDisconnect`, the room leaves, the per-socket memos and the durable
+        // shape-poke rows. Started before the close, so it reads the attachment first. `webSocketClose` runs at most
+        // once per socket, so a runtime that does deliver a close finds nothing left to repeat.
+        const teardown = this.webSocketClose(ws as unknown as WebSocket, 4001, "token_expired", true).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already closed, so there is nothing to propagate a teardown failure to
+            console.error("[@lunora/do] expired-socket teardown failed:", error);
+        });
 
-        if (route !== undefined && !this.routeCloseSent.has(ws)) {
-            this.routeCloseSent.add(ws);
-            const closed = this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close").catch(() => undefined);
-
-            this.shardHost.waitUntil?.(closed);
-        }
-
+        this.shardHost.waitUntil?.(teardown);
         dropExpiredCredentialSocket(ws);
     }
 
@@ -17235,6 +17409,19 @@ abstract class ShardDO {
 
         this.liveSubscribers.set(connectionId, subscriber);
         this.startLiveKeepalive();
+
+        // An abrupt disconnect reaches the request's signal even when nothing cancels the body, so
+        // listen to both: the stream's own `cancel` covers a reader that went away, this covers a peer that did.
+        const forget = (): void => {
+            this.liveSubscribers.delete(connectionId);
+            subscriber.close();
+        };
+
+        if (request.signal.aborted) {
+            forget();
+        } else {
+            request.signal.addEventListener("abort", forget, { once: true });
+        }
 
         return new Response(stream, { headers: { ...LIVE_SSE_HEADERS, [LIVE_CONNECTION_HEADER]: connectionId } });
     }

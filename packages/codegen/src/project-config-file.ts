@@ -275,7 +275,8 @@ const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, k
         return { unreadable: true };
     }
 
-    const property = plain.find((candidate) => propertyKeyName(candidate) === key);
+    // The last one wins, as it does at runtime: `{ a: 1, a: 2 }` evaluates to 2.
+    const property = plain.findLast((candidate) => propertyKeyName(candidate) === key);
 
     if (property === undefined) {
         return { absent: true };

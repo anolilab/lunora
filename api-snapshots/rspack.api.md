@@ -205,6 +205,7 @@ type ProxyArrayEntry = Record<string, unknown> & {
 ```ts
 interface ResolvedLunoraRspackOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
+    explicitTarget: string | undefined;
     lazyFunctions: boolean;
     projectRoot: string;
     schemaDir: string;

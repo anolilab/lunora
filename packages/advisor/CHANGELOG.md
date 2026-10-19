@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.238...@lunora/advisor@1.0.0-alpha.239) (2026-10-19)
+
+### Bug Fixes
+
+* **advisor:** point lint remediations at the real span and trace APIs ([#1262](https://github.com/anolilab/lunora/issues/1262)) ([2376f87](https://github.com/anolilab/lunora/commit/2376f87994b05f1fc7196eb9b533a8a66a202963))
+
 ## @lunora/advisor [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.237...@lunora/advisor@1.0.0-alpha.238) (2026-10-19)
 
 
