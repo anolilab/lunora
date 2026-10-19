@@ -99,7 +99,7 @@ const routed = filterSink(
 - Platform records use synthetic paths such as `ttl:sweep` or `scheduler:outbox`.
   Some are kept only in the shard's local log and never reach a sink, so no filter
   can route them. The filter applies to the records a sink receives.
-- Enriched values are normalized before they are redacted. Log lines use the same
+- Enriched values are redacted, then normalized to JSON-safe primitives. Log lines use the same
   rules as logged fields, which mask personal data such as emails and ids. Metric,
   span and RPC values use credential-only redaction, so ids and URLs survive on
   those signals. Keep personal data out of an enricher for those signals. An
