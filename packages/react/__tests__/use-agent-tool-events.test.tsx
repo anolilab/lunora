@@ -10,6 +10,9 @@ import type { UseAgentToolEventsApi, UseAgentToolEventsOptions, UseAgentToolEven
 import { useAgentToolEvents } from "../src/use-agent-tool-events";
 import { createMockClient } from "./mock-client";
 
+/** A callback that ignores the result: the harness renders no output that depends on it. */
+const noopReady = (): void => {};
+
 const makeRef = (reference: string): FunctionReference => {
     return { __lunoraRef: reference };
 };
@@ -98,11 +101,7 @@ describe("useAgentToolEvents", () => {
 
         render(
             <LunoraProvider client={client}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
-                    onReady={() => {}}
-                    options={buildOptions()}
-                />
+                <Harness onReady={noopReady} options={buildOptions()} />
             </LunoraProvider>,
         );
 
@@ -129,11 +128,7 @@ describe("useAgentToolEvents", () => {
 
         render(
             <LunoraProvider client={client}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
-                    onReady={() => {}}
-                    options={buildOptions()}
-                />
+                <Harness onReady={noopReady} options={buildOptions()} />
             </LunoraProvider>,
         );
 
@@ -167,11 +162,7 @@ describe("useAgentToolEvents", () => {
 
         render(
             <LunoraProvider client={client}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
-                    onReady={() => {}}
-                    options={buildOptions()}
-                />
+                <Harness onReady={noopReady} options={buildOptions()} />
             </LunoraProvider>,
         );
 
