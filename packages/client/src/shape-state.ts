@@ -36,6 +36,12 @@ export type ShapeCallback = (rows: Record<string, unknown>[]) => void;
  * instead of re-seeding.
  */
 export interface ShapeSubscriptionState {
+    /**
+     * Whether the server has answered this shape's `shape_subscribe` on the CURRENT connection. Kept
+     * apart from `serverCursor` on purpose: the cursor is the resume position and survives a disconnect
+     * (so the next subscribe can resume), which makes it no evidence about the new socket.
+     */
+    answered: boolean;
     args: Record<string, unknown> | undefined;
     callbacks: Set<ShapeCallback>;
     errorCallbacks: Set<SubscriptionErrorCallback>;
@@ -204,6 +210,8 @@ export const commitPokeSlice = (state: ShapeSubscriptionState, buffer: PokeBuffe
         state.rows.clear();
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
+        // The re-seed is a new subscribe, not yet answered.
+        state.answered = false;
 
         return "reseed";
     }
@@ -213,6 +221,7 @@ export const commitPokeSlice = (state: ShapeSubscriptionState, buffer: PokeBuffe
     }
 
     applyRowOpsToView(state.rows, ops);
+    state.answered = true;
 
     if (message.checkpoint !== undefined) {
         state.serverCursor = message.checkpoint;

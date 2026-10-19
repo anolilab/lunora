@@ -25,6 +25,7 @@ const createConnectedClient = async (fetchImpl: typeof fetch) => {
 
 describe("direct mutation whose response was lost", () => {
     afterEach(() => {
+        vi.unstubAllGlobals();
         vi.useRealTimers();
     });
 
@@ -151,6 +152,35 @@ describe("direct mutation whose response was lost", () => {
 
         await expect(outcome).resolves.toBe("TypeError");
         expect(outbox.enqueue).not.toHaveBeenCalled();
+
+        client.close();
+    });
+
+    it("rejects at once, without queueing, when there is no fetch to send it with", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+        vi.stubGlobal("fetch", undefined);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ heartbeatIntervalMs: 0, persistence: createInMemoryPersistence(), url: "http://app.test", WebSocket });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        await settle();
+
+        let outcome: string | undefined;
+
+        client.mutation(fnRef("todos.set"), { text: "a" }).catch((error: unknown) => {
+            outcome = (error as { code?: string }).code;
+        });
+
+        await settle();
+
+        // Nothing was ever sent, so nothing is retried: the caller hears about it on the first attempt.
+        expect(outcome).toBe("INTERNAL");
+        expect(client.pendingCount()).toBe(0);
 
         client.close();
     });

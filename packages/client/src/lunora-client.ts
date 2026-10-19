@@ -2413,7 +2413,7 @@ class LunoraClient {
         }
 
         for (const state of this.shapeSubscriptions.values()) {
-            if (state.serverCursor === undefined) {
+            if (!state.answered) {
                 pendingSubscriptions += 1;
             }
         }
@@ -2508,9 +2508,9 @@ class LunoraClient {
 
         for (const state of this.shapeSubscriptions.values()) {
             subscriptions.push({
-                // A shape has no separate ack frame; arrival of a cursor means the
-                // server has served it.
-                acked: state.serverCursor !== undefined,
+                // A shape has no separate ack frame; the first poke applied on this
+                // connection means the server has served it.
+                acked: state.answered,
                 functionPath: `shape:${state.name}`,
                 id: state.id,
                 kind: "shape",
@@ -3875,6 +3875,14 @@ class LunoraClient {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
+
+                // Its frame will never be answered now: stand the watchdog down and free the pacing slot it holds.
+                const conn = this.getConnection(subscriptionState.shardKey);
+
+                if (conn) {
+                    this.settleSubscribeWatchdog(conn, subscriptionState.id);
+                }
+
                 this.releaseIdleShard(subscriptionState.shardKey);
                 this.emitSyncStatus();
             }
@@ -3946,6 +3954,7 @@ class LunoraClient {
         this.nextShapeId += 1;
         const id = `shape_${this.nextShapeId.toString()}`;
         const state: ShapeSubscriptionState = {
+            answered: false,
             args: shape.args,
             callbacks: new Set([callback]),
             errorCallbacks: options.onError ? new Set([options.onError]) : new Set(),
@@ -3960,6 +3969,7 @@ class LunoraClient {
         };
 
         this.shapeSubscriptions.set(id, state);
+        this.emitSyncStatus();
         this.ensureSocket(options.shardKey);
         this.sendShapeSubscribeIfOpen(state);
 
@@ -3967,6 +3977,7 @@ class LunoraClient {
             this.shapeSubscriptions.delete(id);
             this.sendOrQueueUnsubscribe(state.shardKey, id, "shape_unsubscribe");
             this.releaseIdleShard(state.shardKey);
+            this.emitSyncStatus();
         };
     }
 
@@ -4812,6 +4823,8 @@ class LunoraClient {
             // where this used to reject, and it owns its own retry policy.
             if (
                 shouldQueueOffline &&
+                // Without a `fetch` nothing was sent and nothing ever will be: tell the caller now rather than retry to the cap.
+                this.fetchImpl !== undefined &&
                 !this.outbox &&
                 options.replayBaseline === undefined &&
                 (error instanceof TypeError || error instanceof TransportError) &&
@@ -6724,6 +6737,10 @@ class LunoraClient {
                 // close 4001, repeat. The reset now happens in
                 // `handleServerMessage` when a non-`error` frame proves the
                 // socket is live (see there).
+                //
+                // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
+                // also be told the previous socket's answers still stand.
+                this.markShardPendingAck(shardKey);
                 this.emitConnectionStatus();
 
                 // Announce the connection (and its app context) before resubscribing,
@@ -6735,7 +6752,6 @@ class LunoraClient {
                 // at a time (see `queueResubscribe`) — every one of them runs its
                 // query server-side to build a snapshot, and on the default shard
                 // they all land on one Durable Object.
-                this.markShardPendingAck(shardKey);
                 this.clearResubscribeQueue(conn);
 
                 for (const state of this.subscriptions.all()) {
@@ -6864,8 +6880,9 @@ class LunoraClient {
         conn.connectionId = undefined;
         conn.whisperAck = undefined;
         this.dropWhisperJoinWaiters(connectionKey(conn.shardKey));
-        this.emitConnectionStatus();
+        // Before the emit, so a listener never sees the dead socket's answers still counted.
         this.markShardPendingAck(conn.shardKey);
+        this.emitConnectionStatus();
         // Frames still queued (or in flight) belong to the socket that just
         // died; the `open` handler re-queues every subscription on this shard.
         this.clearResubscribeQueue(conn);
@@ -6925,13 +6942,19 @@ class LunoraClient {
         /* eslint-enable no-param-reassign */
     }
 
-    /** Mark every subscription bound to `shardKey` as needing a fresh ack. */
+    /** Mark every subscription and shape bound to `shardKey` as needing a fresh answer from the server. */
     private markShardPendingAck(shardKey: string | undefined): void {
         const key = connectionKey(shardKey);
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
                 state.acked = false;
+            }
+        }
+
+        for (const state of this.shapeSubscriptions.values()) {
+            if (connectionKey(state.shardKey) === key) {
+                state.answered = false;
             }
         }
     }
@@ -7373,6 +7396,7 @@ class LunoraClient {
     private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
         const outcome = commitPokeSlice(state, buffer, message);
 
+        this.emitSyncStatus();
         emitShapeRows(state);
 
         if (outcome === "reseed") {
@@ -7400,6 +7424,7 @@ class LunoraClient {
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
         /* eslint-enable no-param-reassign */
+        this.emitSyncStatus();
 
         // eslint-disable-next-line no-console -- last-resort visibility: the client recovers on its own, but a frame it cannot apply is a protocol-level surprise worth surfacing.
         console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
@@ -7906,6 +7931,7 @@ class LunoraClient {
 
         if (state) {
             state.acked = false;
+            this.emitSyncStatus();
             fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
@@ -8576,8 +8602,12 @@ class LunoraClient {
             shapeState.rows.clear();
             shapeState.serverCursor = undefined;
             shapeState.serverEpoch = undefined;
+            shapeState.answered = false;
             emitShapeRows(shapeState);
         }
+
+        // Every subscription above just lost its answer; an open socket would otherwise leave listeners counting it.
+        this.emitSyncStatus();
 
         this.bounceShardSockets();
 
