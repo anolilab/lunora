@@ -1730,6 +1730,10 @@ class LunoraClient {
      * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
      * for short-lived credentials like the minted ephemeral admin sub-token.
      * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
+     *
+     * The value is sent in the upgrade URL, where it lands in access logs,
+     * browser history and `Referer`: it is for the `LUNORA_WS_BEARER` gate
+     * value or a short-lived ticket, and must never be a session credential.
      */
     public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
