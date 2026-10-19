@@ -80,7 +80,9 @@ const hintLines = (hint) => (typeof hint === "string" ? hint.split("\n") : [...h
 const renderErrorReference = (catalog, isInternal) => {
     const codes = Object.keys(catalog)
         .filter((code) => !isInternal(code))
-        .sort((a, b) => a.localeCompare(b));
+        // Code-unit order, not `localeCompare`: the ICU collation differs between the Node builds that run this
+        // generator, so a locale sort would make the committed reference drift on one platform and not another.
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
     const lines = [
         "## Error codes",
