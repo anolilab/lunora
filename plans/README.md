@@ -33,6 +33,10 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                                   | Title                                                                  | Notes                                                                                  |
 | ------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [532](./532-client-adapter-audit-fixes.md)             | Client and adapter fixes from the 2026-10-19 audit                     | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
+| [533](./533-addon-audit-fixes.md)                      | Add-on package fixes from the 2026-10-19 audit                         | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
+| [534](./534-cli-config-audit-fixes.md)                 | CLI and config tooling fixes from the 2026-10-19 audit                 | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
+| [535](./535-shard-engine-write-path-fixes.md)          | Shard-engine and observability write-path fixes from the audit         | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
 | [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | A to D shipped; E (auto-mount the routes) open                                         |
 | [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                    |
@@ -70,6 +74,26 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
 | 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
 | 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
+
+## Audit 2026-10-19 — deferred findings
+
+Full table with evidence in [issue #1271](https://github.com/anolilab/lunora/issues/1271).
+Plans 532–535 carry the S-sized fixes. These need a decision or an M-sized change
+and are recorded here so the next audit does not re-report them:
+
+- **Bearer in the WebSocket URL** (`client/src/lunora-client.ts:5936`): carry it in the `connect` envelope; L, protocol change.
+- **React double fetch per mount** (`react/src/use-query.ts:112,133`): HTTP snapshot + WS seed; resolve `queryFn` from the first push; M.
+- **Per-dispatch observability writes** (`do/src/shard-do.ts:8451,9962`): request log + metrics upserts on every read; decide prod defaults.
+- **CDC without retention** (`do/src/cdc-retention.ts:206-212`): default a retention when `cdc: true`, or emit a `doctor` diagnostic.
+- **Cascade bounding** (`shard-engine/src/relations.ts:689-707`): page holders; typed refusal above a ceiling; M.
+- **Write-flush fan-out O(sockets)** (`do/src/shard-do.ts:13056`): table → socket index from `subMemos`; M.
+- **`.global()` writes as sequential D1 round trips** (`sql-store/src/ctx-db.ts:2700-2751`): batch independent companions; M.
+- **Global delete local probe** (`shard-engine/src/ctx-db.ts:2785-2830`) and **companion-signature memo per request** (`ctx-db-companions.ts:641`): S each.
+- **`ShardRegistryDO` / `EventLogDO` without a caller secret** (vs `session-do.ts:103`): decide whether to require it on `alpha`.
+- **Browser crawl limits** (`browser/src/crawl-client.ts:62-70`): clamp `limit`/`depth`, refuse link-following without an allowlist; S.
+- **Node scheduler/alarm multi-process claim** (`platform-node/src/node-scheduler-host.ts:287`): claim rows or document single-process.
+- **Agent default history read unbounded** (`agent/src/agent-loop.ts:813`), **RAG lexical join O(corpus)** (`ai/src/rag/sql-lexical-store.ts:216`), **`payments.check` ledger fold** (`payment/src/database-store.ts:299`), **`payment_events` / scheduler `dead:` retention**.
+- **Studio edit runs codegen twice** (`config/src/studio-host/schema-edit-handler.ts:155`), **codegen fixpoint re-infers everything per pass** (`codegen/src/run-codegen.ts:208`), **watcher refreshes the whole program** (`codegen-project.ts:117`).
 
 ## Perf audit 2026-10-16 — measured and rejected
 
