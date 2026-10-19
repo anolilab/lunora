@@ -3431,7 +3431,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
             const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
-            const page = await source.findMany(tableName, { where });
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
+            const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
+            const page = await source.findMany(tableName, { limit: cap + 1, where });
             const ids = page.page.map((row) => String(row["_id"]));
 
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
@@ -4265,7 +4267,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent patches
             // consistent.
             const source = globalWriterFor(tableName, "patchWhere") ?? writer;
-            const page = await source.findMany(tableName, { where: args.where });
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
+            const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
+            const page = await source.findMany(tableName, { limit: cap + 1, where: args.where });
             const patches = page.page.map((row) => {
                 return { id: String(row["_id"]), patch: args.patch };
             });
