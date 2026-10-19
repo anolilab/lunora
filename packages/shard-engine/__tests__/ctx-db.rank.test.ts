@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { clearCompanionSignatures } from "../src/ctx-db-companion-state";
-import { rankKeyFromDoc } from "../src/rank";
+import { rankKeyFromDoc, rankTableName } from "../src/rank";
 import type { RankIndexDefinitionLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -237,6 +237,36 @@ describe("ctx-db rank", () => {
             const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
 
             await expect(writer2.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
+        });
+
+        it("rebuilds a companion larger than one insert chunk with every row in sort order", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter(makeSchema());
+            const total = 1200;
+
+            await writer.insertManyUnsafe?.(
+                "messages",
+                Array.from({ length: total }, (_, index) => {
+                    return { _id: `m${String(index)}`, archived: false, channelId: "c1", score: index };
+                }),
+                { allowExplicitId: true, limit: total },
+            );
+
+            const schemaWithRank = makeSchema(byScoreDesc);
+
+            runShardMigrations(harness.sql, schemaWithRank);
+            backfillRankIndexes(harness.sql, schemaWithRank);
+
+            const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
+
+            expect(harness.raw(`SELECT COUNT(*) AS n FROM "${rankTableName("messages", "leaderboard")}"`)[0]?.["n"]).toBe(total);
+            await expect(writer2.rank("messages", "leaderboard", { row: `m${String(total - 1)}` })).resolves.toEqual({ position: 1, total });
+            await expect(writer2.rank("messages", "leaderboard", { row: "m0" })).resolves.toEqual({ position: total, total });
+
+            const page = await writer2.rankPage("messages", "leaderboard", { take: 3 });
+
+            expect(page.page.map((document_) => document_["_id"])).toEqual(["m1199", "m1198", "m1197"]);
         });
 
         it("rankPage walks the companion in declared sort order", async () => {
