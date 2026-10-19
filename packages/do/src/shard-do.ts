@@ -501,7 +501,11 @@ interface SensitiveScope {
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
     /** Keep the values for a record opened under the scope and not yet written. Returns the release. */
     hold: () => () => void;
-    /** Scrub a telemetry name (an event or span name), masking an exact match against a marked property name. */
+
+    /**
+     * Scrub a telemetry name (an event, span or metric name, or a plain log message). A name that is exactly a
+     * marked property name masks whole; any other name is scrubbed as free text.
+     */
     name: (name: string) => string;
     /** Scrub a free-text string. */
     text: (text: string) => string;
@@ -7409,14 +7413,18 @@ abstract class ShardDO {
         const at =
             (level: ContextLogLevel) =>
             (...args: unknown[]): void => {
-                const { fields, message } = parseLogArgs(args, boundFields);
+                // A string argument that is exactly a marked property name is masked before the message is
+                // rendered from it: the message joins the arguments, so masking only the finished message
+                // would miss a key that sits beside other words.
+                const masked = args.map((argument) => (typeof argument === "string" ? scope.name(argument) : argument));
+                const { fields, message } = parseLogArgs(masked, boundFields);
                 // Searched before `parseLogArgs` stringified any Error in the fields.
                 const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 
                 this.recordUserLog(
                     functionPath,
                     level,
-                    scope.value(args),
+                    scope.value(masked),
                     scope.text(message),
                     scope.fields(fields),
                     sink,
@@ -7439,7 +7447,7 @@ abstract class ShardDO {
                 this.recordUserLog(
                     functionPath,
                     "info",
-                    scope.value([eventName]),
+                    [eventName],
                     eventName,
                     scope.fields(boundFields ? { ...boundFields, ...fields } : fields),
                     sink,

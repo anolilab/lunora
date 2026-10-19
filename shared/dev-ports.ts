@@ -13,7 +13,7 @@
  * share a port. The hash has only a fixed number of slots, though, so two linked worktrees can
  * hash to the same slot and get the same pair; set `LUNORA_DEV_PORT_OFFSET` on one of them. An explicit
  * `LUNORA_DEV_PORT_OFFSET` is checked for browser-blocked (Fetch spec "bad ports") and
- * out-of-range ports. Vite keeps `strictPort`: a taken port fails loudly, it never drifts.
+ * out-of-range ports, and for an offset that would move one pinned port onto another. Vite keeps `strictPort`: a taken port fails loudly, it never drifts.
  *
  * Zero-dependency (node built-ins and the sibling {@link file://./fnv1a.ts}), so
  * consumers import it by relative path and the bundler inlines it.

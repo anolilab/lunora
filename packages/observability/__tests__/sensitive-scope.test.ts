@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TracerDeps } from "../src/context-telemetry";
-import { createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
+import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
 import { createDatabaseTally, instrumentDatabase } from "../src/database-telemetry";
 import { createSensitiveScope, NO_SENSITIVE_SCOPE, SENSITIVE_ARG_MASK, sensitiveNames, sensitiveValues } from "../src/request-log";
 
@@ -393,6 +394,80 @@ describe("sensitiveValues", () => {
         expect.assertions(1);
 
         expect(sensitiveValues({ value: nest(10, { token: TRICKY }) }, new Set(["value"]))).toContain(TRICKY_ESCAPED);
+    });
+});
+
+describe("telemetry names under a sensitive scope, beyond the event and span handle", () => {
+    const names = sensitiveNames({ creds: { "ops-mailbox": 1 } }, new Set(["creds"]));
+
+    it("masks a marked property name used as a Cloudflare span name, on the recorded span and the mirrored trace", async () => {
+        expect.assertions(3);
+
+        // A span body that accepts any call, so the bridge can run without a real tracing object.
+        const span = new Proxy({}, { get: () => () => undefined });
+        const enterSpan = vi.fn(async (_name: string, body: (value: unknown) => unknown) => body(span));
+        const recorded: SpanEvent[] = [];
+        const tracer = createTracer({
+            anchor,
+            fuseHostSpans: true,
+            functionPath: "vault:trace",
+            record: (event) => {
+                recorded.push(event);
+            },
+            resolveHostTracing: async () => ({ enterSpan }) as never,
+            scope: createSensitiveScope([], names),
+            shardKey: "shard-1",
+            userId: () => undefined,
+        });
+
+        await tracer("ops-mailbox", () => "ok");
+
+        expect(enterSpan).toHaveBeenCalledWith(SENSITIVE_ARG_MASK, expect.any(Function));
+        expect(recorded[0]?.name).toBe(SENSITIVE_ARG_MASK);
+        expect(JSON.stringify(recorded)).not.toContain("ops-mailbox");
+    });
+
+    it("masks a marked property name used as a metric name", () => {
+        expect.assertions(2);
+
+        const recorded: MetricEvent[] = [];
+        const metrics = createMetrics({
+            functionPath: "vault:metric",
+            record: (event) => {
+                recorded.push(event);
+            },
+            scope: createSensitiveScope([], names),
+            shardKey: "shard-1",
+        });
+
+        metrics.count("ops-mailbox");
+
+        expect(recorded[0]?.name).toBe(SENSITIVE_ARG_MASK);
+        expect(JSON.stringify(recorded)).not.toContain("ops-mailbox");
+    });
+
+    it("masks a marked value in the host that names an outbound fetch span", async () => {
+        expect.assertions(2);
+
+        const recorded: SpanEvent[] = [];
+        const fetch = createTracedFetch(
+            {
+                anchor,
+                functionPath: "vault:send",
+                record: (span) => {
+                    recorded.push(span);
+                },
+                scope: createSensitiveScope([SECRET]),
+                shardKey: "shard-1",
+                userId: () => undefined,
+            },
+            async () => new Response("ok"),
+        );
+
+        await fetch(`https://${SECRET}.example.test/x`);
+
+        expect(recorded[0]?.name).toBe(`GET ${SENSITIVE_ARG_MASK}.example.test`);
+        expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 });
 

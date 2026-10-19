@@ -487,6 +487,9 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
             const normalized = scope.fields(normalizeLogFields(resolved.attributes));
+            // The span name is the same on the recorded span and on the Cloudflare trace it is mirrored
+            // to, so a marked property name is masked once here, before either sees it.
+            const spanName = scope.name(name);
 
             // Post-hoc attributes/events/links the body attaches through its
             // `SpanHandle`. Attributes merge over `normalized` at record time
@@ -583,7 +586,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // bytes and pre-existing recorded spans stay identical.
                             ...(resolved.kind === undefined || resolved.kind === "internal" ? {} : { kind: resolved.kind }),
                             ...(links.length === 0 ? {} : { links }),
-                            name: scope.name(name),
+                            name: spanName,
                             ok,
                             parentSpanId: parentId,
                             ...spanAnchorFields(anchor),
@@ -637,7 +640,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     const cfTracing = await resolveHostTracing();
 
                     if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
-                        return await cfTracing.enterSpan(name, (span) => {
+                        return await cfTracing.enterSpan(spanName, (span) => {
                             bodyStarted = true;
 
                             return runRecorded(span);
@@ -794,7 +797,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     // path. A span name built from a path with ids in it makes
                     // every request its own group in a collector, which is how a
                     // trace backend's aggregate views get destroyed.
-                    name: `${request.method} ${safeHost(request.url)}`,
+                    name: scope.text(`${request.method} ${safeHost(request.url)}`),
                     ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
                     ...spanAnchorFields(anchor),
@@ -841,7 +844,7 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
                 ...(normalized === undefined ? {} : { attributes: normalized }),
                 functionPath,
                 kind,
-                name,
+                name: scope.name(name),
                 shardKey,
                 ts: Date.now(),
                 value,

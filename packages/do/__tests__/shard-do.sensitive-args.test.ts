@@ -209,6 +209,20 @@ class TelemetryShard extends ShardDO {
             return { ok: true };
         }
 
+        if (functionPath === "vault:composed") {
+            // A marked key beside other words, which the rendered message joins.
+            log.info("rejected", Object.keys(args["value"] as Record<string, unknown>)[0] ?? "");
+
+            return { ok: true };
+        }
+
+        if (functionPath === "vault:message") {
+            // A key of the marked object, written as a plain log message.
+            log.info(Object.keys(args["value"] as Record<string, unknown>)[0] ?? "");
+
+            return { ok: true };
+        }
+
         if (functionPath === "vault:serialize") {
             // A handler that quotes its whole argument bag, as JSON, in a log line and in a
             // failure: the marked value appears in its escaped spelling, not its raw one.
@@ -319,6 +333,49 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
 
             expect(named?.fields).toStrictEqual({ [SENSITIVE_ARG_MASK]: "x", label: "primary" });
             expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a marked key that a log call joins into its message beside other words", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            await shard.fetch(telemetryRpc("vault:composed", { label: "primary", value: { "ops-mailbox": 1 } }));
+
+            const rejected = logs.find((event) => event.message.startsWith("rejected"));
+
+            expect(rejected?.message).toBe(`rejected ${SENSITIVE_ARG_MASK}`);
+            expect(JSON.stringify(logs)).not.toContain("ops-mailbox");
+            expect(logs.length).toBeGreaterThan(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a key of a marked object written as a plain log message", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            await shard.fetch(telemetryRpc("vault:message", { label: "primary", value: { "ops-mailbox": 1 } }));
+
+            expect(logs.length).toBeGreaterThan(0);
+            expect(JSON.stringify(logs)).not.toContain("ops-mailbox");
         } finally {
             database.close();
         }

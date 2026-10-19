@@ -247,7 +247,7 @@ Two opt-ins are needed, on **both** sides:
 
 Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
 
-**Limit:** a run paused for a secret request (`requestSecretTool`) cannot be resumed through MCP. MCP has no operation to supply or decline the value, so the run waits for its owner to answer it in the app and otherwise expires. The status reports it as `awaiting_input`, and the pending result says the decision belongs in the app.
+**Limit:** a run paused for a tool approval or a secret request (`requestSecretTool`) cannot be resumed through MCP. MCP has no operation to approve, reject, supply or decline it, so the run waits for its owner to answer it in the app and otherwise expires. The status reports the run as `awaiting_input`, and that result's `hint` says the decision belongs in the app.
 
 Runs are **owner-scoped** to the identity the configured token resolves to — which is the deployment's **admin** identity, because `LUNORA_ADMIN_TOKEN` is what every tool needs (see [Tokens](#tokens)). Every agent thread this server starts therefore belongs to that one identity; run a separate MCP server per deployment if you need them kept apart.
 

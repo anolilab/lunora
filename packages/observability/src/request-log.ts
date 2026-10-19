@@ -640,9 +640,8 @@ interface SensitiveScope {
     hold: () => () => void;
 
     /**
-     * Scrub a telemetry name (an event or span name). A name that is exactly a marked
-     * property name masks whole, because a handler that uses a key of a marked object as
-     * a name has put that key on the record; any other name is scrubbed as text.
+     * Scrub a telemetry name (an event, span or metric name, or a plain log message). A name that is exactly
+     * a marked property name masks whole; any other name is scrubbed as free text.
      */
     name: (name: string) => string;
     /** Scrub a free-text string. */

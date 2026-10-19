@@ -39,9 +39,9 @@ const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
  * Thread statuses that mean the run has stopped — every member of
  * `AgentThreadStatus` except `"running"`.
  *
- * `"awaiting_input"` belongs here: a run paused on a human-in-the-loop tool
- * approval is STOPPED, and nothing this server can do resumes it (MCP offers no
- * way to supply the approval). Treating it as still-running burned the whole
+ * `"awaiting_input"` belongs here: a run paused on a human-in-the-loop decision (a
+ * tool approval or a secret request) is STOPPED, and nothing this server can do
+ * resumes it (MCP offers no way to answer either one). Treating it as still-running burned the whole
  * `maxWaitMs` budget on ~100 admin queries per call and then reported
  * `status: "running"` with a hint to poll a tool that would answer
  * `awaiting_input` forever.
@@ -247,7 +247,7 @@ const readTerminal = async (client: LunoraClient, threadKey: string, status: str
 
     if (status === "awaiting_input") {
         // Not an error — the run is healthy and paused on a human-in-the-loop
-        // tool approval. Say so plainly, including that MCP is not the surface
+        // decision (a tool approval or a secret request). Say so plainly, including that MCP is not the surface
         // that can unblock it, so the caller stops polling instead of waiting
         // out a budget that can never expire into an answer.
         return ok({
