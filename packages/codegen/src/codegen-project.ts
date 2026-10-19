@@ -72,24 +72,57 @@ const tsconfigFiles = (tsconfigPath: string): string[] => {
 const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfigSources.filter((path) => DECLARATION_FILE_RE.test(path));
 
 /**
+ * Whether the token at the scanner's position is `export`, or an `import` that starts a
+ * declaration rather than an `import(` call or `import.meta`.
+ */
+const isModuleKeyword = (scanner: ts.Scanner, token: ts.SyntaxKind): boolean => {
+    if (token === ts.SyntaxKind.ExportKeyword) {
+        return true;
+    }
+
+    return token === ts.SyntaxKind.ImportKeyword && ![ts.SyntaxKind.DotToken, ts.SyntaxKind.OpenParenToken].includes(scanner.scan());
+};
+
+/**
  * Whether a file is a module, which is what keeps its declarations out of the program
  * (a script's are global). Scanned token by token, so an `import` or `export` in a
- * comment or string does not count. An `import(` call or `import.meta` does not either.
- * Stops at the first module token, which is near the top of a module.
+ * comment or string does not count, and neither does one inside a namespace or
+ * braces. Stops at the first module token, which is near the top of a module.
  */
 const isModuleSource = (text: string): boolean => {
     const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
+    // Braces open at this point, and the depth each template's `${` began at, so the `}`
+    // that closes a substitution is read as template text rather than as code.
+    let depth = 0;
+    const substitutionDepths: number[] = [];
 
     for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-        if (token === ts.SyntaxKind.ExportKeyword) {
-            return true;
-        }
+        switch (token) {
+            case ts.SyntaxKind.CloseBraceToken: {
+                if (substitutionDepths.at(-1) === depth) {
+                    if (scanner.reScanTemplateToken(false) === ts.SyntaxKind.TemplateTail) {
+                        substitutionDepths.pop();
+                    }
+                } else {
+                    depth -= 1;
+                }
 
-        if (token === ts.SyntaxKind.ImportKeyword) {
-            const next = scanner.scan();
+                break;
+            }
+            case ts.SyntaxKind.OpenBraceToken: {
+                depth += 1;
 
-            if (next !== ts.SyntaxKind.OpenParenToken && next !== ts.SyntaxKind.DotToken) {
-                return true;
+                break;
+            }
+            case ts.SyntaxKind.TemplateHead: {
+                substitutionDepths.push(depth);
+
+                break;
+            }
+            default: {
+                if (depth === 0 && isModuleKeyword(scanner, token)) {
+                    return true;
+                }
             }
         }
     }

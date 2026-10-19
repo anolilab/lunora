@@ -292,6 +292,14 @@ describe("globals declared outside lunora/", () => {
             expected: "commented: number",
         },
         {
+            name: "a script whose namespace exports, and whose template text after a substitution says export",
+            files: {
+                "src/app-types.ts": `declare namespace App {\n    export interface Env {\n        x: string;\n    }\n}\n\nconst label = \`\${1} export\`;\n`,
+            },
+            handler: "{ x: (null as unknown as App.Env).x }",
+            expected: "x: string",
+        },
+        {
             name: "a declare module for a specifier the lunora source imports",
             files: { "src/virtual.ts": 'declare module "virtual-mode" {\n    export const mode: "dev" | "prod";\n}\n' },
             probeImports: 'import { mode } from "virtual-mode";\n',
