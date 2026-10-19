@@ -197,6 +197,26 @@ interface CaptchaGlobal {
     reset?: (widgetId?: unknown) => void;
 }
 
+/** Every widget currently mounted, so a failed submit can re-arm all of them. */
+const widgets = new Set<{ api: CaptchaGlobal; id: unknown }>();
+
+/**
+ * Reset every live widget and drop any pending token.
+ *
+ * The token is spent by the request that carried it (see {@link captchaHeaders}),
+ * so after a failed submit the widget still shows "solved" while holding nothing
+ * the server will accept — the retry goes out without a header and fails with
+ * `MISSING_RESPONSE`. The form controllers call this on every failure so the
+ * user is asked to solve again instead.
+ */
+const resetCaptcha = (): void => {
+    for (const widget of widgets) {
+        widget.api.reset?.(widget.id);
+    }
+
+    store.set({});
+};
+
 interface RenderCaptchaOptions {
     onError?: (error: unknown) => void;
     provider: CaptchaProvider;
@@ -213,6 +233,7 @@ interface RenderCaptchaOptions {
 const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => void) => {
     const provider = PROVIDERS[options.provider];
     let widgetId: unknown;
+    let widget: { api: CaptchaGlobal; id: unknown } | undefined;
     let disposed = false;
 
     /**
@@ -248,6 +269,8 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
                 },
                 sitekey: options.siteKey,
             });
+            widget = { api, id: widgetId };
+            widgets.add(widget);
 
             return true;
         })
@@ -257,6 +280,10 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 
     return () => {
         disposed = true;
+
+        if (widget !== undefined) {
+            widgets.delete(widget);
+        }
 
         // Only if the store still holds *our* token — another widget may have
         // solved since, and consuming clears it anyway.
@@ -271,4 +298,4 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 };
 
 export type { CaptchaHeaderOptions, CaptchaProvider, RenderCaptchaOptions };
-export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, setCaptchaToken };
+export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, resetCaptcha, setCaptchaToken };

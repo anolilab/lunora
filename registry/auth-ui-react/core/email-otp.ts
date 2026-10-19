@@ -4,6 +4,7 @@
  * — so it's a bespoke controller over the shared {@link createStore} primitive,
  * still exposing the same `getState`/`subscribe` contract for the view layer.
  */
+import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
 import { statusAfterEdit } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
@@ -79,6 +80,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             store.update({ status: "idle", step: "verify", successMessage: context.localization.emailOtpSent });
         } catch (error_) {
             context.onError?.(error_);
+            resetCaptcha();
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.genericError), status: "error" });
         }
     };
@@ -108,6 +110,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             context.nav.replace(postAuthDestination(context));
         } catch (error_) {
             context.onError?.(error_);
+            resetCaptcha();
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });
         }
     };

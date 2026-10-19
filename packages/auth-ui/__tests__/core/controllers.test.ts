@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, AuthResponse, ControllerContext } from "../../src/core";
 import {
+    captchaHeaders,
     createActiveMemberController,
     createAnonymousController,
     createEmailOtpController,
@@ -12,6 +13,7 @@ import {
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
+    renderCaptcha,
     resolveContext,
 } from "../../src/core";
 
@@ -593,5 +595,54 @@ describe(createAnonymousController, () => {
         await controller.actions.signIn();
 
         expect(controller.getState().status).toBe("error");
+    });
+});
+
+describe("captcha after a failed submit", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("resets the widget and drops the token the failed request spent", async () => {
+        let solve: ((token: string) => void) | undefined;
+        const api = {
+            render: vi.fn((_element: Element, parameters: { callback: (token: string) => void }) => {
+                solve = parameters.callback;
+
+                return "widget-1";
+            }),
+            reset: vi.fn(),
+        };
+
+        vi.stubGlobal("hcaptcha", api);
+        // jsdom never fetches the provider script; fire its `load` by hand.
+        vi.spyOn(document.head, "appendChild").mockImplementation(<T extends Node>(node: T): T => {
+            queueMicrotask(() => node.dispatchEvent(new Event("load")));
+
+            return node;
+        });
+
+        // A teardown function; named `view` for testing-library's naming rule.
+        const view = renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" });
+
+        await vi.waitFor(() => {
+            expect(api.render).toHaveBeenCalledTimes(1);
+        });
+
+        solve?.("solved-token");
+
+        const client = stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } });
+        const controller = createSignInController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        controller.actions.setField("password", "secret1234");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("error");
+        expect(captchaHeaders()).toStrictEqual({});
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
     });
 });

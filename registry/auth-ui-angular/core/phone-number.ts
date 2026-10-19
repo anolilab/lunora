@@ -6,6 +6,7 @@
  * own state machine like `email-otp.ts` does, rather than being one form. The
  * other two are single submits.
  */
+import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
@@ -74,6 +75,7 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
             store.update({ status: "idle", ...(await work()) });
         } catch (error) {
             context.onError?.(error);
+            resetCaptcha();
             store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
         }
     };

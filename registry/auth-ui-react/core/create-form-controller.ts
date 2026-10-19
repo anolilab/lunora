@@ -13,6 +13,7 @@
  * Flows whose fields come from the server declare {@link FormControllerOptions.prefill}
  * rather than seeding themselves — see `organization-settings.ts`.
  */
+import { resetCaptcha } from "./captcha";
 import type { ControllerContext } from "./config";
 import type { Localization } from "./localization";
 import { mapAuthError } from "./map-error";
@@ -183,6 +184,8 @@ const createFormController = <TField extends string>(context: ControllerContext,
             }
         } catch (error) {
             context.onError?.(error);
+            // The request spent the captcha token; re-arm the widget for the retry.
+            resetCaptcha();
 
             store.set({
                 ...state(),
