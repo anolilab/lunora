@@ -356,17 +356,28 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
 }
 
 /**
+ * Total binary attachment bytes forwarded in the default envelope. Raw +
+ * decoded + base64 + JSON copies of one large attachment outgrow the isolate's
+ * memory limit; apps that need more supply `resolveArgs` and store to R2.
+ */
+const MAX_FORWARDED_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+/**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.
  * Binary attachment `content` (postal-mime hands binary parts back as an
  * `ArrayBuffer`/`Uint8Array`) would be corrupted by `JSON.stringify` — an
  * `ArrayBuffer` serialises to `{}` and a `Uint8Array` to a bloated index-keyed
  * object. We base64-encode binary content and mark `encoding: "base64"` so it
- * survives the wire intact; string content is passed through untouched.
+ * survives the wire intact; string content is passed through untouched. Binary
+ * content past {@link MAX_FORWARDED_ATTACHMENT_BYTES} is dropped and the
+ * attachment marked `truncated`.
  */
 const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
     if (email.attachments.length === 0) {
         return email;
     }
+
+    let forwarded = 0;
 
     return {
         ...email,
@@ -376,6 +387,12 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
             if (typeof content === "string") {
                 return attachment;
             }
+
+            if (forwarded + content.byteLength > MAX_FORWARDED_ATTACHMENT_BYTES) {
+                return { ...attachment, content: "", encoding: "base64" as const, truncated: true };
+            }
+
+            forwarded += content.byteLength;
 
             const bytes = content instanceof Uint8Array ? content : new Uint8Array(content);
 

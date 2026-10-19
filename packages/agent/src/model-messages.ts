@@ -35,6 +35,25 @@ const toolMessage = (row: AgentMessageRow): ModelMessage => {
 };
 
 /**
+ * A synthetic tool-result for a persisted tool call that never got a result row
+ * (the run died between persisting the assistant row and executing the call).
+ * Providers reject an unpaired `toolCallId`, which would wedge the thread.
+ */
+const unexecutedToolMessage = (call: { id: string; name: string }): ModelMessage => {
+    return {
+        content: [
+            {
+                output: { type: "text" as const, value: "Tool call was not executed: the run was interrupted before it ran." },
+                toolCallId: call.id,
+                toolName: call.name,
+                type: "tool-result" as const,
+            },
+        ],
+        role: "tool",
+    };
+};
+
+/**
  * Assemble the AI SDK conversation for one LLM turn: instructions, then the
  * retrieved memory context (when any), then the persisted thread history with
  * tool calls/results correlated the way providers expect (assistant tool-call
@@ -64,6 +83,15 @@ const buildModelMessages = (options: {
         messages.push({ content: `Summary of the earlier conversation:\n\n${options.summary}`, role: "system" });
     }
 
+    const answered = new Set(options.history.filter((row) => row.role === "tool" && row.toolCallId !== undefined).map((row) => row.toolCallId));
+    // Synthetic results for the current assistant row's unanswered calls, emitted
+    // after its persisted tool rows and before the next non-tool row.
+    let unanswered: ModelMessage[] = [];
+    const flushUnanswered = (): void => {
+        messages.push(...unanswered);
+        unanswered = [];
+    };
+
     for (const row of options.history) {
         // The awaiting-approval placeholder is a UI/observability marker, not a
         // real tool result — feeding it to the model would double the tool-call's
@@ -73,9 +101,14 @@ const buildModelMessages = (options: {
             continue;
         }
 
+        if (row.role !== "tool") {
+            flushUnanswered();
+        }
+
         switch (row.role) {
             case "assistant": {
                 messages.push(assistantMessage(row));
+                unanswered = (row.toolCalls ?? []).filter((call) => !answered.has(call.id)).map((call) => unexecutedToolMessage(call));
 
                 break;
             }
@@ -99,6 +132,8 @@ const buildModelMessages = (options: {
             }
         }
     }
+
+    flushUnanswered();
 
     return messages;
 };

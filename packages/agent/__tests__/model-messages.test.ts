@@ -63,7 +63,44 @@ describe(buildModelMessages, () => {
             history: [{ content: "", role: "assistant", seq: 0, toolCalls: [{ id: "c", input: {}, name: "t" }] }],
         });
 
-        expect(messages).toHaveLength(1);
+        // The second message is the synthetic result pairing the dangling call.
+        expect(messages).toHaveLength(2);
         expect(messages[0]?.content).toStrictEqual([{ input: {}, toolCallId: "c", toolName: "t", type: "tool-call" }]);
+    });
+
+    it("pairs a tool call the interrupted run never answered with a synthetic result", () => {
+        const messages = buildModelMessages({
+            history: [
+                { content: "do both", role: "user", seq: 0 },
+                {
+                    content: "",
+                    role: "assistant",
+                    seq: 1,
+                    toolCalls: [
+                        { id: "call_1", input: {}, name: "first" },
+                        { id: "call_2", input: {}, name: "second" },
+                    ],
+                },
+                { content: "done", role: "tool", seq: 2, toolCallId: "call_1", toolName: "first" },
+            ],
+        });
+
+        expect(messages.filter((message) => message.role === "tool")).toHaveLength(2);
+        expect(messages[1]?.role).toBe("assistant");
+        expect(messages[2]).toStrictEqual({
+            content: [{ output: { type: "text", value: "done" }, toolCallId: "call_1", toolName: "first", type: "tool-result" }],
+            role: "tool",
+        });
+        expect(messages[3]).toStrictEqual({
+            content: [
+                {
+                    output: { type: "text", value: "Tool call was not executed: the run was interrupted before it ran." },
+                    toolCallId: "call_2",
+                    toolName: "second",
+                    type: "tool-result",
+                },
+            ],
+            role: "tool",
+        });
     });
 });

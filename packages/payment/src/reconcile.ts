@@ -143,6 +143,13 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
         return false;
     }
 
+    // A webhook that landed mid-sweep is newer than the provider snapshot: leave its write alone.
+    const latest = await store.getSubscription(adapter.identifier, id);
+
+    if (latest?.lastEventAt !== existing?.lastEventAt || latest?.updatedAt !== existing?.updatedAt) {
+        return false;
+    }
+
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
     await store.upsertSubscription(overlayProviderSubscription(existing, current));
@@ -157,6 +164,13 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     const current = mergePaymentTruth(existing, providerTruth);
 
     if (!paymentDrifted(existing, current)) {
+        return false;
+    }
+
+    // Same mid-sweep webhook guard as `reconcileSubscription`.
+    const latest = await store.getPaymentSession(adapter.identifier, id);
+
+    if (latest?.updatedAt !== existing?.updatedAt) {
         return false;
     }
 
@@ -250,6 +264,9 @@ interface SweepCounts {
     readonly updated: number;
 }
 
+// ponytail: fixed guess under Stripe's rate limit; make it an option when a provider needs another value.
+const RECONCILE_CONCURRENCY = 8;
+
 // Fan out over a batch with per-id fault isolation: a single failing id (a 404'd/deleted row, a
 // transient 5xx, a 429) must never abort the whole sweep, or drift for every other id would never
 // self-heal. Each rejection is surfaced as a `reconcile.error` signal rather than thrown.
@@ -260,7 +277,26 @@ const sweep = async (
     adapter: PaymentAdapter,
     observer?: PaymentObserver,
 ): Promise<SweepCounts> => {
-    const settled = await Promise.allSettled(ids.map((id) => reconcileOne(id)));
+    // Bounded: one provider read per id, so an unbounded fan-out over a large batch trips the
+    // provider's rate limit. Workers pull the next id off a shared cursor.
+    const settled: PromiseSettledResult<boolean>[] = Array.from({ length: ids.length });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+        while (cursor < ids.length) {
+            const index = cursor;
+
+            cursor += 1;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each worker reconciles serially; the pool is the concurrency
+                settled[index] = { status: "fulfilled", value: await reconcileOne(ids[index] ?? "") };
+            } catch (error) {
+                settled[index] = { reason: error, status: "rejected" };
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(RECONCILE_CONCURRENCY, ids.length) }, () => worker()));
 
     let updated = 0;
     let failed = 0;

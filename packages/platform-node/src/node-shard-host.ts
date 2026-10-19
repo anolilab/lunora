@@ -200,6 +200,11 @@ const createAlarms = (
         }
     };
 
+    /** Delete the durable row only if it still holds the timestamp that just fired. */
+    const consume = (firedAt: number): void => {
+        database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt);
+    };
+
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
@@ -252,8 +257,10 @@ const createAlarms = (
             // (or that itself schedules the next alarm, which is the normal
             // pattern) must not race a stale row: the timestamp this timer just
             // consumed is spent either way, and leaving it behind would re-fire
-            // it on the next construction over this database.
-            persist(undefined);
+            // it on the next construction over this database. Conditional on
+            // the timestamp: a transaction may have persisted a newer alarm
+            // while this timer was still armed, and that row is not ours.
+            consume(ms);
 
             (async (): Promise<void> => {
                 await onAlarm?.();
