@@ -359,7 +359,7 @@ export const listItems = query({
     });
 
     it("seeds an augmentation of a module that a file a lunora/ source imports reaches", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const helperPath = join(workdir, "src", "helper.ts");
         const augmentPath = join(workdir, "src", "fake-mod-augment.ts");
@@ -369,7 +369,13 @@ export const listItems = query({
         writeFileSync(augmentPath, 'export {};\n\ndeclare module "fake-mod" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
         writeFileSync(join(lunoraDirectory, "usesHelper.ts"), 'import { helper } from "../src/helper";\n\nexport const used = helper;\n', "utf8");
 
-        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(true);
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, augmentPath)).toBe(true);
+
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, augmentPath)).toBe(true);
     });
 
     it("drops a file a lunora/ source stops importing, and keeps the program when nothing changes", () => {
@@ -462,6 +468,36 @@ export const listItems = query({
 
         expect(loaded(project, commonJsPath)).toBe(false);
         expect(loaded(project, scriptPath)).toBe(true);
+    });
+
+    it("treats a JavaScript file that only assigns module.exports as CommonJS", () => {
+        expect.assertions(1);
+
+        const exportsPath = join(workdir, "src", "exports-only.js");
+
+        writeFileSync(exportsPath, "module.exports = { value: 1 };\n", "utf8");
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { allowJs: true, strict: true }, include: ["src/**/*", "lunora/**/*"] }),
+            "utf8",
+        );
+
+        expect(loaded(createCodegenProject(lunoraDirectory), exportsPath)).toBe(false);
+    });
+
+    it("keeps a file a lunora/ source references by triple-slash path, though nothing imports it", () => {
+        expect.assertions(1);
+
+        const referencedPath = join(workdir, "src", "referenced.ts");
+
+        writeFileSync(referencedPath, "export const referenced = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "usesReference.ts"), '/// <reference path="../src/referenced.ts" />\n\nexport const used = 1;\n', "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, referencedPath)).toBe(true);
     });
 
     it("reads a file the tsconfig extends again for a new Project, so an edit to it takes effect", () => {
