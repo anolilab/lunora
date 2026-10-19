@@ -58,6 +58,7 @@ Scaffolded projects gitignore `lunora/_generated/`; never hand-edit it.
 - Schema/data migrations: `lunora-migration-helper`
 - Deploying (wrangler, bindings, secrets, the drift gate): `lunora-deploy`
 - Slow queries, scans, write conflicts: `lunora-performance-audit`
+- Launch readiness, surprise Cloudflare bills, public routes reaching paid products: `lunora-cloudflare-audit`
 
 ### Reviewing existing `lunora/` code
 

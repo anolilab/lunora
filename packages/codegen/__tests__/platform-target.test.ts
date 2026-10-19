@@ -884,7 +884,10 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         // The declaration in `lunora/`, the signal the gate hands the emitters, and the
         // surface they write: the shard's action ctx and the push consumer's publisher.
-        write("live.ts", `import { defineLiveStream } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts" });\n`);
+        write(
+            "live.ts",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts", topics: { post: { payload: v.null() } } });\n`,
+        );
         write("queues.ts", `import { defineQueue } from "@lunora/queue";\n\nexport const digest = defineQueue({ handler: async () => {} });\n`);
 
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");

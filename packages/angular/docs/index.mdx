@@ -155,17 +155,21 @@ outside an injection context (e.g. lazily in `ngOnInit`), supply `client` and
 
 ## `liveTopic(source, options?)`
 
-Follows one topic on the connection shared by its URL, and mirrors the last
-payload and any refusal into `lastEvent` and `error` signals. It subscribes when
-the owning `DestroyRef` is created and unsubscribes when it is destroyed.
+Follows one topic a `defineLiveStream` declares, and mirrors the last payload and
+any refusal into `lastEvent` and `error` signals. It subscribes when the owning
+`DestroyRef` is created and unsubscribes when it is destroyed.
 
-`source` is a plain `SubscribeLiveTopicOptions` object or a function returning
-one. A new topic or connection option resubscribes; a new `onEvent` or `onError`
-is read at call time and does not. `options` takes `destroyRef` and `injector`,
-which the reactive form needs when called outside an injection context.
+`source` is the reference `_generated/live.ts` hands out, or a function returning
+one. The stream's route is resolved against the injected `LunoraClient`, and
+`lastEvent` and `onEvent` are typed by the payload the topic declares. A function
+makes the topic reactive: a new topic resubscribes, while a new `onEvent` or
+`onError` is read at call time and does not. `options` takes `client`,
+`destroyRef` and `injector`, which the reactive form needs when called outside an
+injection context, plus `shardKey` and `sessionKey` (each a string or a signal, which resubscribes on change) and the transport tuning `headers`,
+`withCredentials`, `retryDelay` and `maxDelayMs`.
 
 ```ts
-readonly comments = liveTopic(() => ({ url: "/live/posts/connect", topic: `comments:${this.postId()}` }));
+readonly comments = liveTopic(() => live.posts.comments({ postId: this.postId() }));
 ```
 
 ## `mutate(fn, args, options?)`

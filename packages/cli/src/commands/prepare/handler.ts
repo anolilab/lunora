@@ -6,7 +6,8 @@
  * second implementation: it was one, and the copies had drifted so that prepare
  * checked LESS than the deploy it precedes.
  */
-import { resolveLazyFunctions } from "@lunora/config";
+import type { DevProcessSpawner } from "@lunora/config";
+import { resolveDeployDriver, resolveLazyFunctions } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -15,7 +16,7 @@ import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
-import { runPreDeployPipeline } from "../deploy/handler";
+import { runPreDeployPipeline, smokeLoadLazyModules } from "../deploy/handler";
 import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
@@ -27,6 +28,12 @@ interface PrepareCommandOptions {
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
     logger: Logger;
+
+    /** Starts the smoke check's `wrangler dev`. Unset, the check launches a real server; a caller that must not launch one passes its own. */
+    smokeLauncher?: DevProcessSpawner;
+
+    /** `false` (`--no-smoke-load`) skips the lazy smoke check. Default on. */
+    smokeLoad?: boolean;
 
     /** Injected process runner for the `postcodegen` hook (tests). Defaults to the real spawner. */
     spawner?: Spawner;
@@ -71,7 +78,8 @@ interface PrepareCommandResult {
  * it exists to pre-check. They also provisioned by different routes.
  *
  * What `prepare` still does NOT do, which is the line between the two commands:
- * no container image build or push, and no wrangler invocation. It answers
+ * no container image build or push, and no bundle or deploy. Its lazy smoke check
+ * does start a local `wrangler dev`, the same one `deploy` runs, so it answers
  * "would this deploy?" without producing a bundle.
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
@@ -103,6 +111,19 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
+    // The lazy smoke check runs here too, so a module that throws at load fails the CI gate rather than the
+    // deploy that follows it. Deploy runs the same check in its own preflight.
+    const smokeError = await smokeLoadLazyModules(
+        cwd,
+        { env: undefined, logger: options.logger, smokeLauncher: options.smokeLauncher, smokeLoad: options.smokeLoad },
+        resolveDeployDriver(pipeline.target),
+        pipeline.validation.wranglerPath,
+    );
+
+    if (smokeError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: smokeError, validation: pipeline.validation };
+    }
+
     // Prepare fully succeeded — safe to advance the committed schema baseline.
     // Deferred to here for the same reason deploy defers it past wrangler: a run
     // that failed earlier must not move the goalposts the next one measures
@@ -122,6 +143,7 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         logger,
+        smokeLoad: options.smokeLoad,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
         updateSchemaBaseline: options.updateSchemaBaseline === true,

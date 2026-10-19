@@ -1,3 +1,20 @@
+## @lunora/runtime [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.219...@lunora/runtime@1.0.0-alpha.220) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/observability:** upgraded to 1.0.0-alpha.154
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.86
+
 ## @lunora/runtime [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.218...@lunora/runtime@1.0.0-alpha.219) (2026-10-18)
 
 ### Features

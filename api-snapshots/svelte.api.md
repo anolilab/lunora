@@ -348,9 +348,9 @@ type ListPresentReference = FunctionReference<"query", {
 ### `LiveTopicState` (interface)
 
 ```ts
-interface LiveTopicState {
+interface LiveTopicState<Payload = unknown> {
     error: LiveStreamSubscribeError | undefined;
-    lastEvent: unknown;
+    lastEvent: Payload | undefined;
 }
 ```
 
@@ -713,7 +713,7 @@ function infiniteQuery<F extends FunctionReference>(client: LunoraClient, functi
 ### `liveTopic` (const)
 
 ```ts
-const liveTopic: (options: SubscribeLiveTopicOptions | Readable<SubscribeLiveTopicOptions>) => Readable<LiveTopicState>;
+const liveTopic: <Payload>(topic: LiveTopicRef<Payload> | Readable<LiveTopicRef<Payload>>, options?: LiveTopicOptions<Payload> | Readable<LiveTopicOptions<Payload>>) => Readable<LiveTopicState<Payload>>;
 ```
 
 ### `mutation` (function)

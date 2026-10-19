@@ -387,25 +387,40 @@ are `api.*` references. The handle is `{ present, sessionId, setData, teardown }
 {#each $present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
 ```
 
-### `liveTopic(options)`
+### `liveTopic(topic, options?)`
 
-Follows one topic on the connection shared by its URL. The readable holds
-`{ lastEvent, error }`: the last payload delivered on the topic, and the shard's
-refusal of the subscription. Nothing opens until the first subscriber, and the
-subscription closes when the last one leaves, so there is no `teardown()`.
+Follows one topic a `defineLiveStream` declares. Pass the reference
+`_generated/live.ts` hands out; the stream's route is resolved against the
+`LunoraClient` in context, and `lastEvent` and `onEvent` are typed by the payload
+the topic declares. The readable holds `{ lastEvent, error }`: the last payload
+delivered on the topic, and the shard's refusal of the subscription. Nothing opens
+until the first subscriber, and the subscription closes when the last one leaves,
+so there is no `teardown()`.
 
-`options` is a plain object or a `Readable` of one. A new topic or connection
-option resubscribes; a new `onEvent` or `onError` is read at call time and does
-not.
+Call `liveTopic` while a component initialises: it reads the client with
+`getContext`, which throws outside that window. `topic` is a reference or a
+`Readable` of one, and a new topic resubscribes. `options` are `onEvent`,
+`onError`, `shardKey`, `sessionKey`, and the transport tuning `headers`,
+`withCredentials`, `retryDelay` and `maxDelayMs`. `options` may be a `Readable` as
+well, e.g. to move to a new `sessionKey` on sign-out; a new `onEvent` or `onError`
+is read at call time and does not resubscribe.
 
 ```svelte
 <script lang="ts">
     import { liveTopic } from "@lunora/svelte";
+    import { writable } from "svelte/store";
+
+    import { live } from "../lunora/_generated/live";
 
     export let postId: string;
 
-    // Re-run when `postId` changes, so the store follows the new post's topic.
-    $: comments = liveTopic({ url: "/live/posts/connect", topic: `comments:${postId}` });
+    // Call `liveTopic` once, during init (it reads the client from context), and hand it a store of the
+    // reference, so a new `postId` moves the same subscription to the new post's topic.
+    const topic = writable(live.posts.comments({ postId }));
+
+    $: topic.set(live.posts.comments({ postId }));
+
+    const comments = liveTopic(topic);
 </script>
 
 {#if $comments.lastEvent !== undefined}<p>New comment</p>{/if}

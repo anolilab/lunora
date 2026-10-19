@@ -104,9 +104,8 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly live?: {
-        publish: (topic: string, payload: unknown, options: {
+        publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
             shardKey?: string;
-            stream: string;
         }) => Promise<void>;
     };
     readonly log: LunoraLogger;
@@ -1121,7 +1120,6 @@ type ListWhere<F> = {
 ```ts
 interface LivePublishOptions {
     shardKey?: string;
-    stream: string;
 }
 ```
 
@@ -1129,39 +1127,91 @@ interface LivePublishOptions {
 
 ```ts
 interface LivePublisher {
-    publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
 }
 ```
 
 ### `LiveStream` (interface)
 
 ```ts
-interface LiveStream {
+interface LiveStream<Topics extends LiveTopics = LiveTopics> {
     connect: LunoraRouteHandler;
     connectPath: string;
     control: LunoraRouteHandler;
     controlPath: string;
     id: string;
+    readonly topics: Topics;
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 ```
 
 ### `LiveStreamConfig` (interface)
 
 ```ts
-interface LiveStreamConfig {
+interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
     allowAnonymousControl?: boolean;
     id: string;
-    onSubscribe?: LiveSubscribeHandler;
+    onSubscribe?: LiveSubscribeHandler<Topics>;
+    topics: Topics;
 }
 ```
 
 ### `LiveSubscribeHandler` (type)
 
 ```ts
-type LiveSubscribeHandler = (options: {
-    ctx: HttpActionCtx;
-    topic: string;
-}) => boolean | Promise<boolean>;
+type LiveSubscribeHandler<Topics extends LiveTopics = LiveTopics> = (options: LiveSubscribeOptions<Topics>) => boolean | Promise<boolean>;
+```
+
+### `LiveSubscribeOptions` (type)
+
+```ts
+type LiveSubscribeOptions<Topics extends LiveTopics> = {
+    [Name in keyof Topics & string]: {
+        ctx: HttpActionCtx;
+        key: LiveTopicKey<Topics[Name]>;
+        raw: string;
+        topic: Name;
+    };
+}[keyof Topics & string];
+```
+
+### `LiveTopicDeclaration` (interface)
+
+```ts
+interface LiveTopicDeclaration {
+    key?: Readonly<Record<string, Validator<string>>>;
+    payload: Validator;
+}
+```
+
+### `LiveTopicKey` (type)
+
+```ts
+type LiveTopicKey<Topic extends LiveTopicDeclaration> = Topic["key"] extends Readonly<Record<string, Validator>> ? {
+    readonly [Field in keyof Topic["key"]]: Infer<Topic["key"][Field]>;
+} : Readonly<Record<string, never>>;
+```
+
+### `LiveTopicPayload` (type)
+
+```ts
+type LiveTopicPayload<Topic extends LiveTopicDeclaration> = Infer<Topic["payload"]>;
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
+### `LiveTopics` (type)
+
+```ts
+type LiveTopics = Readonly<Record<string, LiveTopicDeclaration>>;
 ```
 
 ### `LogFields` (type)
@@ -3490,7 +3540,7 @@ const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O 
 ### `defineLiveStream` (const)
 
 ```ts
-const defineLiveStream: (config: LiveStreamConfig) => LiveStream;
+const defineLiveStream: <const Topics extends LiveTopics>(config: LiveStreamConfig<Topics>) => LiveStream<Topics>;
 ```
 
 ### `defineMigration` (const)

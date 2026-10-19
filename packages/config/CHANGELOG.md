@@ -1,3 +1,46 @@
+## @lunora/config [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.379...@lunora/config@1.0.0-alpha.380) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.330
+* **@lunora/container:** upgraded to 1.0.0-alpha.83
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/seed:** upgraded to 1.0.0-alpha.239
+* **@lunora/studio:** upgraded to 1.0.0-alpha.320
+
+## @lunora/config [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.378...@lunora/config@1.0.0-alpha.379) (2026-10-19)
+
+### Features
+
+* **cli:** add a cloudflare cost audit skill and a cron cadence lint ([#1269](https://github.com/anolilab/lunora/issues/1269)) ([365571a](https://github.com/anolilab/lunora/commit/365571a2c39e366e3ba9826ce5656ff1526d8015))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.329
+* **@lunora/studio:** upgraded to 1.0.0-alpha.319
+
+## @lunora/config [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.377...@lunora/config@1.0.0-alpha.378) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.328
+
+## @lunora/config [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.376...@lunora/config@1.0.0-alpha.377) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/seed:** upgraded to 1.0.0-alpha.238
+* **@lunora/studio:** upgraded to 1.0.0-alpha.318
+
 ## @lunora/config [1.0.0-alpha.376](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.375...@lunora/config@1.0.0-alpha.376) (2026-10-18)
 
 ### Bug Fixes

@@ -1273,6 +1273,29 @@ export default crons;
             expect(studioFeatures).toHaveProperty("vectors", false);
         });
 
+        it("reports an every-minute cron at INFO and leaves a slower one alone", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/internal.js";
+const crons = cronJobs();
+crons.interval("poll", { minutes: 1 }, internal.messages.list, {});
+crons.interval("hourly", { hours: 1 }, internal.messages.list, {});
+export default crons;
+`,
+                "utf8",
+            );
+
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+                (advisory) => advisory.name === "cron_every_minute",
+            );
+
+            expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["cron_every_minute:poll"]);
+            expect(findings[0]?.level).toBe("INFO");
+        });
+
         it("wires the vector introspector on exactly the condition studioFeatures.vectors gates the nav on", () => {
             expect.assertions(6);
 

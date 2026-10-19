@@ -23,6 +23,7 @@ import resolveStandardSchemaType from "./discover/functions/resolve-standard-sch
 import discoverHttpRoutes from "./discover/http-routes";
 import discoverInserts from "./discover/inserts";
 import { assertJurisdictionMoveAcknowledged, findDoAuthDeclaration } from "./discover/jurisdiction-move";
+import discoverLiveStreams from "./discover/live-streams";
 import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-literal-policy";
 import discoverMaskMetadata from "./discover/mask-procedures/metadata";
 import discoverMigrations from "./discover/migrations";
@@ -52,6 +53,7 @@ import {
     emitFunctions,
     emitInternalApi,
     emitLazyFunctionModules,
+    emitLive,
     emitQueues,
     emitScheduler,
     emitSeed,
@@ -689,6 +691,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // in its `__lunora_schema_history` ledger on cold start (plan 200). One
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
+    // The literal-only read of each exported `defineLiveStream`. Not gated on the platform verdict: the typed references are
+    // client-side data with no host dependency, so a user module importing `_generated/live.ts` keeps resolving. Only the shard's
+    // publish check and `ctx.live` follow the verdict (`liveStreams` below).
+    const liveStreams = discoverLiveStreams(project, lunoraDirectory);
     const shardContent = emitShard({
         // `_generated/shard.ts` is committed, and this finding is a fact about
         // the machine codegen ran on rather than about the app — regenerating
@@ -719,6 +725,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasVectors: vectorStoreSupported,
         // Declared AND not rejected by the gate: a target without live streams gets
         // no `ctx.live` on its action ctx, and the gate has already reported why.
+        liveStreamDeclarations: liveStreams,
         liveStreams: platformGate.signals.liveStreams === true,
         maskMetadata,
         mutators,
@@ -743,6 +750,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const workflowsContent = emitWorkflows(workflows);
     const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
+    const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
@@ -916,6 +924,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
               { content: workflowsContent, kind: "optional", name: "workflows.ts" },
               { content: agentsContent, kind: "optional", name: "agents.ts" },
               { content: queuesContent, kind: "optional", name: "queues.ts" },
+              { content: liveContent, kind: "optional", name: "live.ts" },
               { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
               { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
               { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
@@ -986,6 +995,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             functionModules: functionModulesContent,
             functions: functionsContent,
             internal: internalContent,
+            live: liveContent,
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,

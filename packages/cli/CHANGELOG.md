@@ -1,3 +1,65 @@
+## @lunora/cli [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.403...@lunora/cli@1.0.0-alpha.404) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.238
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.330
+* **@lunora/config:** upgraded to 1.0.0-alpha.380
+* **@lunora/container:** upgraded to 1.0.0-alpha.83
+* **@lunora/d1:** upgraded to 1.0.0-alpha.191
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.244
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.220
+* **@lunora/seed:** upgraded to 1.0.0-alpha.239
+* **@lunora/testing:** upgraded to 1.0.0-alpha.284
+
+## @lunora/cli [1.0.0-alpha.403](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.402...@lunora/cli@1.0.0-alpha.403) (2026-10-19)
+
+### Features
+
+* **cli:** add a cloudflare cost audit skill and a cron cadence lint ([#1269](https://github.com/anolilab/lunora/issues/1269)) ([365571a](https://github.com/anolilab/lunora/commit/365571a2c39e366e3ba9826ce5656ff1526d8015))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.237
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.329
+* **@lunora/config:** upgraded to 1.0.0-alpha.379
+
+## @lunora/cli [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.401...@lunora/cli@1.0.0-alpha.402) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.328
+* **@lunora/config:** upgraded to 1.0.0-alpha.378
+
+## @lunora/cli [1.0.0-alpha.401](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.400...@lunora/cli@1.0.0-alpha.401) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.236
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/config:** upgraded to 1.0.0-alpha.377
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.243
+* **@lunora/seed:** upgraded to 1.0.0-alpha.238
+* **@lunora/testing:** upgraded to 1.0.0-alpha.283
+
 ## @lunora/cli [1.0.0-alpha.400](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.399...@lunora/cli@1.0.0-alpha.400) (2026-10-18)
 
 ### Features

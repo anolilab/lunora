@@ -145,6 +145,12 @@ describe("live-stream fixture: a scheduled job's ctx.live.publish", () => {
         expect(emitted).toStrictEqual(committed);
     });
 
+    it("emits the client-safe topic references (live.ts snapshot)", () => {
+        expect.assertions(1);
+
+        expect(generated.live).toBe(readFileSync(join(expectedDirectory, "live.ts"), "utf8"));
+    });
+
     it("delivers the job's publish to an SSE subscriber connected to the same shard", async () => {
         expect.assertions(3);
 
@@ -159,7 +165,7 @@ describe("live-stream fixture: a scheduled job's ctx.live.publish", () => {
 
         await shard.fetch(
             new Request("https://shard.internal/_lunora/live/control", {
-                body: JSON.stringify({ action: "subscribe", connectionId, stream: "feed", subscriptionId: "s1", topic: "feed:news" }),
+                body: JSON.stringify({ action: "subscribe", connectionId, stream: "feed", subscriptionId: "s1", topic: "news" }),
                 method: "POST",
             }),
         );
@@ -180,5 +186,34 @@ describe("live-stream fixture: a scheduled job's ctx.live.publish", () => {
 
         expect(dispatched.status).toBe(200);
         await expect(nextLiveFrame(connect)).resolves.toContain('"text":"export ready"');
+    });
+
+    it("refuses a publish whose payload the topic's validator rejects, and delivers nothing", async () => {
+        expect.assertions(3);
+
+        const ShardClass = createShardDO({});
+        const shard = new (ShardClass as unknown as new (state: unknown, env: unknown) => LiveShard)(createState(), {});
+        const connect = await shard.fetch(new Request("https://shard.internal/_lunora/live/connect", { method: "GET" }));
+        const connectionId = connect.headers.get("x-lunora-live-connection");
+
+        await shard.fetch(
+            new Request("https://shard.internal/_lunora/live/control", {
+                body: JSON.stringify({ action: "subscribe", connectionId, stream: "feed", subscriptionId: "s1", topic: "news" }),
+                method: "POST",
+            }),
+        );
+
+        const dispatched = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "live:announceBroken" }),
+                headers: { "content-type": "application/json", "x-lunora-mutation-id": "job-2", "x-lunora-system": "1" },
+                method: "POST",
+            }),
+        );
+
+        // The shard's refusal reaches the action as a BAD_REQUEST, so the job fails instead of publishing.
+        expect(dispatched.status).toBe(400);
+        await expect(dispatched.text()).resolves.toContain("BAD_REQUEST");
+        await expect(nextLiveFrame(connect, 300)).rejects.toThrow(/no live frame/u);
     });
 });

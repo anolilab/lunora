@@ -28,6 +28,11 @@ for (const [fixture, goldenDirectory, only] of GOLDEN_FIXTURES) {
         writeFileSync(join(expectedDirectory, file), payload, "utf8");
     }
 
+    // `live.ts` exists only for a project that declares a live stream, so it is captured on top of the shared outputs.
+    if (result.generated.live !== "") {
+        writeFileSync(join(expectedDirectory, "live.ts"), result.generated.live, "utf8");
+    }
+
     // The workdir lives under `__tests__/fixtures` (see `makeFixtureWorkdir`), so
     // leaving it behind would show up as an untracked tree in the repo.
     rmSync(workdir, { force: true, recursive: true });

@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
 import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
+import { callsServerFactory } from "./callee";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -333,13 +334,21 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
             signals.liveContext = signals.liveContext || contextReads.has("live");
         }
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
+
+        for (const call of calls) {
             const signal = callSignal(sourceFile, call) ?? declarationSignal(sourceFile, call);
 
             if (signal !== undefined) {
                 signals[signal] = true;
             }
         }
+
+        // A stream imported under another name (`import { defineLiveStream as stream }`) has no tell in the callee's text, and
+        // discovery reads it by import, so the gate must too or a declared stream would slip past the platform verdict.
+        signals.liveStreams =
+            signals.liveStreams ||
+            (sourceFile.getFullText().includes("defineLiveStream") && calls.some((call) => callsServerFactory(call, "defineLiveStream")));
 
         if (Object.values(signals).every(Boolean)) {
             break;

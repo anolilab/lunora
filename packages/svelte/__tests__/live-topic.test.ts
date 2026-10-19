@@ -1,7 +1,7 @@
-import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
+import type { LiveStreamSubscribeError, LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
 import { get, writable } from "svelte/store";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { liveTopic } from "../src/live-topic";
 
@@ -11,7 +11,21 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
     return { ...actual, subscribeLiveTopic: vi.fn<typeof subscribeLiveTopic>() };
 });
 
+// The store reads its base URL from the client in context; the client itself is not under test here.
+vi.mock(import("../src/context"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, getLunoraClient: () => ({ url: "https://api.test" }) as never };
+});
+
 const subscribeMock = vi.mocked(subscribeLiveTopic);
+
+const URL = "https://api.test/live/posts/connect";
+
+/** A reference as `_generated/live.ts` hands one out, for the `posts` stream. */
+const ref = <Payload = unknown>(topic: string): LiveTopicRef<Payload> => {
+    return { __lunoraLive: "posts", topic };
+};
 
 // `liveTopic` opens only in a browser, and the vitest env is `node`: define a
 // `window` for the client-path tests, as `subscription.test.ts` does.
@@ -45,16 +59,14 @@ describe("liveTopic store", () => {
     });
 
     it("opens nothing until the first subscriber, then subscribes with the options", () => {
-        const store = liveTopic({ headers: { "x-tenant": "a" }, topic: "post:1", url: "/live/posts/connect", withCredentials: true });
+        const store = liveTopic(ref("post:1"), { headers: { "x-tenant": "a" }, withCredentials: true });
 
         expect(subscribeMock).not.toHaveBeenCalled();
 
         const stop = store.subscribe(() => {});
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
-        expect(subscribeMock).toHaveBeenCalledWith(
-            expect.objectContaining({ headers: { "x-tenant": "a" }, topic: "post:1", url: "/live/posts/connect", withCredentials: true }),
-        );
+        expect(subscribeMock).toHaveBeenCalledWith(expect.objectContaining({ headers: { "x-tenant": "a" }, topic: "post:1", url: URL, withCredentials: true }));
 
         stop();
     });
@@ -64,7 +76,7 @@ describe("liveTopic store", () => {
 
         subscribeMock.mockImplementation(() => unsubscribe);
 
-        const stop = liveTopic({ topic: "post:1", url: "/live/posts/connect" }).subscribe(() => {});
+        const stop = liveTopic(ref("post:1")).subscribe(() => {});
 
         expect(unsubscribe).not.toHaveBeenCalled();
 
@@ -77,7 +89,7 @@ describe("liveTopic store", () => {
         Reflect.deleteProperty(globalThis, "window");
 
         try {
-            const stop = liveTopic({ topic: "post:1", url: "/live/posts/connect" }).subscribe(() => {});
+            const stop = liveTopic(ref("post:1")).subscribe(() => {});
 
             expect(subscribeMock).not.toHaveBeenCalled();
 
@@ -88,17 +100,17 @@ describe("liveTopic store", () => {
     });
 
     it("resubscribes when the topic changes, closing the previous subscription first", () => {
-        const options = writable<SubscribeLiveTopicOptions>({ topic: "post:1", url: "/live/posts/connect" });
+        const topic = writable(ref("post:1"));
         const firstUnsubscribe = vi.fn<() => void>();
         const secondUnsubscribe = vi.fn<() => void>();
 
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => secondUnsubscribe);
 
-        const stop = liveTopic(options).subscribe(() => {});
+        const stop = liveTopic(topic).subscribe(() => {});
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
 
-        options.set({ topic: "post:2", url: "/live/posts/connect" });
+        topic.set(ref("post:2"));
 
         expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
         expect(subscribeMock).toHaveBeenCalledTimes(2);
@@ -110,14 +122,14 @@ describe("liveTopic store", () => {
     });
 
     it("resubscribes when the session key changes, closing the previous subscription first", () => {
-        const options = writable<SubscribeLiveTopicOptions>({ sessionKey: "user-1", topic: "post:1", url: "/live/posts/connect" });
+        const options = writable<LiveTopicOptions>({ sessionKey: "user-1" });
         const firstUnsubscribe = vi.fn<() => void>();
 
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
 
-        const stop = liveTopic(options).subscribe(() => {});
+        const stop = liveTopic(ref("post:1"), options).subscribe(() => {});
 
-        options.set({ sessionKey: "user-2", topic: "post:1", url: "/live/posts/connect" });
+        options.set({ sessionKey: "user-2" });
 
         expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
         expect(subscribeMock).toHaveBeenCalledTimes(2);
@@ -129,11 +141,11 @@ describe("liveTopic store", () => {
     it("does not resubscribe when only the callback identities change, and calls the latest", () => {
         const firstHandler = vi.fn<() => void>();
         const latestHandler = vi.fn<() => void>();
-        const options = writable<SubscribeLiveTopicOptions>({ onEvent: firstHandler, topic: "post:1", url: "/live/posts/connect" });
+        const options: LiveTopicOptions = { onEvent: firstHandler };
 
-        const stop = liveTopic(options).subscribe(() => {});
+        const stop = liveTopic(ref("post:1"), options).subscribe(() => {});
 
-        options.set({ onEvent: latestHandler, topic: "post:1", url: "/live/posts/connect" });
+        options.onEvent = latestHandler;
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
 
@@ -146,7 +158,7 @@ describe("liveTopic store", () => {
     });
 
     it("updates lastEvent on each delivered payload and starts undefined", () => {
-        const store = liveTopic({ topic: "post:1", url: "/live/posts/connect" });
+        const store = liveTopic(ref("post:1"));
         const stop = store.subscribe(() => {});
 
         expect(get(store).lastEvent).toBeUndefined();
@@ -164,7 +176,7 @@ describe("liveTopic store", () => {
 
     it("sets error when the shard refuses the subscription, and forwards it to onError", () => {
         const onError = vi.fn<() => void>();
-        const store = liveTopic({ onError, topic: "post:1", url: "/live/posts/connect" });
+        const store = liveTopic(ref("post:1"), { onError });
         const stop = store.subscribe(() => {});
 
         expect(get(store).error).toBeUndefined();
@@ -175,5 +187,24 @@ describe("liveTopic store", () => {
         expect(onError).toHaveBeenCalledWith(refusal);
 
         stop();
+    });
+
+    it("resolves the stream's route against the client's URL, on the shard asked for", () => {
+        const stop = liveTopic(ref("post:1"), { shardKey: "tenant-1" }).subscribe(() => {});
+
+        expect(lastOptions()).toMatchObject({ topic: "post:1", url: `${URL}?shard=tenant-1` });
+
+        stop();
+    });
+
+    it("types lastEvent and onEvent by the payload the topic declares", () => {
+        const store = liveTopic(ref<{ text: string }>("a"), { onEvent: (payload) => expectTypeOf(payload).toEqualTypeOf<{ text: string }>() });
+
+        expectTypeOf(get(store).lastEvent).toEqualTypeOf<{ text: string } | undefined>();
+
+        // @ts-expect-error -- the topic carries `{ text: string }`, not a number
+        liveTopic(ref<{ text: string }>("a"), { onEvent: (payload: number) => payload });
+
+        expect(get(store).lastEvent).toBeUndefined();
     });
 });
