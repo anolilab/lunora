@@ -1017,6 +1017,13 @@ class TestOnlineOnlyWrites < Minitest::Test
     client.attach_socket(->(_frame) {})
     raised = assert_raises(Errno::ECONNREFUSED) { client.submit("auth:setPassword", { "token" => SECRET }, online_only: true) }
     assert_same refusal, raised
+
+    # An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+    disconnected = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, body) { posts << body })
+    sent = posts.length
+
+    assert_raises(Lunora::WireFormatError) { disconnected.submit("auth:setPassword", { "token" => Object.new }, online_only: true) }
+    assert_equal sent, posts.length, "and nothing was sent"
   end
 
   def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one

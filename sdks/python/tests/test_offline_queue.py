@@ -1147,6 +1147,15 @@ class TestOnlineOnlyWrites(unittest.TestCase):
 
         self.assertIs(raised.exception, refusal)
 
+        # An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+        disconnected = LunoraClient("https://app.example", http_post=post)
+        sent = len(posts)
+
+        with self.assertRaises(TypeError):
+            asyncio.run(disconnected.submit(SubmitOptions(args={"token": object()}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(len(posts), sent, "and nothing was sent")
+
     def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
         covers("offline_online_only_leaves_normal_writes_queued")
         store = _Store()

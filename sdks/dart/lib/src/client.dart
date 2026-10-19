@@ -421,8 +421,9 @@ class LunoraClient {
 
       // An uncoded throw is the transport, not a verdict (the replay reads it the same
       // way), so an online-only write that never reached the server while the shard has
-      // no socket is refused rather than surfacing the raw throw.
-      if (onlineOnly && error is! LunoraApiException && !connectedTo(shardKey)) {
+      // no socket is refused rather than surfacing the raw throw. An argument the codec
+      // refuses never left the process, so it surfaces as itself.
+      if (onlineOnly && error is! LunoraApiException && error is! WireFormatException && !connectedTo(shardKey)) {
         throw LunoraApiException(
           offlineNotQueued,
           "'$functionPath' is online-only and the connection is not live, so it was not queued",

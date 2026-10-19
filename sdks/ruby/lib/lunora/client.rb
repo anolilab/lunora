@@ -651,8 +651,9 @@ module Lunora
         settle_layers([], rollbacks, nil)
         # A raw error from the poster is the transport, not a verdict (the replay reads it
         # the same way), so an online-only write that never reached the server while no
-        # socket is open is refused rather than surfacing the raw error.
-        if options.online_only && !e.is_a?(ApiError) && !online?
+        # socket is open is refused rather than surfacing the raw error. An argument the
+        # codec refuses never left the process, so it surfaces as itself.
+        if options.online_only && !e.is_a?(ApiError) && !e.is_a?(WireFormatError) && !online?
           message = "'#{options.function_path}' is online-only and the connection is not live, so it was not queued"
           raise(OfflineError.new(OFFLINE_NOT_QUEUED, message), cause: e)
         end
