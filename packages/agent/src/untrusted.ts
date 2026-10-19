@@ -27,10 +27,12 @@ const LINE_BREAKS = /[\r\n]+/gu;
 
 /**
  * Header names whose values are credentials. Matched anywhere in the name, case-insensitively, so
- * `X-Api_Key`, `X-Auth` and `X-Password` are caught as well as `Authorization`. Over-matching is the safe
- * side: a name that only contains one of these words is shown redacted.
+ * `X-Api_Key`, `X-Private-Key`, `X-Access-Key`, `X-Auth` and `X-Password` are caught as well as
+ * `Authorization`. Any name containing `key` is redacted, which covers every key variant rather than
+ * listing them. Over-matching is the safe side: a name that only contains one of these words is shown
+ * redacted.
  */
-const CREDENTIAL_HEADER = /auth|bearer|jwt|csrf|xsrf|cookie|api[-_]?key|token|secret|passw(?:or)?d|passphrase|credential|session|signature/iu;
+const CREDENTIAL_HEADER = /auth|bearer|jwt|csrf|xsrf|cookie|key|token|secret|passw(?:or)?d|passphrase|credential|session|signature/iu;
 
 const REDACTED = "[redacted]";
 
