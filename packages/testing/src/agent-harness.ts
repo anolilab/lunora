@@ -48,6 +48,15 @@ interface HarnessDispatch {
 /** Extra function-dispatch handler layered over the built-in `agents:*` runtime double. */
 type HarnessFunction = (args?: Record<string, unknown>) => unknown;
 
+/** One secret request the harness keeps, mirroring the component's row: its call id, slot-keyed owner, and status. */
+interface SecretRequest {
+    callId: string;
+    consumerTool: string;
+    instanceId: string;
+    ref?: string;
+    status: "consumed" | "declined" | "expired" | "pending" | "supplied";
+}
+
 interface AgentHarnessOptions {
     /**
      * Worker `env` bindings visible to tool `execute` and a dynamic
@@ -379,19 +388,17 @@ const createRuntime = (
     // database, so the transitions below restate the component's: a pending row settles
     // once, a supply binds its ref, and a take must name the consumer the request declared.
     // The component's own tests pin each transition against the real mutations.
-    const requests = new Map<
-        string,
-        { callId: string; consumerTool: string; instanceId: string; ref?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied" }
-    >();
+    const requests = new Map<string, SecretRequest>();
     // A client answers with the call id, which a later turn can reuse; only one pending request may match it.
-    const pendingForCall = (threadKey: string, callId: string): { request: NonNullable<ReturnType<typeof requestOf>>; slot: string } | undefined => {
+    const pendingForCall = (threadKey: string, callId: string): { request: SecretRequest; slot: string } | undefined => {
         const matches = [...requests].filter(([key, request]) => key.startsWith(`${threadKey}:`) && request.callId === callId && request.status === "pending");
+        const [match] = matches;
 
-        if (matches.length !== 1) {
+        if (matches.length !== 1 || match === undefined) {
             return undefined;
         }
 
-        const [key, request] = matches[0] as [string, NonNullable<ReturnType<typeof requestOf>>];
+        const [key, request] = match;
 
         return { request, slot: key.slice(threadKey.length + 1) };
     };
