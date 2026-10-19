@@ -198,3 +198,109 @@ describe("emitShard — blocked unique index retry", () => {
         }).not.toThrow();
     });
 });
+
+/**
+ * The emitted shard-init gate against a base that behaves like `ShardDO`: `ensureShardInit` memoizes
+ * `runShardInit` once per instance and absorbs its failure, `dispatchShardInit` fires the hooks.
+ */
+const compileInitShard = () => {
+    const fields = [...emitted.matchAll(/^ {8}private (?:blockedUniqueIndexes|migrated|migrationRetryAt|shardInitDeferred|deferredShardInit)\b[^;\n]*;/gm)]
+        .map((match) => match[0])
+        .join("\n");
+    const source = [
+        "class Shard extends Base {",
+        fields,
+        methodSource("protected override ensureMigrated()"),
+        methodSource("private ensureServable()"),
+        methodSource("protected override async runShardInit("),
+        methodSource("protected override async ensureShardInit("),
+        "}",
+        "Shard;",
+    ].join("\n");
+    const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } });
+
+    return (runShardMigrations: () => string[], onHook: () => void) => {
+        class Base {
+            public readonly sql = {};
+
+            private once?: Promise<void>;
+
+            public async ensureShardInit(): Promise<void> {
+                this.once ??= (async (): Promise<void> => {
+                    try {
+                        await (this as unknown as { runShardInit: () => Promise<void> }).runShardInit();
+                    } catch {
+                        // absorbed, as the real base does
+                    }
+                })();
+
+                await this.once;
+            }
+
+            public async dispatchShardInit(): Promise<void> {
+                // The real hook goes through `handleRpc`, which refuses while an index is blocked.
+                (this as unknown as { ensureServable: () => void }).ensureServable();
+                onHook();
+            }
+        }
+        class LunoraError extends Error {
+            public constructor(_code: string, message: string) {
+                super(message);
+            }
+        }
+        // eslint-disable-next-line sonarjs/code-eval -- runs the emitter's own output in a sandbox of stubs
+        const Shard = runInNewContext(outputText, {
+            Date,
+            BLOCKED_MIGRATION_RETRY_MS: 0,
+            Base,
+            config: {},
+            LunoraError,
+            runShardMigrations,
+            schema: {},
+        }) as new () => { ensureShardInit: () => Promise<void> };
+
+        return new Shard();
+    };
+};
+
+describe("emitShard — onShardInit while a unique index is blocked", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("defers the hooks through the blocked window and runs them exactly once after the de-dup", async () => {
+        expect.assertions(4);
+
+        let duplicates = true;
+        const hook = vi.fn<() => void>();
+        const shard = compileInitShard()(() => (duplicates ? ["unique index users_email blocked by duplicates"] : []), hook);
+
+        // Cold start during the blocked window: the init does not dispatch a hook that could only fail.
+        await shard.ensureShardInit();
+        await shard.ensureShardInit();
+
+        expect(hook).not.toHaveBeenCalled();
+
+        // The de-dup lands; the next entry point finds nothing blocked and runs the hooks before its dispatch.
+        duplicates = false;
+        vi.advanceTimersByTime(1);
+        await Promise.all([shard.ensureShardInit(), shard.ensureShardInit()]);
+
+        expect(hook).toHaveBeenCalledTimes(1);
+
+        await shard.ensureShardInit();
+
+        expect(hook).toHaveBeenCalledTimes(1);
+
+        // A shard that was never blocked still runs its hooks once, at init.
+        const clean = vi.fn<() => void>();
+
+        await compileInitShard()(() => [], clean).ensureShardInit();
+
+        expect(clean).toHaveBeenCalledTimes(1);
+    });
+});

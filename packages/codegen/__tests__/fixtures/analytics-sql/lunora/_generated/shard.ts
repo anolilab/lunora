@@ -551,10 +551,49 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 
         // One `onQueryChange` dispatch. Mirrors `executeSubscription` — the

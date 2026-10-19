@@ -710,11 +710,58 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // `ensureMigrated()` runs first because the clear is a `DELETE FROM` and the
     // table has to exist: on a cold start this is the earliest code to touch SQL,
     // ahead of the dispatch that would normally have migrated.
+    //
+    // While a UNIQUE index is blocked by duplicates every user dispatch is refused
+    // (`ensureServable`), and an init hook is one — it would fail, and the base memoizes
+    // `ensureShardInit` once per instance, so it would never be retried when the de-dup
+    // unblocks the index and a cleared `.memory()` table would stay empty until eviction.
+    // So the clear still runs, the hooks are deferred, and the `ensureShardInit` override
+    // (awaited at every runtime entry point, like the base) runs them once the migration
+    // finds nothing blocked, before that entry's own dispatch proceeds.
     const shardInitOverride = `
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema as unknown as SchemaLike);\n" : ""}
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 `;
 
