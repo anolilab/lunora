@@ -66,7 +66,9 @@ describe("createToolServer", () => {
                     name: "counted",
                     outputSchema: output,
                 },
-                handle: async () => {return { content: [{ text: "x", type: "text" }] }},
+                handle: async () => {
+                    return { content: [{ text: "x", type: "text" }] };
+                },
             },
         ]);
 
