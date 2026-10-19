@@ -1,15 +1,8 @@
+import { parse } from "@visulima/cron-parser/cloudflare";
+
 import type { AdvisorCron } from "../../crons";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-
-/** Per field (minute, hour, day of month, month, day of week): `*`, a step of 1, or the field's full range. */
-const UNRESTRICTED_FIELDS = [
-    /^(?:\*|\*\/1|0-59(?:\/1)?)$/,
-    /^(?:\*|\*\/1|0-23(?:\/1)?)$/,
-    /^(?:\*|\*\/1|1-31(?:\/1)?)$/,
-    /^(?:\*|\*\/1|1-12(?:\/1)?)$/,
-    /^(?:\*|\*\/1|0-6(?:\/1)?)$/,
-];
 
 const WHITESPACE = /\s+/;
 
@@ -17,16 +10,32 @@ const WHITESPACE = /\s+/;
  * How a five-field cron expression fires every minute: `"always"` when no field
  * restricts it, `"windowed"` when only the minute field is unrestricted and the
  * hour, day or month limits it (`* 9-17 * * 1-5`), `undefined` otherwise.
- * Anything but five fields is not judged — Cloudflare Cron Triggers reject the rest.
+ *
+ * Fields are judged by the values they permit, read through the same parser the
+ * scheduler validates with, so a list (`0-29,30-59`), a step or a name counts the
+ * same as the spelling it equals. Anything but five fields is not judged, and
+ * neither is an expression the parser rejects — Cloudflare Cron Triggers reject both.
  */
 const everyMinuteKind = (expression: string): "always" | "windowed" | undefined => {
-    const fields = expression.trim().split(WHITESPACE);
+    const text = expression.trim();
 
-    if (fields.length !== UNRESTRICTED_FIELDS.length || UNRESTRICTED_FIELDS[0]?.test(fields[0] ?? "") !== true) {
+    if (text.split(WHITESPACE).length !== 5) {
         return undefined;
     }
 
-    return fields.every((field, index) => UNRESTRICTED_FIELDS[index]?.test(field) === true) ? "always" : "windowed";
+    try {
+        const { dayOfMonth, dayOfWeek, hour, minute, month } = parse(text).fields;
+
+        if (minute.values.length !== 60) {
+            return undefined;
+        }
+
+        return hour.values.length === 24 && dayOfMonth.values.length === 31 && month.values.length === 12 && dayOfWeek.values.length === 7
+            ? "always"
+            : "windowed";
+    } catch {
+        return undefined;
+    }
 };
 
 /** What one fire runs, in the words the finding uses. */
