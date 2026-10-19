@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +200,31 @@ export const listItems = query({
         refreshCodegenProject(project, lunoraDirectory);
 
         expect(loaded(project, nestedPath)).toBe(true);
+    });
+
+    it("re-reads a tsconfig file that became a same-size script with its mtime kept", () => {
+        expect.assertions(2);
+
+        const sourcePath = join(workdir, "src", "shared.ts");
+        const moduleText = "export const marker = 1; // padded to the length of the script that replaces it\n";
+        const scriptText = `${"declare var __MARKER__: string;".padEnd(moduleText.length - 1)}\n`;
+
+        // A fixed mtime on both writes, so the two versions share it exactly.
+        const fixedMtime = new Date("2020-01-01T00:00:00.000Z");
+
+        writeFileSync(sourcePath, moduleText, "utf8");
+        utimesSync(sourcePath, fixedMtime, fixedMtime);
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, sourcePath)).toBe(false);
+
+        // Same size and same mtime: only the content has changed.
+        writeFileSync(sourcePath, scriptText, "utf8");
+        utimesSync(sourcePath, fixedMtime, fixedMtime);
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, sourcePath)).toBe(true);
     });
 
     it("ignores a directory named like a `_generated/` file instead of crashing on it", () => {
