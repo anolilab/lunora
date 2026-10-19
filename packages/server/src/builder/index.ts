@@ -1,7 +1,7 @@
 import type { Validator } from "@lunora/values";
 
 import applyOutput from "../apply-output";
-import { validateArgs } from "../functions";
+import { admitSensitiveArgs, validateArgs } from "../functions";
 import { unionMaskColumns } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTags } from "../rls/policy-tag";
@@ -123,6 +123,9 @@ const makeHandler =
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+
+        admitSensitiveArgs(context, args, parsed);
+
         const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
@@ -147,6 +150,8 @@ const makeStreamHandler =
         // Args validation runs synchronously at call time so a bad envelope
         // surfaces before the iterator is consumed.
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+
+        admitSensitiveArgs(context, args, parsed);
 
         // The middleware chain may be async, but we don't want to block the
         // caller before returning an iterable — defer the chain to the first

@@ -19,6 +19,7 @@ interface BuildContextParts {
     everyContextField: string;
     facadeBlock: string;
     globalDatabaseLine: string;
+    hasSensitiveArgs?: boolean;
     lazyFunctions?: boolean;
     notifyBuild: string;
     ormContextField: string;
@@ -47,6 +48,7 @@ const renderBuildContext = ({
     everyContextField,
     facadeBlock,
     globalDatabaseLine,
+    hasSensitiveArgs = false,
     lazyFunctions = false,
     notifyBuild,
     ormContextField,
@@ -82,6 +84,13 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
     // Only emit `isAction` when an action-only helper is wired — otherwise it
     // would be an unused local.
     const isActionLine = actionOnlyHasAny ? `            const isAction = contextKind === "action";\n` : "";
+    // Only with a `v.sensitive` argument somewhere in the app: the key is the one
+    // `admitSensitiveArgs` in `@lunora/server` looks up, and a validator can only
+    // hand over a marked value when one exists.
+    const sensitiveAdmitField = hasSensitiveArgs
+        ? `
+                [Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),`
+        : "";
 
     return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
@@ -292,7 +301,7 @@ ${notifyBuild}
                 scheduler,
                 span,
                 storage: contextStorage,
-                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}
+                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${sensitiveAdmitField}
             };
 ${isActionLine}${actionOnlyBlock}
 ${

@@ -180,6 +180,21 @@ class TelemetryShard extends ShardDO {
         const anchor = this.resolveDispatchAnchor(false);
         const log = this.makeLogger(functionPath, this.sink, undefined, sensitive);
 
+        if (functionPath === "vault:normalize") {
+            // The validator trims and lowercases `value`, and the generated ctx hands the
+            // parsed args back to the scope. The handler then logs, traces and throws the
+            // transformed value, which the scope opened from the raw args does not match.
+            const parsed = { label: args["label"], value: String(args["value"]).trim().toLowerCase() };
+
+            this.admitSensitiveValues(sensitive, parsed, new Set(["value"]));
+
+            const trace = this.makeTracer(functionPath, this.sink, anchor, sensitive);
+
+            log.info(`normalized ${parsed.value}`, { label: parsed.label, normalized: parsed.value });
+            await trace("step", () => undefined, { label: parsed.label as string, normalized: parsed.value });
+            throw new Error(`rejected ${parsed.value}`);
+        }
+
         if (functionPath === "vault:hook") {
             // A lifecycle hook that logs the marked value of the event it was handed.
             log.info(String(args["value"]));
@@ -576,6 +591,37 @@ class LifecycleShard extends TelemetryShard {
         return event === "disconnect" ? ["vault:hook"] : [];
     }
 }
+
+describe("shardDO scrubs a marked value that a validator transforms before the handler", () => {
+    it("masks the transformed value in the handler's log line, span attribute, error and request log", async () => {
+        expect.assertions(5);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+        const spans: SpanEvent[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: (span) => spans.push(span) };
+
+            await shard.fetch(telemetryRpc("vault:normalize", { label: "primary", value: "  Hunter2-Token  " }));
+
+            const normalized = logs.find((event) => event.message.startsWith("normalized"));
+            const step = spans.find((span) => span.name === "step");
+            const [row] = readRequestLog(database.sql, { outcome: "error" });
+
+            // The logged and traced key is not the marked name, so only the admitted spelling can mask it.
+            expect.soft(normalized?.message).toBe(`normalized ${SENSITIVE_ARG_MASK}`);
+            expect.soft(normalized?.fields).toStrictEqual({ label: "primary", normalized: SENSITIVE_ARG_MASK });
+            expect.soft(step?.attributes).toStrictEqual({ label: "primary", normalized: SENSITIVE_ARG_MASK });
+            expect.soft(row?.errorMessage).toBe(`rejected ${SENSITIVE_ARG_MASK}`);
+            expect.soft(JSON.stringify([logs, spans, readRequestLog(database.sql)])).not.toContain("hunter2-token");
+        } finally {
+            database.close();
+        }
+    });
+});
 
 describe("lifecycle hooks run under the sensitive scope of their event", () => {
     it("masks a marked event value that a lifecycle hook logs", async () => {

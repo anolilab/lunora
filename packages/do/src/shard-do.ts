@@ -5915,12 +5915,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Admit a composed call's marked arguments into the invocation that makes the
-     * call. The callee runs inside that invocation, so its own `v.sensitive` values
-     * are scrubbed from its records too, not only the caller's.
-     */
-
-    /**
      * Run a dispatch outside `/rpc` under the sensitive scope its arguments open, so a
      * `v.sensitive` argument is masked in the records it writes, as it is on `/rpc`. The
      * scope is released once the dispatch and its records are done.
@@ -5940,10 +5934,26 @@ abstract class ShardDO {
         return this.openSensitiveScope(functionPath, args).text(error instanceof Error ? error.message : String(error));
     }
 
+    /**
+     * Admit a composed call's marked arguments into the invocation that makes the
+     * call. The callee runs inside that invocation, so its own `v.sensitive` values
+     * are scrubbed from its records too, not only the caller's.
+     */
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void {
-        const sensitive = this.sensitiveArgNames(functionPath);
+        this.admitSensitiveValues(scope, args, this.sensitiveArgNames(functionPath));
+    }
 
-        scope?.add(sensitiveValues(args, sensitive), sensitiveNames(args, sensitive));
+    /**
+     * Admit the marked values of one function's arguments into a dispatch's scope,
+     * with the names its validators declared. The validator may transform a marked
+     * value (trim, decode, parse), so the value the handler logs is not the one the
+     * scope opened from the raw args holds; the generated ctx calls this with the
+     * parsed args. Names are taken as given, not looked up by path: a composed
+     * call's ctx carries the caller's path, which would name the wrong arguments.
+     */
+    // eslint-disable-next-line class-methods-use-this -- the scope is passed in: the generated ctx closes over one per dispatch
+    protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void {
+        scope?.add(sensitiveValues(args, names), sensitiveNames(args, names));
     }
 
     /**

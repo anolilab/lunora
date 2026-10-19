@@ -142,6 +142,17 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(without).not.toContain("sensitiveArgumentNames");
     });
 
+    it("gives the shard ctx the admit hook a validator calls with a marked argument's parsed value, only when one exists", () => {
+        expect.assertions(2);
+
+        const schema = { tables: [], vectorIndexes: [] };
+
+        expect(emitShard({ hasSensitiveArgs: true, schema })).toContain(
+            '[Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),',
+        );
+        expect(emitShard({ schema })).not.toContain("lunora.admitSensitiveArgs");
+    });
+
     it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
         expect.assertions(8);
 
