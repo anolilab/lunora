@@ -7,8 +7,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import type { AdvisorOpenShardAccess } from "@lunora/advisor";
 import { openShardAccess, runAdvisor } from "@lunora/advisor";
+import { PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
-import { COMPOSED_WORKER_ENTRY, discoverContainerInfo } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { join, relative } from "@visulima/path";
@@ -351,9 +352,16 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
  */
 type PreDeployCommand = "build" | "deploy" | "prepare";
 
-/** Where an app configures itself: its Lunora sources and its own `src/`, plus the root Vite config (the class-A opt-in). */
-const OPEN_SHARD_SCAN_DIRECTORIES = ["lunora", "src"] as const;
-const OPEN_SHARD_SCAN_ROOT_FILES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
+/** Root files an app configures itself in: the Vite config (the class-A opt-in) and `lunora.config.*` (its `app` hook). */
+const OPEN_SHARD_SCAN_ROOT_FILES = [
+    "vite.config.ts",
+    "vite.config.mts",
+    "vite.config.cts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.cjs",
+    ...PROJECT_CONFIG_FILENAMES,
+];
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
 const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules)(?:[/\\]|$)/u;
 
@@ -362,13 +370,15 @@ const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules)(?:[/\\]|$)/u;
  *
  * Read with the TypeScript parser, not a text match, so the "before deploying"
  * comments the templates keep beside the flag never count. Files that do not
- * mention the name are skipped before parsing. Ceiling: an entry outside
- * `lunora/`, `src/` and the root Vite config, or a value that is not the literal
- * `true` (a variable, an env read), is not seen.
+ * mention the name are skipped before parsing. Ceiling: an entry outside the
+ * Lunora source directory (`schemaDir`), `src/`, the root Vite config and
+ * `lunora.config.*`, or a value that is not the literal `true` (a variable, an
+ * env read), is not seen.
  */
 const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
+    const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])];
     const files = [
-        ...OPEN_SHARD_SCAN_DIRECTORIES.flatMap((directory) =>
+        ...directories.flatMap((directory) =>
             existsSync(join(cwd, directory))
                 ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
                       .filter((file) => SOURCE_FILE.test(file) && !SKIPPED_DIRECTORY.test(file))

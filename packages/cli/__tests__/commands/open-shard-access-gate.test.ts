@@ -79,6 +79,40 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("authorizeShard"))).toBe(true);
     });
 
+    it("refuses the flag set in a root lunora.config app hook", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora.config.ts"),
+            `export default {\n    app: (app) => app.extend(() => ({\n        allowUnauthenticatedShardAccess: true,\n    })),\n};\n`,
+            "utf8",
+        );
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("lunora.config.ts:3"))).toBe(true);
+    });
+
+    it("refuses the flag set in a custom schemaDir", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "vite.config.ts"),
+            `import { lunora } from "@lunora/vite";\n\nexport default { plugins: [lunora({ schemaDir: "backend" })] };\n`,
+            "utf8",
+        );
+        mkdirSync(join(workdir, "backend"), { recursive: true });
+        writeFileSync(join(workdir, "backend", "server.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("backend/server.ts:2"))).toBe(true);
+    });
+
     it("deploys with --allow-open-shards, warning about the open posture", async () => {
         expect.assertions(3);
 
