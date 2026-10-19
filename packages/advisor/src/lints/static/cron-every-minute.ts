@@ -22,7 +22,7 @@ const WHITESPACE = /\s+/;
 const firesEveryMinute = (expression: string): boolean => {
     const fields = expression.trim().split(WHITESPACE);
 
-    return fields.length === UNRESTRICTED_FIELDS.length && fields.every((field, index) => (UNRESTRICTED_FIELDS[index] as RegExp).test(field));
+    return fields.length === UNRESTRICTED_FIELDS.length && fields.every((field, index) => UNRESTRICTED_FIELDS[index]?.test(field) === true);
 };
 
 /** What one fire runs, in the words the finding uses. */
