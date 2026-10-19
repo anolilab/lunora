@@ -1045,6 +1045,25 @@ describe("write confirmation with a v.sensitive argument", () => {
         expect(mock.mutation.mock.calls[0]?.[1]).toStrictEqual({ label: "primary", value: SECRET });
     });
 
+    it("masks an argument that a redeploy marked sensitive after the function list was cached", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const stale: FunctionDescriptor = { ...VAULT_FUNCTION, args: VAULT_FUNCTION.args?.map(({ sensitive: _sensitive, ...rest }) => rest) };
+
+        // The list is read (and cached) before the redeploy, then the deployment reports the marker.
+        mock.listFunctions.mockResolvedValueOnce([...MOCK_FUNCTIONS, stale]);
+        await callTool(mock.asClient, "lunora_list_functions", {}, true);
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const result = await callTool(mock.asClient, "lunora_run_mutation", input, true);
+        const payload = parseResult(result) as ActionRequired;
+
+        expect(payload.proposedAction.args).toStrictEqual({ label: "primary", value: "«sensitive»" });
+        expect(result.content[0]!.text).not.toContain(SECRET);
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
     it("never queues a write, even when the cached descriptor does not yet mark the argument sensitive", async () => {
         expect.assertions(2);
 

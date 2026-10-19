@@ -342,6 +342,11 @@ const callWriteTool = async (client: LunoraClient, name: string, input: Record<s
     const kind = name === "lunora_run_action" ? "action" : "mutation";
     const { args, functionPath, shardKey } = readRunArguments(input);
 
+    // Read fresh: a redeploy within the cache window may have marked an argument sensitive, and
+    // the proposal built below must mask it. Writes are rare and confirmed by a person, so the
+    // extra fetch costs nothing that matters.
+    functionsCache.delete(client);
+
     const descriptor = await assertRunnable(client, functionPath, kind);
     const sensitiveArgs = sensitiveArgumentNamesOf(descriptor);
 
