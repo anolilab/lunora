@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.328](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.327...@lunora/codegen@1.0.0-alpha.328) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
 ## @lunora/codegen [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.326...@lunora/codegen@1.0.0-alpha.327) (2026-10-18)
 
 ### Features

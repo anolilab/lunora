@@ -1,5 +1,5 @@
 /** The options `lunora deploy` takes and the result it reports — shared by `build`, `prepare` and the package API. */
-import type { DiscoveryCache } from "@lunora/config";
+import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { DockerProbe } from "../../util/docker";
@@ -128,6 +128,19 @@ interface DeployCommandOptions {
     skipCodegen?: boolean;
     /** Deploy only the app, leaving the `lunora.config` services it binds as they are (`--skip-services`). */
     skipServices?: boolean;
+
+    /**
+     * Starts the smoke check's `wrangler dev`. Unset, the check launches a real server; a caller that must
+     * not start one (a test, or an embedding that stubs subprocesses) passes its own launcher.
+     */
+    smokeLauncher?: DevProcessSpawner;
+
+    /**
+     * Evaluate every lazy function module in workerd before shipping, so a module that throws on
+     * load fails the deploy instead of its first caller. Nothing to check for an eager
+     * registry; `false` (`--no-smoke-load`) skips it. Default on.
+     */
+    smokeLoad?: boolean;
     spawner?: Spawner;
 
     /**
