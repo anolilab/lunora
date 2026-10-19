@@ -139,6 +139,9 @@ write would be queued, `submit` raises `OfflineError` with code
 `OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
 never reach the persistence adapter. It does not wait for a flush or queue behind
 pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `__cause__`.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
