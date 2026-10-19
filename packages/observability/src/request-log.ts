@@ -373,6 +373,30 @@ const stringSpellings = (text: string): string[] => {
 };
 
 /**
+ * The UTF-8 text of a byte value, or `undefined` when the bytes are not UTF-8. A lenient decode would
+ * write U+FFFD for each bad byte, which is not the text a handler logs from them, so nothing is
+ * registered for those bytes.
+ */
+const decodeUtf8 = (bytes: Uint8Array): string | undefined => {
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * The spellings of a byte value's UTF-8 text. A byte value keeps its content in its buffer, which a
+ * property walk never reaches, and its text is what a handler that decodes it logs.
+ */
+const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const text = decodeUtf8(bytes);
+
+    return text === undefined || text.length === 0 ? [] : stringSpellings(text);
+};
+
+/**
  * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
  * and a `seen` set keeps a shared or cyclic reference from being walked twice.
  */
@@ -391,6 +415,8 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
             // Not booleans: `true` and `false` carry no secret, and registering them as text would
             // rewrite every unrelated `true` in the invocation's logs, spans and events.
             found.push(String(value));
+        } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+            found.push(...byteSpellings(value));
         } else if (typeof value === "object" && value !== null && !seen.has(value)) {
             seen.add(value);
 
@@ -410,7 +436,8 @@ const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<s
 
             // The JSON form of the whole argument. Nested objects' JSON is a substring of
             // it, so only the top level is registered.
-            if (typeof root === "object" && root !== null) {
+            // A byte value's JSON form is `{}`, which is not a secret: its text comes from the leaves below.
+            if (typeof root === "object" && root !== null && !(root instanceof ArrayBuffer) && !ArrayBuffer.isView(root)) {
                 found.push(stringifyFieldValue(root));
             }
 

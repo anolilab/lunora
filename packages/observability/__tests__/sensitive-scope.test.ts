@@ -427,6 +427,26 @@ describe("telemetry names under a sensitive scope, beyond the event and span han
         expect(JSON.stringify(recorded)).not.toContain("ops-mailbox");
     });
 
+    it("masks the decoded text of a marked byte argument, and registers no bare JSON form of its buffer", () => {
+        expect.assertions(2);
+
+        // A handler that decodes the bytes and logs the text: the text is what must be masked.
+        const bytes = new TextEncoder().encode(SECRET).buffer;
+        const scope = createSensitiveScope(sensitiveValues({ value: bytes }, new Set(["value"])));
+
+        expect(scope.text(`decoded ${SECRET}`)).toBe(`decoded ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("an ordinary {} stays")).toBe("an ordinary {} stays");
+    });
+
+    it("registers nothing for a marked byte argument that is not UTF-8", () => {
+        expect.assertions(1);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: new Uint8Array([0xff, 0xfe, 0xfd]).buffer }, new Set(["value"])));
+
+        // A lenient decode of these bytes is three U+FFFD; registered as text, it would mask this line.
+        expect(scope.text("\uFFFD\uFFFD\uFFFD")).toBe("\uFFFD\uFFFD\uFFFD");
+    });
+
     it("masks a marked property name used as a metric name", () => {
         expect.assertions(2);
 

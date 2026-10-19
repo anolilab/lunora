@@ -80,6 +80,20 @@ const leavesOf = (value: unknown, into: string[] = [], depth = 0): string[] => {
         }
     } else if (typeof value === "number" || typeof value === "bigint") {
         into.push(String(value));
+    } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        // A byte value keeps its content in its buffer, which a property walk never reaches. Bytes that are
+        // not UTF-8 have no text a handler would log, so they add nothing.
+        const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
+        try {
+            const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+
+            if (text.length > 0) {
+                into.push(text);
+            }
+        } catch {
+            // Not UTF-8: no text to register.
+        }
     } else if (typeof value === "object" && value !== null && depth < MAX_LEAF_DEPTH) {
         for (const child of Object.values(value)) {
             leavesOf(child, into, depth + 1);
