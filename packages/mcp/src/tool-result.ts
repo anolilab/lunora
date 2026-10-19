@@ -118,6 +118,17 @@ const errorFromThrown = (error: unknown): ToolResult => {
         return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
     }
 
+    // The client rebuilds a server's coded rejection as a plain `Error` carrying `code`. A code the
+    // catalog knows is the server's public verdict, so it is kept; any other `code` (a socket's
+    // `ECONNREFUSED`, say) is not a contract and falls through to the generic failure.
+    if (error instanceof Error) {
+        const { code } = error as { code?: unknown };
+
+        if (typeof code === "string" && getCatalogEntry(code) !== undefined) {
+            return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
+        }
+    }
+
     return errorResult("INTERNAL", UNEXPECTED_ERROR_MESSAGE);
 };
 
