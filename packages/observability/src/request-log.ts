@@ -562,7 +562,11 @@ const scrubValue = (value: unknown, secrets: SecretSet, depth: number, ancestors
     }
 
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-        return secrets.texts.includes(String(value)) ? SENSITIVE_ARG_MASK : value;
+        const text = String(value);
+
+        // A one- or two-digit leaf (`{ count: 3 }` under a marked object) must not blank every unrelated
+        // 0, 1 or 42 in the invocation's counts and status fields; a secret that short stays unmatched.
+        return text.length >= SENSITIVE_TOKEN_MIN_LENGTH && secrets.texts.includes(text) ? SENSITIVE_ARG_MASK : value;
     }
 
     if (value instanceof Error) {
