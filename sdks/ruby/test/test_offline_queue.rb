@@ -975,6 +975,50 @@ class TestOnlineOnlyWrites < Minitest::Test
     assert_empty store.appended
   end
 
+  def test_an_online_only_transport_failure_is_refused_with_its_cause
+    ConformanceManifest.covers("offline_online_only_transport_failure_refused")
+    store = MemoryStore.new
+    refusal = Errno::ECONNREFUSED.new("connection refused")
+    posts = []
+    replies = []
+    # Never connected and not queueing before the first connect, so the write takes the direct path.
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, _headers, body|
+        posts << body
+        replies.empty? ? raise(refusal) : replies.shift
+      },
+      offline_queue: Lunora::OfflineQueue.new(persistence: store)
+    )
+
+    seen = []
+    client.subscribe("auth:setPassword", { "token" => SECRET }, ->(value) { seen << value })
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_same refusal, error.cause
+    assert_equal 1, posts.length
+    assert_equal 0, client.pending_mutation_count
+    assert_empty store.appended
+    refute_includes JSON.generate(store.records), SECRET
+    assert_includes seen, %w[a c], "the overlay was shown while the write was in flight"
+    assert_equal %w[a], seen.last, "and rolled back once the write was refused"
+
+    # A coded server rejection is the server's verdict and surfaces as itself.
+    replies << [400, { "error" => { "code" => "CONFLICT", "message" => "nope" } }]
+    rejected = assert_raises(Lunora::ApiError) { client.submit("auth:setPassword", { "token" => SECRET }, online_only: true) }
+    assert_equal "CONFLICT", rejected.code
+
+    # Once the socket is up, the same failure is the server's to report, not a refusal.
+    client.attach_socket(->(_frame) {})
+    raised = assert_raises(Errno::ECONNREFUSED) { client.submit("auth:setPassword", { "token" => SECRET }, online_only: true) }
+    assert_same refusal, raised
+  end
+
   def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one
     ConformanceManifest.covers("offline_online_only_leaves_normal_writes_queued")
     store = MemoryStore.new
