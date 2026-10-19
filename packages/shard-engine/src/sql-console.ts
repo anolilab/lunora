@@ -4,19 +4,53 @@ import { classifyStatement } from "../../../shared/sql-readonly";
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /**
- * Result of a `__lunora_admin__:runSql` read-only query: the column names (from
- * the first row), the rows (capped), the total row count the query produced, and
- * whether the rows were truncated to the cap.
+ * Result of a `__lunora_admin__:runSql` read-only query: the column names, the
+ * rows, and `rowCount` — the rows returned, at most {@link MAX_SQL_ROWS}, NOT the
+ * total the query would produce (the rest is never read). `truncated` says
+ * whether more rows existed; `timedOut` is set when reading stopped at the
+ * {@link MAX_SQL_MS} budget instead.
  */
 interface SqlConsoleResult {
     columns: string[];
     rowCount: number;
     rows: Record<string, unknown>[];
+    timedOut?: boolean;
     truncated: boolean;
 }
 
 /** Most rows the SQL console returns in one query, so a `SELECT *` on a huge table can't blow up the response. */
 const MAX_SQL_ROWS = 1000;
+
+/**
+ * Wall-clock budget for reading a console result, checked between rows. It
+ * cannot interrupt a single step SQLite spends before yielding a row (a sort
+ * over a large table), only stop a long scan from being drained.
+ */
+const MAX_SQL_MS = 5000;
+
+/**
+ * Read at most {@link MAX_SQL_ROWS} items from `source` within {@link MAX_SQL_MS},
+ * never materialising the rest. `truncated` is set only when a further item was
+ * actually seen, so a result of exactly the cap is not reported as cut short.
+ */
+const takeCapped = <T>(source: Iterable<T>): { items: T[]; timedOut: boolean; truncated: boolean } => {
+    const deadline = Date.now() + MAX_SQL_MS;
+    const items: T[] = [];
+
+    for (const item of source) {
+        if (items.length === MAX_SQL_ROWS) {
+            return { items, timedOut: false, truncated: true };
+        }
+
+        if (Date.now() > deadline) {
+            return { items, timedOut: true, truncated: true };
+        }
+
+        items.push(item);
+    }
+
+    return { items, timedOut: false, truncated: false };
+};
 
 /**
  * Make a result's column names unique for display, suffixing every repeat after
@@ -70,8 +104,10 @@ const assertReadonly = (query: string): void => {
  * schema-aware writer and desync the FTS / aggregate / rank shadow tables.
  * Admin-gated by `ShardDO.handleAdminRpc` like every other introspection RPC.
  *
- * Rows are capped at {@link MAX_SQL_ROWS}; `rowCount` reports the true total and
- * `truncated` flags when more rows existed than were returned.
+ * Rows are capped at {@link MAX_SQL_ROWS} and read off the cursor one at a time,
+ * so a `SELECT *` over a huge table never builds the full result; `rowCount` is
+ * the rows returned and `truncated` flags when more existed (or the read hit the
+ * {@link MAX_SQL_MS} budget, which also sets `timedOut`).
  *
  * **Values are returned verbatim — deliberately not wire-decoded.** This surface
  * shows the DATABASE; the studio's data browser shows the MODEL and decodes
@@ -102,24 +138,22 @@ const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     const { columnNames, raw } = cursor;
 
     if (columnNames === undefined || raw === undefined) {
-        const all = cursor.toArray();
-        const rows = all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all;
+        const { items: rows, timedOut, truncated } = takeCapped(cursor);
 
         return {
             columns: rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [],
-            rowCount: all.length,
+            rowCount: rows.length,
             rows,
-            truncated: all.length > MAX_SQL_ROWS,
+            ...(timedOut ? { timedOut } : {}),
+            truncated,
         };
     }
 
     const columns = dedupeColumnNames(columnNames);
-    const all = [...raw.call(cursor)];
-    const rows = (all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all).map((values) =>
-        Object.fromEntries(columns.map((column, index) => [column, values[index]])),
-    );
+    const { items, timedOut, truncated } = takeCapped(raw.call(cursor));
+    const rows = items.map((values) => Object.fromEntries(columns.map((column, index) => [column, values[index]])));
 
-    return { columns, rowCount: all.length, rows, truncated: all.length > MAX_SQL_ROWS };
+    return { columns, rowCount: rows.length, rows, ...(timedOut ? { timedOut } : {}), truncated };
 };
 
 /**
@@ -266,5 +300,5 @@ const lintReadonlySql = (sql: SqlExec, query: string): SqlLintResult => {
     return { diagnostics, plan };
 };
 
-export { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql };
+export { assertReadonly, lintReadonlySql, MAX_SQL_MS, MAX_SQL_ROWS, runReadonlySql };
 export type { SqlConsoleResult, SqlDiagnostic, SqlLintResult };

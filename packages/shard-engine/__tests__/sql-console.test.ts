@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
-import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
+import { assertReadonly, lintReadonlySql, MAX_SQL_MS, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */
 const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; lastQuery: string } => {
@@ -117,7 +117,7 @@ describe("assertReadonly", () => {
 });
 
 describe("runReadonlySql", () => {
-    it("returns columns from the first row, the true count, and rows", () => {
+    it("returns columns from the first row, the row count, and rows", () => {
         expect.assertions(3);
 
         const sql = stubExec([
@@ -140,7 +140,7 @@ describe("runReadonlySql", () => {
         const result = runReadonlySql(stubExec(rows), "SELECT i FROM t");
 
         expect(result.rows).toHaveLength(MAX_SQL_ROWS);
-        expect(result.rowCount).toBe(MAX_SQL_ROWS + 5);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
         expect(result.truncated).toBe(true);
     });
 
@@ -186,8 +186,87 @@ describe("runReadonlySql", () => {
         const result = runReadonlySql(rawExec(["i"], rows), "SELECT i FROM t");
 
         expect(result.rows).toHaveLength(MAX_SQL_ROWS);
-        expect(result.rowCount).toBe(MAX_SQL_ROWS + 5);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
         expect(result.truncated).toBe(true);
+    });
+});
+
+describe("runReadonlySql bounds", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** A cursor over `count` rows that records how far it was iterated and never expects `toArray`. */
+    const countingExec = (count: number, onRow?: () => void): { exec: SqlExec; read: () => number; toArray: ReturnType<typeof vi.fn> } => {
+        let read = 0;
+        const toArray = vi.fn<() => never>(() => {
+            throw new Error("toArray must not be called");
+        });
+        const rows = function* (): Generator<Record<string, unknown>> {
+            for (let index = 0; index < count; index += 1) {
+                read += 1;
+                onRow?.();
+                yield { i: index };
+            }
+        };
+
+        return {
+            exec: {
+                exec: () =>
+                    ({
+                        one: () => {
+                            return {};
+                        },
+                        toArray,
+                        [Symbol.iterator]: rows,
+                    }) as never,
+            },
+            read: () => read,
+            toArray,
+        };
+    };
+
+    it("stops reading a 5,000-row result one row past the cap", () => {
+        expect.assertions(5);
+
+        const { exec, read, toArray } = countingExec(5000);
+        const result = runReadonlySql(exec, "SELECT i FROM t");
+
+        expect(result.rows).toHaveLength(MAX_SQL_ROWS);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
+        expect(result.truncated).toBe(true);
+        expect(read()).toBe(MAX_SQL_ROWS + 1);
+        expect(toArray).not.toHaveBeenCalled();
+    });
+
+    it("does not flag a result of exactly the cap as truncated", () => {
+        expect.assertions(2);
+
+        const result = runReadonlySql(countingExec(MAX_SQL_ROWS).exec, "SELECT i FROM t");
+
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
+        expect(result.truncated).toBe(false);
+    });
+
+    it("stops early, flagged as timed out, once reading passes the time budget", () => {
+        expect.assertions(4);
+
+        let now = 0;
+
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+
+        // Each row takes a second, so the budget is spent after MAX_SQL_MS / 1000 rows.
+        const result = runReadonlySql(
+            countingExec(5000, () => {
+                now += 1000;
+            }).exec,
+            "SELECT i FROM t",
+        );
+
+        expect(result.rowCount).toBeLessThan(10);
+        expect(result.rowCount).toBe(MAX_SQL_MS / 1000);
+        expect(result.truncated).toBe(true);
+        expect(result.timedOut).toBe(true);
     });
 });
 
