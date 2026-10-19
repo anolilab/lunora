@@ -95,7 +95,10 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
 
         // Return the JSON copy, not the original: a getter that answers differently on
         // a second read would pass this check and then throw in the header encode.
-        return JSON.parse(json) as Record<string, unknown>;
+        // A `toJSON()` can serialize to a primitive, so the copy is checked again.
+        const copy: unknown = JSON.parse(json);
+
+        return isPlainRecord(copy) ? copy : undefined;
     } catch {
         return undefined;
     }
@@ -109,7 +112,9 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
  */
 export const toPlainOperatorContext = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
     try {
-        return JSON.parse(JSON.stringify(internal, plainErrorReplacer)) as Record<string, unknown>;
+        const copy: unknown = JSON.parse(JSON.stringify(internal, plainErrorReplacer));
+
+        return isPlainRecord(copy) ? copy : undefined;
     } catch {
         return undefined;
     }

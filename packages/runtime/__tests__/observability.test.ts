@@ -545,6 +545,14 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         expect((events[0]?.error?.internal?.upstream as { message?: unknown } | undefined)?.message).toBe("upstream refused");
     });
 
+    it("drops an operator context whose toJSON serializes to a primitive", () => {
+        expect.assertions(1);
+
+        const error = new LunoraError("CONFLICT", "stale", { internal: { toJSON: () => null } });
+
+        expect(describeInternal(error)).toBeUndefined();
+    });
+
     it("still delivers the event when a getter in the operator context throws", () => {
         expect.assertions(2);
 
