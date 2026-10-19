@@ -111,7 +111,9 @@ Run this whenever an anonymous caller (an unauthenticated `query`, a public
 have to be a crawler: any script can repeat the request.
 
 1. List the public entry points (`lunora advisor` flags `http_action_missing_auth_guard`;
-   read `lunora/http.ts` and the public builders).
+   read `lunora/http.ts` and the public builders). Also read the custom routes
+   registered on the app in the worker entry (`defineApp()`): they run outside
+   the HTTP-action router, so no lint covers their use of paid `env` bindings.
 2. For each, trace arbitrary, missing and malformed inputs. Where is the first
    rejection, and does it happen **before** the metered call?
 3. State the per-hit unit (one DO request? N rows read? one AI inference? one
