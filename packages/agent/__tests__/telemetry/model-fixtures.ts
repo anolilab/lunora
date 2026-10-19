@@ -1,4 +1,5 @@
 import type { Telemetry } from "ai";
+import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 
 /**
@@ -128,6 +129,24 @@ const drain = async (textStream: AsyncIterable<string>, onDelta?: (index: number
     return text;
 };
 
+/** The error finish a provider reports for an attempt it billed and then failed. */
+const FAILED_FINISH = { raw: "length", unified: "error" } as const;
+
+/** A non-streamed attempt that bills 2 input and 1 output tokens, then finishes with the error reason. */
+const failedGenerateModel = (): MockLanguageModelV4 =>
+    new MockLanguageModelV4({
+        doGenerate: () => Promise.resolve({ content: [], finishReason: FAILED_FINISH, usage: reportedUsage({ input: 2, output: 1 }), warnings: [] }),
+    });
+
+/** The streamed counterpart: its only part is the error finish, carrying the same billed usage. */
+const failedStreamModel = (): MockLanguageModelV4 =>
+    new MockLanguageModelV4({
+        doStream: () =>
+            Promise.resolve({
+                stream: simulateReadableStream({ chunks: [{ finishReason: FAILED_FINISH, type: "finish", usage: reportedUsage({ input: 2, output: 1 }) }] }),
+            }),
+    });
+
 /** Let a fire-and-forget export / detached span settle before reading what was captured. */
 const settle = async (): Promise<void> => {
     await new Promise((resolve) => {
@@ -136,4 +155,4 @@ const settle = async (): Promise<void> => {
 };
 
 export type { GenerateResult };
-export { drain, generatingModel, reportedUsage, settle, STOP, streamingModel, usageOf, withTelemetry };
+export { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, settle, STOP, streamingModel, usageOf, withTelemetry };

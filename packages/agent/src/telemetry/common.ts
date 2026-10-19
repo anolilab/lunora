@@ -70,6 +70,39 @@ export const summarizeUsage = (usage: unknown): Record<string, number> | undefin
 };
 
 /**
+ * Key under which a failed model turn's error carries the usage the provider billed for it. `Symbol.for`, so a
+ * bundle that inlines this module twice still reads the key the other copy wrote.
+ */
+export const FAILED_TURN_USAGE = Symbol.for("lunora.failedTurnUsage");
+
+/**
+ * The close event for a call that failed after the provider billed it. A failed attempt has no end event, so
+ * its usage rides on the error that failed it; this re-shapes it the way the SDK's end event carries usage, so
+ * every bridge meters a failed attempt through the same `summarizeUsage` read it uses for a successful one.
+ */
+export const failedTurnEvent = (error: unknown): { usage: unknown } | undefined => {
+    if (typeof error !== "object" || error === null) {
+        return undefined;
+    }
+
+    const billed = (error as Record<symbol, Record<string, number | undefined> | undefined>)[FAILED_TURN_USAGE];
+
+    if (billed === undefined) {
+        return undefined;
+    }
+
+    return {
+        usage: {
+            inputTokenDetails: { cacheReadTokens: billed.cacheReadTokens, cacheWriteTokens: billed.cacheWriteTokens },
+            inputTokens: billed.inputTokens,
+            outputTokenDetails: { reasoningTokens: billed.reasoningTokens },
+            outputTokens: billed.outputTokens,
+            totalTokens: billed.totalTokens,
+        },
+    };
+};
+
+/**
  * Cloudflare AI Gateway telemetry, projected off a language-model call result.
  * Every field is optional — the gateway only runs when routing is configured, so
  * a direct-provider call yields `undefined` and no gateway attribute is emitted.

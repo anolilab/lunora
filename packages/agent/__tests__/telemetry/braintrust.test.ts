@@ -1,7 +1,9 @@
-import { generateText, streamText } from "ai";
+import { generateText, simulateReadableStream, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
+import { defineAgent } from "../../src/define-agent";
+import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
 import { braintrustTelemetry } from "../../src/telemetry/braintrust";
 import { drain, generatingModel, reportedUsage, settle, streamingModel, withTelemetry } from "./model-fixtures";
@@ -415,6 +417,65 @@ describe(braintrustTelemetry, () => {
         expect(calls).toHaveLength(1);
         expect(calls[0]?.args).toStrictEqual({ name: "error", type: "error" });
         expect(calls[0]?.logs[0]).toStrictEqual({ error: { message: "kaboom", name: "Error" } });
+    });
+
+    it("logs the usage a non-streamed attempt was billed before it failed", async () => {
+        const { calls, logger } = fakeBraintrust();
+
+        // A provider that bills the attempt and then finishes with `error`: the agent's
+        // turn seam fails it in-band, so the call rejects with the billed usage attached.
+        const model = new MockLanguageModelV4({
+            doGenerate: () =>
+                Promise.resolve({
+                    content: [],
+                    finishReason: { raw: "length", unified: "error" },
+                    usage: reportedUsage({ input: 2, output: 1 }),
+                    warnings: [],
+                }),
+        });
+
+        await expect(
+            createAgentGenerate(
+                defineAgent({ model, telemetry: withTelemetry(braintrustTelemetry({ logger })) }),
+                {},
+            )({ messages: [{ content: "hi", role: "user" }] }),
+        ).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const llmSpans = calls.filter((call) => call.args?.type === "llm");
+
+        expect(llmSpans).toHaveLength(1);
+        expect(merged(llmSpans[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 1, prompt_tokens: 2, tokens: 3 });
+        expect(merged(llmSpans[0] as TracedCall).error).toBe("model finished with an error reason (provider reason: length)");
+    });
+
+    it("logs the usage a streamed attempt that fails in-band was billed", async () => {
+        const { calls, logger } = fakeBraintrust();
+
+        const model = new MockLanguageModelV4({
+            doStream: () =>
+                Promise.resolve({
+                    stream: simulateReadableStream({
+                        chunks: [{ finishReason: { raw: "length", unified: "error" }, type: "finish", usage: reportedUsage({ input: 2, output: 1 }) }],
+                    }),
+                }),
+        });
+
+        await expect(
+            createStreamGenerate(defineAgent({ model, telemetry: withTelemetry(braintrustTelemetry({ logger })) }), {})(
+                { messages: [{ content: "hi", role: "user" }] },
+                () => undefined,
+            ),
+        ).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const llmSpans = calls.filter((call) => call.args?.type === "llm");
+
+        expect(llmSpans).toHaveLength(1);
+        expect(merged(llmSpans[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 1, prompt_tokens: 2, tokens: 3 });
+        expect(merged(llmSpans[0] as TracedCall).error).toBe("the model call ended with an error");
     });
 
     it("passes the caller's logger through (dependency injection)", async () => {

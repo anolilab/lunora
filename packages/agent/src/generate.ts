@@ -4,7 +4,7 @@ import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 
 import resolveAgentAi from "./agent-ai";
-import { summarizeUsage } from "./telemetry/common";
+import { FAILED_TURN_USAGE, summarizeUsage } from "./telemetry/common";
 import type {
     AgentCompact,
     AgentDefinition,
@@ -196,9 +196,6 @@ const toStreamError = (error: unknown): Error => {
     return new Error(`model stream failed: ${String(error)}`, { cause: error });
 };
 
-/** Key under which a failed turn's error carries the usage the provider billed for it. */
-const FAILED_TURN_USAGE = Symbol("lunoraFailedTurnUsage");
-
 /**
  * A provider's usage as a middleware receives it, before the AI SDK flattens it: each
  * count sits under `total`, with its breakdown beside it.
@@ -207,6 +204,22 @@ interface ProviderUsage {
     inputTokens?: { cacheRead?: number; cacheWrite?: number; total?: number };
     outputTokens?: { reasoning?: number; total?: number };
 }
+
+/**
+ * A provider usage with both buckets present, each count left `undefined` when the provider omitted it. The SDK's
+ * finish normalizer reads both buckets, so a forwarded error finish with one missing throws instead of reporting it.
+ */
+const completeUsageOf = (usage: ProviderUsage | undefined) => {
+    return {
+        inputTokens: {
+            cacheRead: usage?.inputTokens?.cacheRead,
+            cacheWrite: usage?.inputTokens?.cacheWrite,
+            noCache: undefined,
+            total: usage?.inputTokens?.total,
+        },
+        outputTokens: { reasoning: usage?.outputTokens?.reasoning, text: undefined, total: usage?.outputTokens?.total },
+    };
+};
 
 /**
  * The loop's usage from a provider's usage, the same projection the SDK applies to a finished turn.
@@ -303,9 +316,11 @@ const failIncompleteTurn = (ai: AiModule, model: Exclude<LanguageModel, string>)
                                 if (part.type === "finish") {
                                     finished = true;
 
-                                    // Swap the finish for an in-band error so the consumer fails the turn
-                                    // through the same path as any other error part.
+                                    // The finish is forwarded, not replaced: the SDK drops the usage of a turn that never
+                                    // finished, so telemetry would meter the billed attempt at zero. The in-band error
+                                    // after it fails the turn through the same path as any other error part.
                                     if (part.finishReason.unified === "error") {
+                                        controller.enqueue({ ...part, usage: completeUsageOf(part.usage) });
                                         controller.enqueue({ error: finishErrorOf(part.finishReason, part.usage), type: "error" });
 
                                         return;

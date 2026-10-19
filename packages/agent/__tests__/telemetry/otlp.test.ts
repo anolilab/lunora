@@ -3,10 +3,23 @@ import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defineAgent } from "../../src/define-agent";
+import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { OtlpTelemetryOptions } from "../../src/telemetry/otlp";
 import { otlpTelemetry as createOtlpTelemetry } from "../../src/telemetry/otlp";
 import type { GenerateResult } from "./model-fixtures";
-import { drain, generatingModel, reportedUsage, settle as settleFixture, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
+import {
+    drain,
+    failedGenerateModel,
+    failedStreamModel,
+    generatingModel,
+    reportedUsage,
+    settle as settleFixture,
+    STOP,
+    streamingModel,
+    usageOf,
+    withTelemetry,
+} from "./model-fixtures";
 
 /** A model the price table covers, so a cost assertion can fail rather than pass vacuously. */
 const PRICED_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
@@ -223,6 +236,39 @@ describe(otlpTelemetry, () => {
         await settle();
 
         expect(spanOf(calls[0] as CapturedPost).status.code).toBe(2);
+    });
+
+    it("meters the usage a non-streamed attempt was billed before it failed, on an errored span", async () => {
+        const calls = captureFetch();
+        const agent = defineAgent({ model: failedGenerateModel(), telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+
+        await expect(createAgentGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(span.status.code).toBe(2);
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("2");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("1");
+        expect(attribute(span, "lunora.usage.status")).toBe("complete");
+    });
+
+    it("meters the usage a streamed attempt that fails in-band was billed, on an errored span", async () => {
+        const calls = captureFetch();
+        const agent = defineAgent({ model: failedStreamModel(), telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+
+        await expect(createStreamGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] }, () => undefined)).rejects.toThrow(
+            "model finished with an error reason",
+        );
+
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(span.status.code).toBe(2);
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("2");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("1");
     });
 
     it("tags the generation span with gen_ai.conversation.id when a conversation id is set", async () => {

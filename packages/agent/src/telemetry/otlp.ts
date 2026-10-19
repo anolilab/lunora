@@ -4,7 +4,7 @@ import type { Telemetry } from "ai";
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { contentText, failedTurnEvent, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 /** Spans per OTLP export before an early flush. */
@@ -352,7 +352,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             message = raw;
         }
 
-        calls.close(callId, false, message, undefined);
+        calls.close(callId, false, message, failedTurnEvent(raw));
     };
 
     /** The entry one model call opens with — its start time and request metadata. */
@@ -389,7 +389,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             } catch (error) {
                 // The provider call itself failed, so this IS the end of the span and
                 // no end event will follow.
-                calls.close(callId, false, error instanceof Error ? error.message : String(error), undefined);
+                calls.close(callId, false, error instanceof Error ? error.message : String(error), failedTurnEvent(error));
 
                 throw error;
             }
@@ -422,7 +422,9 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             // Fired after the response has been normalized and parsed — for a stream
             // that is after its `finish` part, so this is the first moment the call's
             // real duration AND its token usage are both known.
-            calls.close(callId, true, undefined, event);
+            // The registry grades the end event by its `finishReason`, so an error finish that
+            // reaches the end event (the turn guard forwards it) closes as a failure, not a success.
+            calls.fromLifecycle(event);
         },
         onLanguageModelCallStart: (event: unknown) => {
             const callId = readField(event, "callId");
