@@ -8,6 +8,8 @@ import { getSubscriptionRegistry } from "./cache";
 
 interface QuerySubscriptionInput {
     args: Record<string, unknown>;
+    /** `stableWireKey(args)`, which the caller has already computed for the query key. */
+    argsKey: string;
     client: LunoraClient;
     function_: FunctionReference;
     onError: SubscriptionErrorCallback | undefined;
@@ -15,8 +17,6 @@ interface QuerySubscriptionInput {
     queryKey: QueryKey;
     shardKey: string | undefined;
     skipped: boolean;
-    /** Content hash of the query identity: the effect re-attaches when it changes, not on a fresh `function_`/`args` object. */
-    subscriptionKey: string;
 }
 
 /**
@@ -27,17 +27,11 @@ interface QuerySubscriptionInput {
  * `onError` changing identity must not re-run the effect: a stable wrapper is
  * registered once and the latest handler is read through a ref.
  */
-const useQuerySubscription = ({
-    args,
-    client,
-    function_,
-    onError,
-    queryClient,
-    queryKey,
-    shardKey,
-    skipped,
-    subscriptionKey,
-}: QuerySubscriptionInput): void => {
+const useQuerySubscription = ({ args, argsKey, client, function_, onError, queryClient, queryKey, shardKey, skipped }: QuerySubscriptionInput): void => {
+    // Content hash of the query identity: the effect re-attaches when it changes, not on a fresh
+    // `function_`/`args` object. `\u0001` marks an absent shardKey so it stays distinct from `""`, as in the queryKey.
+    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? "\u0001"}`;
+
     const onErrorRef = useRef(onError);
 
     useEffect(() => {

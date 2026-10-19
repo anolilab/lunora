@@ -51,8 +51,6 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     // fresh array reference each render is fine. React Compiler auto-memoizes
     // this derivation; no manual `useMemo` is needed.
     const queryKey = lunoraQueryKeyFromArgsKey(function_.__lunoraRef, argsKey, shardKey);
-    // `\u0001` marks an absent shardKey so it stays distinct from `""`, as in the queryKey.
-    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? "\u0001"}`;
 
     // Hydration gate — when `hydrateOnStart` is active the durable read cache
     // loads asynchronously on construction. Block the live query until it
@@ -89,7 +87,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         staleTime: Number.POSITIVE_INFINITY,
     });
 
-    useQuerySubscription({ args: argsRecord, client, function_, onError, queryClient, queryKey, shardKey, skipped, subscriptionKey });
+    useQuerySubscription({ args: argsRecord, argsKey, client, function_, onError, queryClient, queryKey, shardKey, skipped });
 
     // When skipped, the queryKey collapses to `["lunora", ref, {}, null]` — the
     // same key a real `useQuery(fn, {})` uses — and TanStack still hands back

@@ -31,8 +31,6 @@ const useSuspenseQuery = <F extends FunctionReference>(function_: F, args: ArgsO
     const argsRecord = args as Record<string, unknown>;
     const argsKey = stableWireKey(argsRecord);
     const queryKey = lunoraQueryKeyFromArgsKey(function_.__lunoraRef, argsKey, shardKey);
-    // `\u0001` marks an absent shardKey so it stays distinct from `""`, as in the queryKey.
-    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? "\u0001"}`;
 
     // The durable read cache loads asynchronously on construction, and a peek before it finishes
     // would miss a value it is about to hold. Until then the snapshot below waits for it instead.
@@ -54,7 +52,7 @@ const useSuspenseQuery = <F extends FunctionReference>(function_: F, args: ArgsO
         staleTime: Number.POSITIVE_INFINITY,
     });
 
-    useQuerySubscription({ args: argsRecord, client, function_, onError, queryClient, queryKey, shardKey, skipped: false, subscriptionKey });
+    useQuerySubscription({ args: argsRecord, argsKey, client, function_, onError, queryClient, queryKey, shardKey, skipped: false });
 
     return data;
 };
