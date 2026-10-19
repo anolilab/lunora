@@ -102,13 +102,50 @@ const routed = filterSink(
 - Enriched values are normalized and redacted the same way logged fields are. An
   enricher that throws leaves the event unchanged.
 
-### Vendor presets
+### Other OTLP vendors
 
-`axiomMetricsSink({ domain, token, dataset })` sends `ctx.metrics` measurements
-to Axiom over OTLP/HTTP, with the Bearer token and the metrics dataset header
-filled in. It implements `onMetric` only: Axiom's OTLP page states the encoding
-for metrics and nothing for traces or logs, so no other signal is sent. Combine
-it with `combineSinks` next to the sinks you already use.
+Any vendor that accepts OTLP over HTTP works through `otlpSink`, so there is no
+per-vendor sink to install. You provide three things: the vendor's base endpoint,
+its credentials, and any routing headers it needs. The sink appends
+`/v1/traces`, `/v1/logs` and `/v1/metrics` to the endpoint.
+
+```ts
+otlpSink({
+    endpoint: env.OTLP_ENDPOINT, // the vendor's OTLP base URL, without a path
+    token: env.OTLP_TOKEN, // sent as `Authorization: Bearer <token>`
+    headers: { "x-vendor-project": env.OTLP_PROJECT }, // any other header the vendor requires
+});
+```
+
+Keep the credentials in the environment so they can be injected at deploy time.
+
+**Routing headers can differ per signal.** `otlpSink` sends one `headers` object
+for every signal. When a vendor needs a different header for one signal, give that
+signal its own instance and forward only the signals the vendor should receive.
+Axiom is an example: traces and logs use `x-axiom-dataset`, and metrics use
+`x-axiom-metrics-dataset`, so metrics go through a second instance:
+
+```ts
+const endpoint = `https://${env.AXIOM_DOMAIN}`;
+const traces = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-dataset": "app-traces" } });
+const metrics = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-metrics-dataset": "app-metrics" } });
+
+observability: combineSinks(traces, { flush: metrics.flush, onMetric: metrics.onMetric }),
+```
+
+For Sentry, or any other vendor, take the endpoint, the auth header and the
+dataset or project header from that vendor's OpenTelemetry setup page. Check
+which signals it accepts before you forward them. The pattern is the same: one
+`otlpSink` per header set, and an object that forwards only the accepted methods.
+
+Checklist for a new vendor:
+
+1. **Endpoint.** Use the base URL. The sink adds the signal paths.
+2. **Auth.** Use `token` for a Bearer token. Put any other auth header in `headers`.
+3. **Routing.** If a signal needs a different header, give it its own `otlpSink`.
+4. **Signals.** Forward only the signals the vendor accepts.
+5. **Verify.** Send one event and confirm it arrives. A failed POST is swallowed,
+   so a wrong header or endpoint looks like missing data, not an error.
 
 ### `otlpSink`
 

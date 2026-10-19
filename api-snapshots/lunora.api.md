@@ -4265,10 +4265,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `AxiomMetricsSinkOptions` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `BACKUP_KEY_PREFIX` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4990,10 +4986,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `argsFromQuery` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `axiomMetricsSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

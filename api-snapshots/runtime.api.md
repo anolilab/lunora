@@ -368,16 +368,6 @@ interface AuthUserFieldSpec {
 }
 ```
 
-### `AxiomMetricsSinkOptions` (interface)
-
-```ts
-interface AxiomMetricsSinkOptions {
-    dataset: string;
-    domain: string;
-    token: string;
-}
-```
-
 ### `BACKUP_KEY_PREFIX` (const)
 
 ```ts
@@ -2401,12 +2391,6 @@ const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, 
 
 ```ts
 const argsFromQuery: (url: URL) => Record<string, unknown>;
-```
-
-### `axiomMetricsSink` (const)
-
-```ts
-const axiomMetricsSink: (options: AxiomMetricsSinkOptions) => ObservabilitySink;
 ```
 
 ### `backupManifestKey` (const)
