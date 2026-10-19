@@ -162,37 +162,48 @@ const reportEnricherFailure = (error: unknown): void => {
 };
 
 /**
- * A copy of an enricher's bag in which every `Error`, at any depth, is a plain record of its
- * name, message and enumerable fields. Redaction then sees each message and credential field,
- * and normalizing serializes the copy without leaving an `Error` opaque. Only plain objects and
- * arrays are rebuilt, so a `Date` or another class instance keeps its value, and a cycle is cut.
+ * A copy of a value in the shape normalizing will serialize, so redaction sees what is exported.
+ * An `Error` at any depth becomes a plain record of its name, message and enumerable fields; an
+ * object with `toJSON()` becomes what that returns. Plain objects and arrays are rebuilt, and other
+ * class instances keep their value. Only a true cycle is cut: an ancestor set tracks the objects on
+ * the current path, so a shared reference is copied wherever it appears.
  */
-const plainErrors = (value: unknown, seen = new WeakSet<object>()): unknown => {
+const plainCopy = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
     if (typeof value !== "object" || value === null) {
         return value;
     }
 
-    if (seen.has(value)) {
+    if (ancestors.has(value)) {
         return undefined;
     }
 
-    seen.add(value);
+    ancestors.add(value);
 
-    if (value instanceof Error) {
-        return plainErrors({ ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name }, seen);
+    try {
+        if (value instanceof Error) {
+            return plainCopy({ ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name }, ancestors);
+        }
+
+        const toJson: unknown = Reflect.get(value, "toJSON");
+
+        if (typeof toJson === "function") {
+            return plainCopy(toJson.call(value), ancestors);
+        }
+
+        if (Array.isArray(value)) {
+            return value.map((item) => plainCopy(item, ancestors));
+        }
+
+        const proto: unknown = Object.getPrototypeOf(value);
+
+        if (proto !== Object.prototype && proto !== null) {
+            return value;
+        }
+
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plainCopy(item, ancestors)]));
+    } finally {
+        ancestors.delete(value);
     }
-
-    if (Array.isArray(value)) {
-        return value.map((item) => plainErrors(item, seen));
-    }
-
-    const proto: unknown = Object.getPrototypeOf(value);
-
-    if (proto !== Object.prototype && proto !== null) {
-        return value;
-    }
-
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plainErrors(item, seen)]));
 };
 
 /**
@@ -204,8 +215,12 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // Redact before normalizing: normalizing turns nested objects into JSON strings,
         // which the key-aware redactor can no longer see into. A throw anywhere here,
         // including in normalizing, leaves the event unchanged rather than dropped.
-        const derived = enrich(event, signal);
-        const flat = derived === undefined ? undefined : (plainErrors(derived) as LogFields);
+        // The enricher gets its own copy of the event: a mutation it makes, even before it throws,
+        // cannot reach the sibling sinks or the shard's buffered copy of the same event.
+        const derived = enrich(plainCopy(event) as SinkEvent, signal);
+        // A key whose value is `undefined` is left out, not exported as the string "undefined".
+        const present = derived === undefined ? undefined : Object.fromEntries(Object.entries(derived).filter(([, value]) => value !== undefined));
+        const flat = present === undefined ? undefined : (plainCopy(present) as LogFields);
         const redacted = signal === "log" ? redactArgs(flat) : redactCredentials(flat);
 
         return normalizeLogFields(redacted as LogFields | undefined);

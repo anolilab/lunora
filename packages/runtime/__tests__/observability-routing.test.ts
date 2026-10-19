@@ -273,6 +273,70 @@ describe("enrichSink", () => {
         expect(serialized).not.toContain("hunter2-secret");
     });
 
+    it("leaves out an enriched key whose value is undefined, and keeps the rest", () => {
+        expect.assertions(2);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { plan: "pro", tenant: undefined };
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(received.logs[0]?.fields?.plan).toBe("pro");
+        expect(received.logs[0]?.fields?.tenant).toBeUndefined();
+    });
+
+    it("exports a value shared under two keys under both keys", () => {
+        expect.assertions(2);
+
+        const tags = ["a"];
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { dims: tags, labels: tags };
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(received.logs[0]?.fields?.labels).toBeDefined();
+        expect(received.logs[0]?.fields?.dims).toStrictEqual(received.logs[0]?.fields?.labels);
+    });
+
+    it("masks an Error that a class's toJSON returns, as the sink receives it", () => {
+        expect.assertions(1);
+
+        class Labelled {
+            private readonly secret = "sekret"; // gitleaks:allow -- test fixture, not a credential
+
+            public toJSON(): Error {
+                return new Error(`password=${this.secret}`);
+            }
+        }
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { note: new Labelled() };
+        });
+
+        wrapped.onMetric?.(metric);
+
+        expect(JSON.stringify(received.metrics[0]?.attributes)).toContain("password=<REDACTED>");
+    });
+
+    it("does not let an enricher change the event it was given", () => {
+        expect.assertions(1);
+
+        const { sink } = recordingSink();
+        const wrapped = enrichSink(sink, (event) => {
+            Reflect.set(event, "functionPath", "changed");
+            throw new Error("enricher exploded");
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(log.functionPath).toBe("messages:list");
+    });
+
     it("reports a throwing enricher, so a broken one is not silent", () => {
         expect.assertions(1);
 
