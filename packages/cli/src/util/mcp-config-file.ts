@@ -11,7 +11,7 @@
  * A file we cannot parse is left strictly alone — reporting `"invalid"` beats
  * overwriting a config whose syntax error is probably a work in progress.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { dirname } from "@visulima/path";
 import type { ParseError } from "jsonc-parser";
@@ -30,7 +30,7 @@ import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
  *
  * Two things the naive temp-then-rename gets wrong, both silent:
  *
- * - **Mode.** A fresh temp file is `0666 & ~umask`, normally `0644`. Renaming it
+ * - **Mode.** A temp file created without a mode is `0666 & ~umask`, normally `0644`. Renaming it
  * over a `0600` config — which is what Zed's `settings.json` and Claude
  * Desktop's are, because they hold `env` blocks full of API tokens — makes
  * those secrets world-readable. Carry the original mode across.
@@ -62,11 +62,9 @@ const writeAtomic = (path: string, contents: string | Uint8Array): void => {
     try {
         // Inside the try, so a failure to create the directory is thrown to the caller like any other write error.
         mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(temporaryPath, contents, "utf8");
-
-        if (mode !== undefined) {
-            chmodSync(temporaryPath, mode);
-        }
+        // Created with its final mode, so the secrets in `env` blocks are never
+        // readable through a umask-default `0644` window. `rename` keeps it.
+        writeFileSync(temporaryPath, contents, { encoding: "utf8", mode: mode ?? 0o600 });
 
         renameSync(temporaryPath, target);
     } catch (error: unknown) {
