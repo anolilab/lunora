@@ -104,6 +104,38 @@ describe("lunoraCollectionOptions: subscription error state", () => {
         expect(options.utils.isError()).toBe(false);
     });
 
+    it("forgets a failed scope's error as soon as the collection is re-scoped or detached", () => {
+        expect.assertions(6);
+
+        const { client, subscriptions } = makeClient();
+        const options = lunoraCollectionOptions({ client, list: ref, scopeBy: "channelId" });
+        const states: boolean[] = [];
+
+        options.utils.subscribeError(() => {
+            states.push(options.utils.isError());
+        });
+        (options.config.sync as { sync: (writer: never) => unknown }).sync(writerOf().writer);
+        options.scope({ channelId: "a" });
+        subscriptions[0]?.onError(ERROR);
+
+        expect(options.utils.isError()).toBe(true);
+
+        // Scope B has delivered nothing yet: scope A's failure is not B's.
+        options.scope({ channelId: "b" });
+
+        expect(options.utils.isError()).toBe(false);
+        expect(subscriptions).toHaveLength(2);
+
+        subscriptions[1]?.onError(ERROR);
+
+        expect(options.utils.isError()).toBe(true);
+
+        options.scope();
+
+        expect(options.utils.isError()).toBe(false);
+        expect(states).toStrictEqual([true, false, true, false]);
+    });
+
     it("is reachable as `collection.utils` on a created TanStack collection", async () => {
         expect.assertions(3);
 

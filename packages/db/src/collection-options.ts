@@ -958,6 +958,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
         unsubscribe?.();
         unsubscribe = undefined;
+        // The previous scope's failure is not this scope's: clear it before the new subscription can report its own.
+        setError(undefined);
         // A watermark stashed for the previous shard's frame must not resolve this one's gate.
         pendingFrameWatermark = undefined;
         // Clear the previous scope's rows from the synced view.
