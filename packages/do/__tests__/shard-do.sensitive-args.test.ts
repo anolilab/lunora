@@ -1,6 +1,7 @@
 import type { LogEventInput } from "@lunora/observability";
 import { readRequestLog, SENSITIVE_ARG_MASK } from "@lunora/observability";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
@@ -231,6 +232,22 @@ class TelemetryShard extends ShardDO {
             return { ok: true };
         }
 
+        if (functionPath === "vault:bytes") {
+            // A marked byte value passed straight to the logger, where it renders as its numeric indices.
+            log.info("got", args["value"]);
+
+            return { ok: true };
+        }
+
+        if (functionPath === "vault:bytes-encoded") {
+            // The same bytes, logged by a handler that encodes them to text itself.
+            const bytes = args["value"] as Uint8Array;
+
+            log.info(`hex ${Buffer.from(bytes).toString("hex")} base64 ${Buffer.from(bytes).toString("base64")}`);
+
+            return { ok: true };
+        }
+
         if (functionPath === "vault:serialize") {
             // A handler that quotes its whole argument bag, as JSON, in a log line and in a
             // failure: the marked value appears in its escaped spelling, not its raw one.
@@ -294,6 +311,17 @@ class TelemetryShard extends ShardDO {
 }
 
 const telemetryRpc = (functionPath: string, args: Record<string, unknown>): Request => rpc(functionPath, args);
+
+/** A request whose args go through the wire codec, the only way a byte value reaches a handler. */
+const wireRpc = (functionPath: string, args: Record<string, unknown>): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: encodeWire(args), functionPath }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+
+/** Bytes that are not valid UTF-8, with the marked secret after the bad lead byte. */
+const RAW_SECRET_BYTES = new Uint8Array([0xff, ...new TextEncoder().encode(SECRET)]);
 
 describe("shardDO scrubs a v.sensitive value from every record a dispatch writes", () => {
     it("masks the marked value in ctx.log, ctx.trace, the wide event and the root span, and keeps the sibling", async () => {
@@ -597,6 +625,74 @@ describe("run-as dispatches under the sensitive scope of their arguments", () =>
             expect(response.status).toBe(200);
             expect(logs.length).toBeGreaterThan(0);
             expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+});
+
+describe("shardDO masks a marked byte value in every form a handler logs it", () => {
+    it("masks a UTF-8 byte value passed straight to the logger, instead of writing its numeric indices", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event) };
+
+            await shard.fetch(wireRpc("vault:bytes", { value: new TextEncoder().encode(SECRET) }));
+
+            const got = logs.find((event) => event.message.startsWith("got"));
+
+            expect(got?.message).toBe(`got ${SENSITIVE_ARG_MASK}`);
+            expect(JSON.stringify(logs)).not.toContain("104,117,110");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks a non-UTF-8 byte value passed straight to the logger", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event) };
+
+            await shard.fetch(wireRpc("vault:bytes", { value: RAW_SECRET_BYTES }));
+
+            const got = logs.find((event) => event.message.startsWith("got"));
+
+            expect(got?.message).toBe(`got ${SENSITIVE_ARG_MASK}`);
+            expect(JSON.stringify(logs)).not.toContain("255,104");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("masks the hex and base64 text a handler encodes a non-UTF-8 byte value to", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event) };
+
+            await shard.fetch(wireRpc("vault:bytes-encoded", { value: RAW_SECRET_BYTES }));
+
+            const encoded = logs.find((event) => event.message.startsWith("hex"));
+
+            expect(encoded?.message).toBe(`hex ${SENSITIVE_ARG_MASK} base64 ${SENSITIVE_ARG_MASK}`);
+            expect(JSON.stringify(logs)).not.toContain(Buffer.from(RAW_SECRET_BYTES).toString("hex"));
         } finally {
             database.close();
         }

@@ -7431,8 +7431,10 @@ abstract class ShardDO {
         boundFields?: Record<string, unknown>,
         scope: SensitiveScope = NO_SENSITIVE_SCOPE,
     ): ContextLogger {
-        // A handler may keep its logger and write through it after it has returned. The
-        // hold keeps the invocation's values for those writes; they go with the logger.
+        // A handler may keep its logger and write through it after it has returned. The hold is
+        // never released on purpose: a late write that found the values already dropped would be
+        // recorded raw, and dropping the write instead would lose the line without a trace. The
+        // values therefore live as long as the logger, whose closures keep the scope reachable.
         scope.hold();
 
         // Every part of the line is scrubbed before it is recorded: the arguments
@@ -7442,9 +7444,10 @@ abstract class ShardDO {
             (...args: unknown[]): void => {
                 // A string argument that is exactly a marked property name is masked before the message is
                 // rendered from it: the message joins the arguments, so masking only the finished message
-                // would miss a key that sits beside other words.
-                const masked = args.map((argument) => (typeof argument === "string" ? scope.name(argument) : argument));
-                const { fields, message } = parseLogArgs(masked, boundFields);
+                // would miss a key that sits beside other words. Every other argument is scrubbed before it
+                // renders too: a byte value renders as its numeric indices, which no text match can find.
+                const masked = args.map((argument) => (typeof argument === "string" ? scope.name(argument) : scope.value(argument)));
+                const { fields, message } = parseLogArgs(masked, boundFields === undefined ? undefined : scope.value(boundFields));
                 // Searched before `parseLogArgs` stringified any Error in the fields.
                 const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 

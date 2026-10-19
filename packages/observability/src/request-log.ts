@@ -385,20 +385,33 @@ const decodeUtf8 = (bytes: Uint8Array): string | undefined => {
     }
 };
 
-/**
- * The spellings of a byte value's UTF-8 text. A byte value keeps its content in its buffer, which a
- * property walk never reaches, and its text is what a handler that decodes it logs.
- */
-const bytesTextOf = (value: ArrayBuffer | ArrayBufferView): string | undefined => {
-    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+const bytesOf = (value: ArrayBuffer | ArrayBufferView): Uint8Array =>
+    value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
 
-    return decodeUtf8(bytes);
+/**
+ * The encoded forms of a byte value, which a handler logs as text when it encodes the bytes itself.
+ * Each one is searched for in free text as it stands, so no escaping applies to them. They are
+ * the only spelling of bytes that is not valid UTF-8, which is why non-UTF-8 values need them.
+ */
+const encodedByteSpellings = (bytes: Uint8Array): string[] => {
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const base64 = btoa(Array.from(bytes, (byte) => String.fromCodePoint(byte)).join(""));
+    // Padding sits only at the end, so the text before the first `=` is the unpadded form.
+    const base64Url = base64.replaceAll("+", "-").replaceAll("/", "_").split("=")[0] ?? "";
+
+    return [...new Set([base64, base64Url, hex, hex.toUpperCase()])];
 };
 
 const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
-    const text = bytesTextOf(value);
+    const bytes = bytesOf(value);
 
-    return text === undefined || text.length === 0 ? [] : stringSpellings(text);
+    if (bytes.length === 0) {
+        return [];
+    }
+
+    const text = decodeUtf8(bytes);
+
+    return [...(text === undefined || text.length === 0 ? [] : stringSpellings(text)), ...encodedByteSpellings(bytes)];
 };
 
 /**
@@ -592,6 +605,27 @@ const scrubContainer = (value: object, secrets: SecretSet, scrubChild: (child: u
 };
 
 /**
+ * Whether a byte value holds a sensitive value, by its UTF-8 text or by one of its encoded forms. Non-UTF-8
+ * bytes have no text, so their encoded forms are the only thing they can match on. The encoded forms use a
+ * fixed alphabet, so a short secret matches them by chance far more often than it matches prose; they are
+ * searched with the free-text rules, not as bare substrings.
+ */
+const byteValueIsSensitive = (value: ArrayBuffer | ArrayBufferView, secrets: SecretSet): boolean => {
+    const bytes = bytesOf(value);
+
+    if (bytes.length === 0) {
+        return false;
+    }
+
+    const text = decodeUtf8(bytes);
+
+    return (
+        (text !== undefined && secrets.texts.some((secret) => text.includes(secret))) ||
+        encodedByteSpellings(bytes).some((form) => scrubSensitiveText(form, secrets.texts) !== form)
+    );
+};
+
+/**
  * Scrub a structured value (a field, an attribute, a log argument) of the same
  * sensitive values. Returns the original reference when nothing matched, so a
  * caller can tell untouched data from a copy and an unmarked sibling keeps its
@@ -602,12 +636,10 @@ const scrubValue = (value: unknown, secrets: SecretSet, depth: number, ancestors
         return scrubSensitiveText(value, secrets.texts);
     }
 
+    // A byte value is masked whole when it matches a sensitive value. Its bytes are never walked as numbers:
+    // no single byte equals a registered text, so a walk would write every one of them out.
     if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-        // A byte value is masked whole when its text holds a sensitive value. Its bytes are never walked as numbers:
-        // no single byte equals a registered text, so a walk would write every one of them out.
-        const text = bytesTextOf(value);
-
-        return text !== undefined && secrets.texts.some((secret) => text.includes(secret)) ? SENSITIVE_ARG_MASK : value;
+        return byteValueIsSensitive(value, secrets) ? SENSITIVE_ARG_MASK : value;
     }
 
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {

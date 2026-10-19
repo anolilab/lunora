@@ -799,3 +799,49 @@ describe("ctx.db error messages under a sensitive scope", () => {
         expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 });
+
+describe("byte values under a sensitive scope", () => {
+    // Not valid UTF-8 (the lead byte is 0xff), so the only spellings it has are its encoded forms.
+    const RAW = new Uint8Array([0xff, ...new TextEncoder().encode("bytes-secret-9")]);
+
+    it("masks a non-UTF-8 byte value whose bytes were registered, instead of letting it render", () => {
+        expect.assertions(1);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: RAW }, new Set(["value"])));
+
+        expect(scope.value(RAW)).toBe(SENSITIVE_ARG_MASK);
+    });
+
+    it("masks the hex, uppercase hex and base64 text of a registered byte value in free text", () => {
+        expect.assertions(3);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: RAW }, new Set(["value"])));
+        const hex = Buffer.from(RAW).toString("hex");
+        const base64 = Buffer.from(RAW).toString("base64");
+        const base64Url = Buffer.from(RAW).toString("base64url");
+
+        expect(scope.text(`hex ${hex}`)).toBe(`hex ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text(`HEX ${hex.toUpperCase()}`)).toBe(`HEX ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text(`b64 ${base64} url ${base64Url}`)).toBe(`b64 ${SENSITIVE_ARG_MASK} url ${SENSITIVE_ARG_MASK}`);
+    });
+
+    it("masks a UTF-8 byte value by its text, and its encoded text in a message", () => {
+        expect.assertions(2);
+
+        const utf8 = new TextEncoder().encode("bytes-secret-9");
+        const scope = createSensitiveScope(sensitiveValues({ value: utf8 }, new Set(["value"])));
+
+        expect(scope.value(utf8)).toBe(SENSITIVE_ARG_MASK);
+        expect(scope.text(`hex ${Buffer.from(utf8).toString("hex")}`)).toBe(`hex ${SENSITIVE_ARG_MASK}`);
+    });
+
+    it("leaves an unregistered byte value alone, even one that shares a short encoded form", () => {
+        expect.assertions(2);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: RAW }, new Set(["value"])));
+        const other = new Uint8Array([0x01, 0x02, 0x03]);
+
+        expect(scope.value(other)).toBe(other);
+        expect(scope.text(`hex ${Buffer.from(other).toString("hex")}`)).toBe(`hex ${Buffer.from(other).toString("hex")}`);
+    });
+});
