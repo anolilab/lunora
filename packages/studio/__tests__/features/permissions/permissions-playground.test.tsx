@@ -250,4 +250,28 @@ describe("permissionsPlayground", () => {
         expect(mock.query).toHaveBeenCalledTimes(1);
         expect((mock.query.mock.calls[0]?.[1] as { functionPath?: unknown }).functionPath).toBe("deleteDocument");
     });
+
+    it("asks for confirmation before running a prefilled function whose kind is not known yet", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: runAsServer(() => null) });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={[]} prefill={{ functionPath: "deleteDocument", nonce: 1 }} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        // The prefill lands on a microtask.
+        await waitFor(() => {
+            if (screen.getByTestId<HTMLButtonElement>("pp-run").disabled) {
+                throw new Error("prefill not applied yet");
+            }
+        });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        expect(screen.getByTestId("pp-run-confirm").textContent).toBe("This will execute `deleteDocument` as user `user_1`.");
+        expect(mock.query).not.toHaveBeenCalled();
+    });
 });
