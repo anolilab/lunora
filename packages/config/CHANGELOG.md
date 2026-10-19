@@ -1,3 +1,15 @@
+## @lunora/config [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.378...@lunora/config@1.0.0-alpha.379) (2026-10-19)
+
+### Features
+
+* **cli:** add a cloudflare cost audit skill and a cron cadence lint ([#1269](https://github.com/anolilab/lunora/issues/1269)) ([365571a](https://github.com/anolilab/lunora/commit/365571a2c39e366e3ba9826ce5656ff1526d8015))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.329
+* **@lunora/studio:** upgraded to 1.0.0-alpha.319
+
 ## @lunora/config [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.377...@lunora/config@1.0.0-alpha.378) (2026-10-19)
 
 ### Features
