@@ -570,8 +570,9 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
 const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, turn: number): Promise<void> => {
     const { instanceId, persist } = turnContext;
     // Keyed on the slot, not the provider's call id: a reused id would otherwise dedupe this result onto the earlier turn's row.
+    // Its own namespace too, so an ordinary call whose id reads as a slot cannot share the key.
     const slot = secretSlotOf(turn, call.id);
-    const messageKey = `${instanceId}:tool:${slot}`;
+    const messageKey = `${instanceId}:secret-result:${slot}`;
     const stepName = `tool:${call.name}:${slot}`;
     const label = secretLabelOf(call.input);
 

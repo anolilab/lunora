@@ -404,6 +404,25 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect((host.rows.get("agent_secret_requests") ?? [])[1]).toMatchObject({ status: "pending" });
     });
 
+    it("keeps an ordinary tool result whose call id reads as a secret slot, instead of deduplicating it onto the secret's row", async () => {
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            toolTurn("0:call_1", "other", { secretRef: "0:call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("0:call_1", SECRET);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toMatchObject({ stopped: "final", text: "done" });
+        expect([...runtime.messages.values()].filter((message) => message.role === "tool" && message.toolCallId === "0:call_1")).toHaveLength(1);
+    });
+
     it("holds a request open for less than the host keeps a supplied value, however long approvalTimeout is", async () => {
         expect.assertions(2);
 
