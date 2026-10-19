@@ -5244,10 +5244,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 } catch {
                     // Malformed shard response — fail every entry to its own slot
                     // rather than dropping them silently into "no result". Coded
-                    // `SHARD_UNAVAILABLE`, not `SHARD_ERROR`: the client counts a
-                    // per-write `SHARD_ERROR` against that write's replay cap, and a
-                    // shard that could not answer at all says nothing about any
-                    // write in the batch.
+                    // `SHARD_UNAVAILABLE`, not `SHARD_ERROR`: a shard that could not
+                    // answer at all says nothing about any write in the batch, and
+                    // the client re-queues that code instead of settling the write.
                     const message = `shard batch returned a non-JSON response (${String(response.status)})`;
 
                     failSubBatch(entries, response.status, "SHARD_UNAVAILABLE", message, (entry) => {

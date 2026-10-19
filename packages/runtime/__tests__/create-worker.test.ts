@@ -1449,16 +1449,11 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
 
 describe("createWorker — RPC batch shard-level failures", () => {
     // A namespace whose per-shard `/rpc-batch` reply is whatever `reply` builds.
-    const replyingNamespace = (reply: (calls: { id: number }[]) => Response): ShardNamespaceLike => {
+    const replyingNamespace = (reply: () => Response): ShardNamespaceLike => {
         return {
             get: () => {
                 return {
-                    fetch: async (request: Request): Promise<Response> => {
-                        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- request.json() is Promise<unknown> under the build tsconfig; the assertion is required there
-                        const { calls } = (await request.json()) as { calls: { id: number }[] };
-
-                        return reply(calls);
-                    },
+                    fetch: async (): Promise<Response> => reply(),
                 };
             },
             idFromName: (name) => {
@@ -1467,9 +1462,11 @@ describe("createWorker — RPC batch shard-level failures", () => {
         };
     };
 
-    const post = async (shardDO: ShardNamespaceLike) => {
+    // One call, id 0, so a reply can address its slot without reading the request back.
+    const post = async (shardDO: ShardNamespaceLike): Promise<Response> => {
         const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO });
-        const res = await worker.fetch(
+
+        return worker.fetch(
             new Request("https://app.example/_lunora/rpc-batch", {
                 body: JSON.stringify({ calls: [{ functionPath: "messages:send", id: 0, shardKey: "a" }] }),
                 method: "POST",
@@ -1477,43 +1474,34 @@ describe("createWorker — RPC batch shard-level failures", () => {
             {},
             fakeContext,
         );
-
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- res.json() is Promise<unknown> under the build tsconfig; the assertion is required there
-        return (await res.json()) as { results: { body?: { error?: { code?: string } } }[] };
     };
 
-    // The client counts a coded `SHARD_ERROR` against the one write it names; a shard that could not
-    // answer at all says nothing about any write, so it must not carry that code.
+    // A shard that could not answer at all says nothing about any write, so it is reported with the
+    // code the client re-queues, never as a verdict on the one write a slot names.
     it("reports a non-JSON shard reply as SHARD_UNAVAILABLE, not as a per-write SHARD_ERROR", async () => {
         expect.assertions(1);
 
-        const body = await post(replyingNamespace(() => new Response("<html>bad gateway</html>", { status: 502 })));
+        const res = await post(replyingNamespace(() => new Response("<html>bad gateway</html>", { status: 502 })));
 
-        expect(body.results[0]?.body?.error?.code).toBe("SHARD_UNAVAILABLE");
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "SHARD_UNAVAILABLE" } } }] });
     });
 
     it("reports a result the shard left out as SHARD_UNAVAILABLE, not as a per-write SHARD_ERROR", async () => {
         expect.assertions(1);
 
-        const body = await post(replyingNamespace(() => Response.json({ results: [] })));
+        const res = await post(replyingNamespace(() => Response.json({ results: [] })));
 
-        expect(body.results[0]?.body?.error?.code).toBe("SHARD_UNAVAILABLE");
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "SHARD_UNAVAILABLE" } } }] });
     });
 
-    it("passes a genuine per-write SHARD_ERROR through unchanged", async () => {
+    it("passes a per-write verdict through unchanged", async () => {
         expect.assertions(1);
 
-        const body = await post(
-            replyingNamespace((calls) =>
-                Response.json({
-                    results: calls.map((call) => {
-                        return { body: { error: { code: "SHARD_ERROR", message: "boom" } }, id: call.id, status: 503 };
-                    }),
-                }),
-            ),
+        const res = await post(
+            replyingNamespace(() => Response.json({ results: [{ body: { error: { code: "RPC_FAILED", message: "boom" } }, id: 0, status: 500 }] })),
         );
 
-        expect(body.results[0]?.body?.error?.code).toBe("SHARD_ERROR");
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "RPC_FAILED" } } }] });
     });
 });
 
