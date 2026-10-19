@@ -68,7 +68,8 @@ share an `id` or an export name (`LIVE_STREAM_DUPLICATE`).
 A topic name and a key field must be plain identifiers: letters, digits and `_`,
 starting with a letter. A topic named `room` is refused, because its wire topic would
 start with the reserved `room:` prefix. A key value is a string on the wire, so a key
-field must be a string validator such as `v.string()`, `v.id(...)` or `v.literal(...)`.
+field must be a string validator: `v.string()`, `v.id(...)`, a string `v.literal(...)`, or a
+`v.union(...)` of those. `v.literal(1)` and a union with a non-string member are refused.
 `defineLiveStream` refuses a declaration that breaks any of these rules when it runs,
 and codegen refuses a bad name or key field at build time. Only `defineLiveStream` checks
 the validator kinds, since codegen does not read validators.

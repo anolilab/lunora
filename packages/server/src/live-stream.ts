@@ -111,7 +111,7 @@
 
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
-import { parseValidatorMap } from "@lunora/values";
+import { isStringValidator, parseValidatorMap } from "@lunora/values";
 
 import {
     isLiveIdentifier,
@@ -226,8 +226,6 @@ const forbidden = (topic: string): Response => Response.json({ code: "FORBIDDEN_
 
 const badRequest = (message: string): Response => Response.json({ code: "BAD_REQUEST", error: message }, { status: 400 });
 
-const STRING_KEY_KINDS: ReadonlySet<string> = new Set(["id", "literal", "string", "union"]);
-
 /** Reject a declaration whose topics could not be told apart on the wire, or could never be published. */
 const assertDeclaration = (id: string, topics: LiveTopics): void => {
     for (const [name, topic] of Object.entries(topics)) {
@@ -247,7 +245,7 @@ const assertDeclaration = (id: string, topics: LiveTopics): void => {
             }
 
             // A key segment is a string on the wire. A validator of another kind would deny every subscribe, silently.
-            if (!STRING_KEY_KINDS.has(validator.kind)) {
+            if (!isStringValidator(validator)) {
                 throw new TypeError(`defineLiveStream("${id}"): key field "${name}.${field}" must be a string validator (v.string(), v.id(), v.literal(…))`);
             }
         }

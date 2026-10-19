@@ -8523,6 +8523,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `isStringValidator` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `jsonSchemaFromNode` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.

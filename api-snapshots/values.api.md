@@ -349,6 +349,12 @@ const installCompiledValidatorMap: (validators: object, compiled: CompiledValida
 const isOrWrapsFromValidator: (validator: Validator) => boolean;
 ```
 
+### `isStringValidator` (const)
+
+```ts
+const isStringValidator: (validator: Validator) => boolean;
+```
+
 ### `jsonSchemaFromNode` (const)
 
 ```ts

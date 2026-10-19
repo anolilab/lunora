@@ -481,12 +481,21 @@ describe("defineLiveStream topic declaration", () => {
     });
 
     it("rejects a declaration whose topics could alias or never publish", () => {
-        expect.assertions(5);
+        expect.assertions(8);
 
         expect(() => defineLiveStream({ id: "posts", topics: { "a:b": { payload: v.null() } } })).toThrow(/plain identifier/u);
         expect(() => defineLiveStream({ id: "posts", topics: { room: { payload: v.null() } } })).toThrow(/reserved topic prefix/u);
         expect(() => defineLiveStream({ id: "posts", topics: { post: { key: { "a%": v.string() }, payload: v.null() } } })).toThrow(/plain identifier/u);
         expect(() => defineLiveStream({ id: "posts", topics: { post: { key: { n: v.number() as never }, payload: v.null() } } })).toThrow(/string validator/u);
+
+        // A literal or union whose values are not strings has the same "kind" tag as a string-valued one.
+        expect(() => defineLiveStream({ id: "posts", topics: { post: { key: { n: v.literal(1) as never }, payload: v.null() } } })).toThrow(
+            /string validator/u,
+        );
+        expect(() =>
+            defineLiveStream({ id: "posts", topics: { post: { key: { n: v.union(v.literal("a"), v.literal(2)) as never }, payload: v.null() } } }),
+        ).toThrow(/string validator/u);
+        expect(() => defineLiveStream({ id: "posts", topics: { post: { key: { n: v.union(v.literal("a"), v.string()) }, payload: v.null() } } })).not.toThrow();
         expect(() => defineLiveStream({ id: "posts", topics: { post: { key: { id: v.string() }, payload: v.null() } } })).not.toThrow();
     });
 });
