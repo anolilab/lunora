@@ -210,7 +210,7 @@ const ERROR_CATALOG: {
     };
     readonly LIVE_CONTROL_SUPERSEDED: {
         readonly status: 409;
-        readonly title: "Live control superseded";
+        readonly title: "A later live control call already applied";
     };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
@@ -723,10 +723,6 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
-    };
-    readonly LIVE_CONTROL_SUPERSEDED: {
-        readonly status: 409;
-        readonly title: "A later live control call already applied";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
