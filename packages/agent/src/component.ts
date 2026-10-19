@@ -327,12 +327,16 @@ const agentExtension: SchemaExtension<
             label: v.optional(v.string().nullable()),
             status: v.union(v.literal("pending"), v.literal("supplied"), v.literal("declined"), v.literal("expired"), v.literal("consumed")),
             threadKey: v.string(),
+            /** The request's slot (`<turn>:<tool-call id>`): the key its steps, wait and row are stored under. */
             toolCallId: v.string(),
+            /** The provider's tool-call id: what a client sees on the tool call, and answers with. Not unique across turns. */
+            callId: v.string(),
             toolName: v.string(),
             updatedAt: v.number(),
         })
-            // One request per tool call per thread; the unique key makes a replayed pause a no-op.
+            // One request per slot per thread; the unique key makes a replayed pause a no-op.
             .index("byThreadCall", ["threadKey", "toolCallId"], { unique: true })
+            .index("byThreadCallId", ["threadKey", "callId"])
             // See the threads table for why the agent tables are `.public()`.
             .public(),
 
@@ -453,6 +457,24 @@ const secretRequestOf = async (database: QueueDatabase, threadKey: string, toolC
         .first();
 
     return request ?? undefined;
+};
+
+/**
+ * The one pending request a client's tool-call id names on a thread. A paused run takes no further turn, so a thread has at
+ * most one pending request at a time; a second match is refused rather than guessed at.
+ */
+const pendingSecretRequestForCall = async (database: QueueDatabase, threadKey: string, callId: string): Promise<Record<string, unknown>> => {
+    const matches = await database
+        .query(REQUESTS_TABLE)
+        .withIndex("byThreadCallId", (q) => q.eq("threadKey", threadKey).eq("callId", callId))
+        .collect();
+    const pending = matches.filter((request) => request["status"] === "pending");
+
+    if (pending.length !== 1) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending secret request for tool call "${callId}" on thread "${threadKey}"`);
+    }
+
+    return pending[0] as Record<string, unknown>;
 };
 
 /**
@@ -1376,9 +1398,11 @@ export const agentComponent = (): AgentComponent => {
                 "supply or decline a secret on it",
             );
             const store = secretStoreOf(context);
-            const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, args.toolCallId);
+            const slot = pending["toolCallId"] as string;
+            const marker = await pendingSecretMarker(context.db, thread, slot);
             const handle = secretWaitHandle(context, thread);
-            const checked = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+            const checked = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
             // Copied out now: the row read is not a snapshot the write below can be compared against.
             const ownerInstanceId = checked["instanceId"] as string;
 
@@ -1395,7 +1419,7 @@ export const agentComponent = (): AgentComponent => {
             }
 
             try {
-                const request = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+                const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
 
                 if (request["instanceId"] !== ownerInstanceId) {
                     throw new LunoraError(
@@ -1415,7 +1439,7 @@ export const agentComponent = (): AgentComponent => {
             }
 
             try {
-                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${slot}` });
             } catch {
                 // Deliberately not rethrown: the supply is committed, and the wait settles at its
                 // deadline and honours it. The cost is that a lost wake resumes the run late.
@@ -1441,15 +1465,17 @@ export const agentComponent = (): AgentComponent => {
                 context.auth,
                 "supply or decline a secret on it",
             );
-            const marker = await pendingSecretMarker(context.db, thread, args.toolCallId);
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, args.toolCallId);
+            const slot = pending["toolCallId"] as string;
+            const marker = await pendingSecretMarker(context.db, thread, slot);
             const handle = secretWaitHandle(context, thread);
-            const request = await openSecretRequestOrThrow(context.db, args.threadKey, args.toolCallId, Date.now());
+            const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
 
             await context.db.patch(request["_id"] as never, { status: "declined", updatedAt: Date.now() });
             await context.db.delete(marker["_id"] as never);
 
             try {
-                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${args.toolCallId}` });
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${slot}` });
             } catch {
                 // Deliberately not rethrown, as in supply: the decline is committed, and the wait
                 // settles at its deadline and reads it. Failing here would roll the decline back.
@@ -1471,6 +1497,7 @@ export const agentComponent = (): AgentComponent => {
                 consumerTool: v.string(),
                 expiresAt: v.number(),
                 instanceId: v.string(),
+                callId: v.optional(v.string()),
                 label: v.optional(v.string()),
                 threadKey: v.string(),
                 toolCallId: v.string(),
@@ -1489,6 +1516,7 @@ export const agentComponent = (): AgentComponent => {
                         // eslint-disable-next-line unicorn/no-null -- `null` is the stored form of "no label"; the column is nullable
                         label: args.label ?? null,
                         status: "pending",
+                        callId: args.callId ?? args.toolCallId,
                         threadKey: args.threadKey,
                         toolCallId: args.toolCallId,
                         toolName: args.toolName,
@@ -1517,6 +1545,7 @@ export const agentComponent = (): AgentComponent => {
                     label: args.label ?? null,
                     // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
                     ref: null,
+                    callId: args.callId ?? args.toolCallId,
                     instanceId: args.instanceId,
                     status: "pending",
                     toolName: args.toolName,
@@ -1645,7 +1674,7 @@ export const agentComponent = (): AgentComponent => {
                         // Absent (not `null`) when there is no label, so a row from before the column reads the same as one with none.
                         ...(typeof request["label"] === "string" ? { label: request["label"] } : {}),
                         status: request["status"] as string,
-                        toolCallId: request["toolCallId"] as string,
+                        toolCallId: request["callId"] as string,
                         toolName: request["toolName"] as string,
                     };
                 });

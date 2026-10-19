@@ -485,6 +485,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
             consumerTool,
             expiresAt: Date.now() + timeoutMs,
             instanceId,
+            callId: call.id,
             label,
             threadKey,
             toolCallId: slot,
@@ -496,9 +497,8 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
         content: `Awaiting a secret for tool "${call.name}": ${label}`,
         messageKey: markerKey,
         role: "tool",
-        // The client answers the marker with its `toolCallId`, so the marker carries the slot the request is keyed on.
         status: "awaiting_secret",
-        toolCallId: slot,
+        toolCallId: call.id,
         toolName: call.name,
     });
     await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });

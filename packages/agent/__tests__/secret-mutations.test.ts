@@ -205,6 +205,27 @@ describe("secret request component", () => {
     });
 
     describe("agentSupplySecret", () => {
+        it("refuses a supply that names two pending requests, rather than guessing which one it answers", async () => {
+            const { store, puts } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store);
+
+            // A second pending request under the same call id, from a later turn.
+            await call(functions.agentOpenSecretRequest, ctx, {
+                callId: "call_1",
+                consumerTool: "charge",
+                expiresAt: Date.now() + 60_000,
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "2:call_1",
+                toolName: "requestKey",
+            });
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
+                code: "CONFLICT",
+            });
+            expect(puts).toStrictEqual([]);
+        });
+
         it("stores the value, marks the request supplied, and wakes the run with an empty payload", async () => {
             expect.assertions(6);
 

@@ -45,7 +45,7 @@ describe("agentHarness — requestSecretTool", () => {
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:0:call_1");
-        await harness.supply("thread-1", "0:call_1", SECRET);
+        await harness.supply("thread-1", "call_1", SECRET);
 
         await expect(run).resolves.toStrictEqual({ stopped: "final", text: "done", turns: 3 });
         expect(used).toStrictEqual([SECRET]);
@@ -73,7 +73,7 @@ describe("agentHarness — requestSecretTool", () => {
         const first = harness.run(input, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:0:call_1");
-        await harness.supply("thread-1", "0:call_1", SECRET);
+        await harness.supply("thread-1", "call_1", SECRET);
         await first;
 
         // The same instance again: every step, the wait included, is served from the journal.
@@ -93,7 +93,7 @@ describe("agentHarness — requestSecretTool", () => {
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:0:call_1");
-        harness.decline("thread-1", "0:call_1");
+        harness.decline("thread-1", "call_1");
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
         expect(used).toStrictEqual([]);
@@ -117,7 +117,7 @@ describe("agentHarness — requestSecretTool", () => {
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:0:call_1");
-        await harness.supply("thread-1", "0:call_1", SECRET);
+        await harness.supply("thread-1", "call_1", SECRET);
         secrets.advanceClock(TTL);
 
         await expect(run).resolves.toMatchObject({ stopped: "final", text: "could not charge" });
@@ -157,7 +157,7 @@ describe("agentHarness — journal order", () => {
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:0:call_1");
-        await harness.supply("thread-1", "0:call_1", SECRET);
+        await harness.supply("thread-1", "call_1", SECRET);
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
 
@@ -190,7 +190,7 @@ describe("agentHarness — concurrent runs", () => {
         await harness.awaitWait("run-b", "secret:0:call_1");
 
         // Declining run-a's request wakes run-a only; run-b keeps waiting until it is expired.
-        harness.decline("thread-a", "0:call_1");
+        harness.decline("thread-a", "call_1");
 
         await expect(first).resolves.toMatchObject({ stopped: "final" });
 
