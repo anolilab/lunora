@@ -1020,6 +1020,7 @@ class OfflineQueue {
     readonly queueBeforeFirstConnect: boolean;
     constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
     get size(): number;
+    get replaying(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
     discard(id: string): void;
     flushUnpersisted(): void;
@@ -1533,6 +1534,7 @@ interface SubscriptionState {
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
+    valueReceived: boolean;
     readonly wireArgs: Record<string, unknown>;
 }
 ```
@@ -2488,6 +2490,7 @@ type NullableTimestamp = null | number | string;
 ```ts
 interface OfflineQueueDeps {
     onEvict?: EvictHandler;
+    onReplayingChange?: () => void;
     onSizeChange?: (size: number) => void;
     persistence?: PersistenceAdapter;
     version?: string;
