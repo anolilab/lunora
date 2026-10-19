@@ -90,6 +90,20 @@ describe("httpRoute stream() terminal", () => {
         ]);
     });
 
+    it("carries a thrown LunoraError's why on its event:error frame", async () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line require-yield, sonarjs/generator-without-yield -- intentional: this generator only throws.
+        const route = httpRoute.get("/api/conflict").stream(async function* conflictGen() {
+            throw new LunoraError("CONFLICT", "stale", { why: "row moved" });
+        });
+
+        const response = await dispatch(route, "GET", "/api/conflict", new Request("https://x/api/conflict"));
+        const { events } = await readSse(response);
+
+        expect(events.find((event) => event.event === "error")?.data).toMatchObject({ code: "CONFLICT", why: "row moved" });
+    });
+
     it("surfaces a thrown LunoraError as an event:error frame", async () => {
         expect.assertions(2);
 

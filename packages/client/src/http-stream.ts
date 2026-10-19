@@ -207,18 +207,23 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     }
 
     if (frame.event === "error") {
-        let payload: { code?: unknown; message?: unknown } = {};
+        let payload: { code?: unknown; message?: unknown; why?: unknown } = {};
 
         try {
-            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown };
+            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown; why?: unknown };
         } catch {
             /* fall through to the generic error below */
         }
 
         const message = typeof payload.message === "string" ? payload.message : "stream error";
         const code = typeof payload.code === "string" ? payload.code : "HTTP_STREAM_ERROR";
+        const error: LunoraError & { why?: string } = new LunoraError(code, message);
 
-        handle.fail(new LunoraError(code, message));
+        if (typeof payload.why === "string") {
+            error.why = payload.why;
+        }
+
+        handle.fail(error);
 
         return true;
     }

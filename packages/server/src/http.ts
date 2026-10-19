@@ -829,7 +829,9 @@ const buildStreamHandler =
                     // enqueueing onto the closed controller would throw out of
                     // this catch.
                     if (!ac.signal.aborted) {
-                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                        controller.enqueue(
+                            encoder.encode(sseFrame({ code: body.code, message: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, "error")),
+                        );
                     }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);

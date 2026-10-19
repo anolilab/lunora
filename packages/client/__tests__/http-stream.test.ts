@@ -165,6 +165,19 @@ describe("httpStream", () => {
         expect((error as Error & { code?: string }).code).toBe("FORBIDDEN");
     });
 
+    it("keeps the server's why explanation on an `event: error` frame", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturning([
+            'data: {"text":"partial"}\n\n',
+            'event: error\ndata: {"code":"CONFLICT","message":"stale","why":"row moved"}\n\n',
+        ]);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { why?: string });
+
+        expect((error as Error & { why?: string }).why).toBe("row moved");
+    });
+
     it("fails with HTTP_STREAM_STATUS on a non-2xx response", async () => {
         expect.assertions(2);
 
