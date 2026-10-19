@@ -165,7 +165,7 @@ one. The stream's route is resolved against the injected `LunoraClient`, and
 makes the topic reactive: a new topic resubscribes, while a new `onEvent` or
 `onError` is read at call time and does not. `options` takes `client`,
 `destroyRef` and `injector`, which the reactive form needs when called outside an
-injection context, plus `shardKey`, `sessionKey` (a string or a signal, which resubscribes on change) and the transport tuning `headers`,
+injection context, plus `shardKey` and `sessionKey` (each a string or a signal, which resubscribes on change) and the transport tuning `headers`,
 `withCredentials`, `retryDelay` and `maxDelayMs`.
 
 ```ts

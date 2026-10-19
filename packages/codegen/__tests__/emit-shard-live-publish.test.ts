@@ -13,6 +13,21 @@ import { emitShard } from "../src/emit";
  */
 const shard = (liveStreams?: boolean): string => emitShard({ liveStreams, schema: { tables: [], vectorIndexes: [] } });
 
+describe("emitShard — declared live streams", () => {
+    it("registers a stream whose id is __proto__ as an own property, not as the registry's prototype", () => {
+        expect.assertions(2);
+
+        const emitted = emitShard({
+            liveStreamDeclarations: [{ exportName: "feed", filePath: "live", id: "__proto__", topics: [] }],
+            liveStreams: true,
+            schema: { tables: [], vectorIndexes: [] },
+        });
+
+        expect(emitted).toContain('return { ["__proto__"]: liveStream_feed };');
+        expect(emitted).not.toContain('{ "__proto__": liveStream_feed }');
+    });
+});
+
 describe("emitShard — ctx.live.publish on the action ctx", () => {
     it("wires publish to the shard's in-process live path when the app declares a live stream", () => {
         expect.assertions(3);

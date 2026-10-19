@@ -108,7 +108,7 @@ A function makes the topic reactive: a new topic resubscribes, while a new
 `onEvent` or `onError` callback is read at call time and does not. A plain
 reference resolves once. Pass `{ client, destroyRef, injector }` as the second
 argument when calling outside an injection context, as with `liveQuery`; the
-options also take `shardKey`, `sessionKey` (a string or a signal, which resubscribes on change) and the transport tuning `headers`,
+options also take `shardKey` and `sessionKey` (each a string or a signal, which resubscribes on change) and the transport tuning `headers`,
 `withCredentials`, `retryDelay` and `maxDelayMs`.
 
 ## Mutations

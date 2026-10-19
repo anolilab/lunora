@@ -55,7 +55,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER } from "./shared";
+import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, renderObjectKey } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -368,7 +368,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     const liveStreamsOverride =
         declaredStreams.length > 0
             ? `        protected override liveStreams() {
-            return { ${declaredStreams.map((stream) => `${JSON.stringify(stream.id)}: liveStream_${stream.exportName}`).join(", ")} };
+            return { ${declaredStreams.map((stream) => `${renderObjectKey(stream.id)}: liveStream_${stream.exportName}`).join(", ")} };
         }
 `
             : "";

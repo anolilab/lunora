@@ -73,6 +73,28 @@ describe("liveTopic — reactive options", () => {
         expect(secondUnsubscribe).not.toHaveBeenCalled();
     });
 
+    it("reopens on the new shard when a shard signal changes", () => {
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const shardKey = signal("tenant-1");
+        const firstUnsubscribe = vi.fn<() => void>();
+
+        subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementationOnce(() => vi.fn<() => void>());
+
+        liveTopic(ref("post:1"), { client, destroyRef: destroy.asDestroyRef, injector, shardKey });
+
+        TestBed.tick();
+
+        expect(lastOptions().url).toBe("https://api.test/live/posts/connect?shard=tenant-1");
+
+        shardKey.set("tenant-2");
+        TestBed.tick();
+
+        expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
+        expect(lastOptions().url).toBe("https://api.test/live/posts/connect?shard=tenant-2");
+    });
+
     it("resubscribes when the session key changes, closing the previous subscription first", () => {
         const destroy = createFakeDestroyRef();
         const injector = TestBed.inject(Injector);

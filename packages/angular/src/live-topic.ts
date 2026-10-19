@@ -31,7 +31,7 @@ const connectionOf = (options: SubscribeLiveTopicOptions): LiveTopicConnection =
  * `LiveTopicOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
  * @experimental
  */
-export interface LiveTopicOptions<Payload = unknown> extends Omit<ClientLiveTopicOptions<Payload>, "sessionKey"> {
+export interface LiveTopicOptions<Payload = unknown> extends Omit<ClientLiveTopicOptions<Payload>, "sessionKey" | "shardKey"> {
     /**
      * The client the stream's route is resolved against. Defaults to `LUNORA_CLIENT`, read in the
      * ambient injection context, so pass it when calling outside one (with an explicit `destroyRef`).
@@ -57,6 +57,12 @@ export interface LiveTopicOptions<Payload = unknown> extends Omit<ClientLiveTopi
      * key on sign-out.
      */
     sessionKey?: string | (() => string | undefined);
+
+    /**
+     * Follow the topic on this shard, as `shardKey` does on the other adapters. Pass a signal (or any function) when the
+     * shard comes from an input or other state that changes: a new value reopens the subscription on the new shard.
+     */
+    shardKey?: string | (() => string | undefined);
 }
 
 /**
@@ -79,7 +85,7 @@ export interface LiveTopicOptions<Payload = unknown> extends Omit<ClientLiveTopi
  *
  * Pass a function when the topic reads a signal, as above: an input is not bound while a field
  * initializer runs, so a plain reference would read `this.postId` too early. A new topic, or a new
- * `sessionKey` signal value, resubscribes, while a new `onEvent` / `onError` identity is read at
+ * `sessionKey` or `shardKey` signal value, resubscribes, while a new `onEvent` / `onError` identity is read at
  * call time and does not reopen the subscription.
  * @experimental
  */
@@ -95,9 +101,10 @@ export const liveTopic = <Payload>(
     const error = signal<LiveStreamSubscribeError | undefined>(undefined);
 
     const resolveTopic = typeof topic === "function" ? topic : () => topic;
-    const { sessionKey } = options;
+    const { sessionKey, shardKey } = options;
+    const resolveOption = (value: string | (() => string | undefined) | undefined): string | undefined => (typeof value === "function" ? value() : value);
     const subscriptionOf = (): SubscribeLiveTopicOptions =>
-        liveTopicSubscription(client, resolveTopic(), { ...options, sessionKey: typeof sessionKey === "function" ? sessionKey() : sessionKey });
+        liveTopicSubscription(client, resolveTopic(), { ...options, sessionKey: resolveOption(sessionKey), shardKey: resolveOption(shardKey) });
 
     const open = (connection: LiveTopicConnection, registerCleanup: (unsubscribe: () => void) => void): void => {
         // A new topic starts clean: the previous topic's payload must not render under it.
@@ -122,7 +129,7 @@ export const liveTopic = <Payload>(
 
     // Skip the socket on the Angular server platform (SSR), as `liveQuery` does.
     if (shouldOpenSubscription(fromInjectionContext)) {
-        if (typeof topic === "function" || typeof sessionKey === "function") {
+        if (typeof topic === "function" || typeof sessionKey === "function" || typeof shardKey === "function") {
             attachReactiveArgs(() => connectionOf(subscriptionOf()), { destroyRef, injector: options.injector }, open);
         } else {
             open(connectionOf(subscriptionOf()), (unsubscribe) => destroyRef.onDestroy(unsubscribe));

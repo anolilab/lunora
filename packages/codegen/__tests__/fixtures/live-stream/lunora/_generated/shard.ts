@@ -525,7 +525,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
         protected override liveStreams() {
-            return { "feed": liveStream_feed };
+            return { feed: liveStream_feed };
         }
 
         protected override async runShardInit(): Promise<void> {
