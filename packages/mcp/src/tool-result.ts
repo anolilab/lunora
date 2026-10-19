@@ -9,7 +9,7 @@
 import { getCatalogEntry, isInternalCode, LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../shared/base64";
-import type { ToolInputSchema, ToolResult } from "./tool-types";
+import type { ToolInputSchema, ToolOutputSchema, ToolResult } from "./tool-types";
 
 /**
  * `JSON.stringify` replacer for a decoded RPC result. `LunoraClient` decodes
@@ -139,18 +139,42 @@ const ERROR_CODE_PROPERTY: Record<string, unknown> = { description: "Set on an e
 const ERROR_MESSAGE_PROPERTY: Record<string, unknown> = { description: "Set on an error result: a message that is safe to show.", type: "string" };
 
 /**
+ * The schema of an error result's `{ code, message }`, on its own so it can sit
+ * beside the success shape under `anyOf`.
+ */
+const ERROR_SHAPE: ToolInputSchema = {
+    properties: { code: ERROR_CODE_PROPERTY, message: ERROR_MESSAGE_PROPERTY },
+    required: ["code", "message"],
+    type: "object",
+};
+
+/**
  * A tool's `outputSchema`, widened to admit the `{ code, message }` object an
  * error result carries.
  *
  * The MCP SDK client validates `structuredContent` against `outputSchema` even
  * when `isError` is set, so a schema that requires the success fields would
- * reject every failure of that tool. The error fields are added here and the
- * top level requires nothing, so the schema no longer enforces the success
- * fields. The typed helpers still produce them.
+ * reject every failure of that tool. The root becomes `anyOf` over the success
+ * shape and the error shape, so a result validates when it matches either.
+ *
+ * The error properties are not merged into the success shape's own `properties`:
+ * a composed tool may declare its own `code` or `message` with another type, and
+ * a merge would let that type override the error's. `$defs` and `definitions` move
+ * to the root, because a `$ref` inside `anyOf` resolves against the root document.
  */
-const withErrorShape = (output: ToolInputSchema): ToolInputSchema => {
+const withErrorShape = (output: ToolOutputSchema): ToolOutputSchema => {
+    // A definition that is already composed (the error and observability families
+    // wrap their own) is passed through, not nested under a second `anyOf`.
+    if (output.anyOf?.includes(ERROR_SHAPE) === true) {
+        return output;
+    }
+
+    const { $defs, definitions, ...success } = output;
+
     return {
-        properties: { code: ERROR_CODE_PROPERTY, message: ERROR_MESSAGE_PROPERTY, ...output.properties },
+        ...($defs === undefined ? {} : { $defs }),
+        ...(definitions === undefined ? {} : { definitions }),
+        anyOf: [success, ERROR_SHAPE],
         type: "object",
     };
 };

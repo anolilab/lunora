@@ -558,4 +558,4 @@ export type { ToolGate, ToolGates };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { ROW_READ_TOOL_DEFINITIONS } from "./row-read-tools";
-export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";
+export { type ToolDefinition, type ToolInputSchema, type ToolOutputSchema, type ToolResult } from "./tool-types";

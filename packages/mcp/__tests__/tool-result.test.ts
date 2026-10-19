@@ -5,9 +5,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { describe, expect, it, vi } from "vitest";
 
+import type { McpTool } from "../src/compose";
+import { createToolServer } from "../src/compose";
 import { createLocalMcpServer } from "../src/local";
 import { createLunoraMcpServer } from "../src/server";
-import { errorFromThrown, errorResult } from "../src/tool-result";
+import { errorFromThrown, errorResult, okStructured } from "../src/tool-result";
 
 describe("errorResult", () => {
     it("is isError with the code and message in both structuredContent and one text block", () => {
@@ -95,6 +97,41 @@ describe("error results survive a real SDK client", () => {
 
         expect(result.isError).toBe(true);
         expect(result.structuredContent).toMatchObject({ code: "BAD_REQUEST" });
+
+        await client.close();
+    });
+
+    it("validates a composed tool's success and error results when its own output schema types code as a number", async () => {
+        expect.assertions(4);
+
+        // A composed tool whose own `code` is a number: the error shape must not replace it.
+        const numeric: McpTool = {
+            definition: {
+                annotations: { readOnlyHint: true },
+                description: "reports a numeric code",
+                inputSchema: { properties: { fail: { type: "boolean" } }, type: "object" },
+                name: "numeric_code",
+                outputSchema: { properties: { code: { type: "number" } }, required: ["code"], type: "object" },
+            },
+            handle: async ({ fail }: Record<string, unknown>) => {
+                if (fail === true) {
+                    throw new LunoraError("NOT_FOUND", "no such row");
+                }
+
+                return okStructured({ code: 7 });
+            },
+        };
+        const client = await connected(createToolServer({ name: "numeric", version: "1.0.0" }, [numeric]));
+
+        // The SDK client throws on a result that fails the output schema, so reaching
+        // the assertions means both results validated.
+        const success = await client.callTool({ arguments: { fail: false }, name: "numeric_code" });
+        const failure = await client.callTool({ arguments: { fail: true }, name: "numeric_code" });
+
+        expect(success.structuredContent).toStrictEqual({ code: 7 });
+        expect(success.isError).not.toBe(true);
+        expect(failure.isError).toBe(true);
+        expect(failure.structuredContent).toStrictEqual({ code: "NOT_FOUND", message: "no such row" });
 
         await client.close();
     });

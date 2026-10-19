@@ -17,6 +17,20 @@ interface ToolInputSchema {
 }
 
 /**
+ * A tool's `outputSchema`. Either a success shape, or the root `anyOf` a composed
+ * tool gets so an error result also validates. The root stays `type: "object"`,
+ * which the MCP SDK requires, so `properties` is absent on that root.
+ */
+interface ToolOutputSchema {
+    $defs?: Record<string, unknown>;
+    anyOf?: ReadonlyArray<object>;
+    definitions?: Record<string, unknown>;
+    properties?: Record<string, unknown>;
+    required?: ReadonlyArray<string>;
+    type: "object";
+}
+
+/**
  * Hints every tool carries, whether it reads or writes.
  */
 interface ToolAnnotationsBase {
@@ -75,7 +89,7 @@ interface ToolDefinition {
      * emits only a text block declares none, and a client that negotiated an
      * MCP revision older than `2025-06-18` ignores it either way.
      */
-    outputSchema?: ToolInputSchema;
+    outputSchema?: ToolOutputSchema;
 }
 
 /**
@@ -99,4 +113,4 @@ type ToolResult = {
     structuredContent?: Record<string, unknown>;
 };
 
-export type { ToolAnnotations, ToolDefinition, ToolInputSchema, ToolResult };
+export type { ToolAnnotations, ToolDefinition, ToolInputSchema, ToolOutputSchema, ToolResult };

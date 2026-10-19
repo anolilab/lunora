@@ -184,7 +184,7 @@ interface ToolDefinition {
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
-    outputSchema?: ToolInputSchema;
+    outputSchema?: ToolOutputSchema;
 }
 ```
 
@@ -197,6 +197,19 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 ```ts
 interface ToolInputSchema {
     properties: Record<string, unknown>;
+    required?: ReadonlyArray<string>;
+    type: "object";
+}
+```
+
+### `ToolOutputSchema` (interface)
+
+```ts
+interface ToolOutputSchema {
+    $defs?: Record<string, unknown>;
+    anyOf?: ReadonlyArray<object>;
+    definitions?: Record<string, unknown>;
+    properties?: Record<string, unknown>;
     required?: ReadonlyArray<string>;
     type: "object";
 }

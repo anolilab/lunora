@@ -7,6 +7,7 @@ import type { McpTool } from "../src/compose";
 import { createToolServer } from "../src/compose";
 import { createDocsMcpFetchHandler, createDocsMcpServer, DEFAULT_MAX_REQUEST_BYTES, DOCS_SERVER_NAME } from "../src/docs/server";
 import type { DocsIndex } from "../src/docs/types";
+import type { ToolOutputSchema } from "../src/tool-types";
 
 const index: DocsIndex = {
     getPage: async (url) => (url === "/docs/sharding" ? { content: "Partition state.", title: "Sharding", url } : undefined),
@@ -54,7 +55,7 @@ describe("createToolServer", () => {
     });
 
     it("advertises an output schema that admits a failure's code and message", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const output = { properties: { count: { type: "number" } }, required: ["count"], type: "object" } as const;
         const server = createToolServer({ name: "test", version: "1.0.0" }, [
@@ -73,12 +74,76 @@ describe("createToolServer", () => {
         ]);
 
         const listed = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({ params: {} })) as ListToolsResult;
-        const schema = listed.tools[0]?.outputSchema as { properties: Record<string, unknown>; required?: string[] };
+        const schema = listed.tools[0]?.outputSchema as { anyOf: { properties: Record<string, unknown>; required?: string[] }[]; type: string };
 
-        expect(Object.keys(schema.properties)).toStrictEqual(expect.arrayContaining(["code", "count", "message"]));
-        expect(schema.required).toBeUndefined();
+        // The root is an `anyOf` over the success shape and the error shape, so a failure
+        // validates even when the tool's own `code` or `message` has another type.
+        expect(schema.type).toBe("object");
+        expect(schema.anyOf).toStrictEqual([output, expect.objectContaining({ required: ["code", "message"] })]);
+        expect(Object.keys(schema.anyOf[1]?.properties ?? {})).toStrictEqual(["code", "message"]);
         // The declared tool is left as written for anything that holds it.
         expect(output.required).toStrictEqual(["count"]);
+    });
+
+    it("does not nest an output schema that is already composed with the error shape", async () => {
+        expect.assertions(1);
+
+        const makeTool = (name: string, outputSchema: ToolOutputSchema): McpTool => {
+            return {
+                definition: {
+                    annotations: { readOnlyHint: true },
+                    description: name,
+                    inputSchema: { properties: {}, type: "object" },
+                    name,
+                    outputSchema,
+                },
+                handle: async () => {
+                    return { content: [{ text: "x", type: "text" }] };
+                },
+            };
+        };
+        const listSchema = async (server: Server, name: string): Promise<unknown> => {
+            const listed = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({ params: {} })) as ListToolsResult;
+
+            return listed.tools.find((listedTool) => listedTool.name === name)?.outputSchema;
+        };
+        const once = await listSchema(
+            createToolServer({ name: "test", version: "1.0.0" }, [makeTool("first", { properties: { count: { type: "number" } }, type: "object" })]),
+            "first",
+        );
+        const twice = await listSchema(createToolServer({ name: "test", version: "1.0.0" }, [makeTool("second", once as ToolOutputSchema)]), "second");
+
+        expect(twice).toStrictEqual(once);
+    });
+
+    it("keeps a $ref resolvable under the anyOf root by hoisting $defs to the root", async () => {
+        expect.assertions(2);
+
+        const output = {
+            $defs: { row: { properties: { id: { type: "string" } }, type: "object" } },
+            properties: { row: { $ref: "#/$defs/row" } },
+            type: "object",
+        } as const;
+        const server = createToolServer({ name: "test", version: "1.0.0" }, [
+            {
+                definition: {
+                    annotations: { readOnlyHint: true },
+                    description: "reads a row",
+                    inputSchema: { properties: {}, type: "object" },
+                    name: "read_row",
+                    outputSchema: output,
+                },
+                handle: async () => {
+                    return { content: [{ text: "x", type: "text" }] };
+                },
+            },
+        ]);
+
+        const listed = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({ params: {} })) as ListToolsResult;
+        const schema = listed.tools[0]?.outputSchema as Record<string, unknown>;
+
+        expect(schema.$defs).toStrictEqual(output.$defs);
+        expect(schema.anyOf).toStrictEqual([{ properties: output.properties, type: "object" }, expect.anything()]);
     });
 
     it("dispatches to the named tool", async () => {
