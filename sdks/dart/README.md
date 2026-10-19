@@ -135,7 +135,9 @@ where a normal write would be queued, the Future fails at once with a
 `LunoraApiException` coded `offlineNotQueued` (`OFFLINE_NOT_QUEUED`), before any
 optimistic layer is applied, and its arguments never reach the persistence
 adapter. It does not wait for a flush or queue behind pending writes, so it may
-land before an older queued write to the same document.
+land before an older queued write to the same document. A send that fails with no
+server reply while the socket is down (a refused connection, a DNS failure, a
+timeout) raises the same exception, with the transport error as its `cause`.
 
 How a replay reads the reply is one rule for a lone write and a batch alike: a
 coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
