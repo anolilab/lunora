@@ -1,3 +1,16 @@
+## @lunora/svelte [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.267...@lunora/svelte@1.0.0-alpha.268) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.152
+
 ## @lunora/svelte [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.266...@lunora/svelte@1.0.0-alpha.267) (2026-10-18)
 
 ### Features
