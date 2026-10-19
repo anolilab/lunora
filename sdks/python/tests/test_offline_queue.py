@@ -1193,6 +1193,33 @@ class TestCodecFailureIsNotOffline(unittest.TestCase):
 
         self.assertEqual(posts, [])
 
+    def test_a_failed_encoding_rolls_back_the_optimistic_overlay_it_installed(self):
+        # The overlay is installed before the arguments are encoded. A refused encoding must take the
+        # overlay back out, or a subscriber keeps showing a write that was never sent or queued.
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        seen = []
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": "x"}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        options = SubmitOptions(args={"token": "x"}, function_path="auth:setPassword", optimistic=lambda current: [*(current or []), "c"])
+        overflow = RecursionError("maximum recursion depth exceeded")
+
+        with (
+            mock.patch("lunora.client.encode_wire", side_effect=overflow),
+            mock.patch("lunora.submit.encode_wire", side_effect=overflow),
+            self.assertRaises(RecursionError),
+        ):
+            asyncio.run(client.submit(options))
+
+        self.assertEqual(seen[-1], ["a"])
+        self.assertEqual(posts, [])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
