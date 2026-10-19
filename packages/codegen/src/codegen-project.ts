@@ -74,7 +74,7 @@ const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfi
 /**
  * Whether a file is a module, which is what keeps its declarations out of the program
  * (a script's are global). Scanned token by token, so an `import` or `export` in a
- * comment or string does not count. A `import(` call or `import.meta` does not either.
+ * comment or string does not count. An `import(` call or `import.meta` does not either.
  * Stops at the first module token, which is near the top of a module.
  */
 const isModuleSource = (text: string): boolean => {
