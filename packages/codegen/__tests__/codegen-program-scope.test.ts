@@ -500,6 +500,38 @@ export const listItems = query({
         expect(loaded(project, referencedPath)).toBe(true);
     });
 
+    it("seeds a relative augmentation when a lunora/ source imports the same file through a path alias", () => {
+        expect.assertions(1);
+
+        const augmentPath = join(workdir, "src", "router-augment.ts");
+
+        writeFileSync(join(workdir, "src", "router.ts"), "export const router = 1;\n", "utf8");
+        writeFileSync(augmentPath, 'import "./router";\n\ndeclare module "./router" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: { module: "esnext", moduleResolution: "bundler", paths: { "@/*": ["./src/*"] }, strict: true },
+                include: ["src/**/*", "lunora/**/*"],
+            }),
+            "utf8",
+        );
+        writeFileSync(join(lunoraDirectory, "usesRouter.ts"), 'import "@/router";\n\nexport const used = 1;\n', "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(true);
+    });
+
+    it("does not seed an augmentation of a package when only one of its subpaths is imported", () => {
+        expect.assertions(1);
+
+        const augmentPath = join(workdir, "src", "pkg-augment.ts");
+
+        writeFileSync(join(workdir, "src", "routes.ts"), "export const routes = 1;\n", "utf8");
+        writeFileSync(augmentPath, 'import "./routes";\n\ndeclare module "pkg" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
+        writeFileSync(join(lunoraDirectory, "usesSubpath.ts"), 'import "pkg/subpath";\n\nexport const used = 1;\n', "utf8");
+
+        expect(loaded(createCodegenProject(lunoraDirectory), augmentPath)).toBe(false);
+    });
+
     it("drops an augmentation once no file the program reaches imports its module", () => {
         expect.assertions(2);
 
@@ -520,7 +552,7 @@ export const listItems = query({
         expect(loaded(project, augmentPath)).toBe(false);
     });
 
-    it("reads the project-root lunora.config without adding it to a nested schema's program", () => {
+    it("keeps the project-root lunora.config in a nested schema's program across a run", () => {
         expect.assertions(2);
 
         const nestedDirectory = join(workdir, "app", "lunora");
@@ -533,11 +565,11 @@ export const listItems = query({
 
         const project = createCodegenProject(nestedDirectory);
 
-        expect(loaded(project, configPath)).toBe(false);
+        expect(loaded(project, configPath)).toBe(true);
 
         runCodegen({ dryRun: true, lint: false, lunoraDirectory: "app/lunora", project, projectRoot: workdir, wranglerQueueProducers: [] });
 
-        expect(loaded(project, configPath)).toBe(false);
+        expect(loaded(project, configPath)).toBe(true);
     });
 
     it("reads a file the tsconfig extends again for a new Project, so an edit to it takes effect", () => {

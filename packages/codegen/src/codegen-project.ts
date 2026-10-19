@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { Project, ts } from "ts-morph";
 
 import { listLunoraSourceFiles, listSecurityScanFiles } from "./discover/ast";
+import { projectConfigCandidatePaths } from "./project-config-path";
 
 const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 
@@ -244,21 +245,20 @@ const programSeeds = (lunoraDirectory: string, tsconfig: TsconfigInfo | undefine
                 ...generatedSeedFiles(lunoraDirectory),
                 ...declarations,
                 ...globals,
+                ...projectConfigCandidatePaths(lunoraDirectory).filter((path) => existsSync(path)),
             ]),
         ],
     };
 };
 
 /**
- * The key a module name is matched by. A package name matches as written. A relative
- * name (`"./router"`) means the file it resolves to from the file that names it, so
- * `"./x"` in one file and `"../dir/x"` in another match when they reach the same file.
+ * The key a module name is matched by: the file the compiler resolves it to, from the file
+ * that names it. That makes `"./router"` in one file, `"../dir/router"` in another and a
+ * tsconfig path alias such as `"@/router"` match when they reach the same file. A name
+ * that does not resolve (a package not installed) is matched as written.
  */
-const moduleKey = (specifier: string, fromPath: string, options: ts.CompilerOptions): string | undefined =>
-    specifier.startsWith(".") ? ts.resolveModuleName(specifier, fromPath, options, ts.sys).resolvedModule?.resolvedFileName : specifier;
-
-/** Whether a module key names `module`, exactly or as a subpath (`"module/x"`). */
-const namesModule = (keys: ReadonlySet<string>, module: string): boolean => keys.has(module) || [...keys].some((key) => key.startsWith(`${module}/`));
+const moduleKey = (specifier: string, fromPath: string, options: ts.CompilerOptions): string =>
+    ts.resolveModuleName(specifier, fromPath, options, ts.sys).resolvedModule?.resolvedFileName ?? specifier;
 
 /**
  * The module keys the reached files import, read from each file's text by the scanner.
@@ -277,11 +277,7 @@ const importedModuleKeys = (project: Project, reached: ReadonlySet<string>): Set
         }
 
         for (const { fileName } of ts.preProcessFile(sourceFile.getFullText(), true, false).importedFiles) {
-            const key = moduleKey(fileName, sourceFile.getFilePath(), options);
-
-            if (key !== undefined) {
-                keys.add(key);
-            }
+            keys.add(moduleKey(fileName, sourceFile.getFilePath(), options));
         }
     }
 
@@ -358,16 +354,14 @@ const settleProgram = (project: Project, roots: string[], candidates: Augmentati
         project.resolveSourceFileDependencies();
         reached = reachedFiles(project, [...roots, ...chosen]);
 
-        const keys = importedModuleKeys(project, reached);
-        const matching = candidates.filter(
-            (candidate) =>
-                !chosen.includes(candidate.path) &&
-                candidate.augments.some((name) => {
-                    const key = moduleKey(name, candidate.path, options);
+        const pending = candidates.filter((candidate) => !chosen.includes(candidate.path));
 
-                    return key !== undefined && namesModule(keys, key);
-                }),
-        );
+        if (pending.length === 0) {
+            break;
+        }
+
+        const keys = importedModuleKeys(project, reached);
+        const matching = pending.filter((candidate) => candidate.augments.some((name) => keys.has(moduleKey(name, candidate.path, options))));
 
         if (matching.length === 0) {
             break;
