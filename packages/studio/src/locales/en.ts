@@ -392,6 +392,8 @@ const MESSAGE_IDS = [
     "Run as (userId)",
     "Identity (userId) to run as",
     "Run probe",
+    "Include mutations and actions",
+    "This will execute `{functionPath}` as user `{userId}`.",
     "Allowed",
     "Denied",
     "Errored",

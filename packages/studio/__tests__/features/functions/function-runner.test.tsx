@@ -417,6 +417,35 @@ describe("functionRunner run-as identity", () => {
         expect(args.userId).toBe("user_42");
         expect(args.args).toEqual({ limit: 5 });
     });
+
+    it("needs a confirm step before running a mutation as another user", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: () => {
+                return { ran: "as-user" };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={functions} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:send" } });
+        fireEvent.change(screen.getByTestId("run-as-input"), { target: { value: "user_42" } });
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        expect(screen.getByTestId("run-button-confirm").textContent).toBe("This will execute `messages:send` as user `user_42`.");
+        expect(mock.query).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId("run-button-confirm"));
+
+        await screen.findByTestId("result");
+
+        expect((mock.query.mock.calls[0]?.[1] as { functionPath?: unknown }).functionPath).toBe("messages:send");
+    });
 });
 
 describe("functionRunner — v.bigint() / v.bytes() values", () => {

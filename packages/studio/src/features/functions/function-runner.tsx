@@ -4,6 +4,7 @@ import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -236,6 +237,9 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         fireAndForget(run());
     };
 
+    const forgingAs = runAsIdentity ? runAsUserId.trim() : "";
+    const runDisabled = status === "running" || selected === undefined;
+
     // Replace the args box with a minimal JSON template (required args only)
     // derived from the selected function's signature.
     const prefillArgs = (): void => {
@@ -315,9 +319,21 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <Button data-testid="run-button" disabled={status === "running" || selected === undefined} onClick={runOnce} type="button">
-                        {t("Run")}
-                    </Button>
+                    {forgingAs !== "" && selected !== undefined && selected.kind !== "query" ? (
+                        // A mutation or action really executes under the forged identity — guard it.
+                        <ConfirmButton
+                            confirmLabel={t("This will execute `{functionPath}` as user `{userId}`.", { functionPath: selected.path, userId: forgingAs })}
+                            disabled={runDisabled}
+                            onConfirm={runOnce}
+                            testId="run-button"
+                        >
+                            {t("Run")}
+                        </ConfirmButton>
+                    ) : (
+                        <Button data-testid="run-button" disabled={runDisabled} onClick={runOnce} type="button">
+                            {t("Run")}
+                        </Button>
+                    )}
                     {selected !== undefined && <Badge variant="outline">{selected.kind}</Badge>}
                     {runAsIdentity && runAsUserId.trim() !== "" && (
                         <Badge data-testid="run-as-badge" variant="secondary">

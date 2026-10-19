@@ -196,4 +196,37 @@ describe("permissionsPlayground", () => {
         // The verdict is `listDocuments`'; the prefill cleared the outcome for `listSecrets`.
         expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
     });
+
+    it("lists only queries by default, and needs a confirm step before running a mutation as the user", async () => {
+        expect.assertions(5);
+
+        const functions: FunctionDescriptor[] = [...FUNCTIONS, { args: [], kind: "mutation", path: "deleteDocument" }];
+        const mock = createMockClient({ query: runAsServer(() => null) });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={functions} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        const options = (): string[] => [...screen.getByTestId<HTMLSelectElement>("pp-function").options].map((option) => option.value);
+
+        expect(options()).toStrictEqual(["listDocuments"]);
+
+        fireEvent.click(screen.getByTestId("pp-include-writes"));
+        fireEvent.change(screen.getByTestId("pp-function"), { target: { value: "deleteDocument" } });
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        // The first click only asks; nothing has run yet.
+        expect(screen.getByTestId("pp-run-confirm").textContent).toBe("This will execute `deleteDocument` as user `user_1`.");
+        expect(mock.query).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId("pp-run-confirm"));
+
+        await screen.findByTestId("pp-outcome-allowed");
+
+        expect(mock.query).toHaveBeenCalledTimes(1);
+        expect((mock.query.mock.calls[0]?.[1] as { functionPath?: unknown }).functionPath).toBe("deleteDocument");
+    });
 });
