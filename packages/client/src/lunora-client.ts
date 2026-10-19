@@ -742,6 +742,9 @@ class LunoraClient {
     // eslint-disable-next-line unicorn/no-null -- public auth-token contract sentinel
     private authToken: string | null = null;
 
+    /** Hash of the last bearer seen by `identityFingerprint`, keyed on the token so a new token misses once. */
+    private tokenFingerprint: { hash: string; token: string } | undefined;
+
     /**
      * Optional STABLE identity subject (a user id), the basis of the offline-queue
      * identity stamp when supplied. Keeps a same-user token *refresh* from looking
@@ -936,6 +939,13 @@ class LunoraClient {
     private lastStatus: ConnectionStatus = "idle";
 
     private nextSubId = 0;
+
+    /**
+     * Subscriptions whose `subscribe` frame is on the wire and not yet acked,
+     * errored or dropped with the socket. Kept off the public `SubscriptionState`
+     * so the exported shape is unchanged.
+     */
+    private readonly subscribeInFlight = new WeakSet<SubscriptionState>();
 
     private nextStreamId = 0;
 
@@ -6662,6 +6672,7 @@ class LunoraClient {
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
                 state.acked = false;
+                this.subscribeInFlight.delete(state);
             }
         }
     }
@@ -6752,10 +6763,11 @@ class LunoraClient {
     }
 
     /** Send `state`'s `subscribe` frame when the shard's socket can carry it; `true` when a frame actually went out. */
-    private sendSubscribeIfOpen(state: SubscriptionState): boolean {
+    private sendSubscribeIfOpen(state: SubscriptionState, force = false): boolean {
         const conn = this.getConnection(state.shardKey);
 
-        if (conn?.wsState !== "open" || state.acked) {
+        // `force` is for a retry path: the frame it replaces is presumed lost.
+        if (conn?.wsState !== "open" || state.acked || (!force && this.subscribeInFlight.has(state))) {
             return false;
         }
 
@@ -6769,7 +6781,7 @@ class LunoraClient {
         // Drop `sinceSeq` there and take the full snapshot.
         const resumable = state.serverCursor !== undefined && state.serverBase !== undefined;
 
-        return sendOn(conn, {
+        const sent = sendOn(conn, {
             id: state.id,
             // `sinceSeq` rides along when we hold a persisted cursor for this
             // sub (a hydrated read or an earlier frame), so the server can
@@ -6799,6 +6811,12 @@ class LunoraClient {
             },
             type: "subscribe",
         });
+
+        if (sent) {
+            this.subscribeInFlight.add(state);
+        }
+
+        return sent;
     }
 
     private sendShapeSubscribeIfOpen(state: ShapeSubscriptionState): void {
@@ -6870,6 +6888,7 @@ class LunoraClient {
 
                 if (state) {
                     state.acked = true;
+                    this.subscribeInFlight.delete(state);
                 }
 
                 return;
@@ -7006,6 +7025,9 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
+            // The server answered with a rejection, so the frame is no longer outstanding.
+            this.subscribeInFlight.delete(state);
+
             const subscriptionError = buildSubscriptionError(message);
 
             // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
@@ -7100,6 +7122,7 @@ class LunoraClient {
     private resnapshotSubscription(state: SubscriptionState): void {
         /* eslint-disable no-param-reassign -- reset the shared subscription state in place, as the other recovery paths do */
         state.acked = false;
+        this.subscribeInFlight.delete(state);
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
         /* eslint-enable no-param-reassign */
@@ -7266,6 +7289,7 @@ class LunoraClient {
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         state.acked = true;
+        this.subscribeInFlight.delete(state);
 
         if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
             if (cursor !== undefined) {
@@ -7600,6 +7624,7 @@ class LunoraClient {
 
         if (state) {
             state.acked = false;
+            this.subscribeInFlight.delete(state);
             fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
@@ -7648,7 +7673,11 @@ class LunoraClient {
             return null;
         }
 
-        return this.hashToken(token);
+        if (this.tokenFingerprint?.token !== token) {
+            this.tokenFingerprint = { hash: this.hashToken(token), token };
+        }
+
+        return this.tokenFingerprint.hash;
     }
 
     /**
@@ -8255,6 +8284,7 @@ class LunoraClient {
             // The resubscribe rides the next socket, so this one is no longer
             // acknowledged by anything.
             state.acked = false;
+            this.subscribeInFlight.delete(state);
 
             refoldSubscription(state, undefined);
         }
