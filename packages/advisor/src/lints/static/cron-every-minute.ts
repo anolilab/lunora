@@ -14,15 +14,19 @@ const UNRESTRICTED_FIELDS = [
 const WHITESPACE = /\s+/;
 
 /**
- * Whether a five-field cron expression fires on every minute of every day: no
- * field restricts it. A schedule limited to a window (`* 9-17 * * 1-5`) is not
- * judged — the monthly figure the finding quotes would not hold for it. Anything
- * but five fields is not judged either — Cloudflare Cron Triggers reject the rest.
+ * How a five-field cron expression fires every minute: `"always"` when no field
+ * restricts it, `"windowed"` when only the minute field is unrestricted and the
+ * hour, day or month limits it (`* 9-17 * * 1-5`), `undefined` otherwise.
+ * Anything but five fields is not judged — Cloudflare Cron Triggers reject the rest.
  */
-const firesEveryMinute = (expression: string): boolean => {
+const everyMinuteKind = (expression: string): "always" | "windowed" | undefined => {
     const fields = expression.trim().split(WHITESPACE);
 
-    return fields.length === UNRESTRICTED_FIELDS.length && fields.every((field, index) => UNRESTRICTED_FIELDS[index]?.test(field) === true);
+    if (fields.length !== UNRESTRICTED_FIELDS.length || UNRESTRICTED_FIELDS[0]?.test(fields[0] ?? "") !== true) {
+        return undefined;
+    }
+
+    return fields.every((field, index) => UNRESTRICTED_FIELDS[index]?.test(field) === true) ? "always" : "windowed";
 };
 
 /** What one fire runs, in the words the finding uses. */
@@ -31,7 +35,9 @@ const targetOf = (job: AdvisorCron): string =>
 
 /**
  * Flags a cron job that fires every minute — the fastest cadence a Cloudflare
- * Cron Trigger allows (1,440 fires a day, about 43,200 a month).
+ * Cron Trigger allows (1,440 fires a day, about 43,200 a month). A schedule that
+ * runs every minute only inside a window still polls once a minute while it is
+ * open, so it is flagged too, without the all-day monthly figure.
  *
  * Every fire is a Worker `scheduled()` invocation that dispatches its target, so
  * the cost is paid whether or not there was work: a Worker request (shared by
@@ -54,15 +60,26 @@ const cronEveryMinute: Lint = {
     remediation:
         "Confirm the cadence is needed. If the job only reacts to new work, drop it to a coarser interval, or replace the poll with `ctx.scheduler.runAfter(…)` armed by the write that creates the work. Whatever the cadence, make the target return early on an indexed read when there is nothing to do.",
     run: (context) =>
-        (context.crons ?? [])
-            .filter((job) => firesEveryMinute(job.cron))
-            .map((job) =>
+        (context.crons ?? []).flatMap((job) => {
+            const kind = everyMinuteKind(job.cron);
+
+            if (kind === undefined) {
+                return [];
+            }
+
+            const cadence =
+                kind === "always"
+                    ? `fires every minute — about 43,200 dispatches a month of ${targetOf(job)}`
+                    : `fires every minute while its window is open, dispatching ${targetOf(job)} once a minute`;
+
+            return [
                 emit(cronEveryMinute, {
                     cacheKey: `cron_every_minute:${job.name}`,
-                    detail: `Cron job "${job.name}" (\`${job.cron}\`) fires every minute — about 43,200 dispatches a month of ${targetOf(job)}, whether or not there is work. Jobs on the same schedule share one Worker invocation.`,
-                    metadata: { cron: job.cron, job: job.name },
+                    detail: `Cron job "${job.name}" (\`${job.cron}\`) ${cadence}, whether or not there is work. Jobs on the same schedule share one Worker invocation.`,
+                    metadata: { cron: job.cron, job: job.name, window: kind === "windowed" },
                 }),
-            ),
+            ];
+        }),
     source: "static",
     title: "Cron job fires every minute",
 };

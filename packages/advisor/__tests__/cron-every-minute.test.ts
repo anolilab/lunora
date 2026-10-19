@@ -29,12 +29,22 @@ describe("cron_every_minute", () => {
         },
     );
 
-    it.each(["*/5 * * * *", "0 * * * *", "30 9 * * *", "* 9 * * *", "* * 1 * *", "* * * * 1", "* * * *", "* * * * * *", "* 9-17 * * 1-5", "* 0-12 * * *"])(
-        "leaves %j alone",
-        (cron) => {
-            expect.assertions(1);
+    it.each(["*/5 * * * *", "0 * * * *", "30 9 * * *", "* * * *", "* * * * * *"])("leaves %j alone", (cron) => {
+        expect.assertions(1);
 
-            expect(cronEveryMinute.run({ crons: [job(cron)], schema })).toHaveLength(0);
+        expect(cronEveryMinute.run({ crons: [job(cron)], schema })).toHaveLength(0);
+    });
+
+    it.each(["* 9-17 * * 1-5", "* 0-12 * * *", "0-59 9-17 * * *", "* 9 * * *", "* * 1 * *", "* * * * 1"])(
+        "flags the windowed %j without the all-day figure",
+        (cron) => {
+            expect.assertions(3);
+
+            const [finding] = cronEveryMinute.run({ crons: [job(cron)], schema });
+
+            expect(finding?.detail).toContain("while its window is open");
+            expect(finding?.detail).not.toContain("43,200");
+            expect(finding?.metadata).toMatchObject({ window: true });
         },
     );
 
