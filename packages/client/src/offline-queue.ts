@@ -532,7 +532,8 @@ class OfflineQueue {
         // intact on purpose — closing a tab must not discard writes a future
         // session will restore via `hydrate`; use the adapter's `clear()` to
         // purge them (e.g. on logout).
-        for (const item of this.items) {
+        // A write a replay has drained is out of `items` but still unsettled: its caller is still waiting too.
+        for (const item of new Set([...this.items, ...this.unsettled.values()])) {
             const error = new Error("CLIENT_CLOSED");
             const id = item.id ?? "";
             const reject = (persisted: boolean): void => {

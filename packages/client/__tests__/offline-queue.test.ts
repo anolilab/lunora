@@ -113,6 +113,33 @@ describe("offlineQueue", () => {
         expect(error.message).toBe("CLIENT_CLOSED");
         expect(error.code).toBe("CLIENT_CLOSED");
     });
+
+    it("clear() rejects a write a replay has drained, once, still reporting it persisted", async () => {
+        expect.assertions(5);
+
+        const persistence = createInMemoryPersistence();
+        const queue = new OfflineQueue({}, { persistence });
+        const rejected = vi.fn<(error: unknown) => void>();
+
+        queue.enqueue({ args: {}, functionPath: "a", id: "w1", reject: rejected, resolve: () => undefined });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // The replay owns the write now: out of `size`, still waiting on the server.
+        queue.drain();
+        queue.clear();
+
+        expect(rejected).toHaveBeenCalledTimes(1);
+
+        const error = rejected.mock.calls[0]?.[0] as Error & { code?: string; persisted?: boolean };
+
+        expect(error.code).toBe("CLIENT_CLOSED");
+        expect(error.persisted).toBe(true);
+        expect(queue.replaying).toBe(0);
+        // The record stays for the next session.
+        await expect(persistence.load()).resolves.toHaveLength(1);
+    });
 });
 
 describe("offlineQueue — persistence", () => {
