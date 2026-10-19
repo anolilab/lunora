@@ -133,9 +133,11 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
             setPending(pendingCountRef.current > 0);
 
             // `gcTime` is fixed per hook, so a per-call `onlineOnly` on an ordinary reference
-            // cannot get the zero garbage-collection time a sensitive reference has. Drop its
-            // entry, and the arguments it holds, from the mutation cache as soon as it settles.
-            if (!sensitive && variables.options?.onlineOnly === true) {
+            // cannot get the zero garbage-collection time a sensitive reference has. A zero time
+            // also waits for the hook to stop observing the call, so a mounted hook would keep a
+            // sensitive call's arguments. Drop the entry, and the arguments it holds, from the
+            // mutation cache as soon as it settles.
+            if (sensitive || variables.options?.onlineOnly === true) {
                 const cache = queryClient.getMutationCache();
 
                 for (const entry of cache.findAll({ predicate: (candidate) => candidate.state.variables === variables })) {
