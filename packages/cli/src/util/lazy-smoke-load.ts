@@ -203,10 +203,9 @@ const reportSmokeError = (error: unknown, output: string[], logger: Logger): str
  * real Worker entry plus `loadAllFunctions()` in workerd (`wrangler dev --local`) and returns an
  * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
  *
- * Only a failure of the project's modules is an error. When the check itself cannot run — no
- * resolvable entry, wrangler will not boot locally (a remote-only binding, a missing assets
- * directory) — it warns and returns `undefined`: a broken environment must not be mistaken for a
- * broken module.
+ * A failure of the project's modules, or a Worker that starts and then fails, blocks. A check that
+ * cannot run at all (no resolvable entry, a target that is not workerd, containers) warns and
+ * returns `undefined`, because it says nothing about the project. See {@link reportSmokeError}.
  */
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { configPath, cwd, environment, logger, toolchain } = options;

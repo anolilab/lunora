@@ -605,9 +605,10 @@ With lazy functions, `lunora deploy` and `lunora build` also evaluate every lazy
 module in workerd (`wrangler dev --local`) before anything ships, so a module
 that throws on load fails the command instead of its first caller. The check
 reports how many functions it covered and names each failing module with its file;
-it warns and continues when the Worker cannot run locally (a virtual `main`, a
-remote-only binding, declared containers, which `wrangler dev` would build locally). It catches what evaluation raises: a top-level `throw`, or
-a call on an import that is `undefined`. A circular import that never throws
+it blocks when the Worker starts and then fails, and it warns and continues when
+the check cannot run at all (a virtual `main`, a target that is not workerd, or declared
+containers, which `wrangler dev` would build locally). It catches what evaluation
+raises: a top-level `throw`, or a call on an import that is `undefined`. A circular import that never throws
 during evaluation is not caught, because the bundler hoists it. Pass
 `--no-smoke-load` to skip it.
 
