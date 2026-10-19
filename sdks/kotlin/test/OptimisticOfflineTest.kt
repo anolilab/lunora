@@ -334,6 +334,37 @@ private fun onlineOnlyWrite(): SubmitOptions =
     SubmitOptions("auth:setPassword", WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))).apply { onlineOnly = true }
 
 /** With the socket down, an online-only write is refused before anything is queued or sent. */
+private fun onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused() {
+    covers("offline_online_only_refused_when_disconnected_in_callback")
+    var posts = 0
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = MemoryStore())
+
+    // The subscriber sees the overlay, and the connection goes down inside its notification.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val overlayMark = WireValue.Text("c")
+
+    client.attachSocket { }
+    client.subscribe("auth:setPassword", args, { value ->
+        if (value is WireValue.Arr && value.items.any { item -> item == overlayMark }) client.detachSocket()
+    })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + overlayMark) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
+
+    check(refused?.code == OFFLINE_NOT_QUEUED, "an online-only write whose callback drops the socket is refused with OFFLINE_NOT_QUEUED")
+    check(posts == 0, "and a refused write never reaches the wire")
+}
+
 private fun onlineOnlyWriteIsRefusedWhenDisconnected() {
     covers("offline_online_only_refused_when_disconnected")
     var posts = 0
@@ -1984,6 +2015,7 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
     onlineOnlyWriteIsRefusedWhenDisconnected()
+    onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused()
     onlineOnlyWriteIsSentWhenConnected()
     onlineOnlyTransportFailureIsRefused()
     normalWriteStillQueuesBesideAnOnlineOnlyOne()

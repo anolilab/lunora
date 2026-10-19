@@ -152,6 +152,13 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
 
     for (call in deferred) call()
 
+    // The callbacks above are consumer code, and one may have dropped the socket. An online-only write that would
+    // now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+    if (options.onlineOnly && synchronized(lock) { send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect) }) {
+        rollbackLayers(handles)
+        throw notQueued(options.functionPath)
+    }
+
     if (evicted != null) {
         // Settled with the monitor released: the cap's discard rolls optimistic
         // layers back and reaches the consumer's listeners.
