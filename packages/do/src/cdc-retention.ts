@@ -237,7 +237,8 @@ class CdcRetentionRunner {
         // use) turns `LUNORA_CDC_LOG_RETENTION=10k` into "keep 10 rows" — an
         // operator's typo silently destroying the changelog rather than being
         // ignored. `envOptionalPositiveInt` requires the whole string to be an
-        // integer and treats anything else as unset, i.e. as off.
+        // integer and treats anything else as unset: the payload window is then off,
+        // and the row window falls back to its default (see `resolveCdcLogRetention`).
         const environment = this.host.env();
         const keepRows = resolveCdcLogRetention(environment);
         const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");

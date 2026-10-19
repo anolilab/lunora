@@ -101,7 +101,7 @@ describe("shardDO: subscription byte bounds", () => {
     it("refuses to seed a subscription whose result exceeds the byte cap", async () => {
         expect.assertions(4);
 
-        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_BYTES: "1000" });
+        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "1000" });
 
         shard.registerSocket(ws);
         shard.sizes.set("blobs:huge", 5000);
@@ -119,7 +119,7 @@ describe("shardDO: subscription byte bounds", () => {
     it("seeds a result under the cap as before", async () => {
         expect.assertions(2);
 
-        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_BYTES: "1000" });
+        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "1000" });
 
         shard.registerSocket(ws);
         shard.sizes.set("blobs:small", 100);
@@ -133,7 +133,7 @@ describe("shardDO: subscription byte bounds", () => {
         expect.assertions(3);
 
         // Each result fits the per-result cap; three of them do not fit the memo cap together.
-        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_BYTES: "10000", LUNORA_SUBSCRIPTION_MEMO_MAX_BYTES: "2500" });
+        const shard = new BlobShard(createFakeState(), { LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "10000", LUNORA_SUBSCRIPTION_MEMO_MAX_CHARS: "2500" });
 
         shard.registerSocket(ws);
 
