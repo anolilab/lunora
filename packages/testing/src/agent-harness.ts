@@ -114,7 +114,7 @@ interface AgentRunOverrides {
 interface AgentHarness {
     /**
      * Resolve once the run `instanceId` has reached the wait named `name` (e.g.
-     * `secret:call_1`), so a test can act on the run at a known point instead of
+     * `secret:0:call_1`, for the first turn's call `call_1`), so a test can act on the run at a known point instead of
      * after a delay.
      */
     awaitWait: (instanceId: string, name: string) => Promise<void>;

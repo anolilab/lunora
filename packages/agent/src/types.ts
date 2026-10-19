@@ -247,7 +247,7 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * Set by `requestSecretTool`. The loop never calls `execute` on such a tool: it
      * pauses the run until a human supplies (or declines) a value and records
      * `{ secretRef }` as the tool result, where `secretRef` is the request's
-     * tool-call id. `consumer` names the only tool that may read the value. The
+     * slot, `<turn>:<tool-call id>`. The client answers with the same slot. `consumer` names the only tool that may read the value. The
      * value never reaches the loop, the thread or the model.
      */
     secretRequest?: { consumer: string };

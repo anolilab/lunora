@@ -298,11 +298,11 @@ const agentExtension: SchemaExtension<
             .public(),
 
         /**
-         * One row per `requestSecretTool` pause, keyed by the request's tool-call id.
+         * One row per `requestSecretTool` pause, keyed by the request's slot, `<turn>:<tool-call id>`.
          * Every transition (supply, decline, expiry, consumption) is a compare-and-set
          * on `status` inside one mutation, so a supply and the timeout cannot both
          * win. The row holds the host's ref, which the loop never sees: the model is
-         * handed the tool-call id, and the consuming tool resolves it here. The value
+         * handed the slot, and the consuming tool resolves it here. The value
          * itself is never stored in this table.
          */
         [REQUESTS_BARE_TABLE]: defineTable({
