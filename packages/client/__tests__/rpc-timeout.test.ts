@@ -34,6 +34,75 @@ describe("rpc timeout", () => {
         client.close();
     });
 
+    describe("public batch", () => {
+        const calls = [{ fn: fnRef("todos.list") }];
+        const outcomeOf = (promise: Promise<unknown>): Promise<unknown> =>
+            promise.then(
+                () => "resolved",
+                (error: unknown) => error,
+            );
+
+        it("fails a batch whose fetch stalls with a retryable transport error", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ fetch: vi.fn<typeof fetch>(hang), rpcTimeoutMs: 100, url: "http://app.test" });
+            const outcome = outcomeOf(client.batch(calls));
+
+            await vi.advanceTimersByTimeAsync(150);
+
+            const error = await outcome;
+
+            expect(error).toBeInstanceOf(TransportError);
+            expect((error as Error).message).toContain("timed out after 100ms");
+
+            client.close();
+        });
+
+        it("fails a batch whose response body stalls after the headers arrived", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const stalled = {
+                headers: new Headers(),
+                json: hang,
+                ok: true,
+                status: 200,
+            } as unknown as Response;
+            const client = new LunoraClient({ fetch: vi.fn<typeof fetch>(async () => stalled), rpcTimeoutMs: 100, url: "http://app.test" });
+            const outcome = outcomeOf(client.batch(calls));
+
+            await vi.advanceTimersByTimeAsync(150);
+
+            await expect(outcome).resolves.toBeInstanceOf(TransportError);
+
+            client.close();
+        });
+
+        it("does not time out when rpcTimeoutMs is 0", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const reply = Promise.withResolvers<Response>();
+            const client = new LunoraClient({ fetch: vi.fn<typeof fetch>(async () => reply.promise), rpcTimeoutMs: 0, url: "http://app.test" });
+            let settled = false;
+            const outcome = client.batch(calls).finally(() => {
+                settled = true;
+            });
+
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+            expect(settled).toBe(false);
+
+            reply.resolve(jsonResponse({ results: [{ body: { result: 1 }, id: 0, status: 200 }] }));
+            await outcome;
+            client.close();
+        });
+    });
+
     it("re-queues a stalled single replay and delivers it under the same mutationId on the retry", async () => {
         expect.assertions(4);
 

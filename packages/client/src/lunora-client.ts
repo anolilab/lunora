@@ -2759,9 +2759,15 @@ class LunoraClient {
      * No promise pipelining and no capability passing — a call's args cannot
      * reference another call's result (see plan 088 §fence; capabilities are
      * incompatible with DO hibernation).
+     *
+     * The whole exchange, response body included, is bounded by
+     * {@link LunoraClientOptions.rpcTimeoutMs}, rejecting with a retryable
+     * {@link TransportError}. A function's kind is a type-level phantom with no
+     * runtime marker, so unlike {@link action} a batched call cannot be exempted:
+     * call a long-running action through `action()` instead.
      */
     public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
-        return this.sendBatch(calls);
+        return withinRpcDeadline(this.rpcTimeoutMs, undefined, async (signal) => this.sendBatch(calls, signal));
     }
 
     /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional bullet list; the back-ticked `Promise<ReturnOf<F>>` type is prose, not a credential */
@@ -4596,7 +4602,7 @@ class LunoraClient {
 
     // --- Internals ----------------------------------------------------------
 
-    /** The body of {@link batch}, optionally abortable (the polling fallback's timeout). */
+    /** The body of {@link batch}, abortable by the caller's deadline (`batch`'s own, or the polling fallback's timeout). */
     private async sendBatch(
         calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>,
         signal?: AbortSignal,
@@ -5638,6 +5644,8 @@ class LunoraClient {
             if (isEncodable(state.args)) {
                 states.push(state);
             } else {
+                // A refusal answers the request, as for a refused slot below.
+                this.markQueryRejected(state, true);
                 fanSubscriptionError(state.errorCallbacks, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
             }
         }
@@ -5685,6 +5693,8 @@ class LunoraClient {
             }
 
             if (!slot.ok) {
+                // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
+                this.markQueryRejected(state, true);
                 fanSubscriptionError(state.errorCallbacks, {
                     code: slot.error.code,
                     message: slot.error.message,
@@ -7424,8 +7434,11 @@ class LunoraClient {
     }
 
     /** Count a query the server refused as answered, by the evidence {@link syncStatus} asks of it, emitting only on a change. */
-    private markQueryRejected(state: SubscriptionState): void {
-        const ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling;
+    private markQueryRejected(
+        state: SubscriptionState,
+        // A poll's own refusal is ackless by construction, even on the pass that proves the origin reachable, before the gate reads `polling`.
+        ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling,
+    ): void {
         const field = ackless ? "valueReceived" : "acked";
 
         if (!state[field]) {

@@ -247,6 +247,69 @@ describe("sync status of an ackless subscription", () => {
     });
 });
 
+describe("sync status of a refused poll slot", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("stops counting a query a poll refused or could not encode, and counts it again on the next connection", async () => {
+        expect.assertions(6);
+
+        vi.useFakeTimers();
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            const { calls } = JSON.parse(init?.body as string) as { calls: { functionPath: string }[] };
+
+            return jsonResponse({
+                results: calls.map(({ functionPath }, id) =>
+                    functionPath === "denied:list"
+                        ? { body: { error: { code: "FORBIDDEN", message: "denied" } }, id, status: 403 }
+                        : { body: { result: { count: 2 } }, id, status: 200 },
+                ),
+            });
+        });
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            heartbeatIntervalMs: 0,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket,
+        });
+        const seen: SyncStatus[] = [];
+        const errors: string[] = [];
+        const onError = (error: { code?: string }): void => {
+            errors.push(error.code ?? "unknown");
+        };
+        const filter: Record<string, unknown> = {};
+
+        client.onSyncStatus((status) => seen.push(status));
+        client.subscribe(fnRef("denied:list"), {}, () => undefined, { onError });
+        client.subscribe(fnRef("search:list"), { filter }, () => undefined, { onError });
+        // The caller mutates its args after subscribing, to a value the codec refuses.
+        filter.pattern = /x/u;
+        await settle();
+        await failOpens(sockets, 2);
+        await settle();
+
+        expect(client.connectionStatus()).toBe("polling");
+        expect(errors.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["FORBIDDEN", "WIRE_ENCODE_FAILED"]);
+        // Both refusals answered their request: neither stays pending for as long as the shard polls.
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 0, synced: true });
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 0, synced: true });
+
+        // A later connection answers for itself: the old refusals are not its verdict.
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 2, synced: false });
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 2, synced: false });
+
+        client.close();
+    });
+});
+
 describe("sync status across shards", () => {
     afterEach(() => {
         vi.useRealTimers();
