@@ -319,6 +319,20 @@ describe(createEmailOtpController, () => {
         });
     });
 
+    it.each(["setCode", "setEmail"] as const)("clears the sent banner on %s", async (action) => {
+        const { context } = makeContext(stubClient());
+        const controller = createEmailOtpController(context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+
+        expect(controller.getState().successMessage).toBeDefined();
+
+        controller.actions[action]("1");
+
+        expect(controller.getState().successMessage).toBeUndefined();
+    });
+
     it("can go back to the request step", async () => {
         const { context } = makeContext(stubClient());
         const controller = createEmailOtpController(context);

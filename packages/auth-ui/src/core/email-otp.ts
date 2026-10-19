@@ -50,11 +50,21 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
     });
 
     const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
+        store.update({
+            email: { ...store.get().email, value },
+            formError: undefined,
+            status: statusAfterEdit(store.get().status),
+            successMessage: undefined,
+        });
     };
 
     const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
+        store.update({
+            code: { ...store.get().code, value },
+            formError: undefined,
+            status: statusAfterEdit(store.get().status),
+            successMessage: undefined,
+        });
     };
 
     const sendCode = async (): Promise<void> => {
