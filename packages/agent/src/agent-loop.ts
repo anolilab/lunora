@@ -493,7 +493,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
         toolCallId: call.id,
         toolName: call.name,
     });
-    await patchThread({ status: "awaiting_input" });
+    await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });
 
     await step
         .waitForEvent(`secret:${call.id}`, {
@@ -516,7 +516,8 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
     // Retired on every outcome, as the approval marker is: a client offers its
     // supply/decline controls from this row alone.
     await deleteMessage(markerKey);
-    await patchThread({ status: "running" });
+    // Owned by this run: a replacement that took the thread over while it waited keeps its own status.
+    await patchThread({ ifInstanceId: instanceId, status: "running" });
 
     return status;
 };
