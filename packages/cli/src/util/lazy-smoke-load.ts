@@ -8,7 +8,7 @@ import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain 
 import { acceptsConnection, resolveSchemaDirectory, startDevProcess } from "@lunora/config";
 import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { bindingsNeedingDatabase, findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { findAvailablePort } from "./free-port";
@@ -134,7 +134,7 @@ const readWorkerConfig = (cwd: string, environment: string | undefined): { hasCo
 };
 
 /** The entry the smoke Worker re-exports, or why there is none. */
-const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeLoadOptions): { main: string } | { skip: string } => {
+const locateSmokeEntry = ({ composedEntry, configPath, cwd, environment, toolchain }: SmokeLoadOptions): { main: string } | { skip: string } => {
     if (toolchain.devServer !== "workerd") {
         return { skip: "this deploy target does not run on workerd" };
     }
@@ -147,7 +147,14 @@ const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeL
     }
 
     // `wrangler dev` builds and starts every declared container and has no switch to turn that off.
-    return hasContainers ? { skip: "the project declares containers, which `wrangler dev` would build locally before the real container build" } : { main };
+    if (hasContainers) {
+        return { skip: "the project declares containers, which `wrangler dev` would build locally before the real container build" };
+    }
+
+    // `wrangler dev` refuses a Hyperdrive binding with no local database. `lunora dev` embeds one for itself; the check does not.
+    const unbacked = bindingsNeedingDatabase(cwd, process.env, environment, configPath);
+
+    return unbacked.length === 0 ? { main } : { skip: `the Hyperdrive binding ${unbacked.join(", ")} has no local database for wrangler dev` };
 };
 
 /**
@@ -155,18 +162,18 @@ const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeL
  * with a 5xx after booting, one that never answers, or one that answers with something that is not the
  * probe's result is the project's fault and blocks. Only a result from another run's Worker is passed over (`undefined`).
  */
-const probeLazyModules = async (port: number, runId: string): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
-    const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
-        (error: unknown) => {
-            if (error instanceof Error && error.name === "TimeoutError") {
-                throw new SmokeLoadError(
-                    `the smoke Worker booted but did not finish evaluating the lazy modules within ${String(SMOKE_TIMEOUT_MS / 1000)}s — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
-                );
-            }
+const probeLazyModules = async (port: number, runId: string, deadline: number): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
+    const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, {
+        signal: AbortSignal.timeout(Math.max(0, deadline - Date.now())),
+    }).catch((error: unknown) => {
+        if (error instanceof Error && error.name === "TimeoutError") {
+            throw new SmokeLoadError(
+                `the smoke Worker booted but did not finish evaluating the lazy modules within ${String(SMOKE_TIMEOUT_MS / 1000)}s — a module may be awaiting something that never settles. Pass --no-smoke-load to ship anyway.`,
+            );
+        }
 
-            throw error;
-        },
-    );
+        throw error;
+    });
     if (response.status >= 500) {
         throw new SmokeLoadError(
             `the smoke Worker booted but failed while evaluating the lazy modules (HTTP ${String(response.status)}). Pass --no-smoke-load to ship anyway.`,
@@ -431,7 +438,8 @@ export default {
  * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
  *
  * A failure of the project's modules, or a Worker that starts and then fails, blocks. A check that
- * cannot run at all (no resolvable entry, a target that is not workerd, containers, or a run directory
+ * cannot run at all (no resolvable entry, a target that is not workerd, containers, a Hyperdrive binding with no
+ * local database, or a run directory
  * or command that cannot be prepared) warns and returns `undefined`, because it says nothing about the
  * project. See {@link reportSmokeError}.
  */
@@ -458,6 +466,8 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const output: string[] = [];
     let directory: string | undefined;
     let group: SmokeGroup | undefined;
+    // One budget for booting and evaluating: a slow boot leaves less time for the probe, not a second full allowance.
+    const deadline = Date.now() + SMOKE_TIMEOUT_MS;
 
     // Only when the caller did not inject a launcher. Windows has no process groups to signal, so it spawns plainly.
     const grouped = process.platform !== "win32";
@@ -507,7 +517,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                     output.push(line);
                 },
                 port,
-                readyTimeoutMs: SMOKE_TIMEOUT_MS,
+                readyTimeoutMs: Math.max(0, deadline - Date.now()),
                 shell: process.platform === "win32",
             });
 
@@ -521,7 +531,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- the probe decides whether this attempt stands
-                const probed = await probeLazyModules(port, runId);
+                const probed = await probeLazyModules(port, runId, deadline);
 
                 if (probed !== undefined) {
                     reportProbe(cwd, probed, logger);

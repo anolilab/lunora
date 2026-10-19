@@ -274,6 +274,15 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toBeUndefined();
             expect(startDevProcess).not.toHaveBeenCalled();
         });
+
+        it("skips a project whose Hyperdrive binding has no local database, which wrangler dev refuses to start without", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ hyperdrive: [{ binding: "DB", id: "abc" }], main: "src/index.ts", name: "app" }));
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
     });
 
     describe("a Worker that boots but does not answer", () => {

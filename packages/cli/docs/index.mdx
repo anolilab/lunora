@@ -609,7 +609,7 @@ it blocks when the Worker starts and then fails, whether the entry throws on loa
 `wrangler dev` cannot run the project (a remote-only binding, a missing assets directory). It also blocks
 when the Worker answers with something other than the check's result, which usually means a route sends
 `/_lunora/*` to the assets instead of the Worker. It warns and continues when the check cannot run at all
-(a virtual `main`, a target that is not workerd, or declared containers, which `wrangler dev` would build locally). It catches what evaluation
+(a virtual `main`, a target that is not workerd, declared containers, which `wrangler dev` would build locally, or a Hyperdrive binding with no local database). It catches what evaluation
 raises: a top-level `throw`, or a call on an import that is `undefined`. A circular import that never throws
 during evaluation is not caught, because the bundler hoists it. Pass
 `--no-smoke-load` to skip it.
