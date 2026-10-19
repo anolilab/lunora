@@ -9,7 +9,7 @@ import { agentComponent } from "../src/component";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { requestSecretTool, SecretUnavailableError, withSecret } from "../src/secret-request-tool";
 import type { AgentDefinition, AgentStepLike, AgentToolContext } from "../src/types";
-import { fakeDatabase, finalTurn, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { fakeDatabase, finalTurn, loopDefaults as baseLoopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
 
 const SECRET = "sk_live_correct-horse-battery-staple";
 const SECRET_WORKS = "charged";
@@ -18,6 +18,10 @@ const TOOL_FAILED_PATTERN = /failed and will not be retried\. the secret is no l
 const THREAD = "thread-1";
 const INSTANCE = "wf-1";
 const OWNER = "user-a";
+
+/** The loop's defaults for a run that has an owner, as a secret request needs: only the owner can answer it. */
+const loopDefaults = (agent: AgentDefinition, overrides?: Parameters<typeof baseLoopDefaults>[1]): ReturnType<typeof baseLoopDefaults> =>
+    baseLoopDefaults(agent, { params: { input: "hello", owner: OWNER, threadKey: THREAD }, ...overrides });
 const WAIT_GRACE_MS = 60 * 1000;
 /** The request's deadline, which the wait outlasts by the grace. The agent's default `approvalTimeout` is longer, so it is the host's value lifetime less the grace. */
 const DEADLINE_MS = 24 * 60 * 60 * 1000 - WAIT_GRACE_MS;
@@ -298,6 +302,24 @@ const pauseAt = async (
 };
 
 describe("requestSecretTool — the loop pauses and resumes", () => {
+    it("refuses a request on a run with no owner instead of waiting out the deadline", async () => {
+        expect.assertions(3);
+
+        const agent = secretAgent([]);
+        const { journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key, stopping")]);
+
+        const result = await runAgentLoop(
+            baseLoopDefaults(agent, { generate, params: { input: "hello", threadKey: THREAD }, run: runtime.run, step: journal }),
+        );
+        const refusal = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool");
+
+        expect(result).toMatchObject({ stopped: "final" });
+        expect(refusal?.content).toContain("this run has no owner");
+        // No request row, no marker and no wait: nothing could ever have answered it.
+        expect(journal.waitedNames).toStrictEqual([]);
+    });
+
     it("pauses on the request, resumes on the request id, consumes the value once, and keeps it out of every record", async () => {
         expect.assertions(23);
 

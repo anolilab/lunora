@@ -580,6 +580,21 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
         return;
     }
 
+    // Supply and decline are owner-only, so on an ownerless run nobody could ever answer: it is
+    // refused here, as a bad argument is, rather than left to wait out the deadline.
+    if (turnContext.owner === undefined) {
+        await persist({
+            content: `Error: tool "${call.name}" was not run: this run has no owner, so no one can supply a secret for it.`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
     const outcome = await awaitSecret(turnContext, call, consumerTool, label);
 
     await persist({

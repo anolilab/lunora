@@ -38,7 +38,7 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
@@ -60,7 +60,7 @@ describe("agentHarness — requestSecretTool", () => {
         const harness = agentHarness(billingAgent(used), {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
         });
-        const input = { input: "charge my card", threadKey: "thread-1" };
+        const input = { input: "charge my card", owner: "user-1", threadKey: "thread-1" };
 
         const first = harness.run(input, { instanceId: "run-1" });
 
@@ -82,7 +82,7 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key, stopping")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:call_1");
         harness.decline("thread-1", "call_1");
@@ -106,7 +106,7 @@ describe("agentHarness — requestSecretTool", () => {
             secrets,
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
@@ -124,7 +124,7 @@ describe("agentHarness — requestSecretTool", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:call_1");
         harness.expire("run-1", "secret:call_1");
@@ -142,7 +142,7 @@ describe("agentHarness — journal order", () => {
             script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
         });
 
-        const run = harness.run({ input: "charge my card", threadKey: "thread-1" }, { instanceId: "run-1" });
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
         await harness.awaitWait("run-1", "secret:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
@@ -171,8 +171,8 @@ describe("agentHarness — concurrent runs", () => {
         const harness = agentHarness(billingAgent([]), {});
         const script = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")];
 
-        const first = harness.run({ input: "charge my card", threadKey: "thread-a" }, { instanceId: "run-a", script });
-        const second = harness.run({ input: "charge my card", threadKey: "thread-b" }, { instanceId: "run-b", script });
+        const first = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-a" }, { instanceId: "run-a", script });
+        const second = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-b" }, { instanceId: "run-b", script });
 
         await harness.awaitWait("run-a", "secret:call_1");
         await harness.awaitWait("run-b", "secret:call_1");
