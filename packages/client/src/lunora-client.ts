@@ -9659,7 +9659,8 @@ class LunoraClient {
 
         const retryAfterHeader = response.headers.get("retry-after");
 
-        if (payload === undefined) {
+        // `null` parses as JSON but is no more an envelope than an HTML page is.
+        if (!payload) {
             // Not a Lunora envelope at all (an edge's HTML page) — classified by
             // HTTP status, since re-queuing every such reply unconditionally
             // parks a chunk the edge REFUSED at the head of the outbox forever.
@@ -9673,7 +9674,7 @@ class LunoraClient {
         // codeless failure terminally, so a proxy's `{"error": "bad gateway"}`
         // read as an envelope destroyed every durable write in the chunk, where
         // the same reply classified by its 502 re-queues them.
-        if (!payload.results) {
+        if (!Array.isArray(payload.results)) {
             const whole = errorEnvelopeOf(payload);
             const error =
                 whole === undefined
