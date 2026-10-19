@@ -3743,7 +3743,7 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
-### `redactSecrets` (const)
+### `redactCredentials` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 

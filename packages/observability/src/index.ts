@@ -104,7 +104,7 @@ export {
     readErrorIssues,
     readRequestLog,
     redactArgs,
-    redactSecrets,
+    redactCredentials,
     REQUEST_LOG_TABLE,
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";

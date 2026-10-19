@@ -299,6 +299,42 @@ describe("observabilitySink", () => {
             expect(events[0]?.error?.internal).toStrictEqual({ shardId: "shard-42" });
         });
 
+        it("keeps an operator context larger than the header cap when the failure never crossed a header", async () => {
+            expect.assertions(1);
+
+            const events: ObservabilityEvent[] = [];
+            const sink: ObservabilitySink = {
+                onRpc: (event) => {
+                    events.push(event);
+                },
+            };
+            const large = "x".repeat(20_000);
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async () => {
+                            throw new LunoraError("CONFLICT", "stale", { internal: { blob: large } });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ observability: sink, shardDO: namespace });
+
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "orders:place" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(events[0]?.error?.internal).toMatchObject({ blob: expect.stringMatching(/^x+/u) });
+        });
+
         it("forwards the shard's internal context to the sink, redacted, and never to the client", async () => {
             expect.assertions(5);
 

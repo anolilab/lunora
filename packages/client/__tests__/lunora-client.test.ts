@@ -2873,7 +2873,7 @@ describe("lunoraClient", () => {
         });
 
         it("ignores a non-string why on an admin error envelope", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () =>
                 jsonResponse({ error: { code: "CONFLICT", message: "stale", why: { nested: true } } }, { status: 409 }),
@@ -2887,7 +2887,10 @@ describe("lunoraClient", () => {
 
             client.setAuthToken("tkn");
 
-            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: undefined });
+            const error = await client.listScheduledJobs().catch((error_: unknown) => error_);
+
+            expect(error).toMatchObject({ code: "CONFLICT" });
+            expect(error).not.toHaveProperty("why");
         });
 
         it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {

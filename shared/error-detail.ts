@@ -68,12 +68,14 @@ const MAX_ENCODED_LENGTH = 16_384;
 const plainErrorReplacer = (_key: string, value: unknown): unknown => (value instanceof Error ? { ...value, message: value.message, name: value.name } : value);
 
 /**
- * The operator-only `internal` context of a thrown `Error` (a `LunoraError`'s), for the
- * detail header alone. `undefined` unless it is a plain object that survives
- * `JSON.stringify`: a bigint or a cycle would otherwise throw inside the header encode,
- * failing the very response the detail describes.
+ * The operator-only `internal` context of a thrown `Error` (a `LunoraError`'s). `undefined`
+ * unless it is a plain object that survives `JSON.stringify`: a bigint or a cycle would
+ * otherwise throw inside the header encode, failing the very response the detail describes.
+ *
+ * `capped` (the default) applies the response header's size limit, for the detail header.
+ * A worker-local error never crosses a header, so its caller passes `capped: false`.
  */
-export const describeInternal = (error: unknown): Record<string, unknown> | undefined => {
+export const describeInternal = (error: unknown, { capped = true }: { capped?: boolean } = {}): Record<string, unknown> | undefined => {
     if (!(error instanceof Error)) {
         return undefined;
     }
@@ -89,7 +91,7 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
 
         // Over the cap the header would drop this context anyway, since URI-encoding only
         // grows it. Refusing it here skips copying and encoding a large record twice.
-        if (json.length > MAX_ENCODED_LENGTH) {
+        if (capped && json.length > MAX_ENCODED_LENGTH) {
             return undefined;
         }
 

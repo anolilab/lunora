@@ -254,7 +254,7 @@ const redactValue = createRedactor(standardRules, { exclude: ["pass"] });
  * thread, where every span, event and metric pays it. `captureRaw` as in
  * {@link redactArgs}.
  */
-const redactSecrets = (value: unknown, captureRaw = false): unknown => {
+const redactCredentials = (value: unknown, captureRaw = false): unknown => {
     if (captureRaw || value === null || value === undefined) {
         return value;
     }
@@ -1020,7 +1020,7 @@ export {
     readErrorIssues,
     readRequestLog,
     redactArgs,
-    redactSecrets,
+    redactCredentials,
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,

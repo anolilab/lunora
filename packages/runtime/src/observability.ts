@@ -13,7 +13,7 @@
  */
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
-import { redactSecrets } from "@lunora/observability";
+import { redactCredentials } from "@lunora/observability";
 
 import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
@@ -30,7 +30,7 @@ import type { SpanEvent } from "../../../shared/span-event";
 const operatorContextFor = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
     const plain = toPlainOperatorContext(internal);
 
-    return plain === undefined ? undefined : (redactSecrets(plain) as Record<string, unknown>);
+    return plain === undefined ? undefined : (redactCredentials(plain) as Record<string, unknown>);
 };
 
 /**
@@ -54,7 +54,7 @@ export interface ObservabilityEvent {
 
         /**
          * Operator-only context from the thrown `LunoraError`'s `internal`. Sinks only:
-         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactSecrets`
+         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactCredentials`
          * before a sink sees it: credential-named fields only, so ids and URLs survive.
          */
         internal?: Record<string, unknown>;

@@ -89,6 +89,13 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
  * eight `sdks/*` ports narrow the slot this way and are held to
  * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
  */
+
+/**
+ * The envelope's `why`, as an own property to spread onto a thrown error. Absent unless the
+ * envelope carries a string, so an error never has a `why` key whose value is undefined.
+ */
+const whyProperty = (envelope: { why?: string }): { why?: string } => (envelope.why === undefined ? {} : { why: envelope.why });
+
 const errorEnvelopeOf = (
     body: unknown,
 ): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string; why?: string } | undefined => {
@@ -260,5 +267,6 @@ export {
     retryAfterHeaderMs,
     slotError,
     unreadableSlotError,
+    whyProperty,
 };
 export type { LunoraClientError, RpcEnvelopeBody };

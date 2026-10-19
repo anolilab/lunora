@@ -14,7 +14,7 @@
  * further down in `shared/otlp.ts`, shared with `@lunora/container` so the worker
  * and container speak an identical wire format.
  */
-import { redactSecrets } from "@lunora/observability";
+import { redactCredentials } from "@lunora/observability";
 
 import { toPlainOperatorContext } from "../../../shared/error-detail";
 import { coerceFieldValue } from "../../../shared/log-fields";
@@ -37,7 +37,7 @@ const UNSAMPLED_TRACE_FLAG = 0;
 const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
     const plain = toPlainOperatorContext(internal);
 
-    return plain === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(redactSecrets(plain)))];
+    return plain === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(redactCredentials(plain)))];
 };
 
 /**

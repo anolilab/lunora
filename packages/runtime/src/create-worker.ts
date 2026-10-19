@@ -2078,7 +2078,7 @@ const buildErrorEvent = (
     const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? error.status : 500;
     const { message, name, stack } = describeError(error);
-    const internal = describeInternal(error);
+    const internal = describeInternal(error, { capped: false });
 
     return {
         durationMs,
