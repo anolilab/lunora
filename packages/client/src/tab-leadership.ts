@@ -64,7 +64,7 @@ export interface TabLeadershipHost {
 }
 
 /**
- * This tab just won leadership. Reopen the sockets for every subscription and every shard
+ * This tab just won leadership. Reopen the sockets for every subscription, every shape and every shard
  * with a queued write, then broadcast the status once so followers stop showing the
  * previous leader's value, and emit it locally: the status this tab reports moved from the
  * mirror to its own sockets, whether or not anything is subscribed.
@@ -80,6 +80,8 @@ export const onBecomeLeader = (host: TabLeadershipHost): void => {
 
     for (const shape of host.activeShapes()) {
         shape.answered = false;
+        // A tab holding only a shape has no subscription to open this socket, and its open handler resends the shape.
+        host.ensureSocket(shape.shardKey);
     }
 
     for (const shardKey of host.queuedShardKeys()) {

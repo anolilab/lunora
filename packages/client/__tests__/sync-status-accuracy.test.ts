@@ -527,4 +527,56 @@ describe("sync status across a leadership change", () => {
 
         client.close();
     });
+
+    it("keeps a follower pending on a settled frame alone, and synced once a value arrives", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const handlers: ((event: { data: unknown }) => void)[] = [];
+
+        class FakeChannel {
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public addEventListener(_type: string, handler: (event: { data: unknown }) => void): void {
+                handlers.push(handler);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public close(): void {}
+
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public postMessage(): void {}
+        }
+
+        vi.stubGlobal("BroadcastChannel", FakeChannel);
+
+        const { WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(), heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const send = (data: unknown): void => {
+            for (const handler of handlers) {
+                handler({ data });
+            }
+        };
+
+        // A tab that outranks this one leads, so this tab follows it.
+        send({ tabId: "aaa-leader-tab", ts: Date.now(), type: "heartbeat" });
+        send({ status: "connected", tabId: "aaa-leader-tab", type: "connection-status" });
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        // The leader's snapshot went out before this tab subscribed; only a later settled frame reaches it.
+        send({ cursor: 3, epoch: "e1", key: "todos.list::{}::", tabId: "aaa-leader-tab", type: "subscription-settled" });
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 1, synced: false });
+
+        send({ data: [], key: "todos.list::{}::", tabId: "aaa-leader-tab", type: "subscription-data" });
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 0, synced: true });
+
+        // A later settled frame changes nothing about an answered subscription.
+        send({ cursor: 4, epoch: "e1", key: "todos.list::{}::", tabId: "aaa-leader-tab", type: "subscription-settled" });
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 0 });
+
+        client.close();
+    });
 });

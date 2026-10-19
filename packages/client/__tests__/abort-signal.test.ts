@@ -164,6 +164,42 @@ describe("abort signal", () => {
         client.close();
     });
 
+    it("unsubscribes when the first replayed value aborts the signal", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ fetch: vi.fn<typeof fetch>(), heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const first = new AbortController();
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        await settle();
+        sockets[0]?.receive({ id: sockets[0]?.frames()[0]?.id, type: "ack" });
+        sockets[0]?.receive({ data: [1], id: sockets[0]?.frames()[0]?.id, type: "data" });
+
+        // A "take the first value, then stop" consumer joins the shared subscription and aborts inside the replay.
+        const seen: unknown[] = [];
+
+        client.subscribe(
+            fnRef("todos.list"),
+            {},
+            (value) => {
+                seen.push(value);
+                first.abort();
+            },
+            { signal: first.signal },
+        );
+        sockets[0]?.receive({ data: [2], id: sockets[0]?.frames()[0]?.id, type: "data" });
+
+        // The aborted subscriber is gone, so the second push never reaches it.
+        expect(seen).toStrictEqual([[1]]);
+
+        client.close();
+    });
+
     it("registers nothing for a subscribe whose signal is already aborted", async () => {
         expect.assertions(1);
 

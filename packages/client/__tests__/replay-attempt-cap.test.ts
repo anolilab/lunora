@@ -4,16 +4,16 @@ import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
-const shardError = (): Response => jsonResponse({ error: { code: "SHARD_ERROR", message: "shard answered garbage" } }, { status: 500 });
-
-const replayRetry = { maxShardErrorAttempts: 3 };
+// What a handler that always throws reaches the client as: the shard's `{ error }` envelope, coded with the thrown
+// error's own code (or `RPC_FAILED` for a bare throw). Never a transient code, so it is a verdict on the write.
+const handlerFailure = (): Response => jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, { status: 500 });
 
 const createClient = (fetchImpl: typeof fetch) => {
     const { sockets, WebSocket } = createSocketHarness();
     const client = new LunoraClient({
         fetch: fetchImpl,
         heartbeatIntervalMs: 0,
-        offlineQueue: { queueBeforeFirstConnect: true, replayRetry },
+        offlineQueue: { queueBeforeFirstConnect: true },
         persistence: createInMemoryPersistence(),
         url: "http://app.test",
         WebSocket,
@@ -24,17 +24,17 @@ const createClient = (fetchImpl: typeof fetch) => {
     return { client, sockets };
 };
 
-describe("replay attempt cap", () => {
+describe("replay of a write the shard keeps failing", () => {
     afterEach(() => {
         vi.useRealTimers();
     });
 
-    it("settles a write the shard keeps failing on, after the configured number of attempts", async () => {
+    it("settles a write whose handler always throws on its first attempt", async () => {
         expect.assertions(3);
 
         vi.useFakeTimers();
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => shardError());
+        const fetchImpl = vi.fn<typeof fetch>(async () => handlerFailure());
         const { client, sockets } = createClient(fetchImpl);
         const write = client.mutation(fnRef("todos.set"), { text: "poison" });
         const outcome = write.then(
@@ -46,14 +46,14 @@ describe("replay attempt cap", () => {
         sockets[0]?.open();
         await vi.advanceTimersByTimeAsync(5000);
 
-        await expect(outcome).resolves.toBe("SHARD_ERROR");
-        expect(fetchImpl).toHaveBeenCalledTimes(3);
+        await expect(outcome).resolves.toBe("RPC_FAILED");
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
         expect(client.pendingCount()).toBe(0);
 
         client.close();
     });
 
-    it("does not let a poisoned write block the siblings queued behind it", async () => {
+    it("does not let a write whose handler always throws block the siblings queued with it", async () => {
         expect.assertions(3);
 
         vi.useFakeTimers();
@@ -66,13 +66,13 @@ describe("replay attempt cap", () => {
                 return jsonResponse({
                     results: calls.map((call, id) =>
                         call.args.text === "poison"
-                            ? { body: { error: { code: "SHARD_ERROR", message: "shard answered garbage" } }, id }
+                            ? { body: { error: { code: "RPC_FAILED", message: "internal error" } }, id }
                             : { body: { result: { ok: true } }, id },
                     ),
                 });
             }
 
-            return calls[0]?.args.text === "poison" ? shardError() : jsonResponse({ result: { ok: true } });
+            return calls[0]?.args.text === "poison" ? handlerFailure() : jsonResponse({ result: { ok: true } });
         });
         const { client, sockets } = createClient(fetchImpl);
         const poison = client.mutation(fnRef("todos.set"), { text: "poison" }).then(
@@ -86,13 +86,13 @@ describe("replay attempt cap", () => {
         await vi.advanceTimersByTimeAsync(5000);
 
         await expect(sibling).resolves.toStrictEqual({ ok: true });
-        await expect(poison).resolves.toBe("SHARD_ERROR");
+        await expect(poison).resolves.toBe("RPC_FAILED");
         expect(client.pendingCount()).toBe(0);
 
         client.close();
     });
 
-    it("never counts a transport failure against the cap", async () => {
+    it("keeps retrying a write after a transport failure, however many there are", async () => {
         expect.assertions(2);
 
         vi.useFakeTimers();
@@ -117,8 +117,8 @@ describe("replay attempt cap", () => {
     });
 
     // The worker reports a shard that could not answer a batch at all (non-JSON reply, results left
-    // out) per slot. That is not a verdict on the write, so it must never spend the write's cap.
-    it("never counts a shard-level SHARD_UNAVAILABLE against the cap", async () => {
+    // out) per slot. That is not a verdict on the write, so it is retried rather than settled.
+    it("keeps retrying a write after a shard-level SHARD_UNAVAILABLE, however many there are", async () => {
         expect.assertions(2);
 
         vi.useFakeTimers();
@@ -143,7 +143,6 @@ describe("replay attempt cap", () => {
         sockets[0]?.open();
         await vi.advanceTimersByTimeAsync(40_000);
 
-        // Five refusals is past the cap of 3: only the code decides whether they count.
         await expect(write).resolves.toStrictEqual({ ok: true });
         expect(fetchImpl).toHaveBeenCalledTimes(6);
 

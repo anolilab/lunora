@@ -124,6 +124,18 @@ describe("onBecomeLeader shapes", () => {
 
         expect(shape.answered).toBe(false);
     });
+
+    it("reopens the socket of a shape's shard even when no query uses it", () => {
+        expect.assertions(2);
+
+        const shape = { answered: true, shardKey: "tenant-s" } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape] });
+
+        onBecomeLeader(host);
+
+        expect(host.ensureSocket).toHaveBeenCalledWith("tenant-s");
+        expect(host.queueResubscribe).not.toHaveBeenCalled();
+    });
 });
 
 describe("onStopBeingLeader", () => {

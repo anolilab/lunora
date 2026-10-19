@@ -125,22 +125,6 @@ export interface OfflineQueueOptions {
      * writes on the very first session before the WS is up.
      */
     queueBeforeFirstConnect?: boolean;
-
-    /**
-     * Give-up policy for replaying queued writes that fail retryably. A hintless
-     * retryable failure (a `429`/`503` the edge answered, or a request that timed
-     * out) backs off from 1s, doubling per consecutive failure up to 60s (also
-     * the ceiling for a server's `Retry-After` hint). `SHARD_ERROR` is retried
-     * because the worker cannot tell a flaky shard from a write that makes the
-     * shard fail every time; a write that collects `maxShardErrorAttempts` of them
-     * is settled with that error instead, so one such write cannot hold up every
-     * write queued behind it. Transport failures, timeouts, rate limits and
-     * refused credentials never count against it.
-     */
-    replayRetry?: {
-        /** `SHARD_ERROR` answers one write may collect before it is settled. Defaults to 10. */
-        maxShardErrorAttempts?: number;
-    };
 }
 
 /**

@@ -70,17 +70,6 @@ const REPLAY_BASE_DELAY_MS = 1000;
 const REPLAY_MAX_DELAY_MS = 60_000;
 
 /**
- * How many times one durable write may be answered with `SHARD_ERROR` before the
- * replay gives up on it. That code is classified transient because the worker
- * cannot tell a flaky shard from a write that makes the shard fail every time;
- * with no cap the second kind sits at the head of the shard's queue forever and
- * every write behind it waits. Only a coded answer counts — a transport failure,
- * a timeout, a rate limit or a refused credential says nothing about the write
- * and never spends an attempt.
- */
-const DEFAULT_MAX_SHARD_ERROR_ATTEMPTS = 10;
-
-/**
  * Coded error a response the client could NOT read a `{ error }` envelope out of
  * is reported as, keyed by HTTP status. Anything else 4xx falls back to
  * `BAD_REQUEST` — see `unparseableResponseError` for which statuses reach
@@ -269,7 +258,6 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlo
 };
 
 export {
-    DEFAULT_MAX_SHARD_ERROR_ATTEMPTS,
     defaultReplayRetryDelayMs,
     isTransientReplayFailure,
     isUndecodableResult,

@@ -127,7 +127,6 @@ import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
 import type { RpcEnvelopeBody } from "./replay";
 import {
-    DEFAULT_MAX_SHARD_ERROR_ATTEMPTS,
     defaultReplayRetryDelayMs,
     indexReplaySlots,
     isTransientReplayFailure,
@@ -1060,10 +1059,7 @@ class LunoraClient {
      */
     private readonly replayRetryState = new Map<string, { attempts: number; delayMs: number | undefined }>();
 
-    /** How many `SHARD_ERROR` answers one queued write may collect before the replay settles it; see `offlineQueue.replayRetry`. */
-    private readonly maxShardErrorAttempts: number;
-
-    /** Capped failures collected so far, per queued write id (see `spendsLastReplayAttempt`); cleared when the write settles. */
+    /** Failed replay attempts collected so far, per ambiguous-send write id (see `spendsLastReplayAttempt`); cleared when the write settles. */
     private readonly replayAttempts = new Map<string, number>();
 
     /** Pending rate-limit retry flushes, keyed by {@link connectionKey}, so `close()` can cancel them. */
@@ -1090,7 +1086,6 @@ class LunoraClient {
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
-        this.maxShardErrorAttempts = options.offlineQueue?.replayRetry?.maxShardErrorAttempts ?? DEFAULT_MAX_SHARD_ERROR_ATTEMPTS;
         this.managedSocketOptions = {
             connectTimeoutMs: this.connectTimeoutMs,
             heartbeatIntervalMs: this.heartbeatIntervalMs,
@@ -2417,7 +2412,8 @@ class LunoraClient {
             // there is. Judged per shard: one shard may poll while another holds an open socket.
             const ackless = follower || this.connectionGateState(state.shardKey).polling;
 
-            if (!(state.acked || (ackless && state.valueReceived))) {
+            // `acked` is no evidence there: a mirrored `settled` frame sets it without delivering a value.
+            if (!(ackless ? state.valueReceived : state.acked)) {
                 pendingSubscriptions += 1;
             }
         }
@@ -3904,6 +3900,11 @@ class LunoraClient {
         };
 
         options.signal?.addEventListener("abort", unsubscribe, { once: true });
+
+        // A callback may abort during the synchronous replay above, before the listener existed: `abort` never fires again.
+        if (options.signal?.aborted) {
+            unsubscribe();
+        }
 
         return unsubscribe;
     }
@@ -9363,16 +9364,14 @@ class LunoraClient {
      * Count a failed replay attempt against `item` and report whether it was the
      * last attempt the write gets.
      *
-     * Two kinds of failure are capped, each against its own limit. A write queued
-     * after an ambiguous direct send has a caller still waiting, so every
-     * transient failure of it except a rate limit or a refused credential
-     * (a transport error, a timeout, `SHARD_ERROR`, ...) counts against
-     * {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}. Any other write is bounded only in
-     * `SHARD_ERROR` answers (`offlineQueue.replayRetry.maxShardErrorAttempts`):
-     * only a coded answer from the shard says the write itself may be what fails,
-     * where a transport error, a timeout, a rate limit or a refused credential
-     * says nothing about it. A whole-batch `SHARD_ERROR` is not attributable to
-     * one write and is not counted.
+     * Only a write queued after an ambiguous direct send is capped: its caller is
+     * still waiting, so every transient failure of it except a rate limit or a
+     * refused credential (a transport error, a timeout, `SHARD_UNAVAILABLE`, ...)
+     * counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}. Any other write is never
+     * capped here: a write the shard fails deterministically arrives with a coded
+     * verdict (the handler's own code, `RPC_FAILED`, `BATCH_ENTRY_FAILED`) that
+     * {@link isTransientReplayFailure} settles terminally on the first attempt, and
+     * a transient failure says nothing about the write itself.
      */
     private spendsLastReplayAttempt(item: QueuedMutation, error: unknown): boolean {
         if (item.id === undefined) {
@@ -9380,19 +9379,14 @@ class LunoraClient {
         }
 
         const code = (error as { code?: string } | null | undefined)?.code;
-        let limit: number;
 
         if (
-            item.ambiguousSend === true &&
-            !isAuthReplayFailure(error) &&
-            code !== "RATE_LIMITED" &&
-            code !== "TOO_MANY_REQUESTS" &&
-            isTransientReplayFailure(error)
+            item.ambiguousSend !== true ||
+            isAuthReplayFailure(error) ||
+            code === "RATE_LIMITED" ||
+            code === "TOO_MANY_REQUESTS" ||
+            !isTransientReplayFailure(error)
         ) {
-            limit = MAX_AMBIGUOUS_SEND_ATTEMPTS;
-        } else if (code === "SHARD_ERROR") {
-            limit = this.maxShardErrorAttempts;
-        } else {
             return false;
         }
 
@@ -9400,7 +9394,7 @@ class LunoraClient {
 
         this.replayAttempts.set(item.id, attempts);
 
-        return attempts >= limit;
+        return attempts >= MAX_AMBIGUOUS_SEND_ATTEMPTS;
     }
 
     /** Settle, terminally, the ambiguous-send writes among `items` that `error` was the last attempt for; the rest stay queued. */
