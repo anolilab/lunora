@@ -52,10 +52,14 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         step: "request",
     });
 
+    /** The address the last code went to; editing it lifts the cooldown. */
+    let sentTo: string | undefined;
+
     const setEmail = (value: string): void => {
         store.update({
             email: { ...store.get().email, value },
             formError: undefined,
+            ...(sentTo !== undefined && value.trim() !== sentTo ? { resendAvailableAt: undefined } : {}),
             status: statusAfterEdit(store.get().status),
             successMessage: undefined,
         });
@@ -90,6 +94,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         try {
             assertOk(await context.authClient.emailOtp.sendVerificationOtp({ email: state.email.value.trim(), type: "sign-in" }));
 
+            sentTo = state.email.value.trim();
             store.update({
                 resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
                 status: "idle",

@@ -107,6 +107,9 @@ const createFormController = <TField extends string>(context: ControllerContext,
      */
     const edited = new Set<TField>();
 
+    /** The values the last cooldown-starting send went to, so editing the address lifts the cooldown. */
+    let sentValues: Record<TField, string> | undefined;
+
     const state = (): FormState<TField> => store.get();
 
     const values = (): Record<TField, string> => {
@@ -125,11 +128,14 @@ const createFormController = <TField extends string>(context: ControllerContext,
         edited.add(name);
 
         const current = state();
+        // ponytail: editing and reverting lifts the cooldown too; the server's own rate limit is the real guard.
+        const retargeted = sentValues !== undefined && sentValues[name] !== value;
 
         store.set({
             ...current,
             fields: { ...current.fields, [name]: { ...current.fields[name], error: undefined, value } },
             formError: undefined,
+            ...(retargeted ? { resendAvailableAt: undefined } : {}),
             status: statusAfterEdit(current.status),
             successMessage: undefined,
         });
@@ -173,11 +179,13 @@ const createFormController = <TField extends string>(context: ControllerContext,
         store.set({ ...state(), fields: nextFields, formError: undefined, status: "submitting" });
 
         try {
-            const result = (await options.submit(values(), context)) ?? {};
+            const sent = values();
+            const result = (await options.submit(sent, context)) ?? {};
 
             if (options.resendCooldown) {
                 // The form stays up for a resend, but this request spent the captcha token.
                 resetCaptcha();
+                sentValues = sent;
             }
 
             store.set({

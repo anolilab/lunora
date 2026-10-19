@@ -67,6 +67,9 @@ interface PhoneVerifyOptions {
 const createPhoneVerifyController = (context: ControllerContext, options: PhoneVerifyOptions = {}): PhoneVerifyController => {
     const store = createStore<PhoneVerifyState>({ phoneNumber: "", status: "idle", step: "request" });
 
+    /** The number the last code went to; a different one is not a resend, so it skips the cooldown. */
+    let sentTo: string | undefined;
+
     const run = async (work: () => Promise<Partial<PhoneVerifyState>>, fallback: string): Promise<void> => {
         if (store.get().status === "submitting") {
             return;
@@ -90,11 +93,11 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                 store.set({ phoneNumber: "", resendAvailableAt: store.get().resendAvailableAt, status: "idle", step: "request" });
             },
             send: async (phoneNumber: string) => {
-                if (cooldownActive(store.get().resendAvailableAt)) {
+                const trimmed = phoneNumber.trim();
+
+                if (cooldownActive(store.get().resendAvailableAt) && trimmed === sentTo) {
                     return;
                 }
-
-                const trimmed = phoneNumber.trim();
 
                 if (trimmed === "") {
                     store.update({ error: context.localization.phoneRequired, status: "error" });
@@ -104,6 +107,8 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
 
                 await run(async () => {
                     assertOk(await context.authClient.phoneNumber.sendOtp({ phoneNumber: trimmed }));
+
+                    sentTo = trimmed;
 
                     return {
                         phoneNumber: trimmed,

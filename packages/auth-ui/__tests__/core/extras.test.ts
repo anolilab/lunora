@@ -362,6 +362,27 @@ describe("redirectTo reaches every sign-in transport", () => {
         expect(replace).toHaveBeenCalledWith("/invite/xyz");
     });
 
+    it("sends a phone code to a corrected number inside the cooldown, but not a repeat of the same one", async () => {
+        expect.assertions(1);
+
+        const { createPhoneVerifyController, resolveContext } = await import("../../src/core");
+
+        const sendOtp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), phoneNumber: { sendOtp, verify: vi.fn() } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            redirects: { afterSignIn: "/app" },
+        });
+        const controller = createPhoneVerifyController(context);
+
+        await controller.actions.send("+15551234567");
+        await controller.actions.send("+15551234567");
+        controller.actions.restart();
+        await controller.actions.send("+15557654321");
+
+        expect(sendOtp).toHaveBeenCalledTimes(2);
+    });
+
     it("falls back to the configured default on a client-side door when redirectTo would leave the origin", async () => {
         expect.assertions(1);
 

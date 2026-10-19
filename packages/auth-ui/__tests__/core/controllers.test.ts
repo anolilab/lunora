@@ -722,4 +722,35 @@ describe("resend cooldown", () => {
 
         expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
     });
+
+    it("lifts the cooldown when the address is corrected, but not for the same one", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const forgot = createForgotPasswordController(makeContext(client).context);
+
+        forgot.actions.setField("email", "typo@b.co");
+        await forgot.actions.submit();
+        forgot.actions.setField("email", "typo@b.co");
+
+        expect(forgot.getState().resendAvailableAt).toBeDefined();
+
+        forgot.actions.setField("email", "a@b.co");
+
+        expect(forgot.getState().resendAvailableAt).toBeUndefined();
+
+        await forgot.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+
+        const otp = createEmailOtpController(makeContext(client).context);
+
+        otp.actions.setEmail("typo@b.co");
+        await otp.actions.sendCode();
+        otp.actions.back();
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
 });
