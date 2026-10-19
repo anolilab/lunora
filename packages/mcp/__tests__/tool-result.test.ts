@@ -38,6 +38,27 @@ describe("errorFromThrown", () => {
         expect(result).toStrictEqual(errorResult("INTERNAL", "Internal error"));
     });
 
+    it("keeps the catalog code and public message of an error the client rebuilt from a server rejection", () => {
+        expect.assertions(2);
+
+        const rebuilt = Object.assign(new Error("function not found or not public: messages:list"), { code: "NOT_FOUND" });
+
+        expect(errorFromThrown(rebuilt)).toStrictEqual(errorResult("NOT_FOUND", "function not found or not public: messages:list"));
+        // An internal code still shows only its title, as for a LunoraError.
+        expect(errorFromThrown(Object.assign(new Error("SQLITE_TOOBIG at table messages"), { code: "INTERNAL" }))).toStrictEqual(
+            errorResult("INTERNAL", "Internal error"),
+        );
+    });
+
+    it("does not treat a code the catalog does not know as a contract", () => {
+        expect.assertions(2);
+
+        const result = errorFromThrown(Object.assign(new Error("connect ECONNREFUSED billing-db.internal:443"), { code: "ECONNREFUSED" }));
+
+        expect(result.structuredContent).toStrictEqual({ code: "INTERNAL", message: "the tool call failed unexpectedly" });
+        expect(JSON.stringify(result)).not.toContain("billing-db.internal");
+    });
+
     it("reduces a plain Error to a fixed INTERNAL message, dropping any raw text", () => {
         expect.assertions(2);
 
