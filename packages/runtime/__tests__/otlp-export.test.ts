@@ -99,14 +99,16 @@ describe("otlpSend gzip threshold", () => {
 });
 
 describe("otlpTraceBody error internal context", () => {
-    const failed = (internal?: Record<string, unknown>): ObservabilityEvent => {return {
-        durationMs: 3,
-        error: { code: "INTERNAL", message: "boom", status: 500, ...(internal === undefined ? {} : { internal }) },
-        functionPath: "orders:place",
-        ok: false,
-        traceFlags: 1,
-        traceId: "0af7651916cd43dd8448eb211c80319c",
-    }};
+    const failed = (internal?: Record<string, unknown>): ObservabilityEvent => {
+        return {
+            durationMs: 3,
+            error: { code: "INTERNAL", message: "boom", status: 500, ...(internal === undefined ? {} : { internal }) },
+            functionPath: "orders:place",
+            ok: false,
+            traceFlags: 1,
+            traceId: "0af7651916cd43dd8448eb211c80319c",
+        };
+    };
 
     it("exports the redacted internal context on the exception event for the operator's collector", () => {
         expect.assertions(2);

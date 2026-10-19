@@ -900,6 +900,7 @@ type LunoraClientError = Error & {
     data?: unknown;
     docsUrl?: string;
     hint?: string | string[];
+    why?: string;
 };
 ```
 
