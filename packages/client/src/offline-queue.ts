@@ -440,14 +440,26 @@ class OfflineQueue {
         const kept: QueuedMutation[] = [];
 
         for (const item of this.items) {
-            if (item.precondition !== undefined && !item.precondition()) {
-                const error = new Error("offline mutation skipped: precondition failed before replay");
+            let holds = true;
+            let cause: unknown;
+
+            if (item.precondition !== undefined) {
+                try {
+                    holds = item.precondition();
+                } catch (error: unknown) {
+                    holds = false;
+                    cause = error;
+                }
+            }
+
+            if (holds) {
+                kept.push(item);
+            } else {
+                const error = new Error("offline mutation skipped: precondition failed before replay", cause === undefined ? undefined : { cause });
 
                 (error as Error & { code?: string }).code = "OFFLINE_PRECONDITION_FAILED";
                 item.reject(error);
                 conflicted.push(item);
-            } else {
-                kept.push(item);
             }
         }
 
