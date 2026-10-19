@@ -194,6 +194,31 @@ describe("ctx-db batch writes", () => {
             expect(result).toStrictEqual({ deleted: 2 });
             await expect(writer.findMany("messages", {}).then((page) => page.page)).resolves.toHaveLength(1);
         });
+
+        it("deleteWhere stops reading one row past the cap before refusing an over-cap match", async () => {
+            expect.assertions(3);
+
+            const { writer } = setupWriter();
+
+            await writer.insertMany(
+                "messages",
+                Array.from({ length: 600 }, (_, index) => row(index)),
+                { limit: 1000 },
+            );
+
+            const findMany = vi.spyOn(writer, "findMany");
+
+            await expect(writer.deleteWhere("messages", { channelId: "c1" })).rejects.toThrow(/batch of 501 exceeds the limit of 500/);
+
+            const fetched = await (findMany.mock.results[0]?.value as ReturnType<BatchWriter["findMany"]>);
+
+            expect(fetched.page.length).toBeLessThanOrEqual(501);
+
+            findMany.mockRestore();
+
+            // Nothing was deleted — the cap is checked before any write.
+            await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(600);
+        });
     });
 
     describe("patchMany", () => {
@@ -245,6 +270,30 @@ describe("ctx-db batch writes", () => {
             const channelIds = await writer.findMany("messages", {}).then((page) => new Set(page.page.map((document) => document["channelId"])));
 
             expect(channelIds).toStrictEqual(new Set(["c1", "patched"]));
+        });
+
+        it("patchWhere stops reading one row past the cap before refusing an over-cap match", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupWriter();
+
+            await writer.insertMany(
+                "messages",
+                Array.from({ length: 600 }, (_, index) => row(index)),
+                { limit: 1000 },
+            );
+
+            const findMany = vi.spyOn(writer, "findMany");
+
+            await expect(writer.patchWhere("messages", { patch: { channelId: "patched" }, where: { channelId: "c1" } })).rejects.toThrow(
+                /batch of 501 exceeds the limit of 500/,
+            );
+
+            const fetched = await (findMany.mock.results[0]?.value as ReturnType<BatchWriter["findMany"]>);
+
+            expect(fetched.page.length).toBeLessThanOrEqual(501);
+
+            findMany.mockRestore();
         });
     });
 

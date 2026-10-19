@@ -1436,8 +1436,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // delete. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(where, baseWhere),
+                limit: (options?.limit ?? DEFAULT_BATCH_LIMIT) + 1,
                 relationBaseWhere: relationReadFilter,
             });
             const ids = resolved.page.map((row) => String(row["_id"]));
@@ -1727,8 +1729,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // patch. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(args.where, baseWhere),
+                limit: (options?.limit ?? DEFAULT_BATCH_LIMIT) + 1,
                 relationBaseWhere: relationReadFilter,
             });
             const patches = resolved.page.map((row) => {

@@ -68,11 +68,11 @@ const rankColumnsSql = (index: RankIndexDefinitionLike): SQL =>
     );
 
 /**
- * INSERT one row's rank-companion entry (id, canonical partition key, the
- * serialized sort values). `columnsSql` is prebuilt via {@link rankColumnsSql}
- * so a backfill loop hoists it out of its per-row iteration.
+ * One row's rank-companion value tuple, in {@link rankColumnsSql} order: id,
+ * canonical partition key, the serialized sort values. Shared by the single-row
+ * insert and the chunked rebuild so the two encodings cannot diverge.
  */
-const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+const rankRowValuesSql = (index: RankIndexDefinitionLike, id: string, record: Record<string, unknown>): SQL => {
     const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
     // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
     const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
@@ -81,7 +81,12 @@ const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefiniti
         dsql`, `,
     );
 
-    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+    return dsql`(${valuesSql})`;
+};
+
+/** INSERT one row's rank-companion entry. `columnsSql` is prebuilt via {@link rankColumnsSql}. */
+const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${rankRowValuesSql(index, id, record)}`);
 };
 
 /** One full scan of `tableName`, decoded, keeping the rows a companion tallies: live, and matching its static `where`. */
@@ -171,8 +176,16 @@ const rebuildRankCompanion = (sql: SqlExec, tableName: string, index: RankIndexD
 
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)}`);
 
-    for (const record of records) {
-        insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
+    // id + partition + one per sort key bound per row, so one statement lands just under Workerd's per-statement parameter cap.
+    const CHUNK_ROWS = Math.max(1, Math.floor(WORKERD_SQLITE_LIMITS.boundParams / (2 + index.sortBy.length)));
+
+    for (let start = 0; start < records.length; start += CHUNK_ROWS) {
+        const rowsSql = dsql.join(
+            records.slice(start, start + CHUNK_ROWS).map((record) => rankRowValuesSql(index, record["_id"] as string, record)),
+            dsql`, `,
+        );
+
+        runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${rowsSql}`);
     }
 
     writeCompanionSignature(sql, rankTable, signature);

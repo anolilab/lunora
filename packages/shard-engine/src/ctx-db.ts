@@ -3302,10 +3302,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 syncAggregates(tableName, existing, merged);
                 syncRanks(tableName, id, existing, undefined);
 
-                cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
+                const indexKeys = rowIndexKeys(tableName, existing, merged);
+
+                cache?.invalidate(tableName, id, indexKeys);
 
                 recordCdc(tableName, id, "update", merged);
-                broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
+                broadcast({ indexKeys, key: id, op: "update", row: merged, table: tableName });
 
                 // `delete()` was called, so fire the DELETE triggers (the flag flip
                 // is an implementation detail of how the delete is recorded).
@@ -3335,10 +3337,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             syncAggregates(tableName, existing, undefined);
             syncRanks(tableName, id, existing, undefined);
 
-            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing));
+            const indexKeys = rowIndexKeys(tableName, existing);
+
+            cache?.invalidate(tableName, id, indexKeys);
 
             recordCdc(tableName, id, "delete");
-            broadcast({ indexKeys: rowIndexKeys(tableName, existing), key: id, op: "delete", table: tableName });
+            broadcast({ indexKeys, key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
@@ -3431,7 +3435,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
             const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
-            const page = await source.findMany(tableName, { where });
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
+            const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
+            const page = await source.findMany(tableName, { limit: cap + 1, where });
             const ids = page.page.map((row) => String(row["_id"]));
 
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
@@ -4183,10 +4189,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // both images additionally covers a patch that MOVES the row
             // between index slices: the slice it left is only derivable from
             // the before-image.
-            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
+            const indexKeys = rowIndexKeys(tableName, existing, merged);
+
+            cache?.invalidate(tableName, id, indexKeys);
 
             recordCdc(tableName, id, "update", merged);
-            broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
+            broadcast({ indexKeys, key: id, op: "update", row: merged, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -4265,7 +4273,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent patches
             // consistent.
             const source = globalWriterFor(tableName, "patchWhere") ?? writer;
-            const page = await source.findMany(tableName, { where: args.where });
+            // `cap + 1` rows is enough for `assertBatchLimit` to see an over-cap match without reading it all.
+            const cap = batchOptions?.limit ?? DEFAULT_BATCH_LIMIT;
+            const page = await source.findMany(tableName, { limit: cap + 1, where: args.where });
             const patches = page.page.map((row) => {
                 return { id: String(row["_id"]), patch: args.patch };
             });
