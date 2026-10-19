@@ -18,18 +18,7 @@ const isDefineLiveStream = (call: CallExpression): boolean => {
 
 /** A spread member, or a computed key, hides names from a static read. */
 const hidesNames = (literal: ObjectLiteralExpression): boolean =>
-    literal
-        .getProperties()
-        .some(
-            (property) =>
-                Node.isSpreadAssignment(property) ||
-                ((Node.isPropertyAssignment(property) ||
-                    Node.isShorthandPropertyAssignment(property) ||
-                    Node.isMethodDeclaration(property) ||
-                    Node.isGetAccessorDeclaration(property) ||
-                    Node.isSetAccessorDeclaration(property)) &&
-                    Node.isComputedPropertyName(property.getNameNode())),
-        );
+    literal.getProperties().some((property) => Node.isSpreadAssignment(property) || Node.isComputedPropertyName(property.getNameNode()));
 
 /**
  * Also true for a method or accessor. The `topics` and `key` maps hold only validators, so a member of either kind is a
