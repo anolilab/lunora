@@ -456,8 +456,14 @@ describe("useMutation", () => {
         it("drops an online-only call's arguments from the mutation cache, where an ordinary call keeps them", async () => {
             expect.hasAssertions();
 
-            /** Run one write through the hook, unmount it, and hand back the cache that held the call. */
-            const writeAndUnmount = async (reference: FunctionReference, options?: { onlineOnly?: boolean }): Promise<QueryClient> => {
+            /**
+             * Run one write through the hook, unmount it, and hand back the cache that held the call
+             * with a promise that settles once the cache removes an entry.
+             */
+            const writeAndUnmount = async (
+                reference: FunctionReference,
+                options?: { onlineOnly?: boolean },
+            ): Promise<{ queryClient: QueryClient; removed: Promise<void> }> => {
                 const queryClient = new QueryClient();
                 const mock = createMockClient();
 
@@ -473,21 +479,33 @@ describe("useMutation", () => {
                 await act(async () => {
                     await handle.current?.send();
                 });
+
+                // Subscribed before the unmount that starts garbage collection, so the removal cannot be missed.
+                const removed = new Promise<void>((resolve) => {
+                    const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+                        if (event.type === "removed") {
+                            unsubscribe();
+                            resolve();
+                        }
+                    });
+                });
+
                 view.unmount();
 
-                return queryClient;
+                return { queryClient, removed };
             };
 
-            const ordinary = await writeAndUnmount(makeRef("accounts:note"));
-            const sensitive = await writeAndUnmount(makeSensitiveRef("accounts:linkApiKey"));
-            const perCall = await writeAndUnmount(makeRef("accounts:note"), { onlineOnly: true });
+            const { queryClient: ordinary } = await writeAndUnmount(makeRef("accounts:note"));
+            const { queryClient: sensitive, removed } = await writeAndUnmount(makeSensitiveRef("accounts:linkApiKey"));
+            const { queryClient: perCall } = await writeAndUnmount(makeRef("accounts:note"), { onlineOnly: true });
 
             // Default garbage-collection time: the settled call, with its arguments, stays cached.
             expect(ordinary.getMutationCache().getAll()).toHaveLength(1);
 
-            await waitFor(() => {
-                expect(sensitive.getMutationCache().getAll()).toHaveLength(0);
-            });
+            // A sensitive call is collected at once: the cache announces the removal.
+            await removed;
+
+            expect(sensitive.getMutationCache().getAll()).toHaveLength(0);
 
             // A per-call online-only write on an ordinary reference leaves the cache once it settles.
             expect(perCall.getMutationCache().getAll()).toHaveLength(0);
