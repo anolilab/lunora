@@ -2,7 +2,7 @@ import type { SubscriptionError } from "@lunora/client";
 import { createCollection } from "@tanstack/db";
 import { describe, expect, it, vi } from "vitest";
 
-import type { LunoraCollectionUtils } from "../src/collection-options";
+import type { LunoraCollectionUtils } from "../src/collection-error-state";
 import { lunoraCollectionOptions } from "../src/collection-options";
 
 const ref = { __lunoraRef: "messages:list" } as never;

@@ -3,6 +3,8 @@ import { LunoraError } from "@lunora/errors";
 import type { CollectionConfig } from "@tanstack/db";
 import { BTreeIndex } from "@tanstack/db";
 
+import type { LunoraCollectionUtils } from "./collection-error-state";
+import { createErrorState } from "./collection-error-state";
 import type { Row } from "./internals";
 import { makeDiffEmit, toMap } from "./internals";
 
@@ -660,22 +662,6 @@ export interface LunoraCollectionConfig<TRow extends Row> {
     shardKey?: string;
 }
 
-/**
- * What a collection exposes about its subscription's health, as `collection.utils`.
- *
- * A rejected subscription still moves the collection out of `loading` (so it never
- * hangs there), which on its own is indistinguishable from a successful load that
- * found no rows. This is the difference: `isError()` stays true until rows arrive.
- */
-export interface LunoraCollectionUtils {
-    /** The last subscription error, or `undefined` once rows have arrived since (or before any error). */
-    error: () => SubscriptionError | undefined;
-    /** Whether the subscription is currently failing. */
-    isError: () => boolean;
-    /** Listen for the error state changing; returns the unsubscribe. Shaped for `useSyncExternalStore`. */
-    subscribeError: (listener: () => void) => () => void;
-}
-
 /** The result of {@link lunoraCollectionOptions}: a TanStack collection config plus its sync controls. */
 export interface LunoraCollectionOptions<TRow extends Row> {
     /** Resolves optimistic-overlay drops against the server's confirmed watermarks — the current scope's shard for a `scopeBy` collection. */
@@ -771,31 +757,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     let unsubscribe: (() => void) | undefined;
     let onErrorHandler: ((error: SubscriptionError) => void) | undefined;
 
-    // The subscription's health, outside `sync.sync` so it outlives a sync restart's callbacks.
-    let lastError: SubscriptionError | undefined;
-    const errorListeners = new Set<() => void>();
-    const setError = (next: SubscriptionError | undefined): void => {
-        if (lastError === next) {
-            return;
-        }
-
-        lastError = next;
-
-        for (const listener of errorListeners) {
-            listener();
-        }
-    };
-    const utils: LunoraCollectionUtils = {
-        error: () => lastError,
-        isError: () => lastError !== undefined,
-        subscribeError: (listener) => {
-            errorListeners.add(listener);
-
-            return () => {
-                errorListeners.delete(listener);
-            };
-        },
-    };
+    const { setError, utils } = createErrorState();
 
     // The last scope args a `scopeBy` collection was pointed at. Remembered here
     // (outside `sync.sync`) so a sync restart after gc cleanup re-opens the same

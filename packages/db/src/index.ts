@@ -12,6 +12,7 @@
  */
 export type { ChangePlan, PlanDelete, PlanInsert, PlanPatch, PlanWriter } from "./apply-plan";
 export { applyPlanToCollections, applyPlanToDb } from "./apply-plan";
+export type { LunoraCollectionUtils } from "./collection-error-state";
 export type {
     CheckpointFallbackEvent,
     CheckpointRegistry,
@@ -20,7 +21,6 @@ export type {
     CheckpointWatermark,
     LunoraCollectionConfig,
     LunoraCollectionOptions,
-    LunoraCollectionUtils,
 } from "./collection-options";
 export { CHECKPOINT_FALLBACK_MS, createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions, releaseShardCheckpoints } from "./collection-options";
 export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";
