@@ -6203,7 +6203,7 @@ class LunoraClient {
         if (envelope !== undefined) {
             const error = new Error(envelope.message ?? "admin request failed");
 
-            (error as Error & { code?: string }).code = envelope.code;
+            Object.assign(error, { code: envelope.code, why: envelope.why });
             throw error;
         }
 

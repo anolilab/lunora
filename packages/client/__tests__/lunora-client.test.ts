@@ -2833,6 +2833,24 @@ describe("lunoraClient", () => {
     // --- Scheduler admin --------------------------------------------------------
 
     describe("lunoraClient — scheduler admin", () => {
+        it("keeps the server's why explanation on an admin error", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: "row moved" } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: "row moved" });
+        });
+
         it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
             expect.assertions(4);
 
