@@ -586,6 +586,34 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
+        "re-runs the pass when lunora.config changes, since `codegen.exclude` decides which files the cached Project is seeded with",
+        async () => {
+            expect.assertions(1);
+
+            // Every `postcodegen` run appends a line, so the file counts passes. The
+            // config sits outside `lunora/`, so only registering it as a dependency of
+            // the compilation and folding it into the fingerprint lets an edit reach codegen.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            await runOnce(productionCompiler(root));
+
+            await watchRun(
+                root,
+                () => {
+                    // Cleared AFTER build 1, whose pass always runs the hook: only a second
+                    // pass, started by the config edit, can bring the file back.
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
         "stops re-running a pass that keeps failing on identical inputs",
         async () => {
             expect.assertions(2);

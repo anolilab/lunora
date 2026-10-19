@@ -1222,6 +1222,40 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(createCalls).toHaveBeenCalledTimes(before + 2);
         });
 
+        it("a lunora.config.ts save drops the cached Project without regenerating — the next save seeds a fresh one", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The config save does not regenerate: a binding-relevant save restarts the server
+            // instead, and a pass here would race that restart.
+            changeListener!(join(workdir, "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The next schema save builds the fresh Project, seeded from the saved config.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
         it("deleting the root tsconfig.json drops the cached Project (PR review)", async () => {
             expect.assertions(3);
 

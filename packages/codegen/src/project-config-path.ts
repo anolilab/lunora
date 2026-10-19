@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 /**
  * The config filenames probed at the project root, in order. TypeScript first
@@ -27,4 +27,39 @@ const findProjectConfigFile = (projectRoot: string): string | undefined =>
     // disagree about a config that was right there.
     PROJECT_CONFIG_FILENAMES.map((name) => resolve(projectRoot, name)).find((candidate) => existsSync(candidate));
 
-export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES };
+/**
+ * Every `lunora.config.*` path source discovery may read for the schema directory
+ * `lunoraDirectory`: each candidate name in its parent and every directory above that,
+ * nearest first, up to and including the project root (the first directory holding a
+ * `package.json` or `.git`). The schema directory itself is not searched, matching
+ * discovery. A config above the root belongs to another project, so the walk stops there.
+ *
+ * Listed whether or not each file exists. A watcher needs the absent ones too, so
+ * that creating a nearer config is seen as the change it is.
+ */
+const projectConfigCandidatePaths = (lunoraDirectory: string): string[] => {
+    const candidates: string[] = [];
+    let directory = dirname(resolve(lunoraDirectory));
+
+    for (;;) {
+        candidates.push(...PROJECT_CONFIG_FILENAMES.map((name) => join(directory, name)));
+
+        if (existsSync(join(directory, "package.json")) || existsSync(join(directory, ".git"))) {
+            return candidates;
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return candidates;
+        }
+
+        directory = parent;
+    }
+};
+
+/** The config codegen reads for `lunoraDirectory`: the nearest existing candidate, or `undefined`. */
+const findCodegenConfigFile = (lunoraDirectory: string): string | undefined =>
+    projectConfigCandidatePaths(lunoraDirectory).find((candidate) => existsSync(candidate));
+
+export { findCodegenConfigFile, findProjectConfigFile, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths };
