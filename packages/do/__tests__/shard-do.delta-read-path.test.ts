@@ -12,7 +12,7 @@ import {
     readCdcCursor,
     runShardMigrations,
 } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cdcArchiveBucket } from "../src/cdc-retention";
 import type { ShardDOState } from "../src/shard-do";
@@ -427,17 +427,39 @@ describe("delta-sync read path", () => {
             return shard;
         };
 
-        it("leaves the log untouched when neither knob is configured", async () => {
+        it("leaves a log inside the default window untouched when neither knob is configured", async () => {
             expect.assertions(2);
 
             await sweepWith({}, 20);
 
-            // The pre-existing behaviour, preserved deliberately: the log's
-            // out-of-shard consumers (a warehouse connector's opaque cursor) are
-            // invisible from here, so retention is something a deployment opts
-            // into rather than something inferred.
             expect(minCdcSeq(harness.sql)).toBe(1);
             expect(minCdcReplayableSeq(harness.sql)).toBe(1);
+        });
+
+        it("trims past the default 100,000-row window when neither knob is configured", async () => {
+            expect.assertions(2);
+
+            const shard = new ProbeCountingShard(makeState([]), {});
+
+            await shard.seed("m0", "c1");
+            harness.sql.exec(
+                `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100000)
+                 INSERT INTO __cdc_log (ts, "table", id, op, doc) SELECT 0, 'messages', 'bulk' || i, 'insert', NULL FROM n`,
+            );
+
+            // The sweep is throttled to one per minute and the first seed already spent it.
+            const realNow = Date.now();
+            const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 120_000);
+
+            try {
+                await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
+            } finally {
+                clock.mockRestore();
+            }
+
+            expect(minCdcSeq(harness.sql)).toBeGreaterThan(1);
+            // Only the overflow went: the newest 100,000 rows survive.
+            expect((harness.sql.exec(`SELECT COUNT(*) AS n FROM __cdc_log`).toArray()[0] as { n: number }).n).toBe(100_000);
         });
 
         it("compacts payloads while keeping every key resumable", async () => {
@@ -534,8 +556,8 @@ describe("delta-sync read path", () => {
             expect.assertions(2);
 
             // `Number.parseInt` reads this as 10 and deletes the changelog. The
-            // whole-string parse reads it as malformed, i.e. as off — the only
-            // safe direction for a knob whose effect is a DELETE.
+            // whole-string parse reads it as malformed, i.e. as unset — the default
+            // window, never a window the operator mistyped.
             await sweepWith({ LUNORA_CDC_LOG_RETENTION: "10k" }, 20);
 
             expect(minCdcSeq(harness.sql)).toBe(1);

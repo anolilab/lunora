@@ -2269,10 +2269,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // A `.memory()` table never reaches the changelog. Its rows do not
         // survive the next eviction, so a CDC consumer replaying them would
         // materialize state the shard itself no longer believes in — and log
-        // retention is opt-in (`LUNORA_CDC_LOG_RETENTION`; without it
-        // `CdcRetentionRunner.sweep` returns before trimming anything), so on a
-        // default deployment a heartbeat-rate presence table would grow the log
-        // without bound for the life of the shard.
+        // retention defaults to a 100,000-row window (`LUNORA_CDC_LOG_RETENTION`),
+        // so a heartbeat-rate presence table would churn the whole window and
+        // evict the entries real consumers still need.
         //
         // What this costs, stated because two call sites got it wrong by
         // assuming otherwise:
