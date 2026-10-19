@@ -19,17 +19,51 @@ import { metaOf, unwrapOptional } from "./introspect";
 /** JSON Schema constraint fragment a `.check()` / `.meta()` may have attached. */
 interface Constraints {
     enum?: ReadonlyArray<unknown>;
+    /** `.positive()` — a bound the value must be strictly above; folded into `minimum` by {@link constraintsOf}. */
+    exclusiveMinimum?: number;
     /** `.email()` / `.url()` — a named JSON Schema format the value must satisfy. */
     format?: string;
     maximum?: number;
+    /** Array `.max()` — the most items the value may hold. */
+    maxItems?: number;
     maxLength?: number;
     minimum?: number;
+    /** Array `.min()` — the fewest items the value must hold. */
+    minItems?: number;
     minLength?: number;
     /** `.pattern()` — a regular expression source the value must match. */
     pattern?: string;
+    /** `.int()` — `"integer"` forces a whole number. */
+    type?: string;
 }
 
-const constraintsOf = (validator: Validator): Constraints => metaOf(validator).constraints ?? {};
+/** Gap above an exclusive float lower bound. */
+const EXCLUSIVE_EPSILON = 1e-6;
+
+/**
+ * A validator's constraints with the numeric ones normalised into plain inclusive
+ * `minimum` / `maximum`, so the generator and the `.unique()` deal read one range:
+ * `exclusiveMinimum` becomes the next integer (or `+ε` for a float), and an
+ * `integer` column rounds its bounds inward.
+ */
+const constraintsOf = (validator: Validator): Constraints => {
+    const raw = (metaOf(validator).constraints ?? {}) as Constraints;
+    const integer = raw.type === "integer";
+    let { maximum, minimum } = raw;
+
+    if (typeof raw.exclusiveMinimum === "number") {
+        const above = raw.exclusiveMinimum + (integer ? 1 : EXCLUSIVE_EPSILON);
+
+        minimum = minimum === undefined ? above : Math.max(minimum, above);
+    }
+
+    if (integer) {
+        minimum = minimum === undefined ? undefined : Math.ceil(minimum);
+        maximum = maximum === undefined ? undefined : Math.floor(maximum);
+    }
+
+    return { ...raw, maximum, minimum };
+};
 
 /**
  * Field-name → generator heuristics, tried in order; the first rule whose any
@@ -352,7 +386,11 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 return [];
             }
 
-            return copycat.times(input, [1, 3], (itemInput) => generateValue(element, fieldName, itemInput, now));
+            const { maxItems, minItems } = constraints;
+            const lowest = minItems ?? Math.min(1, maxItems ?? 1);
+            const highest = maxItems ?? Math.max(3, lowest);
+
+            return copycat.times(input, [lowest, highest], (itemInput) => generateValue(element, fieldName, itemInput, now));
         }
 
         case "bigint": {
@@ -427,8 +465,9 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             const { max, min } = resolveRange(constraints, NUMBER_RANGE, fieldName);
 
             // `v.number()` is a float column, so honour non-integer bounds with a
-            // float (faker's integer generator rejects fractional min/max).
-            if (!Number.isInteger(min) || !Number.isInteger(max)) {
+            // float (faker's integer generator rejects fractional min/max) — unless
+            // the column is `.int()`, whose bounds `constraintsOf` already rounded inward.
+            if (constraints.type !== "integer" && (!Number.isInteger(min) || !Number.isInteger(max))) {
                 return copycat.float(input, { max, min });
             }
 
