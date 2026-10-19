@@ -1489,8 +1489,9 @@ export const agentComponent = (): AgentComponent => {
                 // Retire the marker in this same mutation, so the UI stops offering the form.
                 await context.db.delete(marker["_id"] as never);
             } catch (error: unknown) {
-                // The row did not move to `supplied`, so nothing will consume the value.
-                await store.discard(ref);
+                // The row did not move to `supplied`, so nothing will consume the value. A discard that fails must not
+                // replace the error that says why the supply was refused: the stored value then waits for its TTL.
+                await store.discard(ref).catch(() => undefined);
 
                 throw error;
             }

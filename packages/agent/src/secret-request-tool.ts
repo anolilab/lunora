@@ -123,10 +123,31 @@ const withErrorFields = (_key: string, inner: unknown): unknown => {
 };
 
 /**
- * Whether a value's serialized form carries the secret, including the JSON-escaped
- * spelling of it (a quote or backslash in the secret is escaped inside a string).
- * A value that cannot be serialized cannot be persisted as a step output either,
- * so it is not treated as a leak.
+ * The spellings of a secret the result guard looks for: the raw text, its JSON-escaped form, and the
+ * base64, base64url, hex and URI-encoded forms a consumer might return it in. Best-effort: a form
+ * outside this list is not caught, so a consumer must not return the value in any encoding.
+ */
+const secretSpellings = (secret: string): string[] => {
+    const bytes = new TextEncoder().encode(secret);
+    const binary = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join("");
+    const base64 = btoa(binary);
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+    return [
+        ...new Set([
+            base64,
+            base64.replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""),
+            encodeURIComponent(secret),
+            hex,
+            JSON.stringify(secret).slice(1, -1),
+            secret,
+        ]),
+    ];
+};
+
+/**
+ * Whether a value's serialized form carries the secret in any of its {@link secretSpellings}. A value
+ * that cannot be serialized cannot be persisted as a step output either, so it is not treated as a leak.
  */
 const containsSecret = (value: unknown, secret: string): boolean => {
     // These have no JSON form at all, so they cannot be journalled as a step output either.
@@ -142,7 +163,7 @@ const containsSecret = (value: unknown, secret: string): boolean => {
         return false;
     }
 
-    return serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1));
+    return secretSpellings(secret).some((spelling) => serialized.includes(spelling));
 };
 
 /** What a redacted secret reads as in a message the caller, telemetry or the journal sees. */

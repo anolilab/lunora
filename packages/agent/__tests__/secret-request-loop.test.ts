@@ -148,19 +148,38 @@ const secretHost = async (journal: WaitJournal) => {
     }
 
     const { secretValues, advanceClock } = reference;
+    const { database, rows } = fakeDatabase();
     const puts: string[] = [];
+    let discardFails = false;
+    let expireOnPut = false;
     const store: SecretValueHost = {
-        discard: (ref) => secretValues.discard(ref),
+        discard: async (ref) => {
+            if (discardFails) {
+                throw new Error("the secret store is unavailable");
+            }
+
+            return secretValues.discard(ref);
+        },
         put: async (value, options) => {
             const ref = await secretValues.put(value, options);
 
             puts.push(value);
 
+            // The request expires between the store and the second check, the window a store failure must not hide.
+            if (expireOnPut) {
+                expireOnPut = false;
+
+                const row = (rows.get("agent_secret_requests") ?? [])[0];
+
+                if (row !== undefined) {
+                    row["status"] = "expired";
+                }
+            }
+
             return ref;
         },
         take: (ref, options) => secretValues.take(ref, options),
     };
-    const { database, rows } = fakeDatabase();
     const insert = database["insert"] as (table: string, document: Record<string, unknown>) => Promise<unknown>;
     const { functions } = agentComponent();
     const context = {
@@ -220,6 +239,12 @@ const secretHost = async (journal: WaitJournal) => {
             "agents:agentSettleSecretRequest": dispatch(functions.agentSettleSecretRequest),
             "agents:agentTakeSecret": dispatch(functions.agentTakeSecret),
         } as Record<string, (args?: Record<string, unknown>) => unknown>,
+        expireOnNextPut: (): void => {
+            expireOnPut = true;
+        },
+        failDiscards: (): void => {
+            discardFails = true;
+        },
         puts,
         rows,
         decline: async (toolCallId: string): Promise<unknown> => {
@@ -640,6 +665,21 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "0:call_1" }));
     });
 
+    it("reports the CONFLICT for a refused supply even when the store cannot discard the value it stored", async () => {
+        expect.assertions(1);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        host.expireOnNextPut();
+        host.failDiscards();
+
+        // The discard failure must not replace the reason the supply was refused.
+        await expect(host.supply("call_1", SECRET)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
     it("refuses a supply that arrives after the timeout settled the request, with CONFLICT and nothing stored", async () => {
         expect.assertions(4);
 
@@ -751,6 +791,31 @@ describe("withSecret — the consuming step", () => {
         await expect(withSecret(consumerContext(host, new WaitJournal(), claims, "tool:other:call_3", "call_3"), ref, () => "never")).rejects.toBeInstanceOf(
             SecretUnavailableError,
         );
+    });
+
+    it("refuses a callback result that returns the secret base64-encoded, and keeps it out of the journal", async () => {
+        expect.assertions(2);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
+        const journalled: unknown[] = [];
+        const step = {
+            do: async (_name: string, callback: () => Promise<unknown>) => {
+                const output = await callback();
+
+                journalled.push(output);
+
+                return output;
+            },
+        } as unknown as AgentStepLike;
+        const context = consumerContext(host, step, [], "tool:charge:call_2", "call_2");
+
+        await expect(
+            withSecret(context, ref, (secret) => {
+                return { header: btoa(secret) };
+            }),
+        ).rejects.toThrow("withSecret's callback returned the secret");
+        expect(JSON.stringify(journalled)).not.toContain(btoa(SECRET));
     });
 
     it("refuses to journal a callback result that echoes the secret, discards the value, and fails the call", async () => {
