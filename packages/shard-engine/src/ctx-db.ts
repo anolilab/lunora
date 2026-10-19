@@ -2018,14 +2018,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Throw `VALIDATION_ERROR` when a foreign-key column in `document` names a row
      * that does not exist — one primary-key lookup per reference, inside the
-     * write's own transaction. `fields` narrows the check to the columns a patch
-     * sets, so a row that already held a dangling reference stays patchable.
+     * write's own transaction. When `stored` (the row being rewritten) is given, a
+     * column that still holds its stored value is skipped: a delete with no
+     * `onDelete` leaves children dangling, and a rewrite that does not touch the
+     * reference — a spread `replace`, a patch carrying the old value — must not
+     * fail on it.
      */
-    const assertForeignKeysExist = (tableName: string, document: Record<string, unknown>, fields?: ReadonlySet<string>): void => {
+    const assertForeignKeysExist = (tableName: string, document: Record<string, unknown>, stored?: Record<string, unknown>): void => {
         for (const edge of checkedForeignKeys.get(tableName) ?? []) {
             const value = document[edge.column];
 
-            if (typeof value !== "string" || (fields !== undefined && !fields.has(edge.column))) {
+            if (typeof value !== "string" || stored?.[edge.column] === value) {
                 continue;
             }
 
@@ -4211,7 +4214,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // transform a second time.
             const merged = runRowValidators(tableDefinition, mergedRow, true, { only: new Set(Object.keys(effectivePatch)) });
 
-            assertForeignKeysExist(tableName, merged, new Set(Object.keys(effectivePatch)));
+            assertForeignKeysExist(tableName, merged, existing);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -4718,7 +4721,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const replaced = runRowValidators(tableDefinition, replacement, false, { trusted: replaceOptions?.allowExplicitId === true });
 
             if (replaceOptions?.allowExplicitId !== true) {
-                assertForeignKeysExist(tableName, replaced);
+                assertForeignKeysExist(tableName, replaced, previous);
             }
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
