@@ -312,7 +312,8 @@ and what point-in-time recovery does to a discarded value, are in the
 platform's Secret values section.
 
 The model receives `{ "secretRef": "…" }` from the request. That ref is the
-request's tool-call id, not the stored value and not the store's reference, and
+request's slot (`<turn>:<tool-call id>`), which is also the `toolCallId` the
+client answers with. It is not the stored value and not the store's reference, and
 the model passes it to the consuming tool. `withSecret` takes the value inside its
 own durable step, returns only what the callback returns, and discards the value
 as a second step, but only after a take that succeeded. A callback result that

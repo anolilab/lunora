@@ -455,32 +455,39 @@ const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> 
 };
 
 /**
+ * The key one secret request is stored, waited on and settled under. A provider can reuse a tool-call id in a later
+ * turn of the same run, and every step, wait and row keyed on the bare id would then replay the earlier request. The
+ * turn makes the slot unique within the run; the call id still correlates the tool result.
+ */
+const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:${callId}`;
+
+/**
  * Pause the run on a `requestSecretTool` call until a human supplies or declines a
  * value. Same shape as {@link awaitApproval}, with the request row as the authority:
  *
  * 1. The pending request row is written inside a durable step. The step computes its deadline, and a replay keeps the stored one.
  * 2. The `"awaiting_secret"` marker (filtered out of the model prompt) is persisted, and the thread moves to `"awaiting_input"`.
- * 3. A wait on `secret:<toolCallId>` is armed for `approvalTimeout` plus a grace (see `SECRET_WAIT_GRACE_MS`). Supply and decline wake it with no payload.
+ * 3. A wait on `secret:<slot>` is armed for `approvalTimeout` plus a grace (see `SECRET_WAIT_GRACE_MS`). Supply and decline wake it with no payload.
  * 4. When the wait ends, woken or timed out, a settle step reads the row's outcome. A pending row becomes `expired` there, so a late supply is refused. A supply that already landed is honoured even if the wait timed out.
  *
  * Only the status is journaled. The host ref stays in the row, and the model is handed
  * the request id as its `secretRef`.
  */
-const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, label: string): Promise<SecretOutcome> => {
+const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, label: string, slot: string): Promise<SecretOutcome> => {
     const { agent, deleteMessage, instanceId, openSecretRef, patchThread, persist, run, settleSecretRef, step, threadKey } = turnContext;
-    const markerKey = `${instanceId}:secret:${call.id}`;
+    const markerKey = `${instanceId}:secret:${slot}`;
     // The supplied value outlives the request by the grace, and the host keeps a value at most
     // SECRET_VALUE_MAX_TTL_MS. A longer deadline would let a lost wake-up find the value gone.
     const timeoutMs = Math.min(approvalTimeoutMs(agent.approvalTimeout), SECRET_VALUE_MAX_TTL_MS - SECRET_WAIT_GRACE_MS);
 
-    await step.do(`secret:request:${call.id}`, async (): Promise<void> => {
+    await step.do(`secret:request:${slot}`, async (): Promise<void> => {
         await run(openSecretRef, {
             consumerTool,
             expiresAt: Date.now() + timeoutMs,
             instanceId,
             label,
             threadKey,
-            toolCallId: call.id,
+            toolCallId: slot,
             toolName: call.name,
         });
     });
@@ -489,16 +496,17 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
         content: `Awaiting a secret for tool "${call.name}": ${label}`,
         messageKey: markerKey,
         role: "tool",
+        // The client answers the marker with its `toolCallId`, so the marker carries the slot the request is keyed on.
         status: "awaiting_secret",
-        toolCallId: call.id,
+        toolCallId: slot,
         toolName: call.name,
     });
     await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });
 
     await step
-        .waitForEvent(`secret:${call.id}`, {
+        .waitForEvent(`secret:${slot}`, {
             timeout: timeoutMs + SECRET_WAIT_GRACE_MS,
-            type: `agent-secret:${call.id}`,
+            type: `agent-secret:${slot}`,
         })
         .catch((error: unknown): void => {
             // A timeout is not an error here: the settle step below reads the row and decides.
@@ -508,9 +516,8 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
         });
 
     const { status } = await step.do(
-        `secret:settle:${call.id}`,
-        async (): Promise<{ status: SecretOutcome }> =>
-            (await run(settleSecretRef, { instanceId, threadKey, toolCallId: call.id })) as { status: SecretOutcome },
+        `secret:settle:${slot}`,
+        async (): Promise<{ status: SecretOutcome }> => (await run(settleSecretRef, { instanceId, threadKey, toolCallId: slot })) as { status: SecretOutcome },
     );
 
     // Retired on every outcome, as the approval marker is: a client offers its
@@ -560,11 +567,12 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
  * for the owner, then record the request id or why none came. Outside `step.do` for the
  * same reason an approval wait is: the pause must not be memoized as a tool output.
  */
-const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string): Promise<void> => {
+const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, turn: number): Promise<void> => {
     const { instanceId, persist } = turnContext;
     const messageKey = `${instanceId}:tool:${call.id}`;
     const stepName = `tool:${call.name}:${call.id}`;
     const label = secretLabelOf(call.input);
+    const slot = secretSlotOf(turn, call.id);
 
     // The owner decides from this label, so a request without one is refused, as a bad argument is.
     if (label === undefined) {
@@ -595,11 +603,12 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
         return;
     }
 
-    const outcome = await awaitSecret(turnContext, call, consumerTool, label);
+    const outcome = await awaitSecret(turnContext, call, consumerTool, label, slot);
+    const outcome = await awaitSecret(turnContext, call, consumerTool, label, slot);
 
     await persist({
         // The request id is the handle: the consuming tool resolves it inside the thread.
-        content: outcome === "supplied" ? JSON.stringify({ secretRef: call.id }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
+        content: outcome === "supplied" ? JSON.stringify({ secretRef: slot }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
         messageKey,
         role: "tool",
         stepName,
@@ -608,7 +617,7 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
     });
 };
 
-const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
+const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
     const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
         turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
@@ -648,7 +657,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // for the same reason an approval wait is: the pause must not be memoized as a
     // tool output.
     if (tool.secretRequest !== undefined) {
-        await runSecretRequestCall(turnContext, call, tool.secretRequest.consumer);
+        await runSecretRequestCall(turnContext, call, tool.secretRequest.consumer, turn);
 
         return;
     }
@@ -1541,7 +1550,7 @@ const handleTurn = async (
     // independently, so a crash between two calls resumes after the completed one.
     for (const call of decision.toolCalls) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps ARE the execution model
-        await runToolCall(turnContext, call);
+        await runToolCall(turnContext, call, turn);
     }
 
     await notifyStepFinish(turnContext, { text: decision.text, toolCalls: decision.toolCalls, turn, ...stepUsage });

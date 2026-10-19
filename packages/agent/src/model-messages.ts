@@ -68,7 +68,8 @@ const buildModelMessages = (options: {
         // The awaiting-approval and awaiting-secret placeholders are UI/observability
         // markers, not real tool results — feeding them to the model would double the
         // tool-call's tool-result part (breaking provider pairing). Skip them; the
-        // actual result carries the same toolCallId.
+        // actual result carries the call's own toolCallId. A secret marker's toolCallId
+        // is its request slot (`<turn>:<callId>`), so it never pairs with a call anyway.
         if (row.status === "awaiting_approval" || row.status === "awaiting_secret") {
             continue;
         }

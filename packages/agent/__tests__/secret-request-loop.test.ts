@@ -298,7 +298,7 @@ const pauseAt = async (
     paused.catch(() => {
         /* the paused invocation never settles */
     });
-    await journal.armed("secret:call_1");
+    await journal.armed("secret:0:call_1");
 };
 
 describe("requestSecretTool — the loop pauses and resumes", () => {
@@ -328,22 +328,22 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         // Phase A — the run stops on the secret wait, with the request row and the marker written.
         await pauseAt(agent, journal, runtime, generate);
 
-        expect(journal.waitedNames).toStrictEqual(["secret:call_1"]);
-        expect(journal.waitOptions.get("secret:call_1")).toStrictEqual({ timeout: DEADLINE_MS + WAIT_GRACE_MS, type: "agent-secret:call_1" });
+        expect(journal.waitedNames).toStrictEqual(["secret:0:call_1"]);
+        expect(journal.waitOptions.get("secret:0:call_1")).toStrictEqual({ timeout: DEADLINE_MS + WAIT_GRACE_MS, type: "agent-secret:0:call_1" });
         expect([...runtime.messages.values()].some((message) => message.status === "awaiting_secret")).toBe(true);
         expect(used).toStrictEqual([]);
 
         // Phase B — the supply lands. The wake-up is payload-free, and the same instance replays into the consuming tool.
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
-        expect(journal.events.get("secret:call_1")).toStrictEqual({});
+        expect(journal.events.get("secret:0:call_1")).toStrictEqual({});
 
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
@@ -353,14 +353,14 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         // The tool result the model sees is the request id, not the host ref.
         const requestRow = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool");
 
-        expect(requestRow?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
-        expect(runtime.messages.has("thread-1:wf-1:secret:call_1")).toBe(false);
+        expect(requestRow?.content).toBe(JSON.stringify({ secretRef: "0:call_1" }));
+        expect(runtime.messages.has("thread-1:wf-1:secret:0:call_1")).toBe(false);
 
         // The consuming call claimed the value under its own step name, and discarded it after use.
         const takes = runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret");
 
         expect(takes.map((dispatch) => dispatch.args)).toStrictEqual([
-            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: INSTANCE, threadKey: THREAD, toolCallId: "call_1" },
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: INSTANCE, threadKey: THREAD, toolCallId: "0:call_1" },
         ]);
         expect(runtime.dispatches.some((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toBe(true);
 
@@ -376,6 +376,34 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect(journal.invoked.join("\n")).not.toContain(ref);
     });
 
+    it("pauses for a new request when a later turn reuses the provider's call id, instead of taking the earlier answer", async () => {
+        expect.assertions(3);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            toolTurn("call_1", "requestKey", { label: "Second key" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("0:call_1", SECRET);
+
+        // The resumed run reaches the reused id in turn 2. It must park on its own request, not pass through the first one's event.
+        const resumed = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        resumed.catch(() => {
+            /* parked on the second request; never settles */
+        });
+        await journal.armed("secret:2:call_1");
+
+        expect(journal.waitedNames).toStrictEqual(["secret:0:call_1", "secret:2:call_1"]);
+        expect((host.rows.get("agent_secret_requests") ?? []).map((row) => row["toolCallId"])).toStrictEqual(["0:call_1", "2:call_1"]);
+        expect((host.rows.get("agent_secret_requests") ?? [])[1]).toMatchObject({ status: "pending" });
+    });
+
     it("holds a request open for less than the host keeps a supplied value, however long approvalTimeout is", async () => {
         expect.assertions(2);
 
@@ -386,7 +414,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         const request = runtime.dispatches.find((dispatch) => dispatch.path === "agents:agentOpenSecretRequest");
 
-        expect(journal.waitOptions.get("secret:call_1")?.timeout).toBe(DEADLINE_MS + WAIT_GRACE_MS);
+        expect(journal.waitOptions.get("secret:0:call_1")?.timeout).toBe(DEADLINE_MS + WAIT_GRACE_MS);
         expect((request?.args as { expiresAt: number }).expiresAt - Date.now()).toBeLessThanOrEqual(DEADLINE_MS);
     });
 
@@ -397,7 +425,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
@@ -437,7 +465,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         };
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
         // The resumed invocation replays the journal and settles the wait; the rest of it is of no interest.
         runAgentLoop(loopDefaults(agent, { generate, run: observing, step: journal })).catch(() => {});
@@ -456,12 +484,12 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         // A replay of the completed instance serves every step from the journal.
@@ -480,12 +508,12 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("could not charge"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
         host.advanceClock(PAST_VALUE_LIFETIME_MS);
 
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
@@ -507,13 +535,13 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "other", { secretRef: "call_1" }),
-            toolTurn("call_3", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "other", { secretRef: "0:call_1" }),
+            toolTurn("call_3", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
@@ -537,7 +565,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.decline("call_1");
+        await host.decline("0:call_1");
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         const row = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool");
@@ -545,7 +573,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect(row?.content).toBe('Error: tool "requestKey" was not run: the user declined to supply it.');
         expect(used).toStrictEqual([]);
         expect(runtime.dispatches.some((dispatch) => dispatch.path === "agents:agentTakeSecret")).toBe(false);
-        expect(runtime.messages.has("thread-1:wf-1:secret:call_1")).toBe(false);
+        expect(runtime.messages.has("thread-1:wf-1:secret:0:call_1")).toBe(false);
     });
 
     it("treats a timed-out wait as no value supplied, retires the marker, and lets the run go on", async () => {
@@ -554,14 +582,14 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const agent = secretAgent([]);
         const { host, journal, runtime } = await setup();
 
-        journal.timeoutWaits.add("secret:call_1");
+        journal.timeoutWaits.add("secret:0:call_1");
 
         const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "no key", turns: 2 });
         expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
-        expect(runtime.messages.has("thread-1:wf-1:secret:call_1")).toBe(false);
+        expect(runtime.messages.has("thread-1:wf-1:secret:0:call_1")).toBe(false);
         expect(host.rows.get("agent_secret_requests")?.[0]?.["status"]).toBe("expired");
     });
 
@@ -573,21 +601,21 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
         // The wait reports an elapsed timeout even though the supply committed: the settle step must read the row.
-        journal.timeoutWaits.add("secret:call_1");
+        journal.timeoutWaits.add("secret:0:call_1");
 
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 3 });
         expect(used).toStrictEqual([SECRET]);
-        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
+        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "0:call_1" }));
     });
 
     it("refuses a supply that arrives after the timeout settled the request, with CONFLICT and nothing stored", async () => {
@@ -598,10 +626,10 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
 
         await pauseAt(agent, journal, runtime, generate);
-        journal.timeoutWaits.add("secret:call_1");
+        journal.timeoutWaits.add("secret:0:call_1");
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
-        await expect(host.supply("call_1", SECRET)).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(host.supply("0:call_1", SECRET)).rejects.toMatchObject({ code: "CONFLICT" });
         expect(host.puts).toStrictEqual([]);
         expect(host.rows.get("agent_secret_requests")?.[0]?.["status"]).toBe("expired");
         expect(serialized([...runtime.messages.values()])).not.toContain(SECRET);
@@ -645,7 +673,7 @@ describe("withSecret — the consuming step", () => {
         expect.assertions(1);
 
         const host = await secretHost(new WaitJournal());
-        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
         const context = consumerContext(host, new WaitJournal(), [], "tool:charge:call_2", "call_2");
 
         // An Error stringifies to `{}`, so only its message and stack give it away.
@@ -660,7 +688,7 @@ describe("withSecret — the consuming step", () => {
         expect.assertions(3);
 
         const host = await secretHost(new WaitJournal());
-        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
         const claims: string[] = [];
         const journal = new WaitJournal();
         const context = consumerContext(host, journal, claims, "tool:charge:call_2", "call_2");
@@ -676,7 +704,7 @@ describe("withSecret — the consuming step", () => {
         expect.assertions(4);
 
         const host = await secretHost(new WaitJournal());
-        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
         const claims: string[] = [];
         let attempts = 0;
         const flaky = consumerContext(host, new WaitJournal(), claims, "tool:charge:call_2", "call_2");
@@ -707,7 +735,7 @@ describe("withSecret — the consuming step", () => {
         expect.assertions(3);
 
         const host = await secretHost(new WaitJournal());
-        const ref = await suppliedRequest(host, "call_1", SECRET);
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
         const journalled: unknown[] = [];
         const step = {
             do: async (_name: string, callback: () => Promise<unknown>) => {
@@ -812,12 +840,12 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
         const failure: unknown = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).then(
             () => undefined,
@@ -851,12 +879,12 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("done"),
         ]);
 
         await pauseAt(agent, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
 
         const failure: unknown = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).then(
             () => undefined,
@@ -892,12 +920,12 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
             toolTurn("call_1", "requestKey", { label: "API key" }),
-            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
             finalTurn("refused"),
         ]);
 
         await pauseAt(deterministic, journal, runtime, generate);
-        await host.supply("call_1", SECRET);
+        await host.supply("0:call_1", SECRET);
         await runAgentLoop(loopDefaults(deterministic, { generate, run: runtime.run, step: journal }));
 
         const row = [...runtime.messages.values()].find((message) => message.toolCallId === "call_2" && message.role === "tool");
@@ -927,7 +955,7 @@ describe("a request is settled only by the run that opened it", () => {
         await open("wf-2");
 
         // The older run's wait ends late, and its settle must not expire the newer run's request.
-        const settled = await host.handlers["agents:agentSettleSecretRequest"]?.({ instanceId: INSTANCE, threadKey: THREAD, toolCallId: "call_1" });
+        const settled = await host.handlers["agents:agentSettleSecretRequest"]?.({ instanceId: INSTANCE, threadKey: THREAD, toolCallId: "0:call_1" });
 
         expect(settled).toStrictEqual({ status: "expired" });
         expect(host.rows.get("agent_secret_requests")?.[0]).toMatchObject({ instanceId: "wf-2", status: "pending" });
