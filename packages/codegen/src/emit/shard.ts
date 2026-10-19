@@ -55,7 +55,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, renderObjectKey } from "./shared";
+import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -364,6 +364,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
 
     for (const stream of declaredStreams) {
         assertIdentifier(stream.exportName, "live stream export name");
+
+        if (!IMPORT_PATH_RE.test(stream.filePath)) {
+            throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe live stream file path: ${JSON.stringify(stream.filePath)}`);
+        }
     }
 
     const liveStreamImports = lazyFunctions
@@ -374,7 +378,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         }
 `;
     const lazyLiveStreamsOverride = `        private readonly liveStreamLoaders = new Map<string, () => Promise<{ validatePublish: (topic: string, payload: unknown) => unknown }>>([
-${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, () => import(${JSON.stringify(`../${stream.filePath}.js`)}).then((module) => module.${stream.exportName})],`).join("\n")}
+${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, () => import("../${stream.filePath}.js").then((module) => module.${stream.exportName})],`).join("\n")}
         ]);
 
         private readonly loadedLiveStreams = new Map<string, { validatePublish: (topic: string, payload: unknown) => unknown }>();

@@ -46,6 +46,19 @@ describe("emitShard — declared live streams on a lazy shard", () => {
         expect(lazy).toContain("protected override loadLiveStream(stream: string): Promise<void> | undefined {");
     });
 
+    it.each([false, true])("refuses to import a stream from a file path that is not a plain relative path (lazy: %s)", (lazyFunctions) => {
+        expect.assertions(1);
+
+        expect(() =>
+            emitShard({
+                lazyFunctions,
+                liveStreamDeclarations: [{ exportName: "posts", filePath: 'live"; process.exit(1); //', id: "posts", topics: [] }],
+                liveStreams: true,
+                schema: { tables: [], vectorIndexes: [] },
+            }),
+        ).toThrow(/unsafe live stream file path/u);
+    });
+
     it("emits a shard that parses", async () => {
         expect.assertions(1);
 
