@@ -79,6 +79,8 @@ const spyStore = (
 };
 
 type Handler = { handler: (context: unknown, args: never) => unknown };
+/** The slice of the fake `ctx.db` a test wraps to interleave a write between two reads. */
+type DbLike = { query: (table: string) => { withIndex: (name: string, build: unknown) => { collect: () => Promise<unknown>; first: () => Promise<unknown> } } };
 const call = async (fn: unknown, context: unknown, args: Record<string, unknown>): Promise<unknown> => (fn as Handler).handler(context, args as never);
 
 /**
@@ -224,6 +226,56 @@ describe("secret request component", () => {
                 resolved: true,
             });
             expect(puts).toStrictEqual([SECRET]);
+        });
+
+        it("refuses a supply when a newer run reopens the slot between the selection and the check, storing nothing", async () => {
+            const { store, puts } = spyStore();
+            const { ctx, functions, rows } = await stagedThread("user-a", store);
+            const db = ctx.db as DbLike;
+            let reads = 0;
+
+            // The request row is read twice: once to select it, and again to check it. A replacement run can
+            // reopen the slot for its own instance between those two reads, so the check sees the new owner.
+            const reopening: DbLike = {
+                ...db,
+                query: (table: string) => {
+                    const query = db.query(table);
+
+                    if (table !== REQUESTS) {
+                        return query;
+                    }
+
+                    return {
+                        withIndex: (name: string, build: unknown) => {
+                            const indexed = query.withIndex(name, build);
+
+                            return {
+                                collect: () => indexed.collect(),
+                                first: async () => {
+                                    const row = await indexed.first();
+
+                                    reads += 1;
+
+                                    if (reads === 1) {
+                                        for (const candidate of rows.get(REQUESTS) ?? []) {
+                                            candidate["instanceId"] = "wf-2";
+                                        }
+                                    }
+
+                                    return row;
+                                },
+                            };
+                        },
+                    };
+                },
+            };
+
+            await expect(
+                call(functions.agentSupplySecret, { ...ctx, db: reopening }, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" }),
+            ).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(reads).toBe(1);
+            expect(puts).toStrictEqual([]);
+            expect(requestRow(rows)).toMatchObject({ instanceId: "wf-2", status: "pending" });
         });
 
         it("refuses a supply that names two pending requests, rather than guessing which one it answers", async () => {

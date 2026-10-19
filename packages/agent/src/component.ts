@@ -1411,9 +1411,19 @@ export const agentComponent = (): AgentComponent => {
             const slot = pending["toolCallId"] as string;
             const marker = await pendingSecretMarker(context.db, thread, slot);
             const handle = secretWaitHandle(context, thread);
+            // The owner is the instance the request was selected for, not whatever the row says on a later read.
+            const ownerInstanceId = thread["instanceId"] as string;
+            const assertStillOwned = (request: Record<string, unknown>): void => {
+                if (request["instanceId"] !== ownerInstanceId) {
+                    throw new LunoraError(
+                        "CONFLICT",
+                        `@lunora/agent: tool call "${args.toolCallId}" on thread "${args.threadKey}" was reopened by a newer run while its secret was being stored`,
+                    );
+                }
+            };
             const checked = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
-            // Copied out now: the row read is not a snapshot the write below can be compared against.
-            const ownerInstanceId = checked["instanceId"] as string;
+
+            assertStillOwned(checked);
 
             let ref: string;
 
@@ -1430,12 +1440,7 @@ export const agentComponent = (): AgentComponent => {
             try {
                 const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
 
-                if (request["instanceId"] !== ownerInstanceId) {
-                    throw new LunoraError(
-                        "CONFLICT",
-                        `@lunora/agent: tool call "${args.toolCallId}" on thread "${args.threadKey}" was reopened by a newer run while its secret was being stored`,
-                    );
-                }
+                assertStillOwned(request);
 
                 await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
                 // Retire the marker in this same mutation, so the UI stops offering the form.
