@@ -4,7 +4,7 @@ import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
 import { createStudioMiddleware, isNonLoopbackHost, studioMountPath } from "@lunora/config/studio-host";
 
-import { resolveOptions, resolveRunnableTargetOrThrow } from "./options";
+import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
 import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 import type { WorkerProcess } from "./worker";
@@ -234,16 +234,15 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 await codegenPlugin.prepareDevSession();
                 // Also before the spawn: wrangler bundles the Worker at startup, and
                 // on a fresh clone the `_generated/app` it imports does not exist
-                // until a codegen pass writes it.
-                await codegenPlugin.generateForDev();
+                // until a codegen pass writes it. The target is the one that pass
+                // generated for, so the Worker below matches its output. Re-resolved
+                // on every start, so a `target` edited in `lunora.config.*` takes
+                // effect at the next start; a running worker is not swapped, so a
+                // change still needs `rsbuild dev` restarted.
+                const target = await codegenPlugin.generateForDev();
 
                 // eslint-disable-next-line no-console -- startup notice, before any compilation has a logger
                 console.info(lunoraLine(`starting the worker on http://127.0.0.1:${String(port)} …`));
-
-                // Re-read on every start, as the codegen pass does, so a `target` edited
-                // in `lunora.config.*` takes effect at the next start. A worker already
-                // running is not swapped, so a change still needs `rsbuild dev` restarted.
-                const target = resolveRunnableTargetOrThrow(resolved.projectRoot, resolved.explicitTarget);
 
                 // celld runs its own dev server: `celld dev` serves the Worker,
                 // with each `lunora.config` service registered into its local

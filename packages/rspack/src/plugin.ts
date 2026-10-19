@@ -208,9 +208,16 @@ class LunoraRspackPlugin {
      * this pass writes. Spawned first, wrangler dies on an unresolvable import
      * before the first compilation ever generates it. The first compilation then
      * finds the fingerprint unchanged and skips its own pass.
+     *
+     * Returns the target that pass generated for, so the Worker started next is the
+     * one its output matches. Reading `target` again after this resolves would leave
+     * a window in which an edit to `lunora.config.*` starts a Worker against output
+     * for the other target.
      */
-    public async generateForDev(): Promise<void> {
+    public async generateForDev(): Promise<string> {
         await this.#run(true);
+
+        return this.#options.target;
     }
 
     /** Rspack's plugin entry point. */
