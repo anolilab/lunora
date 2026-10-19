@@ -500,6 +500,46 @@ export const listItems = query({
         expect(loaded(project, referencedPath)).toBe(true);
     });
 
+    it("drops an augmentation once no file the program reaches imports its module", () => {
+        expect.assertions(2);
+
+        const augmentPath = join(workdir, "src", "fake-mod-augment.ts");
+        const usesHelperPath = join(lunoraDirectory, "usesHelper.ts");
+
+        writeFileSync(join(workdir, "src", "helper.ts"), 'import "fake-mod";\n\nexport const helper = 1;\n', "utf8");
+        writeFileSync(augmentPath, 'export {};\n\ndeclare module "fake-mod" {\n    interface Registered {\n        ok: true;\n    }\n}\n', "utf8");
+        writeFileSync(usesHelperPath, 'import { helper } from "../src/helper";\n\nexport const used = helper;\n', "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, augmentPath)).toBe(true);
+
+        writeFileSync(usesHelperPath, "export const used = 1;\n", "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, augmentPath)).toBe(false);
+    });
+
+    it("reads the project-root lunora.config without adding it to a nested schema's program", () => {
+        expect.assertions(2);
+
+        const nestedDirectory = join(workdir, "app", "lunora");
+        const configPath = join(workdir, "lunora.config.ts");
+
+        mkdirSync(join(workdir, "app"), { recursive: true });
+        cpSync(join(fixtureRoot, "lunora"), nestedDirectory, { recursive: true });
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true }, include: ["app/**/*", "src/**/*"] }), "utf8");
+        writeConfig(`export default { target: "cloudflare" };\n`);
+
+        const project = createCodegenProject(nestedDirectory);
+
+        expect(loaded(project, configPath)).toBe(false);
+
+        runCodegen({ dryRun: true, lint: false, lunoraDirectory: "app/lunora", project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(loaded(project, configPath)).toBe(false);
+    });
+
     it("reads a file the tsconfig extends again for a new Project, so an edit to it takes effect", () => {
         expect.assertions(2);
 

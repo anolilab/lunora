@@ -1,5 +1,7 @@
-import type { CallExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { readFileSync } from "node:fs";
+
+import type { CallExpression, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
 import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
@@ -362,7 +364,16 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
     // `lunora/`, so the walk above never reaches it. Only the builder call is
     // read here: the name-only declarations are a `lunora/` concern.
     if (!signals.deliveryAuthorization && projectConfigFile !== undefined) {
-        const configFile = project.getSourceFile(projectConfigFile) ?? project.addSourceFileAtPath(projectConfigFile);
+        // Syntax only, in a throwaway Project: a file added to the shared Project after it is built
+        // throws the program and its type checker away, and the next refresh would drop it again.
+        const configFile =
+            project.getSourceFile(projectConfigFile) ??
+            new Project({
+                compilerOptions: { allowJs: true },
+                skipFileDependencyResolution: true,
+                skipLoadingLibFiles: true,
+                useInMemoryFileSystem: true,
+            }).createSourceFile(projectConfigFile, readFileSync(projectConfigFile, "utf8"), { overwrite: true });
 
         signals.deliveryAuthorization = configFile
             .getDescendantsOfKind(SyntaxKind.CallExpression)

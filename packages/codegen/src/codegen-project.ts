@@ -5,7 +5,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { SourceFile } from "ts-morph";
 import { Project, ts } from "ts-morph";
 
 import { listLunoraSourceFiles, listSecurityScanFiles } from "./discover/ast";
@@ -262,16 +261,18 @@ const moduleKey = (specifier: string, fromPath: string, options: ts.CompilerOpti
 const namesModule = (keys: ReadonlySet<string>, module: string): boolean => keys.has(module) || [...keys].some((key) => key.startsWith(`${module}/`));
 
 /**
- * The module keys the Project's own files import, read from each file's text by the
- * scanner. Imports inside `node_modules` are skipped: a package augmenting a module it
- * imports is the one case this does not follow.
+ * The module keys the reached files import, read from each file's text by the scanner.
+ * Imports inside `node_modules` are skipped: a package augmenting a module it imports is
+ * the one case this does not follow.
  */
-const importedModuleKeys = (project: Project): Set<string> => {
+const importedModuleKeys = (project: Project, reached: ReadonlySet<string>): Set<string> => {
     const options = project.getCompilerOptions();
     const keys = new Set<string>();
 
-    for (const sourceFile of project.getSourceFiles()) {
-        if (sourceFile.isInNodeModules()) {
+    for (const path of reached) {
+        const sourceFile = project.getSourceFile(path);
+
+        if (sourceFile === undefined) {
             continue;
         }
 
@@ -288,49 +289,12 @@ const importedModuleKeys = (project: Project): Set<string> => {
 };
 
 /**
- * Adds each augmentation the Project now reaches: one whose module some file in the
- * Project imports. Resolving an added file can import more modules, so this repeats
- * until nothing new matches. In the common case no candidate matches and it stops at once.
+ * The files of `project` reached from `roots` by imports and references, outside
+ * `node_modules`, as POSIX paths. Edges come from the compiler's own resolution, read
+ * from each file's text, rather than ts-morph's reference container: that container
+ * holds stale entries after a refresh, and walking it made the next program build throw.
  */
-const addReachedAugmentations = (project: Project, candidates: AugmentationCandidate[]): void => {
-    let pending = candidates.filter((candidate) => project.getSourceFile(candidate.path) === undefined);
-
-    for (;;) {
-        project.resolveSourceFileDependencies();
-
-        if (pending.length === 0) {
-            return;
-        }
-
-        const keys = importedModuleKeys(project);
-        const options = project.getCompilerOptions();
-        const reached = pending.filter((candidate) =>
-            candidate.augments.some((name) => {
-                const key = moduleKey(name, candidate.path, options);
-
-                return key !== undefined && namesModule(keys, key);
-            }),
-        );
-
-        if (reached.length === 0) {
-            return;
-        }
-
-        for (const candidate of reached) {
-            project.createSourceFile(candidate.path, readFileSync(candidate.path, "utf8"), { overwrite: true });
-        }
-
-        pending = pending.filter((candidate) => !reached.includes(candidate));
-    }
-};
-
-/**
- * The files of `project` that nothing reachable from `roots` imports or references,
- * outside `node_modules`. Edges come from the compiler's own resolution, read from each
- * file's text, rather than ts-morph's reference container: that container holds stale
- * entries after a refresh, and walking it made the next program build throw.
- */
-const unreachableFiles = (project: Project, roots: string[]): SourceFile[] => {
+const reachedFiles = (project: Project, roots: string[]): Set<string> => {
     const options = project.getCompilerOptions();
     const resolvedImports = new Map<string, string | undefined>();
     const reached = new Set<string>();
@@ -374,7 +338,55 @@ const unreachableFiles = (project: Project, roots: string[]): SourceFile[] => {
         }
     }
 
-    return project.getSourceFiles().filter((sourceFile) => !sourceFile.isInNodeModules() && !reached.has(sourceFile.getFilePath()));
+    return reached;
+};
+
+/**
+ * Settles which augmentations the program holds, then drops every file it no longer
+ * reaches. Each round, the files reached from the seeds and the augmentations chosen so
+ * far import modules, and a candidate whose module one of them imports is chosen and
+ * loaded if absent. Loading one can reach more files, so this repeats until none is
+ * chosen. A candidate whose module is no longer imported is not chosen, so a refresh
+ * drops it along with what only it imported.
+ */
+const settleProgram = (project: Project, roots: string[], candidates: AugmentationCandidate[]): void => {
+    const options = project.getCompilerOptions();
+    const chosen: string[] = [];
+    let reached: Set<string>;
+
+    for (;;) {
+        project.resolveSourceFileDependencies();
+        reached = reachedFiles(project, [...roots, ...chosen]);
+
+        const keys = importedModuleKeys(project, reached);
+        const matching = candidates.filter(
+            (candidate) =>
+                !chosen.includes(candidate.path) &&
+                candidate.augments.some((name) => {
+                    const key = moduleKey(name, candidate.path, options);
+
+                    return key !== undefined && namesModule(keys, key);
+                }),
+        );
+
+        if (matching.length === 0) {
+            break;
+        }
+
+        for (const candidate of matching) {
+            if (project.getSourceFile(candidate.path) === undefined) {
+                project.createSourceFile(candidate.path, readFileSync(candidate.path, "utf8"), { overwrite: true });
+            }
+        }
+
+        chosen.push(...matching.map((candidate) => candidate.path));
+    }
+
+    for (const sourceFile of project.getSourceFiles()) {
+        if (!sourceFile.isInNodeModules() && !reached.has(sourceFile.getFilePath())) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
 };
 
 /**
@@ -446,7 +458,7 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
     // `refreshCodegenProject` cannot see them, and a reused Project keeps serving the
     // first copy it parsed. It builds the program here instead of on the first type
     // query — the same work, in a different place.
-    addReachedAugmentations(project, seeds.augmentations);
+    settleProgram(project, seeds.files, seeds.augmentations);
 
     return project;
 };
@@ -458,11 +470,11 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
  *
  * The seeds are re-read and created or refreshed; every other file the Project holds is
  * refreshed from disk too (a deleted one drops out). Then the Project keeps exactly the
- * files reachable from the seeds and the augmentations that have reached their module,
- * plus anything a seed now imports. A file a `lunora/` source stops importing is
- * therefore dropped, and one it still imports stays put, so the program is rebuilt only
- * when the files it holds actually change. `node_modules` is left alone: its `.d.ts` set
- * dominates the file count and never changes mid dev-loop.
+ * files reached from the seeds and the augmentations whose module is still imported. A
+ * file a `lunora/` source stops importing is therefore dropped, and one it still imports
+ * stays put, so the program is rebuilt only when the files it holds actually change.
+ * `node_modules` is left alone: its `.d.ts` set dominates the file count and never
+ * changes mid dev-loop.
  */
 export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
     const tsconfigPath = findTsconfig(lunoraDirectory);
@@ -497,13 +509,5 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
         }
     }
 
-    addReachedAugmentations(project, seeds.augmentations);
-
-    // The augmentations already in the Project are roots too: each was added because its
-    // module is reached, and dropping it would only make the next refresh add it again.
-    const roots = [...seeds.files, ...seeds.augmentations.map(({ path }) => path).filter((path) => project.getSourceFile(path) !== undefined)];
-
-    for (const sourceFile of unreachableFiles(project, roots)) {
-        project.removeSourceFile(sourceFile);
-    }
+    settleProgram(project, seeds.files, seeds.augmentations);
 };
