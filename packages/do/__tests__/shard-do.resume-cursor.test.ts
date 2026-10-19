@@ -62,6 +62,38 @@ class FixedSubscriptionShard extends ShardDO {
     }
 }
 
+/** A shard whose subscription run parks until released, so a test can land a newer refresh mid-seed. */
+class GatedSubscriptionShard extends FixedSubscriptionShard {
+    public readonly gate = Promise.withResolvers<boolean>();
+
+    public readonly parked = Promise.withResolvers<boolean>();
+
+    public baseline(ws: FakeSocket, subId: string): string | undefined {
+        const internals = this as unknown as { subMemos: WeakMap<object, Map<string, { lastJson: string }>> };
+
+        return internals.subMemos.get(ws)?.get(subId)?.lastJson;
+    }
+
+    public deliverNewer(ws: FakeSocket, subId: string, result: unknown, generation: number): void {
+        (this as unknown as { pushSubscriptionData: (...args: unknown[]) => void }).pushSubscriptionData(
+            ws,
+            subId,
+            { result, tables: this.tables },
+            { cursor: 1, epoch: undefined, generation },
+            { clientWatermark: undefined, pageDeltas: false },
+        );
+    }
+
+    protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+        const outcome = { result: this.result, tables: this.tables };
+
+        this.parked.resolve(true);
+        await this.gate.promise;
+
+        return outcome;
+    }
+}
+
 const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
     return {
         acceptWebSocket() {},
@@ -309,6 +341,41 @@ describe("shardDO subscription resume cursor", () => {
             expect((ws.frames[1] as { code?: string }).code).toBe("SUBSCRIPTION_RESULT_TOO_LARGE");
             expect(ws.frames.some((frame) => frame.type === "resume")).toBe(false);
             expect(Object.keys((ws.deserializeAttachment() as { subs: object }).subs)).toStrictEqual([]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("ignores an oversized resumable seed that a newer refresh already replaced", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema, { cdc: true });
+            append(database.sql, "messages");
+
+            const epoch = readCdcEpoch(database.sql);
+            const shard = new GatedSubscriptionShard(makeState(database), { LUNORA_SUBSCRIPTION_MAX_RESULT_CHARS: "100" });
+            const ws = new FakeSocket();
+
+            shard.result = [{ _id: "m-1", text: "x".repeat(500) }];
+            ws.serializeAttachment({ subs: {} });
+
+            // The seed reads its oversized (older) result, then parks before returning it.
+            const seeding = shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(1, epoch));
+
+            await shard.parked.promise;
+
+            // A write-triggered refresh from a newer generation delivers a smaller result meanwhile.
+            shard.deliverNewer(ws, "s1", [{ _id: "m-1", text: "new" }], 1);
+            shard.gate.resolve(true);
+            await seeding;
+
+            expect(ws.frames.map((frame) => frame.type)).toStrictEqual(["ack", "data", "resume"]);
+            expect(ws.frames.some((frame) => frame.type === "error")).toBe(false);
+            expect(Object.keys((ws.deserializeAttachment() as { subs: object }).subs)).toStrictEqual(["s1"]);
+            expect(shard.baseline(ws, "s1")).toBe(JSON.stringify([{ _id: "m-1", text: "new" }]));
         } finally {
             database.close();
         }

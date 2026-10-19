@@ -3305,6 +3305,7 @@ abstract class ShardDO {
             reportError: (scope, error) => {
                 this.recordShapeError(scope, error);
             },
+            transactionLimits: () => this.transactionLimits(),
         });
 
         this.armWebSocketKeepalive();
@@ -15498,16 +15499,18 @@ abstract class ShardDO {
      */
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
         const memos = socketMap(this.subMemos, ws);
+
+        // A refresh that started after this seed already recorded a newer baseline. Checked BEFORE the size cap: a stale
+        // oversized result must not throw and unsubscribe a query whose newer, smaller result was already delivered.
+        if ((memos.get(subId)?.generation ?? -1) > generation) {
+            return;
+        }
+
         const json = this.encodeOutcome(outcome);
 
         // A resume acknowledges a value the client already holds, but the server still retains it as the diff baseline,
         // so it answers to the same per-result cap as a full seed.
         this.assertResultWithinLimit(json);
-
-        // A refresh that started after this seed already recorded a newer baseline.
-        if ((memos.get(subId)?.generation ?? -1) > generation) {
-            return;
-        }
 
         memos.set(subId, {
             generation,
