@@ -317,8 +317,10 @@ export class EventsSync {
                         }
                     })
                     .catch(() => undefined);
-                controller.abort();
+                // Reject before aborting: an abort-aware transport rejects as soon as it is aborted,
+                // and the timeout must be the error that wins the race and ends the cycle.
                 reject(new Error(`EventsSync: fetchEventsSince timed out after ${timeoutMs.toString()}ms`));
+                controller.abort();
             }, timeoutMs);
         });
 

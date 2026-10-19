@@ -761,7 +761,7 @@ describe("fetch timeout", () => {
         });
 
     it("ends a cycle whose fetch never answers, so later syncs are not stuck behind it", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         vi.useFakeTimers();
 
@@ -770,7 +770,8 @@ describe("fetch timeout", () => {
         const signals: (AbortSignal | undefined)[] = [];
         const sync = new EventsSync({
             applyEvents: () => undefined,
-            fetchEventsSince: async (_sinceSeq, signal) => {
+            // Not `async`: a transport that rejects the moment it is aborted, with no extra ticks.
+            fetchEventsSince: (_sinceSeq, signal) => {
                 signals.push(signal);
 
                 return abortAware(signal);
@@ -786,6 +787,8 @@ describe("fetch timeout", () => {
 
         await expect(first).resolves.toBe(0);
         expect(onError).toHaveBeenCalledTimes(1);
+        // The error that ends the cycle names the timeout, not the transport's abort error.
+        expect((onError.mock.calls[0]?.[0] as Error).message).toMatch(/timed out after 100ms/u);
         // The timed-out request was told to stop.
         expect(signals[0]?.aborted).toBe(true);
 
