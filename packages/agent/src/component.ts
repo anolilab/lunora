@@ -1681,13 +1681,17 @@ export const agentComponent = (): AgentComponent => {
                     .withIndex("byThreadCall", (q) => q.eq("threadKey", args.threadKey))
                     .collect();
 
+                const now = Date.now();
+
                 return requests.map((request) => {
                     return {
                         createdAt: request["createdAt"] as number,
                         expiresAt: request["expiresAt"] as number,
                         // Absent (not `null`) when there is no label, so a row from before the column reads the same as one with none.
                         ...(typeof request["label"] === "string" ? { label: request["label"] } : {}),
-                        status: request["status"] as string,
+                        // A pending row past its deadline is one the wait has not settled yet. Supply already refuses it, so the list
+                        // reports the status settlement is about to write, and reads the same before and after it runs.
+                        status: request["status"] === "pending" && now >= (request["expiresAt"] as number) ? "expired" : (request["status"] as string),
                         // A row written before `callId` existed keeps its call id in `toolCallId`.
                         toolCallId: (request["callId"] ?? request["toolCallId"]) as string,
                         toolName: request["toolName"] as string,

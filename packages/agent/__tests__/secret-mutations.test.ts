@@ -922,6 +922,19 @@ describe("secret request component", () => {
             expect(JSON.stringify(listed)).not.toContain("ref");
         });
 
+        it("lists a pending request past its deadline as expired, the status the timeout settlement writes", async () => {
+            const { ctx, functions } = await stagedThread("user-a");
+
+            vi.setSystemTime(NOW + DEADLINE_MS);
+
+            // Not settled yet: the list must already read as the status settlement will write.
+            await expect(call(functions.agentSecretRequests, ctx, { threadKey: "t-1" })).resolves.toMatchObject([{ status: "expired" }]);
+
+            await call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
+
+            await expect(call(functions.agentSecretRequests, ctx, { threadKey: "t-1" })).resolves.toMatchObject([{ status: "expired" }]);
+        });
+
         it("lists the label the model gave the request, so the owner can see what is asked for", async () => {
             expect.assertions(1);
 
