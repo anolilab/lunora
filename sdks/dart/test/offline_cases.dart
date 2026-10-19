@@ -831,6 +831,17 @@ Future<void> caseOnlineOnlyTransportFailureRefused() async {
   } on SocketFailure {
     // Surfaced as the raw throw, as before.
   }
+
+  // An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+  final other = Poster(result: 'null');
+  final disconnected = LunoraClient(url: 'https://app.example', post: other.call, offlineQueue: OfflineQueue(persistence: _RecordingPersistence()));
+
+  try {
+    await disconnected.mutation('auth:setPassword', args: <String, Object?>{'token': Object()}, onlineOnly: true);
+    failures.add('an unencodable argument must surface');
+  } on WireFormatException {
+    equals(other.paths.length, 0, 'and nothing was sent');
+  }
 }
 
 /// Durable order is authoritative: a prior session's write is older than
