@@ -141,7 +141,9 @@ public final class Submit {
          * an {@link OfflineException} coded {@link Offline#OFFLINE_NOT_QUEUED} before any
          * optimistic layer is installed, so the arguments never reach the queue or the persistence
          * adapter. It does not wait for a queue flush or queue behind pending writes, so it may
-         * overtake them. For a credential or a one-time token.
+         * overtake them. A transport failure sent directly while the connection is down is refused
+         * the same way, with the transport error as its cause. For a credential or a one-time
+         * token.
          */
         public boolean onlineOnly;
 
@@ -226,12 +228,7 @@ public final class Submit {
 
             // Refused before any layer is installed, so no overlay outlives the call.
             if (queueIt && options.onlineOnly) {
-                throw new OfflineException(
-                        Offline.OFFLINE_NOT_QUEUED,
-                        "'"
-                                + options.functionPath
-                                + "' is online-only and the connection is not live, so it was not"
-                                + " queued");
+                throw notQueued(options.functionPath, null);
             }
 
             for (PendingLayer layer : pending) {
@@ -275,6 +272,20 @@ public final class Submit {
             throw undecodable;
         } catch (RuntimeException error) {
             settleLayers(client, List.of(), rollbacks, null);
+
+            // An online-only write is never queued, so a transport failure while the shard has no
+            // open connection is refused as the queued path refuses it. A coded reply is the
+            // server's verdict, and an ApiException is the only error carrying one.
+            boolean wireFailure = !(error instanceof ApiException) && isTransient(error);
+            boolean disconnected;
+
+            synchronized (client.lock) {
+                disconnected = client.sender == null;
+            }
+
+            if (options.onlineOnly && wireFailure && disconnected) {
+                throw notQueued(options.functionPath, error);
+            }
 
             throw error;
         }
@@ -1014,6 +1025,17 @@ public final class Submit {
                 // an envelope-less non-2xx never reaches here (it parses to no `results` and no
                 // `error`, which the caller already treats as transport).
                 false);
+    }
+
+    /** The refusal an online-only write gets when it cannot go out over a live connection. */
+    private static OfflineException notQueued(String functionPath, Throwable cause) {
+        return new OfflineException(
+                Offline.OFFLINE_NOT_QUEUED,
+                "'"
+                        + functionPath
+                        + "' is online-only and the connection is not live, so it was not"
+                        + " queued",
+                cause);
     }
 
     /**
