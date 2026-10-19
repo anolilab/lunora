@@ -4912,7 +4912,7 @@ class LunoraClient {
             // an online-only write must be refused for.
             const wireFailure = isWireFailure(error, argsRecord);
             const networkDown = httpFirst && shouldQueueOffline && wireFailure;
-            const socketOpenNow = this.writeQueueGate(options.shardKey).socketOpen;
+            const socketOpenNow = this.ownSocketOpen(options.shardKey);
 
             //
             // The same holds for any failure that leaves the write's fate unknown — a
@@ -4985,6 +4985,19 @@ class LunoraClient {
 
             throw offlineNotQueuedError(functionPath);
         }
+    }
+
+    /**
+     * Whether this tab's own socket is open for the shard. A follower tab has no socket
+     * of its own: the status it reads is the leader's, which carried no part of the
+     * request that just failed, so it never counts as open.
+     */
+    private ownSocketOpen(shardKey: string | undefined): boolean {
+        if (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) {
+            return false;
+        }
+
+        return this.writeQueueGate(shardKey).socketOpen;
     }
 
     /**
