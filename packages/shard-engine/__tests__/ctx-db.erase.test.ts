@@ -162,13 +162,12 @@ describe("ctx-db.deleteAll", () => {
         runShardMigrations(sql, messagesSchema);
 
         const statements: string[] = [];
-        const spied = {
-            ...sql,
-            exec: (query: string, ...bindings: unknown[]) => {
+        const spied: typeof sql = {
+            exec: ((query: string, ...bindings: unknown[]) => {
                 statements.push(query);
 
                 return sql.exec(query, ...bindings);
-            },
+            }),
         };
 
         const writer = createShardContextDatabase({

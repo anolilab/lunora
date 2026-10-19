@@ -1064,6 +1064,7 @@ ${ADMIN_WRITE_METHODS}
             }
 
             runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
+            this.companionMemo.clear();
             this.migrated = true;
         }
 ${

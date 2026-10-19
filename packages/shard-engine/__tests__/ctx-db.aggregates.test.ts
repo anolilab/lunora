@@ -1026,4 +1026,38 @@ describe("ctx-db aggregates", () => {
             await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(5);
         });
     });
+
+    describe("companionMemo", () => {
+        /** Count the marker lookups a writer built over `memo` pays on its first write. */
+        const markerLookups = async (schema: SchemaLike, memo?: Set<string>): Promise<number> => {
+            const statements: string[] = [];
+            const spied = {
+                ...harness.sql,
+                exec: (query: string, ...bindings: unknown[]) => {
+                    statements.push(query);
+
+                    return harness.sql.exec(query, ...bindings);
+                },
+            };
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, companionMemo: memo, schema, sql: spied });
+
+            await writer.insert("todos", { archived: false, projectId: "p1", seq: 1 });
+
+            return statements.filter((query) => query.startsWith("SELECT") && query.includes("__lunora_companion_state")).length;
+        };
+
+        it("is shared across ctx-db instances, so only the first dispatch verifies a companion", async () => {
+            expect.assertions(3);
+
+            const schema = makeSchema(byProject);
+            const memo = new Set<string>();
+
+            runShardMigrations(harness.sql, schema);
+
+            await expect(markerLookups(schema, memo)).resolves.toBe(1);
+            await expect(markerLookups(schema, memo)).resolves.toBe(0);
+            // Without a shared memo every instance pays the lookup again.
+            await expect(markerLookups(schema)).resolves.toBe(1);
+        });
+    });
 });

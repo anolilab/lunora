@@ -2175,6 +2175,12 @@ abstract class ShardDO {
     protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
+     * Companions the per-dispatch ctx-db has verified, shared across dispatches
+     * through {@link ShardDO.ctxDbTuning}. Cleared whenever migrations run.
+     */
+    protected readonly companionMemo = new Set<string>();
+
+    /**
      * Function paths a dispatch has been observed reading `ctx.ip` through, and
      * whose reactive-cache entries are therefore keyed by the caller's address
      * as well as by identity — see the discriminator {@link ShardDO.runCachedQuery}
@@ -7004,9 +7010,15 @@ abstract class ShardDO {
      * accessor made reading the slice — in a test, or to log it — silently disarm
      * the invalidation backstop in {@link ShardDO.recordChangedTable}.
      */
-    protected ctxDbTuning(): { cache?: ReactiveCache; maxRelationKeys?: number; relationExistsPushDown?: "always" | "auto" | "never" } {
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        companionMemo: Set<string>;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    } {
         return {
             ...this.ctxDbRelationOptions,
+            companionMemo: this.companionMemo,
             ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
         };
     }
@@ -11241,6 +11253,8 @@ abstract class ShardDO {
      */
     private handleRebuildCompanions(): Response {
         clearCompanionSignatures(this.shardHost.sql);
+        // The shard-scoped memo would otherwise keep reporting every companion as verified.
+        this.companionMemo.clear();
         this.recordAudit("rebuildCompanions");
 
         return adminResponse({ ok: true });

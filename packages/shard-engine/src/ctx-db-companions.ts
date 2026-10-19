@@ -265,6 +265,13 @@ interface CompanionSyncDeps {
     schema: SchemaLike;
     /** Project of `state.storage.sql` — the DO's SQLite handle. */
     sql: SqlExec;
+
+    /**
+     * Companions already verified against their durable marker. A host that builds
+     * a ctx-db per dispatch passes one long-lived set so only the first touch per
+     * shard instance pays the lookup; omitted, each ctx-db keeps its own.
+     */
+    verified?: Set<string>;
 }
 
 /** The companion-maintenance surface the writer destructures back into its hot write path. */
@@ -303,9 +310,9 @@ interface CompanionSync {
 const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     const { broadcast, indexKeysFor, invalidateCache, recordCdc, schema, sql } = deps;
 
-    // Companions this ctx-db has already verified against the durable marker,
-    // so only the first touch per instance pays the lookup.
-    const verified = new Set<string>();
+    // Companions already verified against the durable marker, so only the first
+    // touch per memo pays the lookup.
+    const verified = deps.verified ?? new Set<string>();
 
     /**
      * The table's soft-delete marker column, or `undefined` when it has none.

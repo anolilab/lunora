@@ -932,6 +932,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.companionMemo.clear();
             this.migrated = true;
         }
 

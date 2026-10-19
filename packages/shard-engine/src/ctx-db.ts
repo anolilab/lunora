@@ -247,6 +247,7 @@ interface CtxDbOptions {
      * sends, and it makes the stale check answer "not stale".
      */
     baselineSeq?: () => number | undefined;
+
     broadcast?: BroadcastDelta;
 
     /**
@@ -272,6 +273,15 @@ interface CtxDbOptions {
     cdc?: boolean;
 
     clock?: Clock;
+
+    /**
+     * Shard-scoped memo of aggregate / rank companions already verified against
+     * their durable marker. `createShardCtxDb` runs per dispatch, so without a
+     * long-lived set every dispatch re-checks each companion on first touch; a
+     * host (the generated ShardDO) passes one set for the DO's lifetime and clears
+     * it when migrations run. Omitted, each writer keeps its own.
+     */
+    companionMemo?: Set<string>;
 
     /**
      * Opt into the secure-by-default write-path guard. When `true` AND the
@@ -2705,6 +2715,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         recordCdc,
         schema,
         sql,
+        verified: options.companionMemo,
     });
 
     /**
