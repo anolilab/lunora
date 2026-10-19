@@ -647,8 +647,16 @@ module Lunora
 
       begin
         value, commit_cursor = rpc_full(options.function_path, options.args, options.shard_key, options.mutation_id)
-      rescue StandardError
+      rescue StandardError => e
         settle_layers([], rollbacks, nil)
+        # A raw error from the poster is the transport, not a verdict (the replay reads it
+        # the same way), so an online-only write that never reached the server while no
+        # socket is open is refused rather than surfacing the raw error.
+        if options.online_only && !e.is_a?(ApiError) && !online?
+          message = "'#{options.function_path}' is online-only and the connection is not live, so it was not queued"
+          raise(OfflineError.new(OFFLINE_NOT_QUEUED, message), cause: e)
+        end
+
         raise
       end
 
