@@ -136,6 +136,9 @@ const containsSecret = (value: unknown, secret: string): boolean => {
 /** What a redacted secret reads as in a message the caller, telemetry or the journal sees. */
 const REDACTED = "[redacted]";
 
+/** What replaces a callback error that cannot be checked for the secret. */
+const WITHHELD_CALLBACK_ERROR = "@lunora/agent: withSecret's callback threw a value that is withheld, in case it carries the secret";
+
 /** Replace the secret in `text`, both raw and JSON-escaped, the spelling a serialized copy carries. */
 const redactText = (text: string, secret: string): string => {
     // An empty secret is in every string, so there is nothing that can be replaced.
@@ -155,7 +158,7 @@ const redactText = (text: string, secret: string): string => {
  */
 const redactCallbackError = (error: unknown, secret: string, seen: Set<unknown> = new Set()): unknown => {
     if (!(error instanceof Error)) {
-        return new LunoraError("INTERNAL", "@lunora/agent: withSecret's callback threw a value that is withheld, in case it carries the secret");
+        return new LunoraError("INTERNAL", WITHHELD_CALLBACK_ERROR);
     }
 
     if (seen.has(error)) {
@@ -164,29 +167,39 @@ const redactCallbackError = (error: unknown, secret: string, seen: Set<unknown> 
 
     seen.add(error);
 
-    // In place on purpose: a copy would lose the class and brand that classify the error.
-    // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
-    error.message = redactText(error.message, secret);
-
-    if (typeof error.stack === "string") {
+    // The error is the callback's own object, so reading it can run its code: an accessor that throws
+    // `new Error(secret)` would escape with the value. Any failure to inspect it withholds it instead.
+    try {
+        // In place on purpose: a copy would lose the class and brand that classify the error.
         // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
-        error.stack = redactText(error.stack, secret);
-    }
+        error.message = redactText(error.message, secret);
 
-    const fields = error as unknown as Record<string, unknown>;
-
-    for (const key of Object.getOwnPropertyNames(error)) {
-        if (key === "message" || key === "stack") {
-            continue;
+        if (typeof error.stack === "string") {
+            // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
+            error.stack = redactText(error.stack, secret);
         }
 
-        const value = fields[key];
+        const fields = error as unknown as Record<string, unknown>;
 
-        if (value instanceof Error) {
-            redactCallbackError(value, secret, seen);
-        } else if (containsSecret(value, secret)) {
-            fields[key] = JSON.parse(redactText(JSON.stringify(value), secret));
+        for (const key of Object.getOwnPropertyNames(error)) {
+            if (key === "message" || key === "stack") {
+                continue;
+            }
+
+            const value = fields[key];
+
+            if (value instanceof Error) {
+                const redacted = redactCallbackError(value, secret, seen);
+
+                if (redacted !== value) {
+                    fields[key] = redacted;
+                }
+            } else if (containsSecret(value, secret)) {
+                fields[key] = JSON.parse(redactText(JSON.stringify(value), secret));
+            }
         }
+    } catch {
+        return new LunoraError("INTERNAL", WITHHELD_CALLBACK_ERROR);
     }
 
     return error;

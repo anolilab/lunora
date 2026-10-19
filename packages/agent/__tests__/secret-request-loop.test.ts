@@ -738,6 +738,40 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         expect(event?.toolOutput.error.message).toBe("the gateway rejected [redacted]");
     });
 
+    it("withholds an error whose field getter throws the value", async () => {
+        expect.assertions(2);
+
+        const agent = consumerAgent((secret) => {
+            const error = new Error("the gateway rejected the key");
+
+            Object.defineProperty(error, "detail", {
+                enumerable: true,
+                get: () => {
+                    throw new Error(`could not read ${secret}`);
+                },
+            });
+
+            throw error;
+        });
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+
+        const failure: unknown = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        expect((failure as Error).message).toContain("withheld");
+        expect(serialized([(failure as Error).message, (failure as Error).stack, runtime.messages])).not.toContain(SECRET);
+    });
+
     it("persists a deterministic failure's message without the value", async () => {
         expect.assertions(2);
 
