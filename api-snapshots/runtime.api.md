@@ -1204,7 +1204,9 @@ class LunoraError extends LunoraError$1 {
     constructor(message: string, options?: {
         cause?: unknown;
         code?: string;
+        internal?: Record<string, unknown>;
         status?: number;
+        why?: string;
     });
     toResponse(): Response;
 }
