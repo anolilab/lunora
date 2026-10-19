@@ -199,6 +199,29 @@ describe("agentHarness — concurrent runs", () => {
         await expect(second).resolves.toMatchObject({ stopped: "final" });
         expect(harness.messages("thread-b").find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
     });
+
+    it("answers the request on its own thread, even when another thread's key extends it", async () => {
+        expect.assertions(3);
+
+        const harness = agentHarness(billingAgent([]), {});
+        const script = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")];
+
+        const outer = harness.run({ input: "charge my card", owner: "user-1", threadKey: "team" }, { instanceId: "run-team", script });
+        const inner = harness.run({ input: "charge my card", owner: "user-1", threadKey: "team:other" }, { instanceId: "run-other", script });
+
+        await harness.awaitWait("run-team", "secret:0:call_1");
+        await harness.awaitWait("run-other", "secret:0:call_1");
+
+        // "team" has exactly one pending request; the prefix "team:" must not also match "team:other"'s.
+        harness.decline("team", "call_1");
+
+        await expect(outer).resolves.toMatchObject({ stopped: "final" });
+        expect(harness.messages("team").find((message) => message.toolCallId === "call_1")?.content).toContain("was not run");
+
+        harness.expire("run-other", "secret:0:call_1");
+
+        await expect(inner).resolves.toMatchObject({ stopped: "final" });
+    });
 });
 
 describe("request-log redaction of the supply mutation's arguments", () => {

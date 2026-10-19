@@ -205,6 +205,27 @@ describe("secret request component", () => {
     });
 
     describe("agentSupplySecret", () => {
+        it("ignores a pending request a replaced run left under the same call id, and answers the current one", async () => {
+            const { store, puts } = spyStore();
+            const { ctx, functions } = await stagedThread("user-a", store);
+
+            // A row from a run the thread no longer belongs to, still pending under the same call id.
+            await call(functions.agentOpenSecretRequest, ctx, {
+                callId: "call_1",
+                consumerTool: "charge",
+                expiresAt: Date.now() + 60_000,
+                instanceId: "wf-old",
+                threadKey: "t-1",
+                toolCallId: "2:call_1",
+                toolName: "requestKey",
+            });
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                resolved: true,
+            });
+            expect(puts).toStrictEqual([SECRET]);
+        });
+
         it("refuses a supply that names two pending requests, rather than guessing which one it answers", async () => {
             const { store, puts } = spyStore();
             const { ctx, functions } = await stagedThread("user-a", store);

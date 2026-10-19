@@ -54,7 +54,9 @@ interface SecretRequest {
     consumerTool: string;
     instanceId: string;
     ref?: string;
+    slot: string;
     status: "consumed" | "declined" | "expired" | "pending" | "supplied";
+    threadKey: string;
 }
 
 interface AgentHarnessOptions {
@@ -388,26 +390,28 @@ const createRuntime = (
     // database, so the transitions below restate the component's: a pending row settles
     // once, a supply binds its ref, and a take must name the consumer the request declared.
     // The component's own tests pin each transition against the real mutations.
+    // Keyed on both parts as JSON, so no thread key and slot can read as another pair.
+    const requestKey = (threadKey: string, slot: string): string => JSON.stringify([threadKey, slot]);
     const requests = new Map<string, SecretRequest>();
     // A client answers with the call id, which a later turn can reuse; only one pending request may match it.
     const pendingForCall = (threadKey: string, callId: string): { request: SecretRequest; slot: string } | undefined => {
-        const matches = [...requests].filter(([key, request]) => key.startsWith(`${threadKey}:`) && request.callId === callId && request.status === "pending");
-        const [match] = matches;
+        const matches = [...requests.values()].filter(
+            (request) => request.threadKey === threadKey && request.callId === callId && request.status === "pending",
+        );
+        const [request] = matches;
 
-        if (matches.length !== 1 || match === undefined) {
+        if (matches.length !== 1 || request === undefined) {
             return undefined;
         }
 
-        const [key, request] = match;
-
-        return { request, slot: key.slice(threadKey.length + 1) };
+        return { request, slot: request.slot };
     };
-    const requestOf = (args?: Record<string, unknown>) => requests.get(`${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`);
+    const requestOf = (args?: Record<string, unknown>) => requests.get(requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string));
 
     // A replay of the owning run keeps its row. A row left by an earlier run that reused the
     // tool-call id is retired first, which discards its value, and then starts over as pending.
     const openSecretRequest = async (args?: Record<string, unknown>): Promise<unknown> => {
-        const key = `${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`;
+        const key = requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string);
         const existing = requests.get(key);
 
         const owner = args?.["instanceId"] as string | undefined;
@@ -422,6 +426,8 @@ const createRuntime = (
 
         requests.set(key, {
             callId: (args?.["callId"] ?? args?.["toolCallId"]) as string,
+            slot: args?.["toolCallId"] as string,
+            threadKey: args?.["threadKey"] as string,
             consumerTool: args?.["consumerTool"] as string,
             instanceId: args?.["instanceId"] as string,
             status: "pending",

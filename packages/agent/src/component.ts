@@ -330,7 +330,7 @@ const agentExtension: SchemaExtension<
             /** The request's slot (`<turn>:<tool-call id>`): the key its steps, wait and row are stored under. */
             toolCallId: v.string(),
             /** The provider's tool-call id: what a client sees on the tool call, and answers with. Not unique across turns. */
-            callId: v.string(),
+            callId: v.optional(v.string()),
             toolName: v.string(),
             updatedAt: v.number(),
         })
@@ -460,15 +460,24 @@ const secretRequestOf = async (database: QueueDatabase, threadKey: string, toolC
 };
 
 /**
- * The one pending request a client's tool-call id names on a thread. A paused run takes no further turn, so a thread has at
- * most one pending request at a time; a second match is refused rather than guessed at.
+ * The one request a client's tool-call id names on a thread: pending, still before its deadline, and owned by the thread's
+ * current run. A replaced run can leave a pending row under the same call id, so those rows do not count. A paused run takes
+ * no further turn, so two matches are refused rather than guessed at.
  */
-const pendingSecretRequestForCall = async (database: QueueDatabase, threadKey: string, callId: string): Promise<Record<string, unknown>> => {
+const pendingSecretRequestForCall = async (
+    database: QueueDatabase,
+    threadKey: string,
+    instanceId: unknown,
+    callId: string,
+    now: number,
+): Promise<Record<string, unknown>> => {
     const matches = await database
         .query(REQUESTS_TABLE)
         .withIndex("byThreadCallId", (q) => q.eq("threadKey", threadKey).eq("callId", callId))
         .collect();
-    const pending = matches.filter((request) => request["status"] === "pending");
+    const pending = matches.filter(
+        (request) => request["status"] === "pending" && request["instanceId"] === instanceId && now < (request["expiresAt"] as number),
+    );
 
     if (pending.length !== 1) {
         throw new LunoraError("CONFLICT", `@lunora/agent: no pending secret request for tool call "${callId}" on thread "${threadKey}"`);
@@ -1398,7 +1407,7 @@ export const agentComponent = (): AgentComponent => {
                 "supply or decline a secret on it",
             );
             const store = secretStoreOf(context);
-            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, args.toolCallId);
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
             const slot = pending["toolCallId"] as string;
             const marker = await pendingSecretMarker(context.db, thread, slot);
             const handle = secretWaitHandle(context, thread);
@@ -1465,7 +1474,7 @@ export const agentComponent = (): AgentComponent => {
                 context.auth,
                 "supply or decline a secret on it",
             );
-            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, args.toolCallId);
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
             const slot = pending["toolCallId"] as string;
             const marker = await pendingSecretMarker(context.db, thread, slot);
             const handle = secretWaitHandle(context, thread);
@@ -1674,7 +1683,8 @@ export const agentComponent = (): AgentComponent => {
                         // Absent (not `null`) when there is no label, so a row from before the column reads the same as one with none.
                         ...(typeof request["label"] === "string" ? { label: request["label"] } : {}),
                         status: request["status"] as string,
-                        toolCallId: request["callId"] as string,
+                        // A row written before `callId` existed keeps its call id in `toolCallId`.
+                        toolCallId: (request["callId"] ?? request["toolCallId"]) as string,
                         toolName: request["toolName"] as string,
                     };
                 });
