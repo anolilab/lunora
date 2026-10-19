@@ -2,7 +2,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
-import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
+import { isOrWrapsFromValidator, isStringValidator, v, ValidationError } from "../src/index";
 import type { Assert, Equal } from "./__helpers__/type-assert";
 
 const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -1017,5 +1017,21 @@ describe("v.partial", () => {
         expect(doneCheck).toBe(true);
         expect(empty).toStrictEqual({});
         expect(some).toStrictEqual({ title: "a" });
+    });
+});
+
+describe("isStringValidator", () => {
+    it("is true only when every accepted value is a string", () => {
+        expect.assertions(9);
+
+        expect(isStringValidator(v.string())).toBe(true);
+        expect(isStringValidator(v.id("posts"))).toBe(true);
+        expect(isStringValidator(v.literal("a"))).toBe(true);
+        expect(isStringValidator(v.union(v.literal("a"), v.string()))).toBe(true);
+        expect(isStringValidator(v.literal(1))).toBe(false);
+        expect(isStringValidator(v.union(v.literal("a"), v.literal(2)))).toBe(false);
+        expect(isStringValidator(v.number())).toBe(false);
+        expect(isStringValidator(v.optional(v.string()))).toBe(false);
+        expect(isStringValidator(v.union(v.string(), v.number()))).toBe(false);
     });
 });

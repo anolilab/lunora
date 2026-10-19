@@ -1,3 +1,15 @@
+## @lunora/queue [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.115...@lunora/queue@1.0.0-alpha.116) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+
 ## @lunora/queue [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.114...@lunora/queue@1.0.0-alpha.115) (2026-10-18)
 
 

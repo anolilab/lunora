@@ -277,6 +277,9 @@ import {
     LIVE_PUBLISH_PATH,
     LIVE_SSE_HEADERS,
     liveSubscriptionKey,
+    MAX_LIVE_CONTROL_KEY_LENGTH,
+    ROOM_TOPIC_PREFIX,
+    SOCKET_TOPIC_PREFIX,
 } from "../../../shared/live-stream";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -470,24 +473,6 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
-
-/**
- * The whisper-topic prefix a `defineRoom` lives under. Mirrors `@lunora/server`'s
- * room prefix (this package does not import the server). A server publish may
- * not name a room topic: the room's members trust a frame there as its handler's
- * output.
- */
-const ROOM_TOPIC_PREFIX = "room:";
-
-/**
- * Prefix of the reserved whisper topic a `defineWebSocket` route's sockets join
- * so `socket.broadcast` reuses the whisper fan-out — local delivery AND the
- * cross-DO relay — instead of a second broadcast path. Derived from the route's
- * function path (`__lunora_socket__:<namespace>:<fn>`), so no client-supplied
- * topic can address a route channel: the whisper envelope handler refuses any
- * topic under this prefix, and membership is established only at upgrade.
- */
-const SOCKET_TOPIC_PREFIX = "__lunora_socket__:";
 
 /**
  * The outbound frame a `defineWebSocket` handler's `send`/`broadcast` writes:
@@ -1739,6 +1724,11 @@ const takeToken = (ws: ShardSocketLike, buckets: WeakMap<ShardSocketLike, { last
  * subscription id to its topic, so a re-subscribe is idempotent and two
  * subscriptions can share a topic without one unsubscribe evicting the other.
  */
+/** What the shard needs of a declared live stream: the publish check `defineLiveStream` exposes. */
+interface LiveStreamDeclaration {
+    validatePublish: (topic: string, payload: unknown) => unknown;
+}
+
 interface LiveSubscriber {
     /** Ends the SSE response; used when the identity behind the connection expires. */
     close: () => void;
@@ -1754,12 +1744,6 @@ interface LiveSubscriber {
 
 /** A validated live control request, or the 400/404 response that refuses it. */
 type LiveControlRead = { response: Response } | { action: unknown; connectionId: string; key: string; subscriptionId: string };
-
-/**
- * Longest topic or subscription id a live control call may name. Both are held in the
- * shard's memory for the life of the connection, so an unbounded name is a memory lever.
- */
-const MAX_LIVE_CONTROL_KEY_LENGTH = 256;
 
 /**
  * Read and validate a live subscribe/unsubscribe body. The connection lookup is
@@ -1871,6 +1855,22 @@ const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, gr
     }
 
     return jsonResponse({ ok: true });
+};
+
+/**
+ * The refusals a live publish needs nothing but the topic for, so they run before a lazy shard loads a stream's module.
+ * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room or route topic, `BAD_REQUEST` (400) for a topic over the control bound
+ */
+const assertLiveTopicPublishable = (topic: string): void => {
+    // A room or route topic is reserved for its own dispatch; a live publish must not forge into it.
+    if (topic.startsWith(ROOM_TOPIC_PREFIX) || topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+        throw new LunoraError("FORBIDDEN_TOPIC", "a room or route topic cannot be published to", { status: 403 });
+    }
+
+    // The same bound a control call applies: a topic is held in memory and framed to every subscriber, so an unbounded one is wasted work.
+    if (topic.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+        throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
+    }
 };
 
 /**
@@ -6423,18 +6423,10 @@ abstract class ShardDO {
      * @returns the number of LOCAL SSE connections the frame was written to
      */
     protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number {
-        // A room or route topic is reserved for its own dispatch; a live publish must not forge into it.
-        if (topic.startsWith(ROOM_TOPIC_PREFIX) || topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-            throw new LunoraError("FORBIDDEN_TOPIC", "a room or route topic cannot be published to", { status: 403 });
-        }
-
-        // The same bound a control call applies: a topic is held in memory and framed to every subscriber, so an unbounded one is wasted work.
-        if (topic.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
-            throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
-        }
+        assertLiveTopicPublishable(topic);
 
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
-        const dataJson = JSON.stringify(wireData ?? null);
+        const dataJson = JSON.stringify(this.declaredLivePayload(stream, topic, wireData) ?? null);
 
         // Measured in UTF-8 bytes like the room broadcast: `.length` counts UTF-16 units, so
         // multibyte text would pass the cap at several times its byte size.
@@ -6445,6 +6437,60 @@ abstract class ShardDO {
         }
 
         return this.broadcastLiveTopic(stream, topic, dataJson);
+    }
+
+    /**
+     * Make `stream`'s declaration available to {@link liveStreams} before a publish checks it. The default has nothing to load. A
+     * shard that does not hold its streams' modules at start (the generated lazy shard) imports the stream's module here, and
+     * answers `undefined` once it has, or for a stream it does not know, so a warm or eager publish never yields.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the lazy generated subclass loads the stream's module
+    protected loadLiveStream(_stream: string): Promise<void> | undefined {
+        return undefined;
+    }
+
+    /**
+     * The live streams the app declares, by stream id, or `undefined` when this shard does not
+     * know them (a shard built without codegen). The generated subclass returns its declared
+     * `defineLiveStream` values, which is what lets a publish be checked against the topics and
+     * payload validators the app wrote.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the declared streams
+    protected liveStreams(): Readonly<Record<string, LiveStreamDeclaration>> | undefined {
+        return undefined;
+    }
+
+    /**
+     * Refuse a publish the app never declared: an unknown stream, an undeclared or non-canonical
+     * topic, or a payload its validator rejects. Skipped when the shard knows no declarations.
+     * @returns the wire payload to deliver: the validator's parsed result, re-encoded
+     * @throws LunoraError `BAD_REQUEST` (400)
+     */
+    protected declaredLivePayload(stream: string, topic: string, wireData: unknown): unknown {
+        const declared = this.liveStreams();
+
+        if (declared === undefined) {
+            return wireData;
+        }
+
+        const declaration = Object.hasOwn(declared, stream) ? declared[stream] : undefined;
+
+        if (declaration === undefined) {
+            throw new LunoraError("BAD_REQUEST", `"${stream}" is not a declared live stream`, { status: 400 });
+        }
+
+        try {
+            // Deliver what the validator parsed, not what the publisher sent: a stripped field or a coerced value must not reach subscribers.
+            return encodeWire(declaration.validatePublish(topic, decodeWire(wireData)));
+        } catch (error) {
+            if (isLunoraError(error)) {
+                throw error;
+            }
+
+            throw new LunoraError("BAD_REQUEST", `publish to "${topic}" was refused: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 400,
+            });
+        }
     }
 
     /**
@@ -6473,7 +6519,7 @@ abstract class ShardDO {
 
         try {
             // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
-            return Promise.resolve(this.publishLiveEvent(options.stream, topic, encodeWire(payload ?? null)));
+            return Promise.resolve(this.publishLiveWhenLoaded(options.stream, topic, encodeWire(payload ?? null)));
         } catch (error) {
             return Promise.reject(error instanceof Error ? error : new LunoraError("INTERNAL", String(error), { status: 500 }));
         }
@@ -17307,6 +17353,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Publish once the stream's declaration is available: the entry both async publishers (the HTTP route and an in-shard action)
+     * go through. {@link loadLiveStream} yields a promise only when something must load first, so an eager shard publishes without
+     * yielding, in the same turn as before.
+     * @returns the number of LOCAL SSE connections the frame was written to, or a promise of it
+     */
+    private publishLiveWhenLoaded(stream: string, topic: string, wireData: unknown): number | Promise<number> {
+        // Refused before anything loads, so a forged topic cannot make a lazy shard import a module.
+        assertLiveTopicPublishable(topic);
+
+        const loading = this.loadLiveStream(stream);
+
+        return loading === undefined ? this.publishLiveEvent(stream, topic, wireData) : loading.then(() => this.publishLiveEvent(stream, topic, wireData));
+    }
+
+    /**
      * Server-side publish: the worker's `ctx.live.publish` lands here, on an
      * endpoint no browser can reach through `defineLiveStream`'s control route.
      * Fans the event out via {@link ShardDO.broadcastLiveTopic}.
@@ -17328,7 +17389,7 @@ abstract class ShardDO {
         }
 
         try {
-            return jsonResponse({ delivered: this.publishLiveEvent(stream, topic, body.data) });
+            return jsonResponse({ delivered: await this.publishLiveWhenLoaded(stream, topic, body.data) });
         } catch (error) {
             if (isLunoraError(error)) {
                 return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
@@ -17536,4 +17597,14 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { DispatchBookmark, HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };
+export type {
+    DispatchBookmark,
+    HibernatableWebSocket,
+    LiveStreamDeclaration,
+    QueryReadScope,
+    ShardDOOptions,
+    ShardDOState,
+    SubscriptionOutcome,
+    TelemetrySink,
+    TraceRefLike,
+};

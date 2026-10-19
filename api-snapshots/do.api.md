@@ -550,6 +550,9 @@ abstract class ShardDO {
     protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
     protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number;
+    protected loadLiveStream(_stream: string): Promise<void> | undefined;
+    protected liveStreams(): Readonly<Record<string, LiveStreamDeclaration>> | undefined;
+    protected declaredLivePayload(stream: string, topic: string, wireData: unknown): unknown;
     protected publishLiveFromAction(topic: string, payload: unknown, options: {
         shardKey?: string;
         stream: string;
@@ -966,6 +969,14 @@ interface EvaluationInput {
     label?: string;
     name: string;
     score: number;
+}
+```
+
+### `LiveStreamDeclaration` (interface)
+
+```ts
+interface LiveStreamDeclaration {
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 ```
 

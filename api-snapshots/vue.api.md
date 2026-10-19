@@ -443,7 +443,7 @@ interface UseInfiniteQueryResult<T> {
 ### `UseLiveTopicOptions` (type)
 
 ```ts
-type UseLiveTopicOptions = Pick<SubscribeLiveTopicOptions, "onError" | "onEvent"> & {
+type UseLiveTopicOptions<Payload = unknown> = Pick<LiveTopicOptions<Payload>, "onError" | "onEvent"> & {
     [K in keyof ConnectionFields]: MaybeRefOrGetter<ConnectionFields[K]>;
 };
 ```
@@ -451,9 +451,9 @@ type UseLiveTopicOptions = Pick<SubscribeLiveTopicOptions, "onError" | "onEvent"
 ### `UseLiveTopicResult` (interface)
 
 ```ts
-interface UseLiveTopicResult {
+interface UseLiveTopicResult<Payload = unknown> {
     error: ShallowRef<LiveStreamSubscribeError | undefined>;
-    lastEvent: ShallowRef<unknown>;
+    lastEvent: ShallowRef<Payload | undefined>;
 }
 ```
 
@@ -724,7 +724,7 @@ const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: MaybeR
 ### `useLiveTopic` (const)
 
 ```ts
-const useLiveTopic: (options: UseLiveTopicOptions) => UseLiveTopicResult;
+const useLiveTopic: <Payload>(topic: MaybeRefOrGetter<LiveTopicRef<Payload>>, options?: UseLiveTopicOptions<Payload>) => UseLiveTopicResult<Payload>;
 ```
 
 ### `useLunora` (const)
@@ -1008,7 +1008,7 @@ type AgentTokenStreamReference = FunctionReference<"stream", {
 ### `ConnectionFields` (type)
 
 ```ts
-type ConnectionFields = Omit<SubscribeLiveTopicOptions, "onError" | "onEvent">;
+type ConnectionFields = Omit<LiveTopicOptions, "onError" | "onEvent">;
 ```
 
 ### `CreateMicrophone` (type)

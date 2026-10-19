@@ -164,6 +164,16 @@ describe("lazy function registry", () => {
         expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
     });
 
+    it("emits the smoke loader only when there is a lazy entry for it to check", () => {
+        expect.assertions(2);
+
+        const withoutLazyEntries = emitFunctions({ functions: [], lazyFunctions: true });
+        const withLazyEntries = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
+
+        expect(withoutLazyEntries).not.toContain("loadAllFunctions");
+        expect(withLazyEntries).toContain("export const loadAllFunctions");
+    });
+
     it("keeps eager output unchanged unless lazy mode is selected", () => {
         expect.assertions(3);
 
@@ -175,7 +185,7 @@ describe("lazy function registry", () => {
     });
 
     it("loads real handlers once, installs compiled validators, and keeps a failed module failed", async () => {
-        expect.assertions(25);
+        expect.assertions(26);
 
         const projectRoot = mkdtempSync(join(tmpdir(), "lunora-lazy-registry-"));
         const generatedDirectory = join(projectRoot, "_generated");
@@ -320,7 +330,10 @@ for (let attempt = 0; attempt < 2; attempt += 1) {
   }
 }
 
+const allLoaded = await registry.loadAllFunctions();
+
 process.stdout.write(JSON.stringify({
+  allLoaded,
   cacheReusedEntry: cachedEntry === loaded,
   coldEntryMissing: coldEntry === undefined,
   synchronousEntry: synchronousEntry === loaded,
@@ -363,6 +376,7 @@ Reflect.deleteProperty(globalThis, config.stateName);
                 { encoding: "utf8" },
             );
             const result = JSON.parse(output) as {
+                allLoaded: { checked: number; failures: { functionPath: string; message: string }[] };
                 brokenAttempts: string[];
                 brokenEvaluations: number;
                 cacheReusedEntry: boolean;
@@ -391,6 +405,11 @@ Reflect.deleteProperty(globalThis, config.stateName);
                 "internal module must not be loaded by external dispatch",
             ]);
             expect(result.brokenEvaluations).toBe(1);
+            // The pre-deploy smoke-load: every module is evaluated up front and only the broken one is reported.
+            expect(result.allLoaded).toStrictEqual({
+                checked: 3,
+                failures: [{ functionPath: "private:hidden", message: "internal module must not be loaded by external dispatch" }],
+            });
             expect(result.coalescedEvaluations).toBe(1);
             expect(result.finalEvaluations).toBe(1);
             expect(result.cacheReusedEntry).toBe(true);

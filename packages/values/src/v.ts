@@ -1483,6 +1483,35 @@ const optionalInner = (validator: Validator): Validator | undefined => {
 };
 
 /**
+ * True when every value `validator` accepts is a string: `v.string()`, `v.id()`,
+ * `v.storage()`, a `v.literal("…")`, or a `v.union(...)` of those. For tooling
+ * that carries a value as a string on a wire (a URL segment, a topic key) and
+ * must refuse, up front, a validator that could never match it. The members of a
+ * union and the value of a literal live on `_meta`; this accessor keeps that
+ * knowledge in the package that owns validator internals.
+ */
+const isStringValidator = (validator: Validator): boolean => {
+    switch (validator.kind) {
+        case "id":
+        case "storage":
+        case "string": {
+            return true;
+        }
+        case "literal": {
+            return typeof (validator as { _meta?: { value?: unknown } })._meta?.value === "string";
+        }
+        case "union": {
+            const members = (validator as { _meta?: { members?: ReadonlyArray<Validator> } })._meta?.members;
+
+            return members?.every((member) => isStringValidator(member)) ?? false;
+        }
+        default: {
+            return false;
+        }
+    }
+};
+
+/**
  * Validator/codec namespace. Each factory returns a {@link Validator} with a
  * runtime `parse`/`safeParse` plus a phantom `__type` field for inference.
  */
@@ -1558,4 +1587,4 @@ export type {
     Validator,
     ValidatorKind,
 };
-export { isOrWrapsFromValidator, optionalInner, v };
+export { isOrWrapsFromValidator, isStringValidator, optionalInner, v };

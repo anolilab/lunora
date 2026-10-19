@@ -1,3 +1,16 @@
+## @lunora/solid [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.237...@lunora/solid@1.0.0-alpha.238) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.152
+
 ## @lunora/solid [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.236...@lunora/solid@1.0.0-alpha.237) (2026-10-18)
 
 ### Features

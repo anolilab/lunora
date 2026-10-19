@@ -37,6 +37,7 @@ import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import countWithoutIndex from "./lints/static/count-without-index";
+import cronEveryMinute from "./lints/static/cron-every-minute";
 import crossModuleTableWrite from "./lints/static/cross-module-table-write";
 import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -150,6 +151,7 @@ export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
 export type { AdvisorCountRead } from "./counts";
+export type { AdvisorCron } from "./crons";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
@@ -193,6 +195,7 @@ export { default as containerPublicInternet } from "./lints/static/container-pub
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as countWithoutIndex } from "./lints/static/count-without-index";
+export { default as cronEveryMinute } from "./lints/static/cron-every-minute";
 export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
 export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -359,6 +362,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnused,
     queueDispatchCycle,
     queueWithoutDlq,
+    cronEveryMinute,
     topicTooManySubscriptions,
     filterOnPrimaryKey,
     filterWithoutIndex,

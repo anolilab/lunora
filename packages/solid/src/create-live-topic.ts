@@ -1,8 +1,9 @@
-import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
-import { subscribeLiveTopic } from "@lunora/client";
+import type { LiveStreamSubscribeError, LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "@lunora/client";
+import { liveTopicSubscription, subscribeLiveTopic } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
+import { useLunora } from "./context";
 import { trackedArgsEffect } from "./reactive-args";
 
 /**
@@ -10,15 +11,15 @@ import { trackedArgsEffect } from "./reactive-args";
  *
  * A thin lifecycle wrapper over `subscribeLiveTopic` from `@lunora/client`: it
  * subscribes when the owner mounts, unsubscribes on cleanup, and resubscribes when
- * the url, topic or connection options change. Callbacks are not part of that
+ * the topic or the connection options change. Callbacks are not part of that
  * identity, so a new `onEvent` / `onError` never reopens the subscription.
  */
 
-interface CreateLiveTopicResult {
+interface CreateLiveTopicResult<Payload = unknown> {
     /** The shard's refusal of this subscription (403, 409, 429 and similar), or `undefined`. */
     error: Accessor<LiveStreamSubscribeError | undefined>;
     /** The last payload delivered on the topic, or `undefined` until the first event. */
-    lastEvent: Accessor<unknown>;
+    lastEvent: Accessor<Payload | undefined>;
 }
 
 /** The fields that decide which connection and subscription a topic needs. Callbacks are excluded. */
@@ -37,19 +38,28 @@ const connectionOf = (options: SubscribeLiveTopicOptions): LiveTopicConnection =
 };
 
 /**
- * Follow `options.topic` on the shared live connection for `options.url`.
+ * Follow the topic `topic` names on the live connection shared by its stream's route. Pass the
+ * reference `_generated/live.ts` hands out (`live.posts.post({ postId })`), plain or as an
+ * accessor; the route is resolved against the `LunoraClient` from the nearest `LunoraContext`,
+ * and `lastEvent` and `onEvent` are typed by the payload the topic declares.
  *
- * `options` may be a plain object or an accessor. The `onEvent` and `onError`
- * callbacks are read at call time, so the latest identity is always the one invoked.
+ * `options` may be a plain object or an accessor. The `onEvent` and `onError` callbacks are
+ * read at call time, so the latest identity is always the one invoked.
  */
-const createLiveTopic = (options: SubscribeLiveTopicOptions | Accessor<SubscribeLiveTopicOptions>): CreateLiveTopicResult => {
+const createLiveTopic = <Payload>(
+    topic: LiveTopicRef<Payload> | Accessor<LiveTopicRef<Payload>>,
+    options: LiveTopicOptions<Payload> | Accessor<LiveTopicOptions<Payload>> = {},
+): CreateLiveTopicResult<Payload> => {
+    const client = useLunora();
+    const resolveTopic = typeof topic === "function" ? topic : () => topic;
     const resolveOptions = typeof options === "function" ? options : () => options;
+    const resolveSubscription = (): SubscribeLiveTopicOptions => liveTopicSubscription(client, resolveTopic(), resolveOptions());
 
-    const [lastEvent, setLastEvent] = createSignal<unknown>(undefined);
+    const [lastEvent, setLastEvent] = createSignal<Payload | undefined>(undefined);
     const [error, setError] = createSignal<LiveStreamSubscribeError | undefined>(undefined);
 
     trackedArgsEffect(
-        () => connectionOf(resolveOptions()),
+        () => connectionOf(resolveSubscription()),
         (connection) => {
             // A new topic starts clean: the previous topic's payload must not render under it.
             setLastEvent(() => undefined);
@@ -59,12 +69,12 @@ const createLiveTopic = (options: SubscribeLiveTopicOptions | Accessor<Subscribe
                 ...connection,
                 onError: (refusal) => {
                     setError(() => refusal);
-                    resolveOptions().onError?.(refusal);
+                    resolveSubscription().onError?.(refusal);
                 },
                 onEvent: (payload) => {
-                    setLastEvent(() => payload);
+                    setLastEvent(() => payload as Payload);
                     setError(() => undefined);
-                    resolveOptions().onEvent?.(payload);
+                    resolveSubscription().onEvent?.(payload);
                 },
             });
         },

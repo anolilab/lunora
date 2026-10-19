@@ -12,6 +12,7 @@ import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorCountRead } from "./counts";
+import type { AdvisorCron } from "./crons";
 import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagRead } from "./flag-reads";
@@ -268,6 +269,9 @@ export interface LintContext {
     containers?: ReadonlyArray<AdvisorContainer>;
     /** Every `count()` call found in function bodies; the `count_without_index` lint reads it. Absent for a runtime caller. */
     countReads?: ReadonlyArray<AdvisorCountRead>;
+
+    /** Every `cronJobs()` registration; the `cron_every_minute` lint reads it. Supplied by the codegen feeder; absent for runtime callers. */
+    crons?: ReadonlyArray<AdvisorCron>;
 
     /**
      * The `namespace:export` keys of the function-targeted cron jobs. A cron fires

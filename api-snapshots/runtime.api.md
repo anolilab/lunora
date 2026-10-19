@@ -972,9 +972,8 @@ interface HttpActionContext {
     }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     live?: {
-        publish: (topic: string, payload: unknown, options: {
+        publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
             shardKey?: string;
-            stream: string;
         }) => Promise<void>;
     };
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -2987,6 +2986,15 @@ interface KvLike {
 }
 ```
 
+### `LiveTopicRefLike` (interface)
+
+```ts
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LogSinkContext` (interface)
 
 ```ts
@@ -3056,9 +3064,8 @@ type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionCon
 
 ```ts
 interface QueueLivePublisherLike {
-    publish: (topic: string, payload: unknown, options: {
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
         shardKey?: string;
-        stream: string;
     }) => Promise<void>;
 }
 ```

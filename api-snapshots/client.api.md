@@ -442,6 +442,25 @@ interface LiveStreamSubscribeOptions {
 }
 ```
 
+### `LiveTopicOptions` (interface)
+
+```ts
+interface LiveTopicOptions<Payload = unknown> extends Omit<SubscribeLiveTopicOptions, "onEvent" | "topic" | "url"> {
+    onEvent?: (payload: Payload) => void;
+    shardKey?: string;
+}
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LunoraClient` (class)
 
 ```ts
@@ -1807,6 +1826,14 @@ const isRateLimitedError: (error: unknown) => error is Error & {
 const isUnauthorizedError: (error: unknown) => error is Error & {
     code: "UNAUTHORIZED";
 };
+```
+
+### `liveTopicSubscription` (const)
+
+```ts
+const liveTopicSubscription: <Payload>(client: {
+    readonly url: string;
+}, ref: LiveTopicRef<Payload>, options?: LiveTopicOptions<Payload>) => SubscribeLiveTopicOptions;
 ```
 
 ### `maxSeq` (const)

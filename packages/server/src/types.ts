@@ -7,6 +7,7 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import type { LiveTopicRef } from "../../../shared/live-stream";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import type { MutationStorage, ReadOnlyStorage, Storage, StorageMetadata } from "./storage/context";
 
@@ -2644,8 +2645,10 @@ interface ActionCtx {
     readonly ip?: string;
 
     /**
-     * `ctx.live.publish(topic, payload, { stream })` — push an event to the SSE
-     * subscribers of a `defineLiveStream` on THIS shard. Present on the shard
+     * `ctx.live.publish(ref, payload)` — push an event to the SSE subscribers of the
+     * `defineLiveStream` that declares `ref`'s topic, on THIS shard. Get a ref from
+     * `_generated/live.ts`: `live.posts.post({ postId })`. The payload is checked
+     * against the validator the topic declares. Present on the shard
      * (Cloudflare) target only when the app declares a live stream; absent on a
      * target that rates `liveStreams` `unsupported`, where codegen reports why.
      * A scheduled job's action publishes this way too. Absent for a query or
@@ -2657,7 +2660,7 @@ interface ActionCtx {
      * full routing rules.
      */
     readonly live?: {
-        publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+        publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: { shardKey?: string }) => Promise<void>;
     };
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
