@@ -62,6 +62,17 @@ describe("discoverLiveStreams", () => {
         expect(discover()).toStrictEqual([]);
     });
 
+    it("reads a stream whose onSubscribe is method shorthand", () => {
+        expect.assertions(1);
+
+        write(
+            "live.ts",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nexport const posts = defineLiveStream({\n    id: "posts",\n    topics: { a: { payload: v.null() } },\n    async onSubscribe() {\n        return true;\n    },\n});\n`,
+        );
+
+        expect(discover().map((found) => found.id)).toStrictEqual(["posts"]);
+    });
+
     it("reads quoted spellings of id, topics and key the same as bare ones", () => {
         expect.assertions(1);
 
@@ -114,6 +125,7 @@ describe("discoverLiveStreams", () => {
         ["a spread topics map", `{ id: "posts", topics: { ...shared, a: { payload: v.null() } } }`],
         ["a computed topic name", `{ id: "posts", topics: { [name]: { payload: v.null() } } }`],
         ["a topic that is a reference", `{ id: "posts", topics: { a: aTopic } }`],
+        ["a method as a topic", `{ id: "posts", topics: { a() {} } }`],
         ["a spread topic declaration", `{ id: "posts", topics: { a: { ...base, payload: v.null() } } }`],
         ["a key that is a reference", `{ id: "posts", topics: { a: { key: keyFields, payload: v.null() } } }`],
         ["a spread key map", `{ id: "posts", topics: { a: { key: { ...keyFields, b: v.string() }, payload: v.null() } } }`],

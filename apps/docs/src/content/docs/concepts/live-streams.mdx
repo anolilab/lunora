@@ -139,8 +139,9 @@ const { lastEvent, error } = useLiveTopic(live.posts.post({ postId }), {
 
 The stream's route is resolved against the `LunoraClient` from the framework's provider,
 so you write no URL and no topic string, and `lastEvent` and `onEvent` are typed by the
-payload the topic declares. Every hook shares one connection per stream route and closes it
-after the last one unmounts.
+payload the topic declares. Hooks share one connection when their stream route and connection options
+(`shardKey`, `sessionKey`, credentials, headers, retry tuning) match, and the
+connection closes after the last one unmounts.
 
 | Framework | Hook              | Result                                      | Needs the client from                           |
 | --------- | ----------------- | ------------------------------------------- | ----------------------------------------------- |

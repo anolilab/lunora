@@ -17,16 +17,29 @@ const isDefineLiveStream = (call: CallExpression): boolean => {
 };
 
 /** A spread member, or a computed key, hides names from a static read. */
+const hidesNames = (literal: ObjectLiteralExpression): boolean =>
+    literal
+        .getProperties()
+        .some(
+            (property) =>
+                Node.isSpreadAssignment(property) ||
+                ((Node.isPropertyAssignment(property) ||
+                    Node.isShorthandPropertyAssignment(property) ||
+                    Node.isMethodDeclaration(property) ||
+                    Node.isGetAccessorDeclaration(property) ||
+                    Node.isSetAccessorDeclaration(property)) &&
+                    Node.isComputedPropertyName(property.getNameNode())),
+        );
+
+/**
+ * Also true for a method or accessor. The `topics` and `key` maps hold only validators, so a member of either kind is a
+ * declaration codegen cannot read; the stream's own options object may carry `onSubscribe(…) {}`.
+ */
 const hidesMembers = (literal: ObjectLiteralExpression): boolean =>
-    literal.getProperties().some(
-        (property) =>
-            Node.isSpreadAssignment(property) ||
-            ((Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) && Node.isComputedPropertyName(property.getNameNode())) ||
-            // A method or accessor is a name codegen could read but a validator map never holds.
-            Node.isMethodDeclaration(property) ||
-            Node.isGetAccessorDeclaration(property) ||
-            Node.isSetAccessorDeclaration(property),
-    );
+    hidesNames(literal) ||
+    literal
+        .getProperties()
+        .some((property) => Node.isMethodDeclaration(property) || Node.isGetAccessorDeclaration(property) || Node.isSetAccessorDeclaration(property));
 
 /** The name of a member of a map {@link hidesMembers} already vetted: every member is a plain or shorthand property. */
 const memberName = (member: ObjectLiteralElementLike): string => propertyKeyName(member as PropertyAssignment);
@@ -105,7 +118,7 @@ const streamOf = (call: CallExpression, exportName: string, lunoraDirectory: str
         throw notLiteral(call, `needs an object-literal options argument so codegen can read its \`id\` and \`topics\``);
     }
 
-    if (hidesMembers(options)) {
+    if (hidesNames(options)) {
         throw notLiteral(options, "cannot spread its options or use a computed key: codegen must read `id` and `topics` as literals");
     }
 
