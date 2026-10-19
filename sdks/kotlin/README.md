@@ -115,7 +115,9 @@ replayed: where a normal write would be queued, `submit` throws an
 `OfflineException` coded `OFFLINE_NOT_QUEUED` before any optimistic layer is
 installed, and its arguments never reach the persistence adapter. It does not
 wait for a flush or queue behind pending writes, so it may land before an older
-queued write to the same document.
+queued write to the same document. A transport failure on such a write, sent
+directly while the connection is down, is refused the same way, with the
+transport error as its `cause`.
 
 A replay the server rate-limits is re-queued, not dropped: `FlushReport.retryAfterMs`
 carries the delay the envelope named, and the next flush is a no-op until it has
