@@ -1063,8 +1063,8 @@ class LunoraClient {
     /** How many `SHARD_ERROR` answers one queued write may collect before the replay settles it; see `offlineQueue.replayRetry`. */
     private readonly maxShardErrorAttempts: number;
 
-    /** `SHARD_ERROR` answers collected so far, per queued write id (cleared when the write settles). */
-    private readonly shardErrorAttempts = new Map<string, number>();
+    /** Capped failures collected so far, per queued write id (see `spendsLastReplayAttempt`); cleared when the write settles. */
+    private readonly replayAttempts = new Map<string, number>();
 
     /** Pending rate-limit retry flushes, keyed by {@link connectionKey}, so `close()` can cancel them. */
     private readonly replayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -7912,7 +7912,7 @@ class LunoraClient {
 
     private unpersist(id: string | undefined): void {
         if (id) {
-            this.shardErrorAttempts.delete(id);
+            this.replayAttempts.delete(id);
             this.offlineQueue.discard(id);
         }
     }
@@ -9285,15 +9285,16 @@ class LunoraClient {
      * Count a failed replay attempt against `item` and report whether it was the
      * last attempt the write gets.
      *
-     * Two kinds of write are bounded. Any write is bounded in `SHARD_ERROR`
-     * answers (`offlineQueue.replayRetry.maxShardErrorAttempts`): only a coded
-     * answer from the shard says the write itself may be what fails, where a
-     * transport error, a timeout, a rate limit or a refused credential says
-     * nothing about it. A whole-batch `SHARD_ERROR` is not attributable to one
-     * write and is not counted. A write queued after an ambiguous direct send has
-     * a caller still waiting, so it is also bounded in transport-level failures
-     * ({@link MAX_AMBIGUOUS_SEND_ATTEMPTS}); a rate limit or a refused credential
-     * still never counts for it.
+     * Two kinds of failure are capped, each against its own limit. A write queued
+     * after an ambiguous direct send has a caller still waiting, so every
+     * transient failure of it except a rate limit or a refused credential
+     * (a transport error, a timeout, `SHARD_ERROR`, ...) counts against
+     * {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}. Any other write is bounded only in
+     * `SHARD_ERROR` answers (`offlineQueue.replayRetry.maxShardErrorAttempts`):
+     * only a coded answer from the shard says the write itself may be what fails,
+     * where a transport error, a timeout, a rate limit or a refused credential
+     * says nothing about it. A whole-batch `SHARD_ERROR` is not attributable to
+     * one write and is not counted.
      */
     private spendsLastReplayAttempt(item: QueuedMutation, error: unknown): boolean {
         if (item.id === undefined) {
@@ -9317,9 +9318,9 @@ class LunoraClient {
             return false;
         }
 
-        const attempts = (this.shardErrorAttempts.get(item.id) ?? 0) + 1;
+        const attempts = (this.replayAttempts.get(item.id) ?? 0) + 1;
 
-        this.shardErrorAttempts.set(item.id, attempts);
+        this.replayAttempts.set(item.id, attempts);
 
         return attempts >= limit;
     }
