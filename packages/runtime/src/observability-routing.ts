@@ -13,7 +13,7 @@
  * it, so an absent `onSpan` stays absent. Errors thrown by the wrapped sink are
  * swallowed, as `combineSinks` does.
  */
-import { redactArgs, redactSecrets } from "@lunora/observability";
+import { redactArgs, redactCredentials } from "@lunora/observability";
 
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
@@ -31,7 +31,7 @@ type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
  * to add nothing.
  *
  * The result is normalized to JSON-safe primitives and redacted the way the signal's
- * own fields are: `redactArgs` for log lines, and the credential-only `redactSecrets`
+ * own fields are: `redactArgs` for log lines, and the credential-only `redactCredentials`
  * for metrics, spans and RPC events, whose ids and URLs the PII rules would erase. It
  * is merged UNDER the event's own attributes: a key the event already sets keeps its value.
  *
@@ -185,7 +185,7 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // including in normalizing, leaves the event unchanged rather than dropped.
         const derived = enrich(event, signal);
         const flat = derived === undefined ? undefined : flattenErrorValues(derived);
-        const redacted = signal === "log" ? redactArgs(flat) : redactSecrets(flat);
+        const redacted = signal === "log" ? redactArgs(flat) : redactCredentials(flat);
 
         return normalizeLogFields(redacted as LogFields | undefined);
     } catch (error) {
