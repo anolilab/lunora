@@ -93,30 +93,17 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         : (client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey) as ReturnOf<F> | undefined);
 
     // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `client` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the push counter and the cache entry under it, which is exactly the key it already belongs to. The rule only stopped seeing through this call because the body became a block with statements.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `client` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the live value under it, which is exactly the key it already belongs to.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped && hydrated,
         initialData: cachedData,
-        queryFn: async () => {
-            // The one-shot HTTP snapshot races the subscription that feeds this
-            // same key. TanStack applies a resolved `queryFn` result
-            // unconditionally — a `setQueryData` while the fetch is in flight
-            // does NOT cancel it — so a push that lands first would be reverted
-            // to pre-push data, and with `staleTime: Infinity` and push-driven
-            // freshness it stays reverted until the next write (and bypasses the
-            // optimistic layer engine, since the TanStack cache was written
-            // raw). Sample the key's push counter either side of the fetch and
-            // yield to anything newer.
-            const registry = getSubscriptionRegistry(client);
-            const sample = registry.openSnapshotSample(queryKey);
-            const snapshot = await client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey });
-
-            if (registry.closeSnapshotSample(sample)) {
-                return snapshot;
-            }
-
-            return queryClient.getQueryData<ReturnOf<F>>(queryKey) ?? snapshot;
-        },
+        // One execution per mount: the value comes from the subscription the
+        // effect below attaches (its first frame is a full snapshot), and the
+        // HTTP query runs only when there is no socket to push it.
+        queryFn: async ({ signal }) =>
+            getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, async () =>
+                client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+            ),
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns
         // freshness, so the value never goes stale on a timer.

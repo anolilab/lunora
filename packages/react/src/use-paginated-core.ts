@@ -223,11 +223,14 @@ const usePaginatedCore = function <T>(
             }
 
             // Trigger the initial fetch via TanStack so its dedup applies even
-            // when two mounts ask for the same page range. `staleTime: 0` is
-            // deliberate here (unlike `useQuery`): split/join recycle page-range
-            // queryKeys, so a key can reappear carrying a *prior* boundary
-            // configuration's cached rows, and forcing the queryFn to run on
-            // every fresh attach re-fetches those rows rather than trusting them.
+            // when two mounts ask for the same page range. The fetch resolves
+            // from the page's subscription (attached right below) — its first
+            // frame is the page snapshot — and goes over HTTP only when there
+            // is no socket. `staleTime: 0` is deliberate here (unlike
+            // `useQuery`): split/join recycle page-range queryKeys, so a key can
+            // reappear carrying a *prior* boundary configuration's cached rows,
+            // and forcing the queryFn to run on every fresh attach reads the
+            // live value rather than trusting them.
             //
             // `staleTime: 0` alone does NOT keep a recycled key from *serving*
             // the corpse first: this effect runs post-commit while `pageResults`
@@ -237,6 +240,10 @@ const usePaginatedCore = function <T>(
             // below removing the entry when the page is detached — the recycle
             // then finds nothing to read. The attach only fires once per
             // newly-desired page, so this stays a single fetch per page.
+            const fetchSnapshot = async (): Promise<unknown> =>
+                (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
+                    shardKey: desired.shardKey,
+                });
             const fetchPage = (): void => {
                 // eslint-disable-next-line @tanstack/query/exhaustive-deps -- the client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache; `LunoraProvider` clears the `["lunora", …]` entries on a client swap instead. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
                 const initialFetch = queryClient.fetchQuery({
@@ -256,24 +263,7 @@ const usePaginatedCore = function <T>(
                     // hook the owner of the entry's whole lifecycle, so the release
                     // closure below removes it on detach rather than leaking it.
                     gcTime: Number.POSITIVE_INFINITY,
-                    queryFn: async () => {
-                        const sample = registry.openSnapshotSample(entry.key);
-                        const snapshot = await (
-                            client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>
-                        )(desired.fn, entry.args, {
-                            shardKey: desired.shardKey,
-                        });
-
-                        // Same race `useQuery` carries: TanStack applies a resolved
-                        // fetch unconditionally, so a page frame pushed while this
-                        // snapshot was in flight would be reverted to the older
-                        // rows. The push is strictly newer; yield to it.
-                        if (registry.closeSnapshotSample(sample)) {
-                            return snapshot;
-                        }
-
-                        return queryClient.getQueryData(entry.key) ?? snapshot;
-                    },
+                    queryFn: async ({ signal }) => registry.liveValue(queryClient, entry.key, signal, fetchSnapshot),
                     queryKey: entry.key,
                     staleTime: 0,
                 });
