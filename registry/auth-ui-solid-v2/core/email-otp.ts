@@ -4,7 +4,7 @@
  * — so it's a bespoke controller over the shared {@link createStore} primitive,
  * still exposing the same `getState`/`subscribe` contract for the view layer.
  */
-import { resetCaptcha } from "./captcha";
+import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
 import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import { statusAfterEdit } from "./create-form-controller";
@@ -91,6 +91,8 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
         store.update({ email: { ...state.email, error: undefined }, formError: undefined, status: "submitting" });
 
+        const mark = captchaSpends();
+
         try {
             assertOk(await context.authClient.emailOtp.sendVerificationOtp({ email: state.email.value.trim(), type: "sign-in" }));
 
@@ -103,7 +105,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             });
         } catch (error_) {
             context.onError?.(error_);
-            resetCaptcha();
+            resetCaptchaIfSpent(mark);
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.genericError), status: "error" });
         }
     };
@@ -125,6 +127,8 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
         store.update({ code: { ...state.code, error: undefined }, formError: undefined, status: "submitting" });
 
+        const mark = captchaSpends();
+
         try {
             assertOk(await context.authClient.signIn.emailOtp({ email: state.email.value.trim(), otp: state.code.value.trim() }));
 
@@ -133,7 +137,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             context.nav.replace(postAuthDestination(context));
         } catch (error_) {
             context.onError?.(error_);
-            resetCaptcha();
+            resetCaptchaIfSpent(mark);
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });
         }
     };

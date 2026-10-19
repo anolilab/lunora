@@ -6,7 +6,7 @@
  * own state machine like `email-otp.ts` does, rather than being one form. The
  * other two are single submits.
  */
-import { resetCaptcha } from "./captcha";
+import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
 import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import { createFormController } from "./create-form-controller";
@@ -77,11 +77,13 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
 
         store.update({ error: undefined, status: "submitting", successMessage: undefined });
 
+        const mark = captchaSpends();
+
         try {
             store.update({ status: "idle", ...(await work()) });
         } catch (error) {
             context.onError?.(error);
-            resetCaptcha();
+            resetCaptchaIfSpent(mark);
             store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
         }
     };

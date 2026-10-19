@@ -652,7 +652,16 @@ describe("captcha re-arm", () => {
 
     it("resets the widget and drops the token the failed request spent", async () => {
         const { api, view } = await mountSolvedWidget();
-        const client = stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } });
+        const client = stubClient({
+            signIn: {
+                email: vi.fn(() => {
+                    // What the real client does: the request carries the token.
+                    captchaHeaders();
+
+                    return fail("Invalid email or password");
+                }),
+            },
+        });
         const controller = createSignInController(makeContext(client).context);
 
         controller.actions.setField("email", "a@b.co");
@@ -668,13 +677,37 @@ describe("captcha re-arm", () => {
 
     it("resets the widget after a successful resendable request, so the resend asks again", async () => {
         const { api, view } = await mountSolvedWidget();
-        const controller = createForgotPasswordController(makeContext(stubClient()).context);
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return ok({ status: true });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
 
         controller.actions.setField("email", "a@b.co");
         await controller.actions.submit();
 
         expect(controller.getState().status).toBe("success");
         expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
+    it("leaves a solved widget alone when the request never carried its token", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const failing = createSignInController(makeContext(stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } })).context);
+        const resend = createForgotPasswordController(makeContext(stubClient()).context);
+
+        failing.actions.setField("email", "a@b.co");
+        failing.actions.setField("password", "secret1234");
+        await failing.actions.submit();
+        resend.actions.setField("email", "a@b.co");
+        await resend.actions.submit();
+
+        expect(api.reset).not.toHaveBeenCalled();
+        expect(captchaHeaders()).toStrictEqual({ "x-captcha-response": "solved-token" });
 
         view();
     });

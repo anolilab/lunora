@@ -102,6 +102,12 @@ interface CaptchaHeaderOptions {
     endpoints?: ReadonlyArray<string>;
 }
 
+/** How many tokens `captchaHeaders` has handed to a request so far. */
+let spends = 0;
+
+/** Read before a request; pass to {@link resetCaptchaIfSpent} after it. */
+const captchaSpends = (): number => spends;
+
 const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Record<string, string> => {
     // A path the plugin does not guard must not consume the token — see the
     // note on CAPTCHA_ENDPOINTS. Called without a path (a caller attaching it
@@ -117,6 +123,7 @@ const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Reco
     }
 
     store.set({});
+    spends += 1;
 
     return { [CAPTCHA_HEADER]: token };
 };
@@ -217,6 +224,18 @@ const resetCaptcha = (): void => {
     store.set({});
 };
 
+/**
+ * Reset the widgets, but only if a request since `mark` (a {@link captchaSpends}
+ * reading) actually carried a token. A form whose request went to an unguarded
+ * endpoint, or failed before the header was attached, spent nothing — resetting
+ * would erase a solve another card on the page is still holding.
+ */
+const resetCaptchaIfSpent = (mark: number): void => {
+    if (spends !== mark) {
+        resetCaptcha();
+    }
+};
+
 interface RenderCaptchaOptions {
     onError?: (error: unknown) => void;
     provider: CaptchaProvider;
@@ -298,4 +317,4 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
 };
 
 export type { CaptchaHeaderOptions, CaptchaProvider, RenderCaptchaOptions };
-export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, PROVIDERS, renderCaptcha, resetCaptcha, setCaptchaToken };
+export { CAPTCHA_ENDPOINTS, CAPTCHA_HEADER, captchaHeaders, captchaSpends, PROVIDERS, renderCaptcha, resetCaptcha, resetCaptchaIfSpent, setCaptchaToken };

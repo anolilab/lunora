@@ -13,7 +13,7 @@
  * Flows whose fields come from the server declare {@link FormControllerOptions.prefill}
  * rather than seeding themselves — see `organization-settings.ts`.
  */
-import { resetCaptcha } from "./captcha";
+import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
 import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import type { Localization } from "./localization";
@@ -178,13 +178,15 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
         store.set({ ...state(), fields: nextFields, formError: undefined, status: "submitting" });
 
+        const mark = captchaSpends();
+
         try {
             const sent = values();
             const result = (await options.submit(sent, context)) ?? {};
 
             if (options.resendCooldown) {
-                // The form stays up for a resend, but this request spent the captcha token.
-                resetCaptcha();
+                // The form stays up for a resend; if this request spent the captcha token, ask again.
+                resetCaptchaIfSpent(mark);
                 sentValues = sent;
             }
 
@@ -205,8 +207,8 @@ const createFormController = <TField extends string>(context: ControllerContext,
             }
         } catch (error) {
             context.onError?.(error);
-            // The request spent the captcha token; re-arm the widget for the retry.
-            resetCaptcha();
+            // If the request spent the captcha token, re-arm the widget for the retry.
+            resetCaptchaIfSpent(mark);
 
             store.set({
                 ...state(),
