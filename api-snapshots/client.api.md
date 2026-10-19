@@ -1183,6 +1183,7 @@ interface QueuedMutation<T = unknown> {
     readonly functionPath: string;
     id?: string;
     identity?: string | null;
+    readonly issueSeq?: number;
     liveAwaiter?: boolean;
     readonly onCommit?: (commitCursor: number | undefined) => void;
     readonly precondition?: () => boolean;
