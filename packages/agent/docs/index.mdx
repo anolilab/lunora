@@ -312,7 +312,9 @@ and what point-in-time recovery does to a discarded value, are in the
 platform's Secret values section.
 
 The model receives `{ "secretRef": "…" }` from the request. That ref is the
-request's tool-call id, not the stored value and not the store's reference, and
+request's slot (`<turn>:<tool-call id>`). The client answers the pause with the
+tool-call id it sees on it, and the server finds the one pending request for that
+id. The slot is not the stored value and not the store's reference, and
 the model passes it to the consuming tool. `withSecret` takes the value inside its
 own durable step, returns only what the callback returns, and discards the value
 as a second step, but only after a take that succeeded. A callback result that
@@ -1326,7 +1328,7 @@ runtime stubs to back the functions your tools dispatch to.
 
 A run that pauses for a human (an approval or a `requestSecretTool` request) stops
 at its wait. Give the run an `instanceId` (`harness.run(params, { instanceId: "run-1" })`)
-and resolve it with `harness.awaitWait("run-1", "secret:call_1")` to reach the pause, then
+and resolve it with `harness.awaitWait("run-1", "secret:0:call_1")` to reach the pause, then
 `harness.supply(threadKey, toolCallId, value)`, `harness.decline(threadKey, toolCallId)`,
 `harness.deliver("run-1", name, payload)` or `harness.expire("run-1", name)`. Waits are scoped
 to their run, so two runs may wait on the same name. The secret

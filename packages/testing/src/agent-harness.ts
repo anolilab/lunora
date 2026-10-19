@@ -48,6 +48,17 @@ interface HarnessDispatch {
 /** Extra function-dispatch handler layered over the built-in `agents:*` runtime double. */
 type HarnessFunction = (args?: Record<string, unknown>) => unknown;
 
+/** One secret request the harness keeps, mirroring the component's row: its call id, slot-keyed owner, and status. */
+interface SecretRequest {
+    callId: string;
+    consumerTool: string;
+    instanceId: string;
+    ref?: string;
+    slot: string;
+    status: "consumed" | "declined" | "expired" | "pending" | "supplied";
+    threadKey: string;
+}
+
 interface AgentHarnessOptions {
     /**
      * Worker `env` bindings visible to tool `execute` and a dynamic
@@ -114,7 +125,7 @@ interface AgentRunOverrides {
 interface AgentHarness {
     /**
      * Resolve once the run `instanceId` has reached the wait named `name` (e.g.
-     * `secret:call_1`), so a test can act on the run at a known point instead of
+     * `secret:0:call_1`, for the first turn's call `call_1`), so a test can act on the run at a known point instead of
      * after a delay.
      */
     awaitWait: (instanceId: string, name: string) => Promise<void>;
@@ -257,13 +268,13 @@ const createRuntime = (
     extra: Record<string, HarnessFunction>,
     secrets: SecretValueHost,
 ): {
-    /** The run that owns the request, so its wait can be woken; undefined when no request was ever opened. */
-    declineSecret: (threadKey: string, toolCallId: string) => string | undefined;
+    /** The run that owns the pending request, and its slot (the wait's key); undefined when no pending request names the call. */
+    declineSecret: (threadKey: string, callId: string) => { instanceId: string; slot: string } | undefined;
     dispatches: HarnessDispatch[];
     messages: Map<string, HarnessMessage>;
     run: AgentRunFunction;
-    /** The run that owns the request, so its wait can be woken. */
-    supplySecret: (threadKey: string, toolCallId: string, value: string) => Promise<string>;
+    /** The run that owns the pending request, and its slot (the wait's key), so its wait can be woken. */
+    supplySecret: (threadKey: string, callId: string, value: string) => Promise<{ instanceId: string; slot: string }>;
     threads: Map<string, HarnessThread>;
 } => {
     const threads = new Map<string, HarnessThread>();
@@ -375,20 +386,32 @@ const createRuntime = (
         return {};
     };
 
-    // The secret-request rows, one per `(threadKey, toolCallId)`. The harness has no
+    // The secret-request rows, one per `(threadKey, slot)`. The harness has no
     // database, so the transitions below restate the component's: a pending row settles
     // once, a supply binds its ref, and a take must name the consumer the request declared.
     // The component's own tests pin each transition against the real mutations.
-    const requests = new Map<
-        string,
-        { consumerTool: string; instanceId: string; ref?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied" }
-    >();
-    const requestOf = (args?: Record<string, unknown>) => requests.get(`${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`);
+    // Keyed on both parts as JSON, so no thread key and slot can read as another pair.
+    const requestKey = (threadKey: string, slot: string): string => JSON.stringify([threadKey, slot]);
+    const requests = new Map<string, SecretRequest>();
+    // A client answers with the call id, which a later turn can reuse; only one pending request may match it.
+    const pendingForCall = (threadKey: string, callId: string): { request: SecretRequest; slot: string } | undefined => {
+        const matches = [...requests.values()].filter(
+            (request) => request.threadKey === threadKey && request.callId === callId && request.status === "pending",
+        );
+        const [request] = matches;
+
+        if (matches.length !== 1 || request === undefined) {
+            return undefined;
+        }
+
+        return { request, slot: request.slot };
+    };
+    const requestOf = (args?: Record<string, unknown>) => requests.get(requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string));
 
     // A replay of the owning run keeps its row. A row left by an earlier run that reused the
     // tool-call id is retired first, which discards its value, and then starts over as pending.
     const openSecretRequest = async (args?: Record<string, unknown>): Promise<unknown> => {
-        const key = `${args?.["threadKey"] as string}:${args?.["toolCallId"] as string}`;
+        const key = requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string);
         const existing = requests.get(key);
 
         const owner = args?.["instanceId"] as string | undefined;
@@ -401,7 +424,14 @@ const createRuntime = (
             await secrets.discard(existing.ref);
         }
 
-        requests.set(key, { consumerTool: args?.["consumerTool"] as string, instanceId: args?.["instanceId"] as string, status: "pending" });
+        requests.set(key, {
+            callId: (args?.["callId"] ?? args?.["toolCallId"]) as string,
+            slot: args?.["toolCallId"] as string,
+            threadKey: args?.["threadKey"] as string,
+            consumerTool: args?.["consumerTool"] as string,
+            instanceId: args?.["instanceId"] as string,
+            status: "pending",
+        });
 
         return undefined;
     };
@@ -456,28 +486,30 @@ const createRuntime = (
         }
     };
 
-    const supplySecret = async (threadKey: string, toolCallId: string, value: string): Promise<string> => {
-        const request = requests.get(`${threadKey}:${toolCallId}`);
+    const supplySecret = async (threadKey: string, callId: string, value: string): Promise<{ instanceId: string; slot: string }> => {
+        const found = pendingForCall(threadKey, callId);
 
-        if (request?.status !== "pending") {
-            throw new Error(`agentHarness: no pending secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+        if (found === undefined) {
+            throw new Error(`agentHarness: no pending secret request for tool call "${callId}" on thread "${threadKey}"`);
         }
 
         // The value lives as long as the agent's supply window; a take after it refuses.
-        request.ref = await secrets.put(value, { scope: threadKey, ttlMs: SECRET_VALUE_TTL_MS });
-        request.status = "supplied";
+        found.request.ref = await secrets.put(value, { scope: threadKey, ttlMs: SECRET_VALUE_TTL_MS });
+        found.request.status = "supplied";
 
-        return request.instanceId;
+        return { instanceId: found.request.instanceId, slot: found.slot };
     };
 
-    const declineSecret = (threadKey: string, toolCallId: string): string | undefined => {
-        const request = requests.get(`${threadKey}:${toolCallId}`);
+    const declineSecret = (threadKey: string, callId: string): { instanceId: string; slot: string } | undefined => {
+        const found = pendingForCall(threadKey, callId);
 
-        if (request?.status === "pending") {
-            request.status = "declined";
+        if (found === undefined) {
+            return undefined;
         }
 
-        return request?.instanceId;
+        found.request.status = "declined";
+
+        return { instanceId: found.request.instanceId, slot: found.slot };
     };
 
     const handlers = new Map<string, HarnessFunction>([
@@ -620,10 +652,10 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             waits.deliver(instanceId, name, payload);
         },
         decline: (threadKey: string, toolCallId: string) => {
-            const instanceId = runtime.declineSecret(threadKey, toolCallId);
+            const declined = runtime.declineSecret(threadKey, toolCallId);
 
-            if (instanceId !== undefined) {
-                waits.deliver(instanceId, `secret:${toolCallId}`, {});
+            if (declined !== undefined) {
+                waits.deliver(declined.instanceId, `secret:${declined.slot}`, {});
             }
         },
         dispatches: runtime.dispatches,
@@ -639,9 +671,9 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         run,
         secrets,
         supply: async (threadKey: string, toolCallId: string, value: string) => {
-            const instanceId = await runtime.supplySecret(threadKey, toolCallId, value);
+            const supplied = await runtime.supplySecret(threadKey, toolCallId, value);
 
-            waits.deliver(instanceId, `secret:${toolCallId}`, {});
+            waits.deliver(supplied.instanceId, `secret:${supplied.slot}`, {});
         },
         thread: (threadKey: string): HarnessThread | undefined => runtime.threads.get(threadKey),
     };

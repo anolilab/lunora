@@ -35,20 +35,24 @@ describe("agentHarness — requestSecretTool", () => {
 
         const used: string[] = [];
         const harness = agentHarness(billingAgent(used), {
-            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+            script: [
+                toolCallTurn("call_1", "requestKey", { label: "API key" }),
+                toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
+                finalTurn("done"),
+            ],
         });
 
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
 
         await expect(run).resolves.toStrictEqual({ stopped: "final", text: "done", turns: 3 });
         expect(used).toStrictEqual([SECRET]);
-        expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "call_1" }));
-        expect(harness.journalEntries()).toContainEqual(expect.objectContaining({ kind: "wait", name: "secret:call_1", payload: {} }));
+        expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toBe(JSON.stringify({ secretRef: "0:call_1" }));
+        expect(harness.journalEntries()).toContainEqual(expect.objectContaining({ kind: "wait", name: "secret:0:call_1", payload: {} }));
         expect(harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret").map((dispatch) => dispatch.args)).toStrictEqual([
-            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: "run-1", threadKey: "thread-1", toolCallId: "call_1" },
+            { claimant: "tool:charge:call_2", consumerCallId: "call_2", instanceId: "run-1", threadKey: "thread-1", toolCallId: "0:call_1" },
         ]);
         expect(JSON.stringify([harness.messages("thread-1"), harness.dispatches, harness.journalEntries()])).not.toContain(SECRET);
     });
@@ -58,13 +62,17 @@ describe("agentHarness — requestSecretTool", () => {
 
         const used: string[] = [];
         const harness = agentHarness(billingAgent(used), {
-            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+            script: [
+                toolCallTurn("call_1", "requestKey", { label: "API key" }),
+                toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
+                finalTurn("done"),
+            ],
         });
         const input = { input: "charge my card", owner: "user-1", threadKey: "thread-1" };
 
         const first = harness.run(input, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
         await first;
 
@@ -84,7 +92,7 @@ describe("agentHarness — requestSecretTool", () => {
 
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
         harness.decline("thread-1", "call_1");
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
@@ -100,7 +108,7 @@ describe("agentHarness — requestSecretTool", () => {
         const harness = agentHarness(billingAgent(used), {
             script: [
                 toolCallTurn("call_1", "requestKey", { label: "API key" }),
-                toolCallTurn("call_2", "charge", { secretRef: "call_1" }),
+                toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
                 finalTurn("could not charge"),
             ],
             secrets,
@@ -108,7 +116,7 @@ describe("agentHarness — requestSecretTool", () => {
 
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
         secrets.advanceClock(TTL);
 
@@ -126,8 +134,8 @@ describe("agentHarness — requestSecretTool", () => {
 
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
-        harness.expire("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
+        harness.expire("run-1", "secret:0:call_1");
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
         expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
@@ -139,12 +147,16 @@ describe("agentHarness — journal order", () => {
         expect.assertions(2);
 
         const harness = agentHarness(billingAgent([]), {
-            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+            script: [
+                toolCallTurn("call_1", "requestKey", { label: "API key" }),
+                toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
+                finalTurn("done"),
+            ],
         });
 
         const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
 
-        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.awaitWait("run-1", "secret:0:call_1");
         await harness.supply("thread-1", "call_1", SECRET);
 
         await expect(run).resolves.toMatchObject({ stopped: "final" });
@@ -152,12 +164,12 @@ describe("agentHarness — journal order", () => {
         // The write order: the request step, the wait it parks on, then the steps that run after the delivery.
         expect(harness.journalEntries().map((entry) => `${(entry as { kind: string }).kind}:${(entry as { name: string }).name}`)).toStrictEqual([
             "step:llm:turn:0",
-            "step:secret:request:call_1",
-            "wait:secret:call_1",
-            "step:secret:settle:call_1",
+            "step:secret:request:0:call_1",
+            "wait:secret:0:call_1",
+            "step:secret:settle:0:call_1",
             "step:llm:turn:1",
-            "step:secret:consume:tool:charge:call_2:call_1",
-            "step:secret:discard:tool:charge:call_2:call_1",
+            "step:secret:consume:tool:charge:call_2:0:call_1",
+            "step:secret:discard:tool:charge:call_2:0:call_1",
             "step:tool:charge:call_2",
             "step:llm:turn:2",
         ]);
@@ -174,18 +186,41 @@ describe("agentHarness — concurrent runs", () => {
         const first = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-a" }, { instanceId: "run-a", script });
         const second = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-b" }, { instanceId: "run-b", script });
 
-        await harness.awaitWait("run-a", "secret:call_1");
-        await harness.awaitWait("run-b", "secret:call_1");
+        await harness.awaitWait("run-a", "secret:0:call_1");
+        await harness.awaitWait("run-b", "secret:0:call_1");
 
         // Declining run-a's request wakes run-a only; run-b keeps waiting until it is expired.
         harness.decline("thread-a", "call_1");
 
         await expect(first).resolves.toMatchObject({ stopped: "final" });
 
-        harness.expire("run-b", "secret:call_1");
+        harness.expire("run-b", "secret:0:call_1");
 
         await expect(second).resolves.toMatchObject({ stopped: "final" });
         expect(harness.messages("thread-b").find((message) => message.toolCallId === "call_1")?.content).toContain("not supplied before the timeout");
+    });
+
+    it("answers the request on its own thread, even when another thread's key extends it", async () => {
+        expect.assertions(3);
+
+        const harness = agentHarness(billingAgent([]), {});
+        const script = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")];
+
+        const outer = harness.run({ input: "charge my card", owner: "user-1", threadKey: "team" }, { instanceId: "run-team", script });
+        const inner = harness.run({ input: "charge my card", owner: "user-1", threadKey: "team:other" }, { instanceId: "run-other", script });
+
+        await harness.awaitWait("run-team", "secret:0:call_1");
+        await harness.awaitWait("run-other", "secret:0:call_1");
+
+        // "team" has exactly one pending request; the prefix "team:" must not also match "team:other"'s.
+        harness.decline("team", "call_1");
+
+        await expect(outer).resolves.toMatchObject({ stopped: "final" });
+        expect(harness.messages("team").find((message) => message.toolCallId === "call_1")?.content).toContain("was not run");
+
+        harness.expire("run-other", "secret:0:call_1");
+
+        await expect(inner).resolves.toMatchObject({ stopped: "final" });
     });
 });
 
