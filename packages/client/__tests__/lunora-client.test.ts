@@ -1278,6 +1278,27 @@ describe("lunoraClient", () => {
             expect(data).toHaveLength(0);
         });
 
+        it("keeps the server's why explanation on a subscription error", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const errors: { why?: string }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, { onError: (error) => errors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "CONFLICT", message: "stale", why: "row moved" }, id: firstSub(socket).id, type: "error" });
+
+            expect(errors[0]).toMatchObject({ code: "CONFLICT", why: "row moved" });
+        });
+
         it("surfaces the code and nested message from a subscription error envelope", () => {
             expect.assertions(1);
 

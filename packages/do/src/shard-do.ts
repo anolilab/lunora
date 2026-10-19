@@ -8887,7 +8887,7 @@ abstract class ShardDO {
         }
         this.unsubscribe(ws, subId);
         const { body } = toErrorBody(error, { redactedMessage: "internal error" });
-        this.sendSubscriptionError(ws, subId, body.code, body.message);
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
         this.recordSubscriptionRefreshError(functionPath, error, { subId });
         return true;
     }
@@ -13157,7 +13157,7 @@ abstract class ShardDO {
                     }
                     if (this.deliveryAuthorization && isLunoraError(error) && error.code === "SUBSCRIPTION_PERSIST_FAILED") {
                         this.unsubscribe(ws, subId);
-                        this.sendSubscriptionError(ws, subId, error.code, error.message);
+                        this.sendSubscriptionError(ws, subId, error.code, error.message, error.why);
                     }
                     this.recordSubscriptionRefreshError(functionPath, error, { subId });
                 }
@@ -13254,7 +13254,7 @@ abstract class ShardDO {
             // internal or bare throw is redacted.
             const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
 
-            this.sendSubscriptionError(ws, subId, body.code, body.message);
+            this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
         }
     }
 
@@ -13404,9 +13404,9 @@ abstract class ShardDO {
     }
 
     /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
-    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
+    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string, why?: string): void {
         try {
-            this.sendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }), "control");
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message, ...(why === undefined ? {} : { why }) }, id: subId, type: "error" }), "control");
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }

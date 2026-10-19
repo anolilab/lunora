@@ -151,8 +151,9 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
  */
 const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError => {
     const { code, messageText } = parseServerError(message, "subscription error");
+    const why = (message.error as { why?: unknown } | undefined)?.why;
 
-    return { message: messageText, ...(code === undefined ? {} : { code }) };
+    return { message: messageText, ...(code === undefined ? {} : { code }), ...(typeof why === "string" ? { why } : {}) };
 };
 
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
