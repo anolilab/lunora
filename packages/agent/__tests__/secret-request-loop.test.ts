@@ -368,7 +368,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect((request?.args as { expiresAt: number }).expiresAt - Date.now()).toBeLessThanOrEqual(DEADLINE_MS);
     });
 
-    it("changes the thread's status around the wait only while this run still owns the thread", async () => {
+    it("leaves the status of a run that took the thread over alone when the older run's wait ends", async () => {
         expect.assertions(1);
 
         const agent = secretAgent([]);
@@ -379,17 +379,51 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
             finalTurn("done"),
         ]);
 
+        // The thread's status as it stands right after the first `running` patch that follows the settle.
+        const statusAfterPatch: (string | undefined)[] = [];
+        let observed: () => void = () => {};
+        const patched = new Promise<void>((resolve) => {
+            observed = resolve;
+        });
+        let settled = false;
+        const observing: typeof runtime.run = async (reference, args) => {
+            const output = await runtime.run(reference, args);
+
+            if (reference["__lunoraRef"] === "agents:agentSettleSecretRequest") {
+                settled = true;
+
+                // A replacement run takes the thread over while the older run's wait is ending.
+                const thread = runtime.threads.get(THREAD);
+
+                if (thread === undefined) {
+                    throw new Error("the paused run has no thread");
+                }
+
+                thread.instanceId = "wf-2";
+                thread.status = "awaiting_input";
+            } else if (
+                settled &&
+                statusAfterPatch.length === 0 &&
+                reference["__lunoraRef"] === "agents:agentPatchThread" &&
+                (args as { status?: string }).status === "running"
+            ) {
+                statusAfterPatch.push(runtime.threads.get(THREAD)?.status);
+                observed();
+            }
+
+            return output;
+        };
+
         await pauseAt(agent, journal, runtime, generate);
         await host.supply("call_1", SECRET);
-        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
-        const waitPatches = runtime.dispatches
-            .filter((dispatch) => dispatch.path === "agents:agentPatchThread")
-            .map((dispatch) => dispatch.args as { ifInstanceId?: string; status?: string })
-            .filter((args) => args.status === "awaiting_input" || args.status === "running");
+        // The resumed invocation replays the journal and settles the wait; the rest of it is of no interest.
+        runAgentLoop(loopDefaults(agent, { generate, run: observing, step: journal })).catch(() => {});
 
-        // A replacement run that took the thread over while this one waited must keep its own status.
-        expect(waitPatches.filter((args) => args.ifInstanceId !== INSTANCE)).toStrictEqual([]);
+        await patched;
+
+        // The older run no longer owns the thread, so its patch after the wait changed nothing.
+        expect(statusAfterPatch).toStrictEqual(["awaiting_input"]);
     });
 
     it("does not re-run the consuming tool, or re-take the value, when the instance replays", async () => {
