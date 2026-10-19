@@ -63,16 +63,16 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
         return undefined;
     }
 
-    const { internal } = error as { internal?: unknown };
-
-    if (!isPlainRecord(internal)) {
-        return undefined;
-    }
-
     try {
-        JSON.stringify(internal);
+        const { internal } = error as { internal?: unknown };
 
-        return internal;
+        if (!isPlainRecord(internal)) {
+            return undefined;
+        }
+
+        // Return the JSON copy, not the original: a getter that answers differently on
+        // a second read would pass this check and then throw in the header encode.
+        return JSON.parse(JSON.stringify(internal)) as Record<string, unknown>;
     } catch {
         return undefined;
     }
@@ -114,14 +114,23 @@ const TRUNCATED_MESSAGE_LENGTH = 1024;
 
 /**
  * Header-safe (ASCII) encoding of an {@link ErrorDetail}, at most
- * {@link MAX_ENCODED_LENGTH} characters: over it, the stack and `internal` are dropped
- * and the message and name truncated, which always fits.
+ * {@link MAX_ENCODED_LENGTH} characters: over it, `internal` is dropped first (it is the
+ * optional part), then the stack and `internal` together with the message and name
+ * truncated, which always fits.
  */
 export const encodeErrorDetail = (detail: ErrorDetail): string => {
     const encoded = encodeURIComponent(JSON.stringify(detail));
 
     if (encoded.length <= MAX_ENCODED_LENGTH) {
         return encoded;
+    }
+
+    if (detail.internal !== undefined) {
+        const withoutInternal = encodeURIComponent(JSON.stringify({ ...detail, internal: undefined }));
+
+        if (withoutInternal.length <= MAX_ENCODED_LENGTH) {
+            return withoutInternal;
+        }
     }
 
     return encodeURIComponent(
