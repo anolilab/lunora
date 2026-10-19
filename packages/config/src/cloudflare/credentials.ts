@@ -54,13 +54,10 @@ const LINE_BREAK = /\r?\n/u;
 /** What `wrangler whoami --json` prints when no usable login exists. */
 const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
 
-/** What `wrangler whoami --json` prints when the login works. */
-const LOGGED_IN = /"loggedIn"\s*:\s*true/u;
-
 /** How long a "logged out" answer is reused, so the workers of one dev start ask once. */
 const LOGGED_OUT_TTL_MS = 10_000;
 
-/** Per project, the last explicit answer from `wrangler whoami`. */
+/** Per project, the last answer from `wrangler whoami`. */
 const answers = new Map<string, { at: number; loggedOut: boolean }>();
 
 /** A value wrapped in matching single or double quotes. */
@@ -110,8 +107,10 @@ const findWrangler = (projectRoot: string): string | undefined => {
  * Whether the project's own wrangler says its on-disk login is unusable. Everything
  * short of that exact answer (no wrangler installed, a timeout, no network) is
  * `false`, so this can only ever switch Workers AI off for a login that is dead.
- * Only an explicit answer is remembered: a working login for the process, a dead one
- * for a few seconds, so a fresh `wrangler login` is picked up without restarting.
+ * Every answer from a wrangler that ran is remembered, so the probe costs at most
+ * one timeout per process rather than one per caller: a working login or a silent
+ * one (fail-open, treated as working) for the process, a dead one for a few
+ * seconds, so a fresh `wrangler login` is picked up without restarting.
  */
 const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string | undefined>): boolean => {
     const known = answers.get(projectRoot);
@@ -131,13 +130,13 @@ const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string |
         encoding: "utf8",
         env: { ...env, WRANGLER_SEND_METRICS: "false" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: 10_000,
+        timeout: 3000,
     });
     const loggedOut = LOGGED_OUT.test(stdout);
 
-    if (loggedOut || LOGGED_IN.test(stdout)) {
-        answers.set(projectRoot, { at: Date.now(), loggedOut });
-    }
+    // A silent probe (timeout, offline) matches neither pattern: remember it as
+    // logged in, or every caller re-pays the timeout.
+    answers.set(projectRoot, { at: Date.now(), loggedOut });
 
     return loggedOut;
 };
