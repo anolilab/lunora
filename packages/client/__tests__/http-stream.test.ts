@@ -191,6 +191,22 @@ describe("httpStream", () => {
         expect((error as Error & { why?: string }).why).toBe("limit must be positive");
     });
 
+    it("does not wait on a non-2xx error body that never ends", async () => {
+        expect.assertions(1);
+
+        const body = new ReadableStream<Uint8Array>({
+            start() {
+                // Never closed: the body stays open.
+            },
+        });
+
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => new Response(body, { status: 400 })) as unknown as typeof fetch;
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_STATUS");
+    });
+
     it("fails with HTTP_STREAM_STATUS on a non-2xx response", async () => {
         expect.assertions(2);
 

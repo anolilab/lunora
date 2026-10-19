@@ -79,8 +79,7 @@ describe("shardDO (workerd)", () => {
         const stub = newStub("shard-rpc-error");
 
         await runInDurableObject(stub, async (instance) => {
-            // eslint-disable-next-line no-param-reassign -- runInDurableObject hands us the live DO so the test can configure it
-            instance.rpcError = new LunoraError("CONFLICT", "stale", { internal: { shardId: "shard-42" }, why: "row moved" });
+            instance.setRpcError(new LunoraError("CONFLICT", "stale", { internal: { shardId: "shard-42" }, why: "row moved" }));
         });
 
         const response = await stub.fetch("https://shard.internal/rpc", {

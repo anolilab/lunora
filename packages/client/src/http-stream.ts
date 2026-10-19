@@ -49,6 +49,9 @@ const MAX_RETRY_MS = 2_147_483_647;
  */
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 
+/** How long a non-2xx response's error body may take to arrive before the status error is reported without it. */
+const ERROR_BODY_WAIT_MS = 1000;
+
 /**
  * Options accepted by {@link httpStream}.
  */
@@ -399,6 +402,34 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
  */
 
 /**
+ * A non-2xx response's JSON body, read for at most `ERROR_BODY_WAIT_MS`. `undefined` when the body is
+ * absent, malformed or slow; the body is then cancelled so it cannot hold the connection. An abort
+ * while reading rethrows, so the attempt's abort handling takes over.
+ */
+const readErrorBody = async (response: Response, signal: AbortSignal): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(undefined);
+        }, ERROR_BODY_WAIT_MS);
+    });
+    const parsed = response.json().catch((error: unknown) => {
+        if (signal.aborted) {
+            throw error;
+        }
+
+        return undefined;
+    });
+
+    try {
+        return await Promise.race([parsed, slow]);
+    } finally {
+        clearTimeout(timer);
+        await response.body?.cancel().catch(() => undefined);
+    }
+};
+
+/**
  * The coded error a non-2xx stream response carries: the flat `{ code, error, why }` envelope the
  * HTTP routes send before a stream opens. `undefined` for any other body, so the caller keeps its
  * generic status error.
@@ -571,7 +602,7 @@ const httpStream = <Ref extends HttpStreamRef>(
             if (!response.ok) {
                 // A bad status is a real answer, not a transport drop — read its error
                 // envelope, if it has one, and fail WITHOUT reconnecting.
-                const body: unknown = await response.json().catch(() => undefined);
+                const body = await readErrorBody(response, ac.signal);
 
                 handle.fail(
                     statusErrorOf(body, response.status) ??

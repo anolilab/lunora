@@ -77,6 +77,10 @@ class TestShardDO extends DurableObject<Env> {
         this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
     }
 
+    public setRpcError(error: Error): void {
+        this.rpcError = error;
+    }
+
     public override fetch(request: Request): Promise<Response> {
         return this.shard.fetch(request);
     }
