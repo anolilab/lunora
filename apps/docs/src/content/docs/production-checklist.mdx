@@ -34,6 +34,10 @@ containers, log drains) live in [Deployment](/docs/deployment).
       poll timers armed while idle, so that Durable Object never evicts. Run
       such clients in a Worker, or opt out with
       `durable_object_io_tasks_do_not_prevent_eviction`.
+- [ ] A single-page app calls `client.close()` when it tears the client down.
+      Unsubscribing every query releases a shard's socket after a short idle
+      window, but the default shard's socket is the client's home connection and
+      stays open (with its heartbeat) until `close()` or page unload.
 
 ## Secrets
 
