@@ -68,6 +68,7 @@ studio.
 | `self_reschedule_without_progress` | warn  | A guarded `runAfter` re-arms the same function under one second, with no cursor and no row removed: the same work every run. From one second to a minute it is an info-level poll, and a rewrite of a row on each tick does not count as progress. |
 | `unbounded_collect_on_open_range`  | warn  | A server-driven `.collect()` on a `withIndex` range with no upper bound, and nothing in the function removes the rows it reads.                                                                                                                    |
 | `filter_after_index_scan`          | info  | A `.filter()` after `.withIndex()` on a field the index does not cover: extend the index so the read seeks instead of scanning.                                                                                                                    |
+| `cron_every_minute`                | info  | A cron job that fires every minute: a Worker invocation and target dispatch billed on every fire, whether or not there is work.                                                                                                                    |
 
 ### Security
 

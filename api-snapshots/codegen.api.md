@@ -459,6 +459,7 @@ interface LintSchemaOptions {
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
     countReads?: ReadonlyArray<CountReadIR>;
+    crons?: ReadonlyArray<CronJobIR>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;

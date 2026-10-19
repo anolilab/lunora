@@ -2488,6 +2488,9 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@visulima/cron-parser':
+        specifier: catalog:tooling
+        version: 2.0.0
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
