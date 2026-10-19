@@ -64,6 +64,41 @@ describe("shard host prepared statement cache", () => {
         }
     });
 
+    it("steps a raw() read as it is iterated, so stopping early never reads the rest", () => {
+        expect.assertions(2);
+
+        const { database, dispose, host } = createNodeShardHost();
+        let evaluated = 0;
+
+        try {
+            database.function("tick", () => {
+                evaluated += 1;
+
+                return evaluated;
+            });
+            host.sql.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+            host.sql.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000) INSERT INTO t (id) SELECT i FROM n");
+
+            const cursor = host.sql.exec("SELECT tick() FROM t");
+
+            expect(evaluated).toBe(0);
+
+            let taken = 0;
+
+            for (const row of cursor.raw?.() ?? []) {
+                taken += row.length;
+
+                if (taken === 10) {
+                    break;
+                }
+            }
+
+            expect(evaluated).toBe(10);
+        } finally {
+            dispose();
+        }
+    });
+
     it("evicts the least recently used statement past the cap", () => {
         expect.assertions(3);
 
