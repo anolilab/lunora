@@ -208,6 +208,16 @@ describe("findCheckoutRoot", () => {
         expect(findCheckoutRoot(join(worktree, "apps", "studio"))).toStrictEqual({ linked: true, root: worktree });
     });
 
+    it("treats a submodule's .git file as a main checkout, since it points into modules/", () => {
+        expect.hasAssertions();
+
+        const submodule = tempRepo();
+
+        writeFileSync(join(submodule, ".git"), "gitdir: ../.git/modules/lib\n");
+
+        expect(findCheckoutRoot(submodule)).toStrictEqual({ linked: false, root: submodule });
+    });
+
     it("returns undefined outside any checkout", () => {
         expect.hasAssertions();
 
