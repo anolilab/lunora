@@ -72,8 +72,8 @@ const tsconfigFiles = (tsconfigPath: string): string[] => {
 const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfigSources.filter((path) => DECLARATION_FILE_RE.test(path));
 
 /**
- * Whether the token at the scanner's position is `export`, or an `import` that starts a
- * declaration rather than an `import(` call or `import.meta`.
+ * Whether `token` is `export`, or an `import` that starts a declaration rather than an
+ * `import(` call or `import.meta`. An `import` consumes the token after it to tell them apart.
  */
 const isModuleKeyword = (scanner: ts.Scanner, token: ts.SyntaxKind): boolean => {
     if (token === ts.SyntaxKind.ExportKeyword) {
