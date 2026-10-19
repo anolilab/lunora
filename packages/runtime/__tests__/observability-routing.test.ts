@@ -257,6 +257,22 @@ describe("enrichSink", () => {
         expect(JSON.stringify(received.logs[0]?.fields)).not.toContain("hunter2-secret");
     });
 
+    it("redacts the message of an Error nested in an array, as it does a top-level one", () => {
+        expect.assertions(2);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { diagnostics: [new Error("password=hunter2-secret")] }; // gitleaks:allow -- test fixture, not a credential
+        });
+
+        wrapped.onLog?.(log);
+
+        const serialized = JSON.stringify(received.logs[0]?.fields);
+
+        expect(serialized).toContain("password=<REDACTED>");
+        expect(serialized).not.toContain("hunter2-secret");
+    });
+
     it("reports a throwing enricher, so a broken one is not silent", () => {
         expect.assertions(1);
 

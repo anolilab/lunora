@@ -162,17 +162,38 @@ const reportEnricherFailure = (error: unknown): void => {
 };
 
 /**
- * Turn a top-level `Error` value into a record of its name, message and enumerable fields,
- * so redaction sees its message. `normalizeLogFields` serializes nested objects as JSON,
- * which already leaves a nested message out.
+ * A copy of an enricher's bag in which every `Error`, at any depth, is a plain record of its
+ * name, message and enumerable fields. Redaction then sees each message and credential field,
+ * and normalizing serializes the copy without leaving an `Error` opaque. Only plain objects and
+ * arrays are rebuilt, so a `Date` or another class instance keeps its value, and a cycle is cut.
  */
-const flattenErrorValues = (bag: LogFields): LogFields =>
-    Object.fromEntries(
-        Object.entries(bag).map(([key, value]) => [
-            key,
-            value instanceof Error ? { ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name } : value,
-        ]),
-    );
+const plainErrors = (value: unknown, seen = new WeakSet<object>()): unknown => {
+    if (typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    if (seen.has(value)) {
+        return undefined;
+    }
+
+    seen.add(value);
+
+    if (value instanceof Error) {
+        return plainErrors({ ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name }, seen);
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => plainErrors(item, seen));
+    }
+
+    const proto: unknown = Object.getPrototypeOf(value);
+
+    if (proto !== Object.prototype && proto !== null) {
+        return value;
+    }
+
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plainErrors(item, seen)]));
+};
 
 /**
  * Run the enricher over one event and return the normalized, redacted bag, or
@@ -184,7 +205,7 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // which the key-aware redactor can no longer see into. A throw anywhere here,
         // including in normalizing, leaves the event unchanged rather than dropped.
         const derived = enrich(event, signal);
-        const flat = derived === undefined ? undefined : flattenErrorValues(derived);
+        const flat = derived === undefined ? undefined : (plainErrors(derived) as LogFields);
         const redacted = signal === "log" ? redactArgs(flat) : redactCredentials(flat);
 
         return normalizeLogFields(redacted as LogFields | undefined);
