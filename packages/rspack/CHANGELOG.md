@@ -1,3 +1,16 @@
+## @lunora/rspack [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.77...@lunora/rspack@1.0.0-alpha.78) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.333
+* **@lunora/config:** upgraded to 1.0.0-alpha.382
+* **@lunora/studio:** upgraded to 1.0.0-alpha.322
+
 ## @lunora/rspack [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.76...@lunora/rspack@1.0.0-alpha.77) (2026-10-19)
 
 
