@@ -43,8 +43,7 @@ const emitLive = (streams: ReadonlyArray<LiveStreamIR>, useUmbrella = false): st
                 return `        ${topic.name}: (): ${reference} => ({ __lunoraLive: ${id}, topic: ${JSON.stringify(topic.name)} }),`;
             }
 
-            // Each key value is percent-encoded and joined with `:` in the DECLARED field order, the rule `parseLiveTopic` inverts on
-            // the server. It is spelled inline so this module needs no runtime package: a backend-only worker imports it to publish.
+            // Declared field order, each value percent-encoded: the rule `parseLiveTopic` inverts. See the module docblock for why it is inline.
             const segments = topic.fields.map((field) => `\${encodeURIComponent(key.${field})}`).join(":");
 
             return `        ${topic.name}: (key: LiveTopicKey<${declaration}>): ${reference} => ({
