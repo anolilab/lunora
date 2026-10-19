@@ -74,8 +74,15 @@ export interface DevPortInputs {
 
 const isUsablePort = (port: number): boolean => port <= MAX_PORT && !BLOCKED_PORTS.has(port);
 
-const isUsablePair = (offset: number): boolean =>
-    [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES].every((base) => isUsablePort(base + offset));
+const PORT_BASES: readonly number[] = [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES];
+
+const isUsablePair = (offset: number): boolean => PORT_BASES.every((base) => isUsablePort(base + offset));
+
+/**
+ * An offset that moves one base onto another (the main checkout's own port) is a collision
+ * a checkout beside it would hit. Those offsets are exactly the differences between two bases.
+ */
+const collidesWithMainCheckout = (offset: number): boolean => PORT_BASES.some((base) => PORT_BASES.includes(base + offset));
 
 /** A pinned port (the `base`) moved by the checkout's offset. */
 export const shiftedPort = (base: number, ports: DevPorts): number => base + ports.offset;
@@ -107,6 +114,10 @@ export const resolveDevPorts = ({ env, linked, root }: DevPortInputs): DevPorts 
 
         if (!isUsablePair(offset)) {
             throw new Error(`[dev-ports] ${ENV_OFFSET}=${explicit} puts the dev ports out of range or on a browser-blocked port; pick another offset.`);
+        }
+
+        if (collidesWithMainCheckout(offset)) {
+            throw new Error(`[dev-ports] ${ENV_OFFSET}=${explicit} moves a dev port onto another pinned port of the main checkout; pick another offset.`);
         }
 
         return withOffset(offset, "env");

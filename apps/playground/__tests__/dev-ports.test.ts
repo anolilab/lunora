@@ -26,6 +26,13 @@ const offsets = Array.from({ length: EXPLICIT_OFFSETS }, (_, index) => index + 1
 const pairIsBlocked = (offset: number): boolean =>
     [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES].some((base) => BLOCKED_PORTS.has(base + offset));
 
+/** Whether shifting a pinned base by `offset` lands on another pinned base of the main checkout. */
+const overlapsMainCheckout = (offset: number): boolean => {
+    const bases = [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES];
+
+    return bases.some((base) => bases.includes(base + offset));
+};
+
 /** The resolved pair for an explicit offset, or `undefined` when the offset is rejected. */
 const tryExplicitOffset = (offset: number): DevPorts | undefined => {
     try {
@@ -46,11 +53,11 @@ describe("derivePortOffset", () => {
         expect(new Set(derived).size).toBe(roots.length);
     });
 
-    it("never yields a browser-blocked pair, and rejects only the blocked explicit offsets", () => {
+    it("never yields a browser-blocked pair, and rejects only the blocked or colliding explicit offsets", () => {
         expect.hasAssertions();
 
         const accepted = offsets.map((offset) => tryExplicitOffset(offset)).filter((ports): ports is DevPorts => ports !== undefined);
-        const rejectedCount = offsets.filter((offset) => pairIsBlocked(offset)).length;
+        const rejectedCount = offsets.filter((offset) => pairIsBlocked(offset) || overlapsMainCheckout(offset)).length;
 
         expect(accepted).toHaveLength(EXPLICIT_OFFSETS - rejectedCount);
         expect(accepted.some((ports) => BLOCKED_PORTS.has(ports.playground) || BLOCKED_PORTS.has(ports.studio))).toBe(false);
@@ -150,6 +157,18 @@ describe("resolveDevPorts", () => {
         const ports = resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "0" }, linked: true, root: "/worktree" });
 
         expect([ports.playground, ports.studio, ports.source]).toStrictEqual([5173, 5174, "legacy"]);
+    });
+
+    it("rejects an explicit offset that lands a pinned port on another pinned port, and keeps the stride", () => {
+        expect.hasAssertions();
+
+        // 1: studio 5174 + 1 = 5175, the blog's pinned port. 2: playground 5173 + 2 = 5175.
+        // 100: playground 5173 + 100 = 5273, an e2e example's pinned port.
+        expect(() => resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "1" }, linked: true, root: "/worktree" })).toThrow(/pinned port/u);
+        expect(() => resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "2" }, linked: false, root: "/x" })).toThrow(/pinned port/u);
+        expect(() => resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "100" }, linked: false, root: "/x" })).toThrow(/pinned port/u);
+        // The derived stride never collides with a pinned port, so an offset of 200 is accepted.
+        expect(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "200" }, linked: false, root: "/x" }).playground).toBe(5373);
     });
 
     it("rejects a malformed or browser-blocked explicit offset instead of drifting", () => {
