@@ -306,6 +306,24 @@ describe("globals declared outside lunora/", () => {
             expected: "x: string",
         },
         {
+            name: "a script that reads a property named export",
+            files: { "src/globals.ts": "const config = { export: 1 };\nconst value = config.export;\ndeclare var __PROPERTY__: string;\n" },
+            handler: "{ property: __PROPERTY__ }",
+            expected: "property: string",
+        },
+        {
+            name: "a script with a regex literal that contains export",
+            files: { "src/globals.ts": "const pattern = /export/;\ndeclare var __PATTERN__: number;\n" },
+            handler: "{ pattern: __PATTERN__ }",
+            expected: "pattern: number",
+        },
+        {
+            name: "a script whose JSX text says import",
+            files: { "src/view.tsx": "const view = <p>import the data</p>;\ndeclare var __VIEW__: boolean;\n" },
+            handler: "{ view: __VIEW__ }",
+            expected: "view: boolean",
+        },
+        {
             name: "a declare module for a specifier the lunora source imports",
             files: { "src/virtual.ts": 'declare module "virtual-mode" {\n    export const mode: "dev" | "prod";\n}\n' },
             probeImports: 'import { mode } from "virtual-mode";\n',

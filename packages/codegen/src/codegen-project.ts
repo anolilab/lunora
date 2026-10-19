@@ -1,7 +1,7 @@
 /**
  * Creates and refreshes the ts-morph project codegen reads, and locates its tsconfig.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { Project, ts } from "ts-morph";
@@ -71,79 +71,29 @@ const tsconfigFiles = (tsconfigPath: string): string[] => {
  */
 const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfigSources.filter((path) => DECLARATION_FILE_RE.test(path));
 
-/**
- * Whether `token` is `export`, or an `import` that starts a module declaration: an import
- * clause, or `import x = require(…)`. Not an `import(` call, `import.meta`, or an alias to
- * a namespace member such as `import x = N.name`. Consumes the tokens after an `import`
- * to tell them apart.
- */
-const isModuleKeyword = (scanner: ts.Scanner, token: ts.SyntaxKind): boolean => {
-    if (token === ts.SyntaxKind.ExportKeyword) {
-        return true;
-    }
-
-    if (token !== ts.SyntaxKind.ImportKeyword) {
-        return false;
-    }
-
-    const next = scanner.scan();
-
-    if (next === ts.SyntaxKind.OpenParenToken || next === ts.SyntaxKind.DotToken) {
-        return false;
-    }
-
-    if (next !== ts.SyntaxKind.Identifier || scanner.scan() !== ts.SyntaxKind.EqualsToken) {
-        return true;
-    }
-
-    return scanner.scan() === ts.SyntaxKind.Identifier && scanner.getTokenValue() === "require";
-};
+/** Each file's module status, keyed on mtime + size so a warm refresh does not re-parse it. */
+const moduleFileCache = new Map<string, { isModule: boolean; key: string }>();
 
 /**
- * Whether a file is a module, which is what keeps its declarations out of the program
- * (a script's are global). Scanned token by token, so an `import` or `export` in a
- * comment or string does not count, and neither does one inside a namespace or
- * braces. Stops at the first module token, which is near the top of a module.
+ * Whether a file is a module, which is what keeps its declarations out of the program (a
+ * script's are global). Asked of the TypeScript parser, which knows what is module syntax
+ * and what is not: an `import` or `export` in a comment, string, regex, JSX text or
+ * property name does not count, and neither does one inside a namespace.
  */
-const isModuleSource = (text: string): boolean => {
-    const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
-    // Braces open at this point, and the depth each template's `${` began at, so the `}`
-    // that closes a substitution is read as template text rather than as code.
-    let depth = 0;
-    const substitutionDepths: number[] = [];
+const isModuleFile = (path: string, text: string): boolean => {
+    const stats = statSync(path);
+    const key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
+    const cached = moduleFileCache.get(path);
 
-    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-        switch (token) {
-            case ts.SyntaxKind.CloseBraceToken: {
-                if (substitutionDepths.at(-1) === depth) {
-                    if (scanner.reScanTemplateToken(false) === ts.SyntaxKind.TemplateTail) {
-                        substitutionDepths.pop();
-                    }
-                } else {
-                    depth -= 1;
-                }
-
-                break;
-            }
-            case ts.SyntaxKind.OpenBraceToken: {
-                depth += 1;
-
-                break;
-            }
-            case ts.SyntaxKind.TemplateHead: {
-                substitutionDepths.push(depth);
-
-                break;
-            }
-            default: {
-                if (depth === 0 && isModuleKeyword(scanner, token)) {
-                    return true;
-                }
-            }
-        }
+    if (cached?.key === key) {
+        return cached.isModule;
     }
 
-    return false;
+    const isModule = ts.isExternalModule(ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false));
+
+    moduleFileCache.set(path, { isModule, key });
+
+    return isModule;
 };
 
 /** Whether `text` imports or names `specifier` as a quoted module name, or a subpath of it (`"x/y"`). */
@@ -170,7 +120,7 @@ const globalDeclarationFiles = (tsconfigSources: string[], lunoraDirectory: stri
 
         const text = readFileSync(path, "utf8");
 
-        if (GLOBAL_DECLARATION_RE.test(text) || !isModuleSource(text)) {
+        if (GLOBAL_DECLARATION_RE.test(text) || !isModuleFile(path, text)) {
             return true;
         }
 
