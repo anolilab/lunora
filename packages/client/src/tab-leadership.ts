@@ -1,5 +1,6 @@
 import type { ConnectionStatus } from "./connection-state";
 import { dropConfirmedLayers, refoldSubscription } from "./optimistic-layers";
+import type { ShapeSubscriptionState } from "./shape-state";
 import type { SubscriptionError, SubscriptionState } from "./subscription";
 import { fanSubscriptionError } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
@@ -27,6 +28,9 @@ export interface LeaderMirror {
 export interface TabLeadershipHost {
     /** Mark `state` acked and advance its resume position when the frame carries a newer one. */
     ackAndAdvanceCursor: (state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void;
+
+    /** Every shape subscription, which a socket answers and a mirror never does. */
+    activeShapes: () => ShapeSubscriptionState[];
 
     /** Every subscription, snapshotted, so a resubscribe cannot change the set it walks. */
     activeSubscriptions: () => SubscriptionState[];
@@ -74,6 +78,10 @@ export const onBecomeLeader = (host: TabLeadershipHost): void => {
         host.queueResubscribe(state);
     }
 
+    for (const shape of host.activeShapes()) {
+        shape.answered = false;
+    }
+
     for (const shardKey of host.queuedShardKeys()) {
         host.ensureSocket(shardKey);
     }
@@ -95,8 +103,15 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
     mirror.status = undefined;
     mirror.wasEverConnected = false;
 
+    // What this tab's own socket acknowledged ends with that socket. A follower is answered by the leader's
+    // mirrored values (which set these again), so the demoted tab's old answers must not count towards sync.
     for (const state of host.activeSubscriptions()) {
+        state.acked = false;
         state.valueReceived = false;
+    }
+
+    for (const shape of host.activeShapes()) {
+        shape.answered = false;
     }
 
     host.emitConnectionStatus();

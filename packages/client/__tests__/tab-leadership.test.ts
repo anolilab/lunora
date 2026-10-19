@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ConnectionStatus } from "../src/connection-state";
+import type { ShapeSubscriptionState } from "../src/shape-state";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
 import type { LeaderMirror, TabLeadershipHost } from "../src/tab-leadership";
 import {
@@ -18,6 +19,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
     const leader: LeaderMirror = { status: undefined, wasEverConnected: false, ...mirror };
     const host: TabLeadershipHost = {
         ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
+        activeShapes: vi.fn<() => ShapeSubscriptionState[]>(() => []),
         activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
         broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
         clientIdentifier: vi.fn<() => string>(() => "client-a"),
@@ -111,6 +113,19 @@ describe("onBecomeLeader", () => {
     });
 });
 
+describe("onBecomeLeader shapes", () => {
+    it("treats a shape as unanswered until the new socket answers it", () => {
+        expect.assertions(1);
+
+        const shape = { answered: true } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape] });
+
+        onBecomeLeader(host);
+
+        expect(shape.answered).toBe(false);
+    });
+});
+
 describe("onStopBeingLeader", () => {
     it("closes every connection and clears the mirror of the previous leader", () => {
         expect.assertions(3);
@@ -133,6 +148,20 @@ describe("onStopBeingLeader", () => {
         onStopBeingLeader(host);
 
         expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(state.valueReceived).toBe(false);
+    });
+
+    it("forgets the answers its own socket gave, for shapes and acked queries", () => {
+        expect.assertions(3);
+
+        const state = liveSubscription({ acked: true });
+        const shape = { answered: true } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape], activeSubscriptions: () => [state] });
+
+        onStopBeingLeader(host);
+
+        expect(shape.answered).toBe(false);
+        expect(state.acked).toBe(false);
         expect(state.valueReceived).toBe(false);
     });
 });

@@ -59,6 +59,76 @@ describe("direct mutation whose response was lost", () => {
         client.close();
     });
 
+    it("replays under the same mutationId even though the write's own commit invalidated its precondition", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const mutationIds: (string | undefined)[] = [];
+        let calls = 0;
+        let liveQueryChanged = false;
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            calls += 1;
+            mutationIds.push((init?.headers as Record<string, string>)["x-lunora-mutation-id"]);
+
+            if (calls === 1) {
+                // The write committed and its new value is pushed to the live query before the retry goes out.
+                liveQueryChanged = true;
+
+                throw new TypeError("network connection lost");
+            }
+
+            return jsonResponse({ result: { ok: true } });
+        });
+        const client = await createConnectedClient(fetchImpl);
+        const write = client.mutation(fnRef("todos.set"), { text: "a" }, { precondition: () => !liveQueryChanged });
+
+        await vi.advanceTimersByTimeAsync(2000);
+
+        await expect(write).resolves.toStrictEqual({ ok: true });
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        expect(mutationIds[1]).toBe(mutationIds[0]);
+
+        client.close();
+    });
+
+    it("still honours the precondition of a write queued because the socket was down", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            heartbeatIntervalMs: 0,
+            persistence: createInMemoryPersistence(),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        await settle();
+        sockets[0]?.triggerClose();
+
+        const outcome = client.mutation(fnRef("todos.set"), { text: "a" }, { precondition: () => false }).then(
+            () => "resolved",
+            (error: unknown) => (error as { code?: string }).code,
+        );
+
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.open();
+        await vi.runAllTimersAsync();
+
+        await expect(outcome).resolves.toBe("OFFLINE_PRECONDITION_FAILED");
+        expect(fetchImpl).not.toHaveBeenCalled();
+
+        client.close();
+    });
+
     it("still rejects when the server reached a verdict", async () => {
         expect.assertions(2);
 

@@ -247,6 +247,64 @@ describe("sync status of an ackless subscription", () => {
     });
 });
 
+describe("sync status across shards", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("counts a polling shard's delivered value even while another shard holds an open socket", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            const { calls } = JSON.parse(init?.body as string) as { calls: unknown[] };
+
+            return jsonResponse({
+                results: calls.map((_call, id) => {
+                    return { body: { result: { count: 2 } }, id, status: 200 };
+                }),
+            });
+        });
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            heartbeatIntervalMs: 0,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket,
+        });
+
+        // Shard A: an open socket, acked.
+        client.subscribe(fnRef("todos.list"), {}, () => undefined, { shardKey: "a" });
+        await settle();
+        sockets[0]?.open();
+        await settle();
+        sockets[0]?.receive({ id: sockets[0]?.frames()[0]?.id, type: "ack" });
+
+        // Shard B never reaches `open`, so it falls back to polling.
+        client.subscribe(fnRef("messages.list"), {}, () => undefined, { shardKey: "b" });
+        await settle();
+        await failOpens(sockets, 2);
+        await settle();
+
+        // The first poll is what proves the origin reachable, and it already delivered shard B's value.
+        expect(client.syncStatus()).toMatchObject({ connection: "connected", pendingSubscriptions: 0, synced: true });
+
+        // An acked socket is not evidence for the other shard: a fresh subscription on B waits for its own poll.
+        client.subscribe(fnRef("other.list"), {}, () => undefined, { shardKey: "b" });
+
+        expect(client.syncStatus()).toMatchObject({ connection: "connected", pendingSubscriptions: 1, synced: false });
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(client.syncStatus()).toMatchObject({ connection: "connected", pendingSubscriptions: 0, synced: true });
+
+        client.close();
+    });
+});
+
 describe("sync status of queued writes in flight", () => {
     afterEach(() => {
         vi.useRealTimers();
@@ -410,6 +468,62 @@ describe("sync status across a leadership change", () => {
 
         expect(client.syncStatus()).toMatchObject({ connection: "idle" });
         expect(seen.at(-1)).toMatchObject({ connection: "idle" });
+
+        client.close();
+    });
+
+    it("stops counting a demoted leader's socket answers, for queries and shapes alike", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const handlers: ((event: { data: unknown }) => void)[] = [];
+
+        class FakeChannel {
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public addEventListener(_type: string, handler: (event: { data: unknown }) => void): void {
+                handlers.push(handler);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public close(): void {}
+
+            // eslint-disable-next-line class-methods-use-this -- test double
+            public postMessage(): void {}
+        }
+
+        vi.stubGlobal("BroadcastChannel", FakeChannel);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({ crossTabSync: true, fetch: vi.fn<typeof fetch>(), heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const seen: SyncStatus[] = [];
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        client.subscribeShape({ name: "messages" }, () => undefined);
+        // Nobody answers the claim, so this tab leads and opens its socket.
+        await vi.advanceTimersByTimeAsync(3500);
+        sockets[0]?.open();
+        await settle();
+        sockets[0]?.receive({ id: sockets[0]?.frames().find((frame) => frame.type === "subscribe")?.id, type: "ack" });
+        poke(sockets[0], sockets[0]?.frames().find((frame) => frame.type === "shape_subscribe")?.id, 5);
+        client.onSyncStatus((status) => seen.push(status));
+
+        expect(seen.at(-1)).toMatchObject({ connection: "connected", pendingSubscriptions: 0, synced: true });
+
+        // A tab that outranks this one claims the leadership: this socket closes with both answers on it.
+        for (const handler of handlers) {
+            handler({ data: { tabId: "aaa-leader-tab", ts: Date.now(), type: "heartbeat" } });
+        }
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 2, synced: false });
+        expect(seen.at(-1)).toMatchObject({ pendingSubscriptions: 2, synced: false });
+
+        // The new leader delivers the query's value, which is what answers it again; nothing has answered the shape.
+        for (const handler of handlers) {
+            handler({ data: { data: [], key: "todos.list::{}::", tabId: "aaa-leader-tab", type: "subscription-data" } });
+        }
+
+        expect(client.syncStatus()).toMatchObject({ pendingSubscriptions: 1, synced: false });
 
         client.close();
     });

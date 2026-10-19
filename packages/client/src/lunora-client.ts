@@ -148,7 +148,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isStaleDataFrame } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
     onBecomeLeader,
@@ -2399,19 +2399,24 @@ class LunoraClient {
      * that reads `"connected"` the moment a socket opens, while subscriptions still
      * have no data and queued writes are still waiting to go out.
      *
-     * Over the HTTP polling fallback, and on a cross-tab follower (neither sees
-     * server acknowledgements), a subscription counts as answered once the
-     * current connection has delivered a value for it; a hydrated cache does not.
+     * Over the HTTP polling fallback (judged per shard, so one polling shard does
+     * not wait on an ack while another holds an open socket), and on a cross-tab
+     * follower (neither sees server acknowledgements), a subscription counts as
+     * answered once the current connection has delivered a value for it; a
+     * hydrated cache does not.
      * A write counts as pending from the moment it is queued until the server
      * settles it, including while its replay request is on the wire.
      */
     public syncStatus(): SyncStatus {
         const connection = this.computeStatus();
-        // Neither the polling fallback nor a follower tab sees a server `ack`; a delivered value is the evidence there is.
-        const ackless = connection === "polling" || (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader());
+        const follower = this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
         let pendingSubscriptions = 0;
 
         for (const state of this.subscriptions.all()) {
+            // Neither the polling fallback nor a follower tab sees a server `ack`; a delivered value is the evidence
+            // there is. Judged per shard: one shard may poll while another holds an open socket.
+            const ackless = follower || this.connectionGateState(state.shardKey).polling;
+
             if (!(state.acked || (ackless && state.valueReceived))) {
                 pendingSubscriptions += 1;
             }
@@ -4523,6 +4528,7 @@ class LunoraClient {
         // The leader and follower hooks run against this host. It exposes operations on the
         // client, so the hooks reach no state of their own.
         const leadership: TabLeadershipHost = {
+            activeShapes: () => [...this.shapeSubscriptions.values()],
             activeSubscriptions: () => this.subscriptions.all(),
             broadcastStatus: (status, identity) => this.tabCoordinator?.broadcastConnectionStatus(status, identity),
             closeConnections: () => {
@@ -4781,7 +4787,9 @@ class LunoraClient {
                 mutationId,
                 optimisticRollbacks,
                 optimisticConfirms,
-                options.precondition,
+                // Its precondition already held when the direct send went out. Re-running it before the retry
+                // would fail on the very frame the write's own commit pushed, and reject a write that landed.
+                ambiguousSend ? undefined : options.precondition,
                 options.mutationId,
                 replay?.stamp,
                 ambiguousSend,
@@ -7467,6 +7475,11 @@ class LunoraClient {
         const state = id ? this.subscriptions.getById(id) : undefined;
 
         if (!state) {
+            return;
+        }
+
+        // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
+        if (message.type === "data" && isStaleDataFrame(state, message)) {
             return;
         }
 
