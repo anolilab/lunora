@@ -52,7 +52,7 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
-               [--lazy-functions]
+               [--lazy-functions] [--no-smoke-load]
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
              [--lazy-functions] [--no-smoke-load]
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
@@ -603,16 +603,19 @@ run used lazy mode. `--prebuilt` skips regeneration and keeps the existing outpu
 
 With lazy functions, `lunora deploy` and `lunora build` also evaluate every lazy
 module in workerd (`wrangler dev --local`) before anything ships, so a module
-that throws on load fails the command instead of its first caller. The check
-reports how many functions it covered and names each failing module with its file;
-it blocks when the Worker starts and then fails, whether the entry throws on load or local
-`wrangler dev` cannot run the project (a remote-only binding, a missing assets directory). It also blocks
-when the Worker answers with something other than the check's result, which usually means a route sends
-`/_lunora/*` to the assets instead of the Worker. It warns and continues when the check cannot run at all
-(a virtual `main`, a target that is not workerd, declared containers, which `wrangler dev` would build locally, or a Hyperdrive binding with no local database). It catches what evaluation
-raises: a top-level `throw`, or a call on an import that is `undefined`. A circular import that never throws
-during evaluation is not caught, because the bundler hoists it. Pass
-`--no-smoke-load` to skip it.
+that throws on load fails the command instead of its first caller. `lunora prepare`
+runs the same check, so a CI gate sees it too. The check reports how many functions
+it covered and names each failing module with its file. It blocks in three cases:
+a module that fails to load; a Worker that does not start, whether the entry is broken
+or local `wrangler dev` cannot run the project (a remote-only binding, a missing assets
+directory); and a Worker that starts and then fails, or answers with something other than
+the check's result, which usually means a route sends `/_lunora/*` to the assets instead
+of the Worker. It warns and continues when the check cannot run at all (a virtual `main`,
+a target that is not workerd, declared containers, which `wrangler dev` would build locally,
+or a Hyperdrive binding with no local database). It catches what evaluation raises: a
+top-level `throw`, or a call on an import that is `undefined`. A circular import that never
+throws during evaluation is not caught, because the bundler hoists it. Pass `--no-smoke-load`
+to skip it.
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker

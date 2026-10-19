@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -170,9 +170,40 @@ describe(runLazySmokeLoad, () => {
         const error = await run();
 
         expect(error).toContain(
-            "  lunora/billing/invoices.ts (ping): (void 0) is not a function\n      hint: an import is undefined while this module evaluates",
+            "  lunora/billing/invoices.ts (ping): (void 0) is not a function\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates",
         );
         expect(error).not.toContain("boom");
+    });
+
+    // esbuild turns a circular `const` into `var`, so the real symptom is a plain `is not a function`, not `(void 0)`.
+    it("keeps the circular-import hint for the plain TypeError a bundled circular import raises", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(cwd, "lunora", "posts.ts"), "");
+        respondWith({ checked: 1, failures: [{ functionPath: "posts:list", message: "fromA is not a function" }] });
+
+        await expect(run()).resolves.toContain("if this module is part of a circular import");
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("still lists the failing modules when a directory cannot be read", async () => {
+        expect.assertions(3);
+
+        const locked = join(cwd, "lunora", "locked");
+
+        mkdirSync(locked, { recursive: true });
+        chmodSync(locked, 0o000);
+
+        try {
+            respondWith({ checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }] });
+
+            const error = await run();
+
+            expect(error).toContain("1 of 1 lazy function(s) fail to load:\n  posts (list): boom");
+            expect(error).not.toContain("did not start");
+            expect(logger.error).toHaveBeenCalledWith(error);
+        } finally {
+            chmodSync(locked, 0o755);
+        }
     });
 
     it("reports how many functions it covered when nothing fails", async () => {

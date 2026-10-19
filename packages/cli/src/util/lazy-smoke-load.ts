@@ -70,8 +70,16 @@ const isModuleFailure = (value: unknown): value is ModuleFailure =>
 const functionFilesByNamespace = (cwd: string): Map<string, string> => {
     const schemaDirectory = resolveSchemaDirectory(cwd);
     const files = new Map<string, string>();
+    let entries: string[];
 
-    for (const file of readdirSync(join(cwd, schemaDirectory), { recursive: true, encoding: "utf8" })) {
+    try {
+        entries = readdirSync(join(cwd, schemaDirectory), { recursive: true, encoding: "utf8" });
+    } catch {
+        // Unreadable directory: the failures still print, by namespace, and the failing modules stay listed.
+        return files;
+    }
+
+    for (const file of entries) {
         const extension = extname(file);
 
         if (MODULE_EXTENSIONS.has(extension) && !file.split(sep).some((part) => part === "_generated" || part === "node_modules")) {
@@ -99,7 +107,7 @@ const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): st
 
     return [...modules.values()].map(({ exports, message, namespace }) => {
         const hint = UNDEFINED_IMPORT_SYMPTOM.test(message)
-            ? "\n      hint: an import is undefined while this module evaluates — look for a circular import or an export that does not exist"
+            ? "\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates"
             : "";
 
         return `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${hint}`;
@@ -437,11 +445,11 @@ export default {
  * real Worker entry plus `loadAllFunctions()` in workerd (`wrangler dev --local`) and returns an
  * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
  *
- * A failure of the project's modules, or a Worker that starts and then fails, blocks. A check that
- * cannot run at all (no resolvable entry, a target that is not workerd, containers, a Hyperdrive binding with no
- * local database, or a run directory
- * or command that cannot be prepared) warns and returns `undefined`, because it says nothing about the
- * project. See {@link reportSmokeError}.
+ * A failure of the project's modules blocks. So does a Worker that does not start (a broken entry, or a local
+ * `wrangler dev` that cannot run the project) or that starts and then fails. A check that cannot run at all
+ * (no resolvable entry, a target that is not workerd, containers, a Hyperdrive binding with no local database,
+ * or a run directory or command that cannot be prepared) warns and returns `undefined`, because it says nothing
+ * about the project. See {@link reportSmokeError}.
  */
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { configPath, cwd, environment, launcher, logger, toolchain } = options;
