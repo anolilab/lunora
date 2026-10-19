@@ -611,6 +611,19 @@ describe("secret request component", () => {
             expect(puts).toStrictEqual([]);
         });
 
+        it("keeps the committed decline when the wake-up fails to send", async () => {
+            expect.assertions(3);
+
+            const caller = ackLostAgents();
+            const { ctx, functions, rows } = await stagedThread("user-a", spyStore().store, caller);
+
+            await expect(inTransaction(rows, () => call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" }))).resolves.toStrictEqual(
+                { resolved: true },
+            );
+            expect(caller.sent).toHaveLength(1);
+            expect(requestRow(rows)["status"]).toBe("declined");
+        });
+
         it("applies the same owner gate as supply", async () => {
             expect.assertions(1);
 
