@@ -53,6 +53,27 @@ describe("agentHarness — requestSecretTool", () => {
         expect(JSON.stringify([harness.messages("thread-1"), harness.dispatches, harness.journalEntries()])).not.toContain(SECRET);
     });
 
+    it("resumes a finished instance from its journal without waiting for the secret again", async () => {
+        expect.assertions(3);
+
+        const used: string[] = [];
+        const harness = agentHarness(billingAgent(used), {
+            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), toolCallTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")],
+        });
+        const input = { input: "charge my card", threadKey: "thread-1" };
+
+        const first = harness.run(input, { instanceId: "run-1" });
+
+        await harness.awaitWait("run-1", "secret:call_1");
+        await harness.supply("thread-1", "call_1", SECRET);
+        await first;
+
+        // The same instance again: every step, the wait included, is served from the journal.
+        await expect(harness.run(input, { instanceId: "run-1" })).resolves.toStrictEqual({ stopped: "final", text: "done", turns: 3 });
+        expect(used).toStrictEqual([SECRET]);
+        expect(harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret")).toHaveLength(1);
+    });
+
     it("resolves a declined request as a deterministic tool result and takes nothing", async () => {
         expect.assertions(3);
 

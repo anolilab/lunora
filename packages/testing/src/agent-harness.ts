@@ -230,7 +230,17 @@ class DurableStepJournal implements AgentStepLike {
     }
 
     public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
+        // A wait that already resolved is a recorded step: a resumed instance reads it back
+        // rather than waiting for an event that was delivered and consumed once.
+        const recorded = this.entries.get(`wait:${name}`);
+
+        if (recorded) {
+            return { payload: recorded.output as Readonly<T>, type: options.type };
+        }
+
         const payload = await this.waits.wait(this.instanceId, name, options.type);
+
+        this.entries.set(`wait:${name}`, { output: payload });
 
         return { payload: payload as Readonly<T>, type: options.type };
     }
