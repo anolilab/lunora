@@ -1,5 +1,6 @@
 import type { LogEventInput } from "@lunora/observability";
 import { readRequestLog, SENSITIVE_ARG_MASK } from "@lunora/observability";
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
@@ -177,6 +178,13 @@ class TelemetryShard extends ShardDO {
 
         const anchor = this.resolveDispatchAnchor(false);
         const log = this.makeLogger(functionPath, this.sink, undefined, sensitive);
+
+        if (functionPath === "vault:hook") {
+            // A lifecycle hook that logs the marked value of the event it was handed.
+            log.info(String(args["value"]));
+
+            return { ok: true };
+        }
 
         if (functionPath === "vault:fail") {
             // A recorded span is what gives the dispatch a root span to carry the failure.
@@ -522,6 +530,72 @@ describe("shardDO scrubs a v.sensitive value from every record a dispatch writes
 
             expect(late?.message).toBe(`late ${SENSITIVE_ARG_MASK}`);
             expect(late?.fields).toStrictEqual({ label: "primary", value: SENSITIVE_ARG_MASK });
+            expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+});
+
+/** Exposes the lifecycle dispatch, and names one hook, so a test can drive it. */
+class LifecycleShard extends TelemetryShard {
+    public runLifecycle(event: Record<string, unknown>): Promise<void> {
+        return this.dispatchLifecycle("disconnect", { event, identity: null, ip: undefined, userId: undefined } as never);
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: the hook paths are fixed
+    protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
+        return event === "disconnect" ? ["vault:hook"] : [];
+    }
+}
+
+describe("lifecycle hooks run under the sensitive scope of their event", () => {
+    it("masks a marked event value that a lifecycle hook logs", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new LifecycleShard(makeState(database), {});
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            await shard.runLifecycle({ value: SECRET });
+
+            expect(logs.length).toBeGreaterThan(0);
+            expect(JSON.stringify(logs)).not.toContain(SECRET);
+        } finally {
+            database.close();
+        }
+    });
+});
+
+describe("run-as dispatches under the sensitive scope of their arguments", () => {
+    it("masks a marked argument that the run-as target logs", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+        const logs: LogEventInput[] = [];
+
+        try {
+            const shard = new TelemetryShard(makeState(database), { LUNORA_ADMIN_TOKEN: "run-as-admin" });
+
+            shard.sink = { onLog: (event) => logs.push(event), onSpan: () => undefined };
+
+            const response = await shard.fetch(
+                new Request("https://shard.invalid/rpc", {
+                    body: JSON.stringify({
+                        args: { args: { value: SECRET }, functionPath: "vault:hook", userId: "victim" },
+                        functionPath: ADMIN_FUNCTIONS.runAs,
+                    }),
+                    headers: { authorization: "Bearer run-as-admin", "content-type": "application/json" }, // gitleaks:allow -- fixture token, matched against the env value above
+                    method: "POST",
+                }),
+            );
+
+            expect(response.status).toBe(200);
+            expect(logs.length).toBeGreaterThan(0);
             expect(JSON.stringify(logs)).not.toContain(SECRET);
         } finally {
             database.close();

@@ -3731,20 +3731,24 @@ abstract class ShardDO {
      */
     protected async dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void> {
         for (const functionPath of this.lifecycleHookPaths(event)) {
+            // The event is passed as the handler's `args`; the lifecycle
+            // wrapper forwards it verbatim. `handleRpc` builds the ctx and
+            // enforces the internal-visibility gate, which the system flag
+            // satisfies.
+            const hookArgs = info.event as unknown as Record<string, unknown>;
+
             try {
-                // The event is passed as the handler's `args`; the lifecycle
-                // wrapper forwards it verbatim. `handleRpc` builds the ctx and
-                // enforces the internal-visibility gate, which the system flag
-                // satisfies.
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
-                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
-                    this.withSystemDispatch(() => this.handleRpc(functionPath, info.event as unknown as Record<string, unknown>)),
+                await this.withSensitiveScope(functionPath, hookArgs, (sensitive) =>
+                    this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                        this.withSystemDispatch(() => this.handleRpc(functionPath, hookArgs, undefined, undefined, undefined, sensitive)),
+                    ),
                 );
             } catch (error: unknown) {
                 this.logs.push({
                     functionPath,
                     level: "error",
-                    message: error instanceof Error ? error.message : String(error),
+                    message: this.sensitiveFailureMessage(functionPath, hookArgs, error),
                     timestamp: Date.now(),
                 });
             }
@@ -3869,7 +3873,9 @@ abstract class ShardDO {
         for (const functionPath of this.lifecycleHookPaths("init")) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: a later hook may depend on state an earlier one rebuilt, and a throwing hook must not skip the rest
-                await this.withSystemDispatch(() => this.handleRpc(functionPath, event));
+                await this.withSensitiveScope(functionPath, event, (sensitive) =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, event, undefined, undefined, undefined, sensitive)),
+                );
             } catch (error: unknown) {
                 this.recordShardInitError(functionPath, error);
             }
@@ -5913,6 +5919,27 @@ abstract class ShardDO {
      * call. The callee runs inside that invocation, so its own `v.sensitive` values
      * are scrubbed from its records too, not only the caller's.
      */
+
+    /**
+     * Run a dispatch outside `/rpc` under the sensitive scope its arguments open, so a
+     * `v.sensitive` argument is masked in the records it writes, as it is on `/rpc`. The
+     * scope is released once the dispatch and its records are done.
+     */
+    protected async withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T> {
+        const sensitive = this.openSensitiveScope(functionPath, args);
+
+        try {
+            return await run(sensitive);
+        } finally {
+            sensitive.clear();
+        }
+    }
+
+    /** The message of a failed dispatch, with the sensitive values of its arguments masked before it is logged. */
+    protected sensitiveFailureMessage(functionPath: string, args: Record<string, unknown>, error: unknown): string {
+        return this.openSensitiveScope(functionPath, args).text(error instanceof Error ? error.message : String(error));
+    }
+
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void {
         const sensitive = this.sensitiveArgNames(functionPath);
 
@@ -11009,7 +11036,11 @@ abstract class ShardDO {
         // `currentRequestIp` holds either nothing or a concurrently-parked
         // `/rpc`'s address — the admin request scope clears it for exactly that
         // reason. The identity is forged here; an IP would be borrowed.
-        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () => this.handleRpc(parsed.functionPath, parsed.args));
+        const result = await this.withSensitiveScope(parsed.functionPath, parsed.args, (sensitive) =>
+            this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () =>
+                this.handleRpc(parsed.functionPath, parsed.args, undefined, undefined, undefined, sensitive),
+            ),
+        );
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -16458,6 +16489,8 @@ abstract class ShardDO {
         let allowed = true;
 
         for (const functionPath of paths) {
+            const authorizerArgs = event as unknown as Record<string, unknown>;
+
             try {
                 // Same dispatch shape as `dispatchLifecycle`: the socket's verified
                 // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
@@ -16466,8 +16499,10 @@ abstract class ShardDO {
                 // QUERY, so `handleRpc` runs it without a write span.
                 //
                 // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
-                const verdict = await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
-                    this.withSystemDispatch(() => this.handleRpc(functionPath, event as unknown as Record<string, unknown>)),
+                const verdict = await this.withSensitiveScope(functionPath, authorizerArgs, (sensitive) =>
+                    this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                        this.withSystemDispatch(() => this.handleRpc(functionPath, authorizerArgs, undefined, undefined, undefined, sensitive)),
+                    ),
                 );
 
                 if (verdict !== true) {
@@ -16482,7 +16517,7 @@ abstract class ShardDO {
                 this.logs.push({
                     functionPath,
                     level: "error",
-                    message: error instanceof Error ? error.message : String(error),
+                    message: this.sensitiveFailureMessage(functionPath, authorizerArgs, error),
                     timestamp: Date.now(),
                 });
 
@@ -16923,11 +16958,14 @@ abstract class ShardDO {
 
         // Declared out here so the `catch` scrubs with it and the `finally` releases it.
         let sensitive: SensitiveScope | undefined;
+        let dispatchArgs: Record<string, unknown> = {};
 
         try {
             // The inbound frame is wire-encoded; decoding it here keeps a malformed
             // payload inside the logged dispatch instead of throwing out of the socket handler.
             const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
+
+            dispatchArgs = args;
 
             sensitive = this.openSensitiveScope(route.functionPath, args);
 
@@ -16940,7 +16978,7 @@ abstract class ShardDO {
             // A failure after the handler's writes committed (a deferred step that would not run) leaves those
             // writes durable, so the frames announcing them are still owed, as for a room. Only a failure before
             // the commit drops them.
-            if (!this.absorbCommittedFailure(route.functionPath, error)) {
+            if (!this.absorbCommittedFailure(route.functionPath, dispatchArgs, error)) {
                 const thrownText = error instanceof Error ? error.message : String(error);
 
                 this.logs.push({
@@ -17133,7 +17171,7 @@ abstract class ShardDO {
      * Whether a failure is one the room event survives: a post-commit step after durable writes.
      * It is logged, and the event's broadcasts and membership stand.
      */
-    private absorbCommittedFailure(functionPath: string, error: unknown): boolean {
+    private absorbCommittedFailure(functionPath: string, args: Record<string, unknown>, error: unknown): boolean {
         if (!isCommittedFailure(error)) {
             return false;
         }
@@ -17141,7 +17179,7 @@ abstract class ShardDO {
         this.logs.push({
             functionPath,
             level: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: this.sensitiveFailureMessage(functionPath, args, error),
             timestamp: Date.now(),
         });
 
@@ -17159,11 +17197,12 @@ abstract class ShardDO {
         kind: RoomEventKind,
         joinEpoch: number | undefined,
         error: unknown,
+        args: Record<string, unknown> = {},
     ): false {
         this.logs.push({
             functionPath,
             level: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: this.sensitiveFailureMessage(functionPath, args, error),
             timestamp: Date.now(),
         });
 
@@ -17267,18 +17306,26 @@ abstract class ShardDO {
             shardKey: info.event.shardKey,
             userId: info.event.userId,
         };
+        let dispatchArgs: Record<string, unknown> = {};
+
         try {
             // The client wire-encoded `message`; decode it back to real values here
             // so a malformed payload is logged, not thrown out of the socket handler.
             const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
 
-            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(functionPath, args)));
+            dispatchArgs = args;
+
+            await this.withSensitiveScope(functionPath, args, (sensitive) =>
+                this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, args, undefined, undefined, undefined, sensitive)),
+                ),
+            );
         } catch (error: unknown) {
             // A failure after the write committed (a deferred schedule that would not enqueue) leaves
             // the room's writes durable. Members must still hear them and a join keeps its membership,
             // so only a failure before the commit is refused.
-            if (!this.absorbCommittedFailure(functionPath, error)) {
-                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error);
+            if (!this.absorbCommittedFailure(functionPath, dispatchArgs, error)) {
+                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error, dispatchArgs);
             }
         }
 
