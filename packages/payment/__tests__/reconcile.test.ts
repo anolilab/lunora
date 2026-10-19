@@ -253,6 +253,52 @@ describe("reconcile", () => {
         expect(events.at(-1)?.type).toBe("reconcile.completed");
     });
 
+    it("bounds the provider reads in flight during a sweep", async () => {
+        expect.assertions(2);
+
+        let inFlight = 0;
+        let peak = 0;
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async (id: string) => {
+                inFlight += 1;
+                peak = Math.max(peak, inFlight);
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+                inFlight -= 1;
+
+                return { ...subscription("active"), id };
+            },
+        };
+        const ids = Array.from({ length: 20 }, (_, index) => `sub_${String(index)}`);
+
+        const result = await reconcile({ adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
+
+        expect(peak).toBeLessThanOrEqual(8);
+        expect(result.updatedSubscriptions).toBe(20);
+    });
+
+    it("skips the write when a webhook landed on the row mid-sweep", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const stale = { ...subscription("past_due"), lastEventAt: 100 };
+
+        await store.upsertSubscription(stale);
+
+        vi.spyOn(store, "getSubscription")
+            .mockResolvedValueOnce(stale)
+            .mockResolvedValueOnce({ ...subscription("canceled"), lastEventAt: 200 });
+
+        const upsert = vi.spyOn(store, "upsertSubscription");
+
+        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+
+        expect(upsert).not.toHaveBeenCalled();
+        expect(result.updatedSubscriptions).toBe(0);
+    });
+
     it("re-forwards a usage event whose upstream report failed, and marks it reported", async () => {
         expect.assertions(4);
 
