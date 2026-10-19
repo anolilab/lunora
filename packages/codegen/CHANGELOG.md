@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.329...@lunora/codegen@1.0.0-alpha.330) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.238
+* **@lunora/agent:** upgraded to 1.0.0-alpha.229
+* **@lunora/container:** upgraded to 1.0.0-alpha.83
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/queue:** upgraded to 1.0.0-alpha.116
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.138
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.86
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+* **@lunora/payment:** upgraded to 1.0.0-alpha.223
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+
 ## @lunora/codegen [1.0.0-alpha.329](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.328...@lunora/codegen@1.0.0-alpha.329) (2026-10-19)
 
 ### Features
