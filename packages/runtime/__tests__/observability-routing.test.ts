@@ -273,6 +273,19 @@ describe("enrichSink", () => {
         expect(serialized).not.toContain("hunter2-secret");
     });
 
+    it("keeps an enriched __proto__ field as an own field the sink receives", () => {
+        expect.assertions(1);
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { ["__proto__"]: "kept" };
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(Object.getOwnPropertyDescriptor(received.logs[0]?.fields ?? {}, "__proto__")?.value).toBe("kept");
+    });
+
     it("leaves out an enriched key whose value is undefined, and keeps the rest", () => {
         expect.assertions(2);
 

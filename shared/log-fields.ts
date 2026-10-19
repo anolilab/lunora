@@ -57,6 +57,14 @@ export const coerceFieldValue = (value: unknown): boolean | number | string =>
  * absent/empty bag (so an empty `{}` doesn't ride every destination). Bound
  * `.with(...)` fields are merged under the per-call fields (per-call wins).
  */
+/**
+ * Set an own, enumerable field. Assignment would treat a `__proto__` key as the prototype and
+ * drop the field, so the field is defined instead.
+ */
+const setField = (target: LogFields, key: string, value: unknown): void => {
+    Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
+};
+
 export const normalizeLogFields = (perCall: LogFields | undefined, bound?: LogFields): LogFields | undefined => {
     if (perCall === undefined && bound === undefined) {
         return undefined;
@@ -66,13 +74,13 @@ export const normalizeLogFields = (perCall: LogFields | undefined, bound?: LogFi
 
     if (bound !== undefined) {
         for (const [key, value] of Object.entries(bound)) {
-            merged[key] = coerceFieldValue(value);
+            setField(merged, key, coerceFieldValue(value));
         }
     }
 
     if (perCall !== undefined) {
         for (const [key, value] of Object.entries(perCall)) {
-            merged[key] = coerceFieldValue(value);
+            setField(merged, key, coerceFieldValue(value));
         }
     }
 
