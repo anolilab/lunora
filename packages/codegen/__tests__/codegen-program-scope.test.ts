@@ -300,6 +300,12 @@ describe("globals declared outside lunora/", () => {
             expected: "x: string",
         },
         {
+            name: "a script whose top-level import alias points at a namespace member",
+            files: { "src/app-types.ts": "declare namespace App {\n    export interface Env {\n        x: string;\n    }\n}\n\nimport Env = App.Env;\n" },
+            handler: "{ x: (null as unknown as Env).x }",
+            expected: "x: string",
+        },
+        {
             name: "a declare module for a specifier the lunora source imports",
             files: { "src/virtual.ts": 'declare module "virtual-mode" {\n    export const mode: "dev" | "prod";\n}\n' },
             probeImports: 'import { mode } from "virtual-mode";\n',

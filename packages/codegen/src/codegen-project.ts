@@ -72,15 +72,31 @@ const tsconfigFiles = (tsconfigPath: string): string[] => {
 const ambientDeclarationFiles = (tsconfigSources: string[]): string[] => tsconfigSources.filter((path) => DECLARATION_FILE_RE.test(path));
 
 /**
- * Whether `token` is `export`, or an `import` that starts a declaration rather than an
- * `import(` call or `import.meta`. An `import` consumes the token after it to tell them apart.
+ * Whether `token` is `export`, or an `import` that starts a module declaration: an import
+ * clause, or `import x = require(…)`. Not an `import(` call, `import.meta`, or an alias to
+ * a namespace member such as `import x = N.name`. Consumes the tokens after an `import`
+ * to tell them apart.
  */
 const isModuleKeyword = (scanner: ts.Scanner, token: ts.SyntaxKind): boolean => {
     if (token === ts.SyntaxKind.ExportKeyword) {
         return true;
     }
 
-    return token === ts.SyntaxKind.ImportKeyword && ![ts.SyntaxKind.DotToken, ts.SyntaxKind.OpenParenToken].includes(scanner.scan());
+    if (token !== ts.SyntaxKind.ImportKeyword) {
+        return false;
+    }
+
+    const next = scanner.scan();
+
+    if (next === ts.SyntaxKind.OpenParenToken || next === ts.SyntaxKind.DotToken) {
+        return false;
+    }
+
+    if (next !== ts.SyntaxKind.Identifier || scanner.scan() !== ts.SyntaxKind.EqualsToken) {
+        return true;
+    }
+
+    return scanner.scan() === ts.SyntaxKind.Identifier && scanner.getTokenValue() === "require";
 };
 
 /**
