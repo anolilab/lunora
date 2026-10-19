@@ -5933,12 +5933,12 @@ class LunoraClient {
                 }),
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
-                resubscribePending: new Map(),
-                unackedRetryTimers: new Map(),
                 resubscribeQueue: [],
+                resubscribeSlots: new Set(),
                 shardKey,
                 socket: undefined,
                 stableTimer: undefined,
+                unackedWatchdogs: new Map(),
                 // A shard reopened after an idle close was connected before: its
                 // writes stay queue-eligible while it reconnects.
                 wasEverConnected: this.idleClosedShards.delete(key),
@@ -6975,12 +6975,12 @@ class LunoraClient {
      * Cannot wedge: a queued subscription whose frame does not actually go out
      * (socket closed, already acked, unsubscribed while queued) takes no slot,
      * every sent frame is released by the first server frame carrying its id
-     * (see {@link handleServerMessage}) or by its own watchdog, and a disconnect
+     * (see {@link handleServerMessage}) or by its watchdog, and a disconnect
      * drops the queue wholesale — the next `open` re-queues every subscription
      * on the shard, because `markShardPendingAck` un-acked them all.
      */
     private drainResubscribeQueue(conn: ShardConnection): void {
-        while (conn.resubscribePending.size < RESUBSCRIBE_CONCURRENCY) {
+        while (conn.resubscribeSlots.size < RESUBSCRIBE_CONCURRENCY) {
             const state = conn.resubscribeQueue.shift();
 
             if (!state) {
@@ -6996,26 +6996,21 @@ class LunoraClient {
                 continue;
             }
 
-            conn.resubscribePending.set(
-                state.id,
-                setTimeout(() => {
-                    this.releaseResubscribeSlot(conn, state.id);
-                }, RESUBSCRIBE_ACK_TIMEOUT_MS),
-            );
+            conn.resubscribeSlots.add(state.id);
         }
     }
 
-    /** Free the in-flight slot `id` holds on `conn` (if any) and let the next queued subscribe go out. */
-    private releaseResubscribeSlot(conn: ShardConnection, id: string): void {
-        const watchdog = conn.resubscribePending.get(id);
+    /**
+     * Stand down `id`'s watchdog on `conn` — its `subscribe` frame was answered or the socket went
+     * away — and, if it held a pacing slot, free it so the next queued subscribe goes out.
+     */
+    private settleSubscribeWatchdog(conn: ShardConnection, id: string): void {
+        clearTimeout(conn.unackedWatchdogs.get(id));
+        conn.unackedWatchdogs.delete(id);
 
-        if (watchdog === undefined) {
-            return;
+        if (conn.resubscribeSlots.delete(id)) {
+            this.drainResubscribeQueue(conn);
         }
-
-        clearTimeout(watchdog);
-        conn.resubscribePending.delete(id);
-        this.drainResubscribeQueue(conn);
     }
 
     /**
@@ -7026,13 +7021,12 @@ class LunoraClient {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
     private clearResubscribeQueue(conn: ShardConnection): void {
-        for (const watchdog of [...conn.resubscribePending.values(), ...conn.unackedRetryTimers.values()]) {
+        for (const watchdog of conn.unackedWatchdogs.values()) {
             clearTimeout(watchdog);
         }
 
-        conn.unackedRetryTimers.clear();
-
-        conn.resubscribePending.clear();
+        conn.unackedWatchdogs.clear();
+        conn.resubscribeSlots.clear();
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do
         conn.resubscribeQueue = [];
     }
@@ -7087,30 +7081,30 @@ class LunoraClient {
         });
 
         if (sent && !isRetry) {
-            this.armUnackedRetry(conn, state);
+            this.armUnackedWatchdog(conn, state);
         }
 
         return sent;
     }
 
     /**
-     * Re-send `state`'s `subscribe` once if no frame bearing its id arrives within
-     * {@link RESUBSCRIBE_ACK_TIMEOUT_MS}. A server that drops the frame without
-     * replying (a shard still waking, a swallowed message) would otherwise leave
-     * the subscription un-acked on a perfectly live socket until the next
-     * reconnect, because the pacing watchdog only frees its slot. One retry, not a
-     * loop: a query that is merely slow must not be re-run repeatedly.
+     * Watch `state`'s `subscribe` frame: if no frame bearing its id arrives within
+     * {@link RESUBSCRIBE_ACK_TIMEOUT_MS}, free the pacing slot it holds (if any) and
+     * re-send the frame once. A server that drops the frame without replying (a
+     * shard still waking, a swallowed message) would otherwise leave the
+     * subscription un-acked on a perfectly live socket until the next reconnect.
+     * One retry, not a loop: a query that is merely slow must not be re-run repeatedly.
      */
-    private armUnackedRetry(conn: ShardConnection, state: SubscriptionState): void {
-        clearTimeout(conn.unackedRetryTimers.get(state.id));
-        conn.unackedRetryTimers.set(
+    private armUnackedWatchdog(conn: ShardConnection, state: SubscriptionState): void {
+        clearTimeout(conn.unackedWatchdogs.get(state.id));
+        conn.unackedWatchdogs.set(
             state.id,
             setTimeout(() => {
-                conn.unackedRetryTimers.delete(state.id);
-
                 if (!state.acked && this.subscriptions.getById(state.id) === state) {
                     this.sendSubscribeIfOpen(state, true);
                 }
+
+                this.settleSubscribeWatchdog(conn, state.id);
             }, RESUBSCRIBE_ACK_TIMEOUT_MS),
         );
     }
@@ -7176,9 +7170,7 @@ class LunoraClient {
             if (conn) {
                 const { id } = message as { id: string };
 
-                this.releaseResubscribeSlot(conn, id);
-                clearTimeout(conn.unackedRetryTimers.get(id));
-                conn.unackedRetryTimers.delete(id);
+                this.settleSubscribeWatchdog(conn, id);
             }
         }
 
