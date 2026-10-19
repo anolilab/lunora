@@ -648,6 +648,86 @@ describe("schema-drift", () => {
             expect(lost).toStrictEqual([]);
         });
 
+        it("does not report drift when a `v.from()` nested in a container lacks a recorded output type on one side", () => {
+            expect.assertions(8);
+
+            const recorded = { kind: "from", tsType: "number" } as const;
+            const unrecorded = { kind: "from" } as const;
+            const containers: ((inner: TableIR["shape"][string]) => TableIR["shape"][string])[] = [
+                (inner) => {
+                    return { inner, kind: "array" };
+                },
+                (inner) => {
+                    return { kind: "object", shape: { score: inner } };
+                },
+                (inner) => {
+                    return { inner, kind: "optional" };
+                },
+                (inner) => {
+                    return { kind: "record", keyType: { kind: "string" }, valueType: inner };
+                },
+                (inner) => {
+                    return { kind: "union", members: [{ kind: "string" }, inner] };
+                },
+            ];
+
+            for (const wrap of containers) {
+                const { changes: gained } = compare({ score: wrap(unrecorded) }, { score: wrap(recorded) });
+                const { changes: lost } = compare({ score: wrap(recorded) }, { score: wrap(unrecorded) });
+
+                expect([gained, lost]).toStrictEqual([[], []]);
+            }
+
+            // Mixed shapes: one resolved and one unresolved `v.from()` side by side.
+            const pair = (first: typeof recorded | typeof unrecorded, second: typeof recorded | typeof unrecorded) => {
+                return {
+                    kind: "object" as const,
+                    shape: { first, second },
+                };
+            };
+
+            expect(compare({ score: pair(unrecorded, recorded) }, { score: pair(recorded, recorded) }).changes).toStrictEqual([]);
+            expect(compare({ score: pair(recorded, recorded) }, { score: pair(recorded, unrecorded) }).changes).toStrictEqual([]);
+            expect(
+                compare(
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, unrecorded] } },
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, { kind: "from", tsType: "b" }] } },
+                ).changes,
+            ).toStrictEqual([]);
+        });
+
+        it("still flags a nested `v.from()` whose output type changed when both sides recorded it", () => {
+            expect.assertions(4);
+
+            const from = (tsType: string) => ({ kind: "from", tsType }) as const;
+
+            const { changes: inArray } = compare({ score: { inner: from("string"), kind: "array" } }, { score: { inner: from("number"), kind: "array" } });
+            const { changes: inObject } = compare(
+                { score: { kind: "object", shape: { a: from("string") } } },
+                { score: { kind: "object", shape: { a: from("number") } } },
+            );
+
+            expect(inArray).toHaveLength(1);
+            expect(inArray[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(inObject).toHaveLength(1);
+            expect(inObject[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+        });
+
+        it("does not record a `v.from()` output type that names a file path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", { score: { kind: "from", tsType: 'import("/Users/ci/work/app/schemas").Score' }, tag: { kind: "from", tsType: "string" } }),
+                ]),
+                [],
+            );
+            const fields = snapshot.tables.users?.fields;
+
+            expect(fields?.score).not.toHaveProperty("output");
+            expect(fields?.tag).toMatchObject({ output: "string" });
+        });
+
         it("sees an array element type change (it moves the storage projection)", () => {
             expect.assertions(3);
 

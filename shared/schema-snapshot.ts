@@ -532,22 +532,87 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
     return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type };
 };
 
+/** Does any `v.from()` in this field's subtree have no recorded output type? */
+const lacksFromOutput = (field: FieldSnapshot): boolean =>
+    (field.kind === "from" && field.output === undefined) ||
+    [field.key, field.of, ...Object.values(field.fields ?? {}), ...(field.members ?? [])].some((child) => child !== undefined && lacksFromOutput(child));
+
 /**
- * Both sides of a `v.from()` comparison, with the recorded output type dropped
- * from each unless BOTH sides recorded one.
+ * The field with every `v.from()` output type in its subtree dropped. Union
+ * members are re-sorted, since the builder ordered them by their serialized form
+ * and that form included the output.
+ */
+const withoutFromOutput = (field: FieldSnapshot): FieldSnapshot => {
+    return {
+        ...field,
+        ...(field.kind === "from" ? { output: undefined } : {}),
+        ...(field.fields ? { fields: Object.fromEntries(Object.entries(field.fields).map(([name, member]) => [name, withoutFromOutput(member)])) } : {}),
+        ...(field.key ? { key: withoutFromOutput(field.key) } : {}),
+        ...(field.of ? { of: withoutFromOutput(field.of) } : {}),
+        ...(field.members
+            ? {
+                  members: field.members
+                      .map((member) => withoutFromOutput(member))
+                      .toSorted((a, b) => {
+                          const left = JSON.stringify(a);
+                          const right = JSON.stringify(b);
+
+                          if (left === right) {
+                              return 0;
+                          }
+
+                          return left < right ? -1 : 1;
+                      }),
+              }
+            : {}),
+    };
+};
+
+/**
+ * Both sides of a shape comparison, with a `v.from()` output type dropped
+ * wherever either side does not record one.
  *
  * A baseline written before the output type was snapshotted, or built where the
  * type checker could not resolve it, simply does not know the type. Diffing it
  * against a snapshot that does would report every `v.from()` column as changed on
- * the first run after an upgrade — a drift nothing in the schema caused.
+ * the first run after an upgrade — a drift nothing in the schema caused. That
+ * holds for a `v.from()` nested in an array/object/record just as for a column
+ * that is one, so corresponding children are normalised recursively. Union
+ * members have no stable pairing (they are sorted by their own content), so a
+ * union drops every output in its subtree once either side lacks one.
  */
-const comparableFromOutput = (old: FieldSnapshot, field: FieldSnapshot): [FieldSnapshot, FieldSnapshot] =>
-    old.kind === "from" && field.kind === "from" && (old.output === undefined || field.output === undefined)
-        ? [
-              { ...old, output: undefined },
-              { ...field, output: undefined },
-          ]
-        : [old, field];
+const comparableFromOutput = (old: FieldSnapshot, field: FieldSnapshot): [FieldSnapshot, FieldSnapshot] => {
+    if (old.kind !== field.kind) {
+        return [old, field];
+    }
+
+    if (old.kind === "from" || old.kind === "union") {
+        return lacksFromOutput(old) || lacksFromOutput(field) ? [withoutFromOutput(old), withoutFromOutput(field)] : [old, field];
+    }
+
+    const oldChildren: Partial<FieldSnapshot> = { ...(old.fields ? { fields: { ...old.fields } } : {}) };
+    const newChildren: Partial<FieldSnapshot> = { ...(field.fields ? { fields: { ...field.fields } } : {}) };
+
+    for (const slot of ["key", "of"] as const) {
+        if (old[slot] && field[slot]) {
+            [oldChildren[slot], newChildren[slot]] = comparableFromOutput(old[slot], field[slot]);
+        }
+    }
+
+    for (const name of Object.keys(old.fields ?? {})) {
+        const oldMember = old.fields?.[name];
+        const newMember = field.fields?.[name];
+
+        if (oldMember && newMember && oldChildren.fields && newChildren.fields) {
+            [oldChildren.fields[name], newChildren.fields[name]] = comparableFromOutput(oldMember, newMember);
+        }
+    }
+
+    return [
+        { ...old, ...oldChildren },
+        { ...field, ...newChildren },
+    ];
+};
 
 /**
  * Classify a change to the field's value SHAPE: its kind, its `v.id` target, its
