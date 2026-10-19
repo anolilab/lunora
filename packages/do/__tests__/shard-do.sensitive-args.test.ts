@@ -111,6 +111,25 @@ describe("shardDO request log masks v.sensitive arguments", () => {
         }
     });
 
+    it("masks a marked boolean argument by its name in the request log, where a value match could not", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SensitiveShard(makeState(database), {});
+
+            await shard.fetch(rpc("vault:store", { label: "primary", value: true }));
+
+            const [row] = readRequestLog(database.sql);
+
+            expect(row?.redactedArgs).toStrictEqual({ label: "primary", value: SENSITIVE_ARG_MASK });
+            expect(JSON.stringify(readRequestLog(database.sql))).not.toContain("true");
+        } finally {
+            database.close();
+        }
+    });
+
     it("leaves an unmarked function's arguments exactly as sent", async () => {
         expect.assertions(1);
 
