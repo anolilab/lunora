@@ -1,3 +1,19 @@
+## @lunora/cli [1.0.0-alpha.401](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.400...@lunora/cli@1.0.0-alpha.401) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.236
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/config:** upgraded to 1.0.0-alpha.377
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.243
+* **@lunora/seed:** upgraded to 1.0.0-alpha.238
+* **@lunora/testing:** upgraded to 1.0.0-alpha.283
+
 ## @lunora/cli [1.0.0-alpha.400](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.399...@lunora/cli@1.0.0-alpha.400) (2026-10-18)
 
 ### Features
