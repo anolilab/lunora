@@ -16,9 +16,9 @@ export default defineConfig(({ command, mode }) => {
         const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
         const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, port);
 
+        // Refused, not warned: see the playground config.
         if (stale !== undefined) {
-            // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
-            console.warn(
+            throw new Error(
                 `[blog] .dev.vars sets LUNORA_ORIGIN_URL="${stale}" but this checkout serves :${String(port)}; scheduled jobs would call back to the wrong server. Set it to http://localhost:${String(port)}.`,
             );
         }

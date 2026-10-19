@@ -21,9 +21,10 @@ export default defineConfig(({ command, mode }) => {
         const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
         const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, ports.playground);
 
+        // Refused, not warned: the scheduler dispatches to this variable and cannot be steered at runtime, so a
+        // warning lets scheduled jobs run on another checkout's server.
         if (stale !== undefined) {
-            // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
-            console.warn(
+            throw new Error(
                 `[playground] .dev.vars sets LUNORA_ORIGIN_URL="${stale}" but this checkout serves :${String(ports.playground)}; scheduled jobs would call back to the wrong server. Set it to http://localhost:${String(ports.playground)}.`,
             );
         }
