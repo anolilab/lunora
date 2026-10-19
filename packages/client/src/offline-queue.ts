@@ -183,8 +183,8 @@ class OfflineQueue {
 
     private readonly items: QueuedMutation[] = [];
 
-    /** Appends still in flight, by write id. Anything that touches a record durably waits on its append first. */
-    private readonly appending = new Map<string, Promise<void>>();
+    /** Appends still in flight, by write id, each resolving to whether the record landed. Anything that touches a record durably waits on its append first. */
+    private readonly appending = new Map<string, Promise<boolean>>();
 
     /** Records whose append was rejected (a quota error, a closed connection), kept to be tried again — see {@link OfflineQueue.flushUnpersisted}. */
     private readonly unpersisted = new Map<string, PersistedMutation>();
@@ -497,12 +497,27 @@ class OfflineQueue {
         // purge them (e.g. on logout).
         for (const item of this.items) {
             const error = new Error("CLIENT_CLOSED");
+            const id = item.id ?? "";
+            const reject = (persisted: boolean): void => {
+                (error as Error & { code?: string }).code = "CLIENT_CLOSED";
+                // The record outlives this client and replays in the next session: the
+                // write is not lost, whatever the rejection suggests.
+                (error as Error & { persisted?: boolean }).persisted = persisted;
+                item.reject(error);
+            };
+            const landing = this.appending.get(id);
 
-            (error as Error & { code?: string }).code = "CLIENT_CLOSED";
-            // The record outlives this client and replays in the next session: the
-            // write is not lost, whatever the rejection suggests.
-            (error as Error & { persisted?: boolean }).persisted = this.persistence !== undefined && !this.unpersisted.has(item.id ?? "");
-            item.reject(error);
+            if (landing === undefined) {
+                reject(this.persistence !== undefined && !this.unpersisted.has(id));
+            } else {
+                // An append in flight is in neither `unpersisted` nor storage yet, so the only honest
+                // answer is what the append turns out to be; a failure after this point has nobody
+                // left to retry it.
+                landing
+                    .catch(() => false)
+                    .then(reject)
+                    .catch(() => undefined);
+            }
         }
 
         this.items.length = 0;
@@ -531,10 +546,12 @@ class OfflineQueue {
             return;
         }
 
-        const landing = (async (): Promise<void> => {
+        const landing = (async (): Promise<boolean> => {
             try {
                 await persistence.append(record);
                 this.unpersisted.delete(record.id);
+
+                return true;
             } catch (error: unknown) {
                 // Only a write still queued is worth retrying; one settled meanwhile is gone for good.
                 if (this.items.some((item) => item.id === record.id)) {
@@ -542,6 +559,8 @@ class OfflineQueue {
                 }
 
                 reportPersistenceError(this.onPersistenceError, "append", error, record.id);
+
+                return false;
             }
         })();
 
