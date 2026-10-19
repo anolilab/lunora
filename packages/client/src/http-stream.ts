@@ -396,6 +396,25 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 };
 
 /**
+ * The coded error a non-2xx stream response carries: the flat `{ code, error, why }` envelope the
+ * HTTP routes send before a stream opens. `undefined` for any other body, so the caller keeps its
+ * generic status error.
+ */
+const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { code, error, why } = body as { code?: unknown; error?: unknown; why?: unknown };
+
+    if (typeof code !== "string" || typeof error !== "string") {
+        return undefined;
+    }
+
+    return new LunoraError(code, error, { status, why: typeof why === "string" ? why : undefined });
+};
+
+/**
  * Request headers for one attempt. A set `lastEventId` replaces any differently
  * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
  * and only the latest resume position may be sent.
@@ -427,25 +446,6 @@ const readErrorBody = async (response: Response, signal: AbortSignal): Promise<u
         clearTimeout(timer);
         await response.body?.cancel().catch(() => undefined);
     }
-};
-
-/**
- * The coded error a non-2xx stream response carries: the flat `{ code, error, why }` envelope the
- * HTTP routes send before a stream opens. `undefined` for any other body, so the caller keeps its
- * generic status error.
- */
-const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
-    if (typeof body !== "object" || body === null) {
-        return undefined;
-    }
-
-    const { code, error, why } = body as { code?: unknown; error?: unknown; why?: unknown };
-
-    if (typeof code !== "string" || typeof error !== "string") {
-        return undefined;
-    }
-
-    return new LunoraError(code, error, { status, why: typeof why === "string" ? why : undefined });
 };
 
 const attemptHeaders = (extra: Record<string, string> | undefined, lastEventId: string | undefined): Record<string, string> => {
