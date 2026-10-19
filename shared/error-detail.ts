@@ -61,6 +61,13 @@ const isPlainRecord = (value: unknown): value is Record<string, unknown> => type
 const MAX_ENCODED_LENGTH = 16_384;
 
 /**
+ * A `JSON.stringify` replacer that turns a nested `Error` into a record of its name, message and
+ * enumerable fields. `JSON` alone would write it as `{}`, since both `message` and `name` are
+ * non-enumerable, so every serialization of an operator context uses this.
+ */
+const plainErrorReplacer = (_key: string, value: unknown): unknown => (value instanceof Error ? { ...value, message: value.message, name: value.name } : value);
+
+/**
  * The operator-only `internal` context of a thrown `Error` (a `LunoraError`'s), for the
  * detail header alone. `undefined` unless it is a plain object that survives
  * `JSON.stringify`: a bigint or a cycle would otherwise throw inside the header encode,
@@ -78,7 +85,7 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
             return undefined;
         }
 
-        const json = JSON.stringify(internal);
+        const json = JSON.stringify(internal, plainErrorReplacer);
 
         // Over the cap the header would drop this context anyway, since URI-encoding only
         // grows it. Refusing it here skips copying and encoding a large record twice.
@@ -102,9 +109,7 @@ export const describeInternal = (error: unknown): Record<string, unknown> | unde
  */
 export const toPlainOperatorContext = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
     try {
-        return JSON.parse(
-            JSON.stringify(internal, (_key, value: unknown) => (value instanceof Error ? { ...value, message: value.message, name: value.name } : value)),
-        ) as Record<string, unknown>;
+        return JSON.parse(JSON.stringify(internal, plainErrorReplacer)) as Record<string, unknown>;
     } catch {
         return undefined;
     }

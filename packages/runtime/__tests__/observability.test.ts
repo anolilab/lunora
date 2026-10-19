@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { describeInternal } from "../../../shared/error-detail";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { LogEvent, ObservabilityEvent, ObservabilitySink } from "../src/observability";
@@ -491,6 +492,22 @@ describe("observabilitySink: error.internal reaches sinks, redacted", () => {
         const upstream = events[0]?.error?.internal?.upstream as { message?: unknown } | undefined;
 
         expect(upstream?.message).toBe("password=<REDACTED>");
+    });
+
+    it("keeps a nested Error's message from the shard's detail header through to the sink", () => {
+        expect.assertions(1);
+
+        const { events, sink } = collectEvents();
+        const error = new LunoraError("CONFLICT", "stale", { internal: { upstream: new Error("upstream refused") } });
+
+        emitRpcEvent(sink, {
+            durationMs: 1,
+            error: { code: "CONFLICT", internal: describeInternal(error), message: "stale", status: 409 },
+            functionPath: "orders:place",
+            ok: false,
+        });
+
+        expect((events[0]?.error?.internal?.upstream as { message?: unknown } | undefined)?.message).toBe("upstream refused");
     });
 
     it("still delivers the event when a getter in the operator context throws", () => {
