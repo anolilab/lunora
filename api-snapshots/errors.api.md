@@ -803,10 +803,6 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Live connection not found";
     };
-    readonly LIVE_CONTROL_SUPERSEDED: {
-        readonly status: 409;
-        readonly title: "Live control superseded";
-    };
     readonly LIVE_STREAMS_UNSUPPORTED: {
         readonly status: 501;
         readonly title: "Live streams are not served by this worker";
