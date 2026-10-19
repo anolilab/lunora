@@ -9,8 +9,17 @@ import runLazySmokeLoad from "../../src/util/lazy-smoke-load";
 
 const startDevProcess = vi.hoisted(() => vi.fn<(options: DevProcessOptions) => Promise<DevProcess>>());
 
+const acceptsConnection = vi.hoisted(() => vi.fn<(port: number) => Promise<boolean>>(async () => false));
+
+// Every probe sees the preferred port free, the way two runs do before either `wrangler` has bound it.
+const findAvailablePort = vi.hoisted(() => vi.fn<(preferred: number) => Promise<number>>(async (preferred) => preferred));
+
 vi.mock(import("@lunora/config"), async (importOriginal) => {
-    return { ...(await importOriginal()), startDevProcess };
+    return { ...(await importOriginal()), acceptsConnection, startDevProcess };
+});
+
+vi.mock(import("../../src/util/free-port"), async (importOriginal) => {
+    return { ...(await importOriginal()), findAvailablePort };
 });
 
 const dev = vi.fn<(request: { extraArgs?: string[] }) => { args: string[]; tool: string }>((request) => {
@@ -24,32 +33,115 @@ const logger = {
     warn: vi.fn<(message: string) => void>(),
 };
 
+/** A project the check can run against: a generated lazy registry, a Worker entry, and a wrangler config. */
+const scaffoldProject = (dir: string): void => {
+    mkdirSync(join(dir, "lunora", "_generated"), { recursive: true });
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "lunora", "_generated", "functions.ts"), "export const loadAllFunctions = async () => ({ checked: 0, failures: [] });\n");
+    writeFileSync(join(dir, "src", "index.ts"), "export default {};\n");
+    writeFileSync(join(dir, "wrangler.jsonc"), JSON.stringify({ main: "src/index.ts", name: "app" }));
+};
+
+/** The run id the smoke entry was written with; the probe must echo it back. */
+const runIdOf = (entryPath: string): string => /const runId = "([^"]+)"/u.exec(readFileSync(entryPath, "utf8"))?.[1] ?? "";
+
 describe(runLazySmokeLoad, () => {
     let cwd: string;
     const stop = vi.fn<() => Promise<void>>(async () => {});
 
+    /** Answers the probe as this run's Worker would: the result plus the run id of the entry written for the latest `wrangler dev`. */
     const respondWith = (body: unknown): void => {
         vi.stubGlobal(
             "fetch",
-            vi.fn<() => Promise<Response>>(async () => Response.json(body)),
+            vi.fn<() => Promise<Response>>(async () => {
+                const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
+
+                return Response.json({ ...(body as object), run: runIdOf(entry) });
+            }),
         );
     };
     const run = (overrides: Partial<Parameters<typeof runLazySmokeLoad>[0]> = {}) => runLazySmokeLoad({ cwd, logger, toolchain, ...overrides });
 
     beforeEach(() => {
         cwd = mkdtempSync(join(tmpdir(), "lunora-smoke-load-"));
-        mkdirSync(join(cwd, "lunora", "_generated"), { recursive: true });
-        mkdirSync(join(cwd, "src"));
-        writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const loadAllFunctions = async () => ({ checked: 0, failures: [] });\n");
-        writeFileSync(join(cwd, "src", "index.ts"), "export default {};\n");
-        writeFileSync(join(cwd, "wrangler.jsonc"), JSON.stringify({ main: "src/index.ts", name: "app" }));
+        scaffoldProject(cwd);
         vi.clearAllMocks();
+        acceptsConnection.mockResolvedValue(false);
         startDevProcess.mockResolvedValue({ crashed: new Promise(() => {}), stop });
     });
 
     afterEach(() => {
         vi.unstubAllGlobals();
         rmSync(cwd, { force: true, recursive: true });
+    });
+
+    /**
+     * Two runs choose the same port. The first to bind owns it. A later run on that port either gets `ready` from
+     * `startDevProcess` (it saw a listener, not its own child) or, with `losingWranglerExits`, a rejection because its
+     * `wrangler` exited on the bind; `acceptsConnection` then reports the owner. Returns each run's result and the ports used.
+     */
+    const raceForOnePort = async (losingWranglerExits: boolean) => {
+        const other = mkdtempSync(join(tmpdir(), "lunora-smoke-load-"));
+
+        try {
+            scaffoldProject(other);
+
+            const owners = new Map<number, { body: { checked: number; failures: unknown[] }; runId: string }>();
+            const clean = { checked: 1, failures: [] };
+            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }] };
+
+            startDevProcess.mockImplementation(async (options) => {
+                if (!owners.has(options.port)) {
+                    owners.set(options.port, {
+                        body: options.cwd === other ? broken : clean,
+                        runId: runIdOf(resolve(options.cwd, options.args.find((arg) => arg.endsWith("entry.ts")) ?? "")),
+                    });
+
+                    return { crashed: new Promise(() => {}), stop };
+                }
+
+                if (losingWranglerExits) {
+                    throw new Error("wrangler dev (smoke-load) exited with code 1 before it was ready");
+                }
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            acceptsConnection.mockImplementation(async (port) => owners.has(port));
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<(url: string) => Promise<Response>>(async (url) => {
+                    const owner = owners.get(Number(new URL(url).port));
+
+                    return Response.json({ ...owner?.body, run: owner?.runId });
+                }),
+            );
+
+            const [ours, theirs] = await Promise.all([run(), run({ cwd: other })]);
+
+            return { ours, ports: new Set(startDevProcess.mock.calls.map(([options]) => options.port)), theirs };
+        } finally {
+            rmSync(other, { force: true, recursive: true });
+        }
+    };
+
+    it("does not read another run's Worker as its own when both pick the same port", async () => {
+        expect.assertions(3);
+
+        const { ours, ports, theirs } = await raceForOnePort(false);
+
+        expect(ours).toBeUndefined();
+        expect(theirs).toContain("boom");
+        expect(ports.size).toBe(2);
+    });
+
+    it("retries on the next port when its wrangler exits because another run holds the port", async () => {
+        expect.assertions(3);
+
+        const { ours, ports, theirs } = await raceForOnePort(true);
+
+        expect(ours).toBeUndefined();
+        expect(theirs).toContain("boom");
+        expect(ports.size).toBe(2);
     });
 
     it("names every module that fails to load and stops the worker", async () => {

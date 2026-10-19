@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 
-import type { DevProcessSpawner, DriverToolchain } from "@lunora/config";
-import { resolveSchemaDirectory, startDevProcess } from "@lunora/config";
+import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
+import { acceptsConnection, resolveSchemaDirectory, startDevProcess } from "@lunora/config";
 import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -13,6 +14,9 @@ import type { Logger } from "./logger";
 
 /** First port tried for the throwaway worker; clear of wrangler's own 8787 range so it never collides with `lunora dev`. */
 const SMOKE_PORT = 18_787;
+
+/** Ports tried before giving up when another run's Worker answers the probe. */
+const SMOKE_PORT_ATTEMPTS = 3;
 
 /** Upper bound on booting workerd and evaluating every module — a large app takes a while. */
 const SMOKE_TIMEOUT_MS = 120_000;
@@ -146,7 +150,7 @@ const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeL
  * with a 5xx after booting, or one that never answers is the project's fault; anything else
  * (a response that is not ours) throws a plain error and the caller skips the check.
  */
-const probeLazyModules = async (port: number): Promise<{ checked: number; failures: ModuleFailure[] }> => {
+const probeLazyModules = async (port: number, runId: string): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
     const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
         (error: unknown) => {
             if (error instanceof Error && error.name === "TimeoutError") {
@@ -164,14 +168,50 @@ const probeLazyModules = async (port: number): Promise<{ checked: number; failur
         );
     }
 
-    const body = (await response.json().catch(() => undefined)) as Partial<{ checked: number; failures: unknown[] }> | undefined;
-    const { checked, failures } = body ?? {};
+    const body = (await response.json().catch(() => undefined)) as Partial<{ checked: number; failures: unknown[]; run: unknown }> | undefined;
+    const { checked, failures, run } = body ?? {};
 
     if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
-        return { checked, failures };
+        // Another run's Worker bound this port first: `startDevProcess` saw a listener, not our child. Not this project's answer, so `undefined`.
+        return run === runId ? { checked, failures } : undefined;
     }
 
     throw new SmokeLoadError(`unexpected response (HTTP ${String(response.status)})`, true);
+};
+
+/**
+ * Starts `wrangler dev`. `startDevProcess` rejects when the child exits before it is ready, and `wrangler` exits when its
+ * port is already bound. If something listens on that port, another run holds it: `undefined` asks for the next port.
+ * With nothing listening, the failure is this run's own and is rethrown.
+ */
+const startSmokeServer = (options: DevProcessOptions): Promise<DevProcess | undefined> =>
+    startDevProcess(options).catch(async (error: unknown) => {
+        if (await acceptsConnection(options.port)) {
+            return undefined;
+        }
+
+        throw error;
+    });
+
+/** Logs a clean probe, or throws the list of modules the project has to fix. */
+const reportProbe = (cwd: string, { checked, failures }: { checked: number; failures: ModuleFailure[] }, logger: Logger): void => {
+    if (failures.length === 0) {
+        logger.success(`${String(checked)} lazy function(s) evaluate cleanly`);
+
+        return;
+    }
+
+    const lines = formatFailures(cwd, failures);
+    const more = lines.length > MAX_LISTED_MODULES ? [`  …and ${String(lines.length - MAX_LISTED_MODULES)} more module(s)`] : [];
+
+    throw new SmokeLoadError(
+        [
+            `${String(failures.length)} of ${String(checked)} lazy function(s) fail to load:`,
+            ...lines.slice(0, MAX_LISTED_MODULES),
+            ...more,
+            "Fix the module, or pass --no-smoke-load to ship anyway.",
+        ].join("\n"),
+    );
 };
 
 /**
@@ -222,12 +262,16 @@ const prepareSmokeProcess = async (input: {
     environment: string | undefined;
     functionsFile: string;
     main: string;
+    /** The first port to try; a retry starts above the port another run's Worker held. */
+    preferred: number;
     toolchain: DriverToolchain;
-}): Promise<{ args: string[]; command: string; port: number }> => {
-    const { configPath, cwd, directory, environment, functionsFile, main, toolchain } = input;
+}): Promise<{ args: string[]; command: string; port: number; runId: string }> => {
+    const { configPath, cwd, directory, environment, functionsFile, main, preferred, toolchain } = input;
 
     try {
         const entry = join(directory, "entry.ts");
+        // Echoed back by the probe, so an answer from another run's Worker on the same port is recognised.
+        const runId = randomUUID();
 
         // The project's own entry is re-exported so Durable Object classes and bindings resolve exactly as in production.
         writeFileSync(
@@ -235,15 +279,17 @@ const prepareSmokeProcess = async (input: {
             `export * from ${JSON.stringify(resolve(cwd, main))};
 import { loadAllFunctions } from ${JSON.stringify(functionsFile)};
 
+const runId = ${JSON.stringify(runId)};
+
 export default {
     async fetch() {
-        return Response.json(await loadAllFunctions());
+        return Response.json({ ...(await loadAllFunctions()), run: runId });
     },
 };
 `,
         );
 
-        const port = await findAvailablePort(SMOKE_PORT);
+        const port = await findAvailablePort(preferred);
 
         // `--local-protocol http`: a config that sets `dev.local_protocol` to https would otherwise refuse the plain-http probe.
         // Paths go in relative to `cwd`: on Windows the child runs through a shell that does not quote an absolute path containing a space.
@@ -268,7 +314,7 @@ export default {
             }),
         );
 
-        return { args, command, port };
+        return { args, command, port, runId };
     } catch (error) {
         throw new SmokeLoadError(`could not prepare the check (${error instanceof Error ? error.message : String(error)})`, true);
     }
@@ -310,48 +356,63 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     try {
         directory = createRunDirectory(cwd);
 
-        const { args, command, port } = await prepareSmokeProcess({ cwd, configPath, directory, environment, functionsFile, main, toolchain });
-
         logger.info("smoke-loading lazy function modules in workerd");
 
-        const server = await startDevProcess({
-            args,
-            command,
-            cwd,
-            spawn: launcher,
-            label: "wrangler dev (smoke-load)",
-            notFound: "`wrangler` was not found",
-            onLine: (line) => {
-                output.push(line);
-            },
-            port,
-            readyTimeoutMs: SMOKE_TIMEOUT_MS,
-            shell: process.platform === "win32",
-        });
+        // The free-port check and `wrangler dev`'s bind are not atomic, so another run can take the port in between.
+        // Its Worker then answers the probe; that attempt is dropped and retried on the next port.
+        let preferred = SMOKE_PORT;
 
-        try {
-            const { checked, failures } = await probeLazyModules(port);
+        for (let attempt = 0; attempt < SMOKE_PORT_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each attempt starts above the port the previous one found taken
+            const { args, command, port, runId } = await prepareSmokeProcess({
+                configPath,
+                cwd,
+                directory,
+                environment,
+                functionsFile,
+                main,
+                preferred,
+                toolchain,
+            });
 
-            if (failures.length === 0) {
-                logger.success(`${String(checked)} lazy function(s) evaluate cleanly`);
+            preferred = port + 1;
 
-                return undefined;
+            // eslint-disable-next-line no-await-in-loop -- one wrangler at a time: the next attempt depends on this one's port
+            const server = await startSmokeServer({
+                args,
+                command,
+                cwd,
+                spawn: launcher,
+                label: "wrangler dev (smoke-load)",
+                notFound: "`wrangler` was not found",
+                onLine: (line) => {
+                    output.push(line);
+                },
+                port,
+                readyTimeoutMs: SMOKE_TIMEOUT_MS,
+                shell: process.platform === "win32",
+            });
+
+            if (server === undefined) {
+                continue;
             }
 
-            const lines = formatFailures(cwd, failures);
-            const more = lines.length > MAX_LISTED_MODULES ? [`  …and ${String(lines.length - MAX_LISTED_MODULES)} more module(s)`] : [];
+            try {
+                // eslint-disable-next-line no-await-in-loop -- the probe decides whether this attempt stands
+                const probed = await probeLazyModules(port, runId);
 
-            throw new SmokeLoadError(
-                [
-                    `${String(failures.length)} of ${String(checked)} lazy function(s) fail to load:`,
-                    ...lines.slice(0, MAX_LISTED_MODULES),
-                    ...more,
-                    "Fix the module, or pass --no-smoke-load to ship anyway.",
-                ].join("\n"),
-            );
-        } finally {
-            await server.stop();
+                if (probed !== undefined) {
+                    reportProbe(cwd, probed, logger);
+
+                    return undefined;
+                }
+            } finally {
+                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this wrangler still holds its port
+                await server.stop();
+            }
         }
+
+        throw new SmokeLoadError(`the smoke port was answered by other runs on all ${String(SMOKE_PORT_ATTEMPTS)} attempts`, true);
     } catch (error) {
         return reportSmokeError(error, output, logger);
     } finally {
