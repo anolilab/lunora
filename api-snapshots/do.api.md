@@ -411,6 +411,7 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected readonly companionMemo: Set<string>;
     protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
@@ -578,6 +579,7 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected ctxDbTuning(): {
         cache?: ReactiveCache;
+        companionMemo: Set<string>;
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };

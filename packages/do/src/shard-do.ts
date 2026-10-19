@@ -2178,7 +2178,7 @@ abstract class ShardDO {
      * Companions the per-dispatch ctx-db has verified, shared across dispatches
      * through {@link ShardDO.ctxDbTuning}. Cleared whenever migrations run.
      */
-    protected readonly companionMemo = new Set<string>();
+    protected readonly companionMemo: Set<string> = new Set<string>();
 
     /**
      * Function paths a dispatch has been observed reading `ctx.ip` through, and

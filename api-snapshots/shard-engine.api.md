@@ -477,6 +477,7 @@ interface CompanionSyncDeps {
     recordCdc: (table: string, id: string, op: "delete" | "insert" | "update", doc?: Record<string, unknown>) => void;
     schema: SchemaLike;
     sql: SqlExec;
+    verified?: Set<string>;
 }
 ```
 
@@ -539,6 +540,7 @@ interface CtxDbOptions {
     cache?: ReactiveCache;
     cdc?: boolean;
     clock?: Clock;
+    companionMemo?: Set<string>;
     enforceRls?: boolean;
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
