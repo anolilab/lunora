@@ -349,11 +349,17 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
 
     try:
         value, commit_cursor, decode_error = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
-    except Exception:
+    except Exception as error:
         settle: list = []
         with client._lock:
             rollback_all(rollbacks, settle)
+            # A raw exception is the transport, not a verdict (the replay reads it the
+            # same way), so an online-only write that never reached the server while
+            # the shard has no socket is refused rather than surfacing the raw error.
+            unreached = options.online_only and not isinstance(error, LunoraError) and client._send is None
         run_deferred(settle)
+        if unreached:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued") from error
         raise
 
     settle = []

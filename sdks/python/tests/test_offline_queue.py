@@ -1088,6 +1088,65 @@ class TestOnlineOnlyWrites(unittest.TestCase):
         self.assertIn(self.SECRET.encode(), posts[0])
         self.assertEqual(store.appended, [])
 
+    def test_an_online_only_transport_failure_is_refused_with_its_cause(self):
+        covers("offline_online_only_transport_failure_refused")
+        store = _Store()
+        refusal = ConnectionRefusedError("connection refused")
+        posts = []
+        replies = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            if replies:
+                return replies.pop(0)
+            raise refusal
+
+        # Never connected and not queueing before the first connect, so the write takes the direct path.
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        seen = []
+        client.subscribe("auth:setPassword", {"token": self.SECRET}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                        optimistic=lambda current: [*(current or []), "c"],
+                    )
+                )
+            )
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertIs(refused.exception.__cause__, refusal)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(client.pending_mutation_count, 0)
+        self.assertEqual(store.appended, [])
+        self.assertNotIn(self.SECRET, json.dumps(store.records))
+        self.assertIn(["a", "c"], seen, "the overlay was shown while the write was in flight")
+        self.assertEqual(seen[-1], ["a"], "and rolled back once the write was refused")
+
+        # A coded server rejection is the server's verdict and surfaces as itself.
+        replies.append((400, {"error": {"code": "CONFLICT", "message": "nope"}}))
+
+        with self.assertRaises(LunoraError) as rejected:
+            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(rejected.exception.code, "CONFLICT")
+        self.assertNotIsInstance(rejected.exception, OfflineError)
+
+        # Once the socket is up, the same failure is the server's to report, not a refusal.
+        client.attach_socket(lambda _frame: None)
+
+        with self.assertRaises(ConnectionRefusedError) as raised:
+            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertIs(raised.exception, refusal)
+
     def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
         covers("offline_online_only_leaves_normal_writes_queued")
         store = _Store()
