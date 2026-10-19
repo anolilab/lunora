@@ -158,6 +158,44 @@ describe("online-only mutation", () => {
         client.close();
     });
 
+    it("refuses with OFFLINE_NOT_QUEUED when the socket drops while the write's request is in flight", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        let failRequest: (error: Error) => void = () => {};
+        let markSent: () => void = () => {};
+        const requestSent = new Promise<void>((resolve) => {
+            markSent = resolve;
+        });
+        const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+            () =>
+                new Promise<Response>((_resolve, reject) => {
+                    failRequest = reject;
+                    markSent();
+                }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        sockets.at(-1)?.open();
+
+        // The socket is open when the write starts, so the write is sent rather than refused up front.
+        const write = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
+
+        await requestSent;
+        sockets.at(-1)?.triggerClose();
+        failRequest(new TypeError("fetch failed"));
+
+        await expect(write).rejects.toMatchObject({ cause: expect.any(TypeError), code: "OFFLINE_NOT_QUEUED" });
+
+        client.close();
+    });
+
     it("leaves a normal write's transport error unchanged before the first connect", async () => {
         expect.hasAssertions();
 

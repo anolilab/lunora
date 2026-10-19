@@ -4829,7 +4829,7 @@ class LunoraClient {
         // Queue while offline (only mutations — queries fail fast). The gate is
         // read after the wait above, so a socket that dropped meanwhile queues
         // this write instead of sending it.
-        const { httpFirst, midReconnect, shouldQueueOffline, socketDown, socketOpen } = this.writeQueueGate(options.shardKey);
+        const { httpFirst, midReconnect, shouldQueueOffline, socketDown } = this.writeQueueGate(options.shardKey);
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -4906,8 +4906,13 @@ class LunoraClient {
             // network is down. Queue it under the same key, as it would have been
             // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
+            // `httpFirst` is kept from the send: it says which transport the request
+            // took, which does not change while it is in flight. The socket is read
+            // live, because a socket that dropped during the request is the failure
+            // an online-only write must be refused for.
             const wireFailure = isWireFailure(error, argsRecord);
             const networkDown = httpFirst && shouldQueueOffline && wireFailure;
+            const socketOpenNow = this.writeQueueGate(options.shardKey).socketOpen;
 
             //
             // The same holds for any failure that leaves the write's fate unknown — a
@@ -4947,7 +4952,7 @@ class LunoraClient {
             // socket is refused with the typed error whether or not the shard ever
             // connected: before the first connect nothing was queued either way. The
             // transport failure rides along as its `cause`.
-            const refused = networkDown || (options.onlineOnly && wireFailure && !socketOpen);
+            const refused = networkDown || (options.onlineOnly && wireFailure && !socketOpenNow);
 
             if (refused) {
                 throw offlineNotQueuedError(function_.__lunoraRef, error);
