@@ -131,8 +131,15 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
  * `lunora deploy` do, and a watch rebuild logs it and carries on.
  */
 class LunoraRspackPlugin {
-    /** Resolved options, fixed at construction. */
+    /** Resolved options. The `target` is re-resolved on each pass. */
     #options: ResolvedLunoraRspackOptions;
+
+    /**
+     * The target the last codegen pass that actually ran generated for. Unset until
+     * one has run. Kept apart from `#options.target`, which moves at the start of a
+     * pass whether or not that pass gets as far as generating anything.
+     */
+    #generatedTarget: string | undefined;
 
     /** Absolute schema directory — the codegen input, and the watched context. */
     readonly #schemaDirectory: string;
@@ -217,7 +224,7 @@ class LunoraRspackPlugin {
     public async generateForDev(): Promise<string> {
         await this.#run(true);
 
-        return this.#options.target;
+        return this.#generatedTarget ?? this.#options.target;
     }
 
     /** Rspack's plugin entry point. */
@@ -473,6 +480,8 @@ class LunoraRspackPlugin {
         }
 
         const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+
+        this.#generatedTarget = this.#options.target;
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });
 
         if (hook.error !== undefined) {
