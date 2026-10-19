@@ -550,6 +550,7 @@ abstract class ShardDO {
     protected withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T>;
     protected sensitiveFailureMessage(functionPath: string, args: Record<string, unknown>, error: unknown): string;
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void;
+    protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void;
     protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
