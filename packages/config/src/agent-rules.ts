@@ -39,6 +39,7 @@ const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
     "lunora-migration-helper",
     "lunora-deploy",
     "lunora-performance-audit",
+    "lunora-cloudflare-audit",
 ];
 
 /** The router skill whose presence marks the rule set as installed. */
