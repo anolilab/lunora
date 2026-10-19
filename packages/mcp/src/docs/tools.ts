@@ -254,7 +254,20 @@ const docsTools = (index: DocsIndex): ReadonlyArray<McpTool> => [
     {
         definition: GET_DOC_TOOL_DEFINITION,
         handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
-            const url = normalizeDocUrl(readStringArgument(input, "url"));
+            // A malformed or traversing url is the caller's input, not a failure: its RangeError says what to fix,
+            // so it is returned as a bad request rather than the generic internal error a plain throw becomes.
+            let url: string;
+
+            try {
+                url = normalizeDocUrl(readStringArgument(input, "url"));
+            } catch (error: unknown) {
+                if (error instanceof RangeError) {
+                    return errorResult("BAD_REQUEST", error.message);
+                }
+
+                throw error;
+            }
+
             const page = await index.getPage(url);
 
             if (page === undefined) {
