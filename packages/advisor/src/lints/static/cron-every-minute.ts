@@ -14,9 +14,9 @@ const WHITESPACE = /\s+/;
  */
 const firesEveryMinute = (expression: string): boolean => {
     const fields = expression.trim().split(WHITESPACE);
-    const [minute, ...rest] = fields;
+    const [minute = "", ...rest] = fields;
 
-    return fields.length === 5 && EVERY_MINUTE_FIELD.test(minute as string) && rest.every((field) => field === "*");
+    return fields.length === 5 && EVERY_MINUTE_FIELD.test(minute) && rest.every((field) => field === "*");
 };
 
 /** What one fire runs, in the words the finding uses. */
