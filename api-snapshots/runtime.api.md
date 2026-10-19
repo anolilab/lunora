@@ -1362,6 +1362,7 @@ interface ObservabilityEvent {
     durationMs: number;
     error?: {
         code: string;
+        internal?: Record<string, unknown>;
         message: string;
         name?: string;
         stack?: string;
@@ -2882,6 +2883,7 @@ type DefaultShardKey = string | null;
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;

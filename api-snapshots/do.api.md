@@ -956,6 +956,7 @@ interface ContextLogger {
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;
