@@ -184,6 +184,9 @@ const createMockClient = (
         // to `LunoraClient`, so naming the backing field left every consumer
         // reading `undefined` and the hydrated branch permanently untaken.
         isReady: true,
+        peekActiveQuerySnapshot: () => {
+            return { present: false, value: undefined };
+        },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
         query: queryFunction,

@@ -116,6 +116,10 @@ const createParityClient = (): ParityClient => {
         onAuthTokenChange: () => () => undefined,
         onConnectionStatus: () => () => undefined,
         onIdentityChange: () => () => undefined,
+        // A held value stands for an already-open subscription's `lastValue`.
+        peekActiveQuerySnapshot: (functionPath: string) => {
+            return { present: held.has(functionPath), value: held.get(functionPath) };
+        },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
         query: async () =>
