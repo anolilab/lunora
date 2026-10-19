@@ -1170,6 +1170,38 @@ class TestOnlineOnlyWrites(unittest.TestCase):
         self.assertEqual(posts, [])
 
 
+class TestCallbackDisconnect(unittest.TestCase):
+    def test_an_online_only_write_whose_callback_drops_the_socket_is_refused_not_sent(self):
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        def drop_on_overlay(value):
+            # The subscriber sees the overlay, and the connection goes down inside its notification.
+            if value and "c" in value:
+                client.detach_socket()
+
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": "x"}, drop_on_overlay)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        options = SubmitOptions(
+            args={"token": "x"},
+            function_path="auth:setPassword",
+            online_only=True,
+            optimistic=lambda current: [*(current or []), "c"],
+        )
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(client.submit(options))
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertEqual(posts, [])
+
+
 class TestCodecFailureIsNotOffline(unittest.TestCase):
     def test_an_argument_the_codec_cannot_encode_surfaces_as_itself_not_as_offline(self):
         # A stack too shallow to encode the arguments fails in the codec, before any send. It must not be

@@ -342,6 +342,21 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
 
     run_deferred(deferred)
 
+    # The notifications above are subscriber callbacks, and one may drop the socket. An online-only write that would
+    # now queue is refused here, with its overlays rolled back, rather than sent while the shard is disconnected.
+    if entry is None and options.online_only:
+        settle_now: list = []
+        with client._lock:
+            would_queue = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+            if would_queue:
+                rollback_all(rollbacks, settle_now)
+
+        if would_queue:
+            run_deferred(settle_now)
+
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
     if entry is not None:
         report_discarded(client, evicted)
 
