@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
 import type { Readable } from "svelte/store";
@@ -11,7 +11,7 @@ import type { ReactiveArgs } from "./query";
 import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 interface SubscriptionStoreOptions {
-    onError?: (error: Error) => void;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
@@ -101,7 +101,7 @@ function subscription<F extends FunctionReference>(
                                 : new LunoraError(subscriptionError.code, subscriptionError.message);
 
                         errorStore.set(error);
-                        onError?.(error);
+                        onError?.(subscriptionError);
                     },
                     onReset: () => {
                         set(undefined);

@@ -137,6 +137,23 @@ const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "i
 };
 
 describe(makeDiffEmit, () => {
+    it("serializes a row object once across re-deliveries of the same snapshot", () => {
+        const syncedJson = new Map<string, string>();
+        const { ops, writer } = recordingWriter();
+        const emit = makeDiffEmit(syncedJson, writer);
+        const toJSON = vi.fn<() => Row>(() => {
+            return { _id: "a", text: "1" };
+        });
+        const rows = new Map<string, Row>([["a", { _id: "a", text: "1", toJSON }]]);
+
+        emit(rows);
+        ops.length = 0;
+        emit(rows);
+
+        expect(toJSON).toHaveBeenCalledTimes(1);
+        expect(ops).toStrictEqual([]);
+    });
+
     it("emits only the rows that changed between snapshots", () => {
         // syncedJson is the single Map<string, string> cache owned at the caller level.
         const syncedJson = new Map<string, string>();

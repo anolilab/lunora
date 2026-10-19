@@ -115,6 +115,44 @@ describe("offlineQueue", () => {
     });
 });
 
+describe("offlineQueue — drainConflict", () => {
+    it("settles an item whose precondition throws and keeps the rest queued in order", () => {
+        expect.assertions(6);
+
+        const queue = new OfflineQueue();
+        const thrown = new Error("precondition blew up");
+        const reject = vi.fn<(error: unknown) => void>();
+
+        for (const path of ["a", "b", "c"]) {
+            queue.enqueue({
+                args: {},
+                functionPath: path,
+                ...(path === "b"
+                    ? {
+                          precondition: () => {
+                              throw thrown;
+                          },
+                      }
+                    : {}),
+                reject: path === "b" ? reject : () => undefined,
+                resolve: () => undefined,
+            });
+        }
+
+        const conflicted = queue.drainConflict();
+
+        expect(conflicted.map((item) => item.functionPath)).toEqual(["b"]);
+        expect(reject).toHaveBeenCalledTimes(1);
+
+        const error = reject.mock.calls[0]?.[0] as Error & { code?: string };
+
+        expect(error.code).toBe("OFFLINE_PRECONDITION_FAILED");
+        expect(error.cause).toBe(thrown);
+        expect(queue.size).toBe(2);
+        expect(queue.drain().map((item) => item.functionPath)).toEqual(["a", "c"]);
+    });
+});
+
 describe("offlineQueue — persistence", () => {
     it("enqueue mirrors the mutation to durable storage with an assigned id", async () => {
         expect.assertions(4);

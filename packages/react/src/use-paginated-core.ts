@@ -352,6 +352,7 @@ const usePaginatedCore = function <T>(
     // triggers a re-render here.
     useEffect(() => {
         const cache = queryClient.getQueryCache();
+        const pageHashes = new Set(pageEntries.map(({ key }) => serializeQueryKey(key)));
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an
             // `"updated"` event. Every other event type (observer lifecycle,
@@ -364,7 +365,7 @@ const usePaginatedCore = function <T>(
 
             const hash = serializeQueryKey(event.query.queryKey as QueryKey);
 
-            if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
+            if (pageHashes.has(hash)) {
                 // A frame for one of our pages landed — the feed is healthy again.
                 setError(undefined);
                 forceRender();
@@ -372,7 +373,7 @@ const usePaginatedCore = function <T>(
         });
 
         return unsubscribe;
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the cache subscription re-attaches only when `pageKeysHash` (or the stable `queryClient`) changes. The inner `pageEntries.some(...)` membership check reads this render's entries by closure, but the subscription itself must not re-attach every render — keying on the hash is the point.
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the cache subscription re-attaches only when `pageKeysHash` (or the stable `queryClient`) changes. The `pageHashes` set is built from this render's entries and captured by closure, but the subscription itself must not re-attach every render — keying on the hash is the point.
     }, [queryClient, pageKeysHash]);
 
     const pageResults: (PaginationResult<T> | undefined)[] = skipped ? [] : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<T>>(key));
