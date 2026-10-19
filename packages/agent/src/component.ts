@@ -419,6 +419,16 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
  * Retire the pending approval marker in the mutation that decides it. The loop only deletes the marker after its wait
  * resolves, so until then a second decision on the same call would still find it pending and could record a grant.
  */
+/** Whether the call's approval marker still awaits a decision. Mutations run one at a time, so a read is decisive. */
+const approvalIsPending = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<boolean> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    return marker?.["status"] === "awaiting_approval";
+};
+
 const retireApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
     const marker = await database
         .query(MESSAGES_TABLE)
@@ -1389,6 +1399,15 @@ export const agentComponent = (): AgentComponent => {
                 throw new LunoraError(
                     "INTERNAL",
                     `@lunora/agent: no ctx.agents["${agentName}"] producer to resolve the approval — run codegen/dev so the agent binding is wired`,
+                );
+            }
+
+            // Only the first decision on a call counts. A call with no pending marker was already decided, so this
+            // one is refused before a grant is written or an event is sent, a reject included.
+            if (!(await approvalIsPending(context.db, args.threadKey, args.instanceId, args.toolCallId))) {
+                throw new LunoraError(
+                    "CONFLICT",
+                    `@lunora/agent: no pending approval for tool call "${args.toolCallId}" on thread "${args.threadKey}" to decide`,
                 );
             }
 
