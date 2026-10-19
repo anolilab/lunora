@@ -73,6 +73,9 @@ import { recordSchemaVersion } from "./schema-history";
  */
 const INDEX_SORT_KEYS = dsql`_creationTime, id`;
 
+/** How a sort-keyed index's `CREATE INDEX` statement ends, rendered from {@link INDEX_SORT_KEYS}. */
+const INDEX_SORT_KEYS_TAIL = `, ${renderSql("sqlite", INDEX_SORT_KEYS).sql})`;
+
 /**
  * Raised when a UNIQUE index cannot be built because existing rows already violate
  * it. A distinct type so a caller that opted into deferral
@@ -255,7 +258,7 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
             name.startsWith(`${tableName}_`) &&
             !name.startsWith(`${tableName}__`) &&
             statement !== null &&
-            (statement.includes("json_extract(") || statement.trimEnd().endsWith(", _creationTime, id)"));
+            (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
 
         if (createdHere && !declared.has(name)) {
             runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
