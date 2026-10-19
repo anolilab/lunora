@@ -135,6 +135,14 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("content-type: application/json");
     });
 
+    it("renders a plain record whose value has a line break or whose name has a space, instead of throwing", () => {
+        const wrapped = wrapUntrusted("body", { "X Folded Name": "first\r\nX-Injected: yes", "X-Ok": "fine" });
+        const inside = enclosedBy(wrapped, tagIdOf(wrapped));
+
+        expect(inside).toContain("x folded name: first X-Injected: yes");
+        expect(inside).toContain("x-ok: fine");
+    });
+
     it("accepts a plain record as the header map", () => {
         const wrapped = wrapUntrusted("body", { "x-signature-token": "abc", accept: "text/plain" });
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));

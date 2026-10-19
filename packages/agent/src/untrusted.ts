@@ -41,17 +41,20 @@ const neutralise = (text: string): string =>
         .replaceAll(MENTION_TRIGGER, (_match, trigger: string) => `${trigger}${ZERO_WIDTH_SPACE}`)
         .replaceAll(COMMAND_TRIGGER, (_match, lead: string, trigger: string) => `${lead}${trigger}${ZERO_WIDTH_SPACE}`);
 
-/** One `name: value` line per header, credentials redacted, every line neutralised. */
-const renderHeaders = (headers: Headers): string[] => {
-    const lines: string[] = [];
+/**
+ * One `name: value` line per header, credentials redacted, every line neutralised. A record is
+ * rendered as given, never through `new Headers`: that constructor throws on a CR/LF in a value
+ * or a space in a name, and inbound headers carry both.
+ */
+const renderHeaders = (headers: Headers | Readonly<Record<string, string>>): string[] => {
+    const entries = headers instanceof Headers ? [...headers] : Object.entries(headers);
 
-    headers.forEach((value, name) => {
-        const shown = CREDENTIAL_HEADER.test(name) ? REDACTED : value.replaceAll(LINE_BREAKS, " ");
+    return entries.map(([rawName, rawValue]) => {
+        const name = rawName.replaceAll(LINE_BREAKS, " ").toLowerCase();
+        const shown = CREDENTIAL_HEADER.test(name) ? REDACTED : rawValue.replaceAll(LINE_BREAKS, " ");
 
-        lines.push(neutralise(`${name}: ${shown}`));
+        return neutralise(`${name}: ${shown}`);
     });
-
-    return lines;
 };
 
 /**
@@ -68,7 +71,7 @@ const renderHeaders = (headers: Headers): string[] => {
  */
 const wrapUntrusted = (value: string, headers?: Headers | Readonly<Record<string, string>>): string => {
     const tag = `untrusted-data-${crypto.randomUUID()}`;
-    const parts = headers === undefined ? [] : ["Headers:", ...renderHeaders(new Headers(headers)), "", "Body:"];
+    const parts = headers === undefined ? [] : ["Headers:", ...renderHeaders(headers), "", "Body:"];
 
     parts.push(neutralise(value));
 
