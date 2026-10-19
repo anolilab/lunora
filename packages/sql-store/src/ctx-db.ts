@@ -3225,7 +3225,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value) => {
+                findHolders: async (holderTable, field, value, page) => {
                     if (schema.tables[holderTable]?.shardMode?.kind === "shardBy") {
                         throw new LunoraError(
                             "INTERNAL",
@@ -3235,7 +3235,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                     // A hard delete must see soft-deleted holders to remove them; a
                     // soft delete skips already-deleted holders.
-                    const holders = await writer.findMany(holderTable, { includeDeleted: hard, where: { [field]: value } });
+                    const holders = await writer.findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
 
                     return holders.page;
                 },

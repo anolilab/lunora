@@ -125,6 +125,7 @@ import type {
     TableDefinitionLike,
     TableReaderLike,
 } from "./schema-types";
+import { DEFAULT_BATCH_LIMIT } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
@@ -409,18 +410,6 @@ const MAX_TRIGGER_DEPTH = 50;
  */
 /* eslint-enable no-secrets/no-secrets */
 type CountArgs = RestrictableQueryOptions;
-
-/**
- * Default cap on the row count a single batch write
- * (`insertMany`/`deleteMany`/`patchMany`) accepts. Keeps a batch well under the
- * Durable Object request/CPU-burst limits and turns an accidental oversized
- * payload into a clear up-front error instead of a degraded mutation. Override
- * per-call via `options.limit`; callers with larger sets should chunk.
- *
- * Mirrored as `DEFAULT_BATCH_LIMIT` in `@lunora/server`'s RLS middleware (which
- * can't import this package at runtime) — keep the two values in sync.
- */
-const DEFAULT_BATCH_LIMIT = 500;
 
 /**
  * Rows per multi-row `INSERT`. Three bound parameters per row, so one statement
@@ -3247,8 +3236,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing[references],
-                findHolders: async (holderTable, field, value) => {
-                    const holders = await routeForHolder(holderTable).findMany(holderTable, { includeDeleted: hard, where: { [field]: value } });
+                findHolders: async (holderTable, field, value, page) => {
+                    const holders = await routeForHolder(holderTable).findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
 
                     return holders.page;
                 },
