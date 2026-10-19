@@ -17,7 +17,7 @@
  * Zero-dependency (node built-ins and the sibling {@link file://./fnv1a.ts}), so
  * consumers import it by relative path and the bundler inlines it.
  */
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { fnv1aHex } from "./fnv1a";
@@ -122,9 +122,14 @@ export const resolveDevPorts = ({ env, linked, root }: DevPortInputs): DevPorts 
     return withOffset(derivePortOffset(root), "derived");
 };
 
+/** Whether `marker` is a `.git` file whose `gitdir:` points into a repository's `worktrees/` directory. */
+const isLinkedWorktreePointer = (marker: string): boolean => statSync(marker).isFile() && /^gitdir:.*[/\\]worktrees[/\\]/mu.test(readFileSync(marker, "utf8"));
+
 /**
  * Walk up from `start` to the nearest `.git` entry. `linked` is true when that
- * entry is a file, which is how git represents a linked worktree. Returns
+ * entry is a file pointing into a `worktrees/` directory, which is how git
+ * represents a linked worktree. A submodule's `.git` file points into `modules/`
+ * and is a primary checkout. Returns
  * `undefined` outside any checkout. The root is `realpath`ed so a symlinked path
  * hashes to the same offset as the real one.
  */
@@ -135,7 +140,7 @@ export const findCheckoutRoot = (start: string): { linked: boolean; root: string
         const marker = join(dir, ".git");
 
         if (existsSync(marker)) {
-            return { linked: statSync(marker).isFile(), root: realpathSync(dir) };
+            return { linked: isLinkedWorktreePointer(marker), root: realpathSync(dir) };
         }
 
         const parent = dirname(dir);
