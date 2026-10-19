@@ -347,6 +347,12 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
 
         return MutationOutcome("queued", write_id)
 
+    # Encoded and serialized before any transport attempt. An argument the codec or the JSON
+    # encoder refuses (a cycle, or a stack too shallow to encode it) never leaves the process, so
+    # it surfaces as its own error. Inside the transport `try` it would read as an unreached send
+    # and be refused as offline.
+    json.dumps(encode_wire(options.args if options.args is not None else {}))
+
     try:
         value, commit_cursor, decode_error = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
     except Exception as error:

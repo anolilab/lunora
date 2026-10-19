@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1166,6 +1167,30 @@ class TestOnlineOnlyWrites(unittest.TestCase):
         self.assertEqual(outcome.status, "queued")
         self.assertEqual(client.pending_mutation_count, 1)
         self.assertEqual(len(store.appended), 1)
+        self.assertEqual(posts, [])
+
+
+class TestCodecFailureIsNotOffline(unittest.TestCase):
+    def test_an_argument_the_codec_cannot_encode_surfaces_as_itself_not_as_offline(self):
+        # A stack too shallow to encode the arguments fails in the codec, before any send. It must not be
+        # read as an unreached transport failure, which an online-only write refuses as OFFLINE_NOT_QUEUED.
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        overflow = RecursionError("maximum recursion depth exceeded")
+
+        with (
+            mock.patch("lunora.client.encode_wire", side_effect=overflow),
+            mock.patch("lunora.submit.encode_wire", side_effect=overflow),
+            self.assertRaises(RecursionError),
+        ):
+            asyncio.run(client.submit(SubmitOptions(args={"token": "x"}, function_path="auth:setPassword", online_only=True)))
+
         self.assertEqual(posts, [])
 
 
