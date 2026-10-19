@@ -913,6 +913,7 @@ const smokeLoadLazyModules = async (
         configPath: wranglerPath,
         cwd,
         environment: options.env,
+        launcher: options.smokeLauncher,
         logger: options.logger,
         toolchain: driver.toolchain,
     });

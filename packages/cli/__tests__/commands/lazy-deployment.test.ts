@@ -135,6 +135,18 @@ describe("lazy deployment", () => {
             expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledTimes(called ? 1 : 0);
         });
 
+        it("hands an injected smoke launcher to the check", async () => {
+            expect.assertions(1);
+
+            vi.mocked(runLazySmokeLoad).mockClear();
+            const smokeLauncher = vi.fn<(command: string, args: ReadonlyArray<string>, options: { cwd: string; shell: boolean }) => never>();
+            const { spawner } = createRecordingSpawner();
+
+            await runBuildCommand({ cwd: projectRoot, lazyFunctions: true, logger, smokeLauncher, spawner, strictAdvisories: false });
+
+            expect(vi.mocked(runLazySmokeLoad)).toHaveBeenCalledWith(expect.objectContaining({ launcher: smokeLauncher }));
+        });
+
         it("refuses to build, before wrangler runs, when a lazy module fails to load", async () => {
             expect.assertions(3);
 

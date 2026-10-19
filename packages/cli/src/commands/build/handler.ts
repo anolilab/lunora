@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 
+import type { DevProcessSpawner } from "@lunora/config";
 import { resolveLazyFunctions } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -46,6 +47,8 @@ interface BuildCommandOptions {
     logger: Logger;
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
+    /** Starts the smoke check's `wrangler dev`; the deploy command's `smokeLauncher` option, passed through unchanged. */
+    smokeLauncher?: DevProcessSpawner;
     /** `false` skips evaluating lazy function modules before the bundle is written. */
     smokeLoad?: boolean;
     spawner?: Spawner;
@@ -136,6 +139,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         interactive: jsonMode ? false : undefined,
         logger,
         outDir: outDirectory,
+        smokeLauncher: options.smokeLauncher,
         smokeLoad: options.smokeLoad,
         spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
         strictAdvisories: options.strictAdvisories,

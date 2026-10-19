@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 
-import type { DriverToolchain } from "@lunora/config";
+import type { DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { resolveSchemaDirectory, startDevProcess } from "@lunora/config";
 import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
@@ -37,6 +37,8 @@ interface SmokeLoadOptions {
     configPath?: string;
     cwd: string;
     environment?: string;
+    /** Starts the dev process. Defaults to a real `wrangler dev`; a caller that must not launch a server passes its own. */
+    launcher?: DevProcessSpawner;
     logger: Logger;
     toolchain: DriverToolchain;
 }
@@ -283,7 +285,7 @@ export default {
  * project. See {@link reportSmokeError}.
  */
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
-    const { configPath, cwd, environment, logger, toolchain } = options;
+    const { configPath, cwd, environment, launcher, logger, toolchain } = options;
     const functionsFile = join(cwd, resolveSchemaDirectory(cwd), "_generated", "functions.ts");
 
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
@@ -316,6 +318,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
             args,
             command,
             cwd,
+            spawn: launcher,
             label: "wrangler dev (smoke-load)",
             notFound: "`wrangler` was not found",
             onLine: (line) => {

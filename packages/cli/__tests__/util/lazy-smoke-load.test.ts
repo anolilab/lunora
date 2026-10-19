@@ -282,4 +282,15 @@ describe(runLazySmokeLoad, () => {
         await expect(run()).resolves.toBeUndefined();
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("could not create a directory for the check"));
     });
+
+    it("starts the smoke server through the injected launcher", async () => {
+        expect.assertions(1);
+
+        respondWith({ checked: 1, failures: [] });
+        const launcher = vi.fn<(command: string, args: ReadonlyArray<string>, options: { cwd: string; shell: boolean }) => never>();
+
+        await run({ launcher });
+
+        expect(startDevProcess).toHaveBeenCalledWith(expect.objectContaining({ spawn: launcher }));
+    });
 });
