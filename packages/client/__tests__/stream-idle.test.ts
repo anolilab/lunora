@@ -89,7 +89,7 @@ describe("live stream idle watchdog", () => {
         await vi.advanceTimersByTimeAsync(5000);
 
         // 1s, 2s, 4s between attempts: attempts at 0s, 1s and 3s. A backoff reset on every 2xx would retry each second.
-        expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(4);
+        expect(fetchImpl).toHaveBeenCalledTimes(3);
 
         live.close();
     });

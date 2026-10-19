@@ -9,13 +9,16 @@ interface Posted {
     type: string;
 }
 
-/** A `BroadcastChannel` that only records what is posted to it. */
-const stubBroadcastChannel = (): Posted[] => {
+/** A `BroadcastChannel` that records what is posted to it and lets a test deliver an incoming message. */
+const stubBroadcastChannel = (): { deliver: (message: unknown) => void; posted: Posted[] } => {
     const posted: Posted[] = [];
+    let listener: ((event: { data: unknown }) => void) | undefined;
 
     class FakeChannel {
         // eslint-disable-next-line class-methods-use-this -- test double
-        public addEventListener(): void {}
+        public addEventListener(_type: string, handler: (event: { data: unknown }) => void): void {
+            listener = handler;
+        }
 
         // eslint-disable-next-line class-methods-use-this -- test double
         public close(): void {}
@@ -28,7 +31,12 @@ const stubBroadcastChannel = (): Posted[] => {
 
     vi.stubGlobal("BroadcastChannel", FakeChannel);
 
-    return posted;
+    return {
+        deliver: (message) => {
+            listener?.({ data: message });
+        },
+        posted,
+    };
 };
 
 const createLeader = (): TabCoordinator => {
@@ -50,7 +58,7 @@ describe("cross-tab fan-out coalescing", () => {
     it("posts only the latest snapshot per key for a burst within one tick", async () => {
         expect.assertions(4);
 
-        const posted = stubBroadcastChannel();
+        const { posted } = stubBroadcastChannel();
         const leader = createLeader();
         const before = dataFrames(posted).length;
 
@@ -75,7 +83,7 @@ describe("cross-tab fan-out coalescing", () => {
     it("posts a key's pending snapshot ahead of the settled frame that advances its cursor", () => {
         expect.assertions(1);
 
-        const posted = stubBroadcastChannel();
+        const { posted } = stubBroadcastChannel();
         const leader = createLeader();
         const before = posted.length;
 
@@ -90,15 +98,18 @@ describe("cross-tab fan-out coalescing", () => {
     it("drops a snapshot queued by a tab that lost leadership before it flushed", async () => {
         expect.assertions(1);
 
-        const posted = stubBroadcastChannel();
+        const { deliver, posted } = stubBroadcastChannel();
         const leader = createLeader();
         const before = dataFrames(posted).length;
 
         leader.broadcastSubscriptionData("a", { n: 1 }, 1);
-        leader.stop();
+        // A heartbeat from a tab with the smaller id wins the split-brain tie-break: this tab steps down.
+        deliver({ tabId: "aaa-earlier-tab", ts: Date.now(), type: "heartbeat" });
         await Promise.resolve();
 
-        // `stop()` posts the yield first; the snapshot was flushed ahead of it, never after.
-        expect(dataFrames(posted).length - before).toBeLessThanOrEqual(1);
+        // The new leader's own snapshots supersede the one this tab queued.
+        expect(dataFrames(posted).length - before).toBe(0);
+
+        leader.stop();
     });
 });

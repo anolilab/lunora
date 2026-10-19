@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_AMBIGUOUS_SEND_ATTEMPTS } from "../src/client-tuning";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
@@ -113,7 +114,8 @@ describe("direct mutation whose response was lost", () => {
         // The write is not retried for ever, and its predicted value is taken back.
         expect(received).toStrictEqual([5, 6, 5]);
         expect(client.pendingCount()).toBe(0);
-        expect(fetchImpl.mock.calls.length).toBeLessThan(10);
+        // The direct send, then one replay per attempt the cap allows.
+        expect(fetchImpl).toHaveBeenCalledTimes(MAX_AMBIGUOUS_SEND_ATTEMPTS + 1);
 
         client.close();
     });
