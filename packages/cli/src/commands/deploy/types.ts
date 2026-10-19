@@ -12,6 +12,9 @@ import type { FetchLike } from "../run/handler";
 import type { PreDeployCommand } from "./checks";
 
 interface DeployCommandOptions {
+    /** Deploy even though the app sets `allowUnauthenticatedShardAccess: true` (the `open_shard_access` gate). */
+    allowOpenShards?: boolean;
+
     /** Override the schema-drift gate — deploy even with breaking drift and no new migration. */
     allowSchemaDrift?: boolean;
 

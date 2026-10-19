@@ -1,15 +1,18 @@
 /**
  * The read-only pre-deploy checks `lunora deploy` and `lunora prepare` share:
  * Docker and container sources, the D1 placeholder, localhost origins in vars,
- * and the `--migrate` preflight.
+ * and the `--migrate` preflight — plus deploy's open-shard-access gate.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
+import type { AdvisorOpenShardAccess } from "@lunora/advisor";
+import { openShardAccess, runAdvisor } from "@lunora/advisor";
 import type { DiscoveryCache } from "@lunora/config";
 import { COMPOSED_WORKER_ENTRY, discoverContainerInfo } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
-import { join } from "@visulima/path";
+import { join, relative } from "@visulima/path";
+import { Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
@@ -348,9 +351,92 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
  */
 type PreDeployCommand = "build" | "deploy" | "prepare";
 
+/** Where an app configures itself: its Lunora sources and its own `src/`, plus the root Vite config (the class-A opt-in). */
+const OPEN_SHARD_SCAN_DIRECTORIES = ["lunora", "src"] as const;
+const OPEN_SHARD_SCAN_ROOT_FILES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
+const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
+const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules)(?:[/\\]|$)/u;
+
 /**
- * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
- * localhost-origin var check, and the container source + Docker preflights.
+ * Every literal `allowUnauthenticatedShardAccess: true` property in the app.
+ *
+ * Read with the TypeScript parser, not a text match, so the "before deploying"
+ * comments the templates keep beside the flag never count. Files that do not
+ * mention the name are skipped before parsing. Ceiling: an entry outside
+ * `lunora/`, `src/` and the root Vite config, or a value that is not the literal
+ * `true` (a variable, an env read), is not seen.
+ */
+const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
+    const files = [
+        ...OPEN_SHARD_SCAN_DIRECTORIES.flatMap((directory) =>
+            existsSync(join(cwd, directory))
+                ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
+                      .filter((file) => SOURCE_FILE.test(file) && !SKIPPED_DIRECTORY.test(file))
+                      .map((file) => join(cwd, directory, file))
+                : [],
+        ),
+        ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
+    ];
+    const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+
+    return files.flatMap((file) => {
+        const text = readFileSync(file, "utf8");
+
+        if (!text.includes("allowUnauthenticatedShardAccess")) {
+            return [];
+        }
+
+        return project
+            .createSourceFile(relative(cwd, file), text, { overwrite: true })
+            .getDescendantsOfKind(SyntaxKind.PropertyAssignment)
+            .filter((property) => property.getName() === "allowUnauthenticatedShardAccess" && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword)
+            .map((property) => {
+                return { file: relative(cwd, file), line: property.getStartLineNumber() };
+            });
+    });
+};
+
+/**
+ * Refuse a deploy that ships `allowUnauthenticatedShardAccess: true` — the
+ * `open_shard_access` advisor lint — unless `--allow-open-shards` says the open
+ * posture is deliberate. Every template carries the flag for its local demo, and
+ * the runtime only logs a warning about it, so without this a first deploy goes
+ * out with any caller able to read any shard.
+ *
+ * Deploy only: `build` and `prepare` produce or check an artifact, they do not
+ * publish one, and the template build matrix runs `lunora build` on every
+ * template as shipped. Returns the error message, or `undefined` when clean.
+ */
+const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCommand, allowOpenShards: boolean): string | undefined => {
+    if (command !== "deploy") {
+        return undefined;
+    }
+
+    const findings = runAdvisor({ openShardAccess: findOpenShardAccess(cwd), schema: { tables: [] } }, { lints: [openShardAccess] });
+
+    if (findings.length === 0) {
+        return undefined;
+    }
+
+    const sites = findings.map((finding) => `${String(finding.metadata["file"])}:${String(finding.metadata["line"])}`).join(", ");
+
+    if (allowOpenShards) {
+        logger.warn(`deploying with open shard access (--allow-open-shards): ${sites}`);
+
+        return undefined;
+    }
+
+    const message = `deploy blocked (open_shard_access): ${sites} set \`allowUnauthenticatedShardAccess: true\`, so any caller may target any shard. ${openShardAccess.remediation}`;
+
+    logger.error(message);
+
+    return message;
+};
+
+/**
+ * The read-only half of the pre-deploy gates: deploy's open-shard-access gate,
+ * the D1-placeholder hard-block, the localhost-origin var check, and the
+ * container source + Docker preflights.
  * Returns the first error message, or `undefined` when all pass.
  *
  * Separate from the container BUILD so `lunora prepare` can run the checks
@@ -358,6 +444,12 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
 const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
+    const openShardError = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true);
+
+    if (openShardError !== undefined) {
+        return { code: EXIT_CODE.USAGE, error: openShardError };
+    }
+
     const d1Error = checkD1Placeholder(cwd, options.logger, command, options.env);
 
     if (d1Error !== undefined) {

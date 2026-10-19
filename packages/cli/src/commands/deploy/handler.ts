@@ -1101,6 +1101,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
+        allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
