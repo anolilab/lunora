@@ -292,4 +292,24 @@ export const listItems = query({
 
         expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
     });
+
+    it("registers a file an outside source starts importing on the refresh that adds the import", () => {
+        expect.assertions(1);
+
+        const helperPath = join(workdir, "src", "helper.ts");
+
+        writeFileSync(helperPath, "export const helper = 1;\n", "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        // `src/validators.ts` gains an import the Project has not seen yet.
+        writeFileSync(
+            validatorsPath,
+            `import { v } from "@lunora/values";\nimport { helper } from "./helper";\n\nexport const itemValidator = v.object({ title: v.string() });\nexport const unused = helper;\n`,
+            "utf8",
+        );
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, helperPath)).toBe(true);
+    });
 });

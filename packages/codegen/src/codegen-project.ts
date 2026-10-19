@@ -219,12 +219,6 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
         }
     }
 
-    // A `lunora/` file may have started importing a file outside it since the
-    // Project was built. Under `"lunora"` scope nothing else registers that file,
-    // so register it now — BEFORE the pass below, which is what re-reads it from
-    // disk; done after, it would be registered at the text the compiler last saw.
-    project.resolveSourceFileDependencies();
-
     // Second pass: resync everything else the Project already has loaded (type
     // resolution reached past `lunoraDirectory` — a shared validator, a type
     // alias, whatever the user's tsconfig program pulled in). `node_modules` is
@@ -246,4 +240,10 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
             project.removeSourceFile(sourceFile);
         }
     }
+
+    // A file that gained an import since the Project was built is only registered
+    // once its importer's text is current, so this runs after the pass above. Under
+    // `"lunora"` scope nothing else registers it. A file added here is read from
+    // disk at that moment, so it is current too.
+    project.resolveSourceFileDependencies();
 };
