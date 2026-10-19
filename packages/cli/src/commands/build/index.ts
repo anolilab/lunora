@@ -39,6 +39,13 @@ const buildCommand: Command = {
             type: String,
         },
         OUTPUT_FORMAT_OPTION,
+        // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
+        {
+            description: "Evaluate every lazy function module in workerd before shipping (default; nothing to check for an eager registry)",
+            name: "smoke-load",
+            type: Boolean,
+        },
+        { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag
@@ -74,6 +81,7 @@ export type BuildOptions = CreateOptions<{
     format: string | undefined;
     "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
+    "smoke-load": boolean | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is
     // picked (which is what lets the CI-vs-local default apply).

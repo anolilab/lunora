@@ -31,7 +31,7 @@ class LiveTestShardDO extends ShardDO {
 /** The slice of the injected HTTP context these routes use. */
 interface LiveHttpContext {
     fetchShard: (shardKey: string | undefined, path: string, init?: { body?: string; method?: string }) => Promise<Response>;
-    live: { publish: (topic: string, payload: unknown, options: { stream: string }) => Promise<void> };
+    live: { publish: (topic: { __lunoraLive: string; topic: string }, payload: unknown) => Promise<void> };
 }
 
 const ctx = { passThroughOnException: () => undefined, waitUntil: () => undefined };
@@ -74,7 +74,7 @@ const startApp = async () => {
                 if (pathname === "/news/publish" && request.method === "POST") {
                     const body: { data: unknown; topic: string } = await request.json();
 
-                    await lunora.live.publish(body.topic, body.data, { stream: "feed" });
+                    await lunora.live.publish({ __lunoraLive: "feed", topic: body.topic }, body.data);
 
                     return Response.json({ published: true });
                 }

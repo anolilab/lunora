@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
@@ -27,6 +28,9 @@ const withoutAck = (socket: { frames: Frame[] }): Frame[] => socket.frames.filte
 class FakeSocket {
     public readonly frames: Frame[] = [];
 
+    /** The frames exactly as sent, for the tests that pin their bytes. */
+    public readonly raw: string[] = [];
+
     /** The close code and reason the shard closed this socket with, when it did. */
     public closed: { code?: number; reason?: string } | undefined;
 
@@ -45,6 +49,7 @@ class FakeSocket {
     }
 
     public send(data: string): void {
+        this.raw.push(data);
         this.frames.push(JSON.parse(data) as Frame);
     }
 
@@ -927,5 +932,292 @@ describe("shardDO live streams", () => {
         const shard = makeShard([]);
 
         await expect(shard.publishFromAction("feed", "x", { shardKey: "some-other-shard", stream: "s" })).rejects.toMatchObject({ status: 400 });
+    });
+});
+
+/**
+ * A shard that knows its app's declared streams, the way the generated subclass does. The stub stands in
+ * for `defineLiveStream`'s `validatePublish`: it admits one topic and one payload shape, returns only the
+ * declared fields (as an object validator does), and records what it was handed so the test sees the DECODED
+ * payload, not the wire form.
+ */
+class DeclaredLiveShard extends LiveShard {
+    public readonly validated: { payload: unknown; topic: string }[] = [];
+
+    protected override liveStreams() {
+        return {
+            s: {
+                validatePublish: (topic: string, payload: unknown): unknown => {
+                    this.validated.push({ payload, topic });
+
+                    const { text } = (payload ?? {}) as { text?: unknown };
+
+                    if (topic !== "feed" || typeof text !== "string") {
+                        throw new LunoraError("BAD_REQUEST", `refused ${topic}`, { status: 400 });
+                    }
+
+                    return { text };
+                },
+            },
+        };
+    }
+}
+
+describe("shardDO live publish against declared streams", () => {
+    const declared = (): DeclaredLiveShard => {
+        const state = { acceptWebSocket() {}, getWebSockets: () => [], storage: { sql: {} } } as unknown as ShardDOState;
+
+        return new DeclaredLiveShard(state, {});
+    };
+
+    it("delivers a publish the declaration accepts", async () => {
+        expect.assertions(3);
+
+        const shard = declared();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        const published = await publish(shard, { data: encodeWire({ text: "hi" }), stream: "s", topic: "feed" });
+
+        expect(published.status).toBe(200);
+        await expect(reader.next()).resolves.toMatchObject({ data: { data: { text: "hi" }, topic: "feed" }, event: "live" });
+        // The validator saw the decoded payload, not the wire envelope.
+        expect(shard.validated).toStrictEqual([{ payload: { text: "hi" }, topic: "feed" }]);
+    });
+
+    it("delivers what the validator parsed, not what the publisher sent", async () => {
+        expect.assertions(1);
+
+        const shard = declared();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+        await publish(shard, { data: encodeWire({ extra: "not declared", text: "hi" }), stream: "s", topic: "feed" });
+
+        // Exact match: `toMatchObject` would let the undeclared field through.
+        await expect(reader.next()).resolves.toEqual({ data: { data: { text: "hi" }, topic: "feed" }, event: "live" });
+    });
+
+    it("refuses a payload the declaration rejects, over the HTTP publish route, and delivers nothing", async () => {
+        expect.assertions(3);
+
+        const shard = declared();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        const refused = await publish(shard, { data: encodeWire({ text: 1 }), stream: "s", topic: "feed" });
+
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+
+        // A good publish after the refusal is the next frame the subscriber sees: the refused one never went out.
+        await publish(shard, { data: encodeWire({ text: "after" }), stream: "s", topic: "feed" });
+
+        await expect(reader.next()).resolves.toMatchObject({ data: { data: { text: "after" } } });
+    });
+
+    it("refuses a stream the app never declared", async () => {
+        expect.assertions(2);
+
+        const shard = declared();
+        const refused = await publish(shard, { data: encodeWire({ text: "hi" }), stream: "typo", topic: "feed" });
+
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining("typo") } });
+    });
+
+    it("refuses an undeclared topic on a declared stream", async () => {
+        expect.assertions(1);
+
+        const refused = await publish(declared(), { data: encodeWire({ text: "hi" }), stream: "s", topic: "other" });
+
+        expect(refused.status).toBe(400);
+    });
+
+    it("checks an action's publish against the same declaration", async () => {
+        expect.assertions(2);
+
+        const shard = declared();
+
+        await expect(shard.publishFromAction("feed", { text: 1 }, { stream: "s" })).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
+        await expect(shard.publishFromAction("feed", { text: "ok" }, { stream: "s" })).resolves.toBe(0);
+    });
+
+    it("does not validate on a shard that knows no declarations", async () => {
+        expect.assertions(1);
+
+        const refused = await publish(makeShard([]), { data: encodeWire("anything"), stream: "whatever", topic: "any:thing" });
+
+        expect(refused.status).toBe(200);
+    });
+});
+
+/**
+ * A shard that holds no stream until a publish asks for it, the way the generated lazy shard does: `loadLiveStream` stands in
+ * for the dynamic import of the stream's module, and counts how often it ran.
+ */
+class LazyLiveShard extends LiveShard {
+    public readonly loads: string[] = [];
+
+    private readonly loaded = new Map<string, { validatePublish: (topic: string, payload: unknown) => unknown }>();
+
+    protected override loadLiveStream(stream: string): Promise<void> | undefined {
+        if (stream !== "s" || this.loaded.has(stream)) {
+            return undefined;
+        }
+
+        this.loads.push(stream);
+
+        const load = async (): Promise<void> => {
+            this.loaded.set(stream, { validatePublish: (_topic: string, payload: unknown) => payload });
+        };
+
+        return load();
+    }
+
+    protected override liveStreams() {
+        return Object.fromEntries(this.loaded);
+    }
+}
+
+describe("shardDO live publish against lazily loaded streams", () => {
+    const lazy = (): LazyLiveShard => {
+        const state = { acceptWebSocket() {}, getWebSockets: () => [], storage: { sql: {} } } as unknown as ShardDOState;
+
+        return new LazyLiveShard(state, {});
+    };
+
+    it("loads a stream's declaration on the first publish to it, once, and delivers", async () => {
+        expect.assertions(4);
+
+        const shard = lazy();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        const first = await publish(shard, { data: encodeWire({ n: 1 }), stream: "s", topic: "feed" });
+
+        expect(first.status).toBe(200);
+        await expect(reader.next()).resolves.toMatchObject({ data: { data: { n: 1 }, topic: "feed" } });
+
+        await publish(shard, { data: encodeWire({ n: 2 }), stream: "s", topic: "feed" });
+        await reader.next();
+
+        expect(shard.loads).toStrictEqual(["s"]);
+        await expect(shard.publishFromAction("feed", { n: 3 }, { stream: "s" })).resolves.toBe(1);
+    });
+
+    it("refuses an unknown stream without loading anything", async () => {
+        expect.assertions(2);
+
+        const shard = lazy();
+        const refused = await publish(shard, { data: encodeWire(1), stream: "typo", topic: "feed" });
+
+        expect(refused.status).toBe(400);
+        expect(shard.loads).toStrictEqual([]);
+    });
+
+    it("refuses a room topic before it loads the stream", async () => {
+        expect.assertions(3);
+
+        const shard = lazy();
+        const refused = await publish(shard, { data: encodeWire(1), stream: "s", topic: "room:abc" });
+
+        expect(refused.status).toBe(403);
+        await expect(shard.publishFromAction("room:abc", 1, { stream: "s" })).rejects.toMatchObject({ code: "FORBIDDEN_TOPIC" });
+        expect(shard.loads).toStrictEqual([]);
+    });
+});
+
+/** Read every byte of an SSE body that is already complete, up to `stop` (the first occurrence ends the read). */
+const readUntil = async (response: Response, stop: string): Promise<string> => {
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+
+    while (!text.includes(stop)) {
+        // eslint-disable-next-line no-await-in-loop -- sequential read off one stream
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        text += decoder.decode(value, { stream: true });
+    }
+
+    return text;
+};
+
+/**
+ * The wire contracts a typed topic must not move. Typing changes how a topic string is produced and checked,
+ * never how it travels, so these pin the bytes and the limits independently of the declaration layer.
+ */
+describe("shardDO live wire contract", () => {
+    it("writes the SSE frame as exactly `event: live` + a topic-then-data JSON line", async () => {
+        expect.assertions(1);
+
+        const shard = makeShard([]);
+        const { connectionId, response } = await connect(shard);
+
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "post:1" });
+        await publish(shard, { data: { event: "new_post" }, stream: "s", topic: "post:1" });
+
+        await expect(readUntil(response, '"new_post"')).resolves.toContain('event: live\ndata: {"topic":"post:1","data":{"event":"new_post"}}\n\n');
+    });
+
+    it("sends a WebSocket whisper member the relay frame with exactly these keys, in this order", async () => {
+        expect.assertions(1);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+        await publish(shard, { data: { event: "new_post" }, stream: "s", topic: "feed" });
+
+        expect(socket.raw.filter((frame) => frame.includes('"type":"live"'))).toStrictEqual([
+            '{"type":"live","stream":"s","topic":"feed","data":{"event":"new_post"}}',
+        ]);
+    });
+
+    it("refuses the 65th topic on one SSE connection with 429 TOO_MANY_LIVE_TOPICS, and re-subscribing an existing id is not a new topic", async () => {
+        expect.assertions(4);
+
+        const shard = makeShard([]);
+        const { connectionId } = await connect(shard);
+        const subscribe = (index: number): Promise<Response> =>
+            control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: `s${String(index)}`, topic: `t${String(index)}` });
+
+        for (let index = 0; index < 64; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each subscribe must land before the next counts against the limit
+            await subscribe(index);
+        }
+
+        const refused = await subscribe(64);
+
+        expect(refused.status).toBe(429);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "TOO_MANY_LIVE_TOPICS" } });
+
+        const resubscribed = await subscribe(0);
+
+        expect(resubscribed.status).toBe(200);
+
+        // Leaving one frees a place.
+        await control(shard, { action: "unsubscribe", connectionId, stream: "s", subscriptionId: "s0", topic: "t0" });
+
+        const freed = await subscribe(64);
+
+        expect(freed.status).toBe(200);
     });
 });

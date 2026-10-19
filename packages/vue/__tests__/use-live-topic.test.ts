@@ -1,8 +1,8 @@
-import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
+import type { LiveStreamSubscribeError, LiveTopicRef, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
 import type { Mock } from "vitest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { effectScope, nextTick, reactive, ref } from "vue";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { effectScope, nextTick, ref } from "vue";
 
 import type { UseLiveTopicResult } from "../src/use-live-topic";
 import { useLiveTopic } from "../src/use-live-topic";
@@ -30,7 +30,19 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
     };
 });
 
-const URL = "/live/posts/connect";
+// The composable reads its base URL from the injected client; the client itself is not under test here.
+vi.mock(import("../src/lunora-provider"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, useLunora: () => ({ url: "https://api.test" }) as never };
+});
+
+const URL = "https://api.test/live/posts/connect";
+
+/** A reference as `_generated/live.ts` hands one out, for the `posts` stream. */
+const topicRef = <Payload = unknown>(topic: string): LiveTopicRef<Payload> => {
+    return { __lunoraLive: "posts", topic };
+};
 
 /** The subscription opened by the `index`-th call to `subscribeLiveTopic`. */
 const subscriptionAt = (index: number): Subscription => {
@@ -44,9 +56,9 @@ const subscriptionAt = (index: number): Subscription => {
 };
 
 /** Run `useLiveTopic` inside a fresh effect scope, so the test can dispose it like a component unmount. */
-const mount = (options: Parameters<typeof useLiveTopic>[0]) => {
+const mount = (...args: Parameters<typeof useLiveTopic>) => {
     const scope = effectScope();
-    const result: UseLiveTopicResult = scope.run(() => useLiveTopic(options))!;
+    const result: UseLiveTopicResult = scope.run(() => useLiveTopic(...args))!;
 
     return { result, scope };
 };
@@ -67,7 +79,7 @@ describe(useLiveTopic, () => {
     it("subscribes on setup with the connection options", () => {
         expect.hasAssertions();
 
-        mount({ topic: "post:1", url: URL, withCredentials: true });
+        mount(topicRef("post:1"), { withCredentials: true });
 
         expect(subscribeLiveTopic).toHaveBeenCalledTimes(1);
         expect(subscribeLiveTopic).toHaveBeenCalledWith(expect.objectContaining({ topic: "post:1", url: URL, withCredentials: true }));
@@ -76,7 +88,7 @@ describe(useLiveTopic, () => {
     it("unsubscribes when the scope is disposed", () => {
         expect.hasAssertions();
 
-        const { scope } = mount({ topic: "post:1", url: URL });
+        const { scope } = mount(topicRef("post:1"));
         const { unsubscribe } = subscriptionAt(0);
 
         expect(unsubscribe).not.toHaveBeenCalled();
@@ -89,8 +101,12 @@ describe(useLiveTopic, () => {
     it("resolves ref and getter fields, and resubscribes when a reactive topic changes", async () => {
         expect.hasAssertions();
 
-        const topic = ref("a");
-        const { result } = mount({ topic, url: () => URL });
+        const topic = ref(topicRef("a"));
+        const { result } = mount(topic, {
+            headers: () => {
+                return { "x-tenant": "t" };
+            },
+        });
 
         expect(subscriptionAt(0).options.topic).toBe("a");
 
@@ -98,7 +114,7 @@ describe(useLiveTopic, () => {
 
         expect(result.lastEvent.value).toStrictEqual({ from: "a" });
 
-        topic.value = "b";
+        topic.value = topicRef("b");
         await nextTick();
 
         expect(subscribeLiveTopic).toHaveBeenCalledTimes(2);
@@ -110,10 +126,10 @@ describe(useLiveTopic, () => {
     it("resubscribes when the session key changes", async () => {
         expect.hasAssertions();
 
-        const options = reactive<Parameters<typeof useLiveTopic>[0]>({ sessionKey: "user-1", topic: "a", url: URL });
+        const sessionKey = ref("user-1");
 
-        mount(options);
-        options.sessionKey = "user-2";
+        mount(topicRef("a"), { sessionKey });
+        sessionKey.value = "user-2";
         await nextTick();
 
         expect(subscribeLiveTopic).toHaveBeenCalledTimes(2);
@@ -125,9 +141,9 @@ describe(useLiveTopic, () => {
 
         const firstOnEvent = vi.fn<(payload: unknown) => void>();
         const secondOnEvent = vi.fn<(payload: unknown) => void>();
-        const options = reactive<Parameters<typeof useLiveTopic>[0]>({ onEvent: firstOnEvent, topic: "a", url: URL });
+        const options: NonNullable<Parameters<typeof useLiveTopic>[1]> = { onEvent: firstOnEvent };
 
-        mount(options);
+        mount(topicRef("a"), options);
         options.onEvent = secondOnEvent;
         await nextTick();
 
@@ -142,10 +158,10 @@ describe(useLiveTopic, () => {
     it("does not resubscribe when the same headers arrive in a different order", async () => {
         expect.hasAssertions();
 
-        const options = reactive<Parameters<typeof useLiveTopic>[0]>({ headers: { a: "1", b: "2" }, topic: "a", url: URL });
+        const headers = ref({ a: "1", b: "2" });
 
-        mount(options);
-        options.headers = { b: "2", a: "1" };
+        mount(topicRef("a"), { headers });
+        headers.value = { b: "2", a: "1" };
         await nextTick();
 
         expect(subscribeLiveTopic).toHaveBeenCalledTimes(1);
@@ -154,7 +170,7 @@ describe(useLiveTopic, () => {
     it("exposes the last delivered payload as lastEvent", () => {
         expect.hasAssertions();
 
-        const { result } = mount({ topic: "a", url: URL });
+        const { result } = mount(topicRef("a"));
 
         expect(result.lastEvent.value).toBeUndefined();
 
@@ -171,7 +187,7 @@ describe(useLiveTopic, () => {
         expect.hasAssertions();
 
         const onError = vi.fn<(error: LiveStreamSubscribeError) => void>();
-        const { result } = mount({ onError, topic: "a", url: URL });
+        const { result } = mount(topicRef("a"), { onError });
         const refusal: LiveStreamSubscribeError = { status: 403, subscriptionId: "sub-1", topic: "a" };
 
         expect(result.error.value).toBeUndefined();
@@ -185,7 +201,7 @@ describe(useLiveTopic, () => {
     it("clears a refusal once a payload arrives", () => {
         expect.hasAssertions();
 
-        const { result } = mount({ topic: "a", url: URL });
+        const { result } = mount(topicRef("a"));
 
         subscriptionAt(0).options.onError?.({ status: 403, subscriptionId: "sub-1", topic: "a" });
 
@@ -202,10 +218,38 @@ describe(useLiveTopic, () => {
 
         Reflect.deleteProperty(globalThis, "window");
 
-        const { result } = mount({ topic: "a", url: URL });
+        const { result } = mount(topicRef("a"));
 
         expect(subscribeLiveTopic).not.toHaveBeenCalled();
         expect(result.lastEvent.value).toBeUndefined();
         expect(result.error.value).toBeUndefined();
+    });
+
+    it("resolves the stream's route against the client's URL, on a reactive shard", async () => {
+        expect.hasAssertions();
+
+        const shardKey = ref("a");
+
+        mount(topicRef("post:1"), { shardKey });
+        shardKey.value = "b";
+        await nextTick();
+
+        expect(subscriptionAt(0).options.url).toBe(`${URL}?shard=a`);
+        expect(subscriptionAt(1).options.url).toBe(`${URL}?shard=b`);
+    });
+
+    it("types lastEvent and onEvent by the payload the topic declares", () => {
+        expect.hasAssertions();
+
+        const result = effectScope().run(() =>
+            useLiveTopic(topicRef<{ text: string }>("a"), { onEvent: (payload) => expectTypeOf(payload).toEqualTypeOf<{ text: string }>() }),
+        )!;
+
+        expectTypeOf(result.lastEvent.value).toEqualTypeOf<{ text: string } | undefined>();
+
+        // @ts-expect-error -- the topic carries `{ text: string }`, not a number
+        useLiveTopic(topicRef<{ text: string }>("a"), { onEvent: (payload: number) => payload });
+
+        expect(subscribeLiveTopic).toHaveBeenCalledTimes(2);
     });
 });

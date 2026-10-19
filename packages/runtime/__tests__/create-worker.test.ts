@@ -3522,7 +3522,7 @@ describe("createWorker — live streams and socket paths", () => {
         const worker = createWorker({
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
-                    await c.var.lunora.live?.publish("post:1", { event: "comment" }, { stream: "posts" });
+                    await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { event: "comment" });
 
                     return new Response("published");
                 }),
@@ -3547,7 +3547,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/publish", async (c) => {
                     try {
-                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { stream: "posts" });
+                        await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { event: "x" });
 
                         return new Response("published");
                     } catch (error) {
@@ -3575,7 +3575,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
                     try {
-                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+                        await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { big: true });
 
                         return new Response("published");
                     } catch {
@@ -3597,7 +3597,7 @@ describe("createWorker — live streams and socket paths", () => {
 
         const worker = createWorker({
             queue: async (_batch, _env, _context, _trigger, live) => {
-                await live?.publish("digest:1", { event: "ready" }, { stream: "posts" });
+                await live?.publish({ __lunoraLive: "posts", topic: "digest:1" }, { event: "ready" });
             },
             shardDO: shard.namespace,
         });
@@ -3638,7 +3638,7 @@ describe("createWorker — live streams and socket paths", () => {
             liveStreams: false,
             queue: async (_batch, _env, _context, _trigger, live) => {
                 try {
-                    await live.publish("digest:1", { event: "ready" }, { stream: "posts" });
+                    await live.publish({ __lunoraLive: "posts", topic: "digest:1" }, { event: "ready" });
                 } catch (error) {
                     thrown = error;
                 }
@@ -3664,7 +3664,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/publish", async (c) => {
                     try {
-                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "victim-shard", stream: "posts" });
+                        await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { event: "x" }, { shardKey: "victim-shard" });
                     } catch (error) {
                         thrown = error;
 
@@ -3692,7 +3692,7 @@ describe("createWorker — live streams and socket paths", () => {
             authorizeShard,
             httpRouter: honoApp((app) =>
                 app.post("/publish", async (c) => {
-                    await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "tenant-42", stream: "posts" });
+                    await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { event: "x" }, { shardKey: "tenant-42" });
 
                     return new Response("published");
                 }),
@@ -3715,7 +3715,7 @@ describe("createWorker — live streams and socket paths", () => {
             authorizeShard,
             httpRouter: honoApp((app) =>
                 app.post("/publish", async (c) => {
-                    await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "__root__", stream: "posts" });
+                    await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { event: "x" }, { shardKey: "__root__" });
 
                     return new Response("published");
                 }),
@@ -3738,7 +3738,7 @@ describe("createWorker — live streams and socket paths", () => {
         const worker = createWorker({
             authorizeShard,
             queue: async (_batch, _env, _context, _trigger, live) => {
-                await live?.publish("digest:1", { event: "ready" }, { shardKey: "tenant-42", stream: "posts" });
+                await live?.publish({ __lunoraLive: "posts", topic: "digest:1" }, { event: "ready" }, { shardKey: "tenant-42" });
             },
             shardDO: shard.namespace,
         });
@@ -3765,7 +3765,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
                     try {
-                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+                        await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { big: true });
                     } catch (error) {
                         thrown = error;
                     }
@@ -3796,7 +3796,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
                     try {
-                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+                        await c.var.lunora.live?.publish({ __lunoraLive: "posts", topic: "post:1" }, { big: true });
                     } catch (error) {
                         thrown = error;
                     }

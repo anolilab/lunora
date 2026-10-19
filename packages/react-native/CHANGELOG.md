@@ -1,3 +1,27 @@
+## @lunora/react-native [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.208...@lunora/react-native@1.0.0-alpha.209) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/react:** upgraded to 1.0.0-alpha.242
+
+## @lunora/react-native [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.207...@lunora/react-native@1.0.0-alpha.208) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/react:** upgraded to 1.0.0-alpha.241
+
 ## @lunora/react-native [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.206...@lunora/react-native@1.0.0-alpha.207) (2026-10-18)
 
 

@@ -18,21 +18,34 @@ Server-Sent Events connection.
 
 ## Declare the stream
 
+Declare every topic the stream carries, with the key that addresses it and the payload
+it delivers. Both are `v` validators, the same ones a function's `args` use.
+
 ```ts
 // lunora/live.ts
-import { defineLiveStream } from "@lunora/server";
+import { defineLiveStream, v } from "@lunora/server";
 
 import { api } from "./_generated/api";
 
 export const posts = defineLiveStream({
     id: "posts",
-    onSubscribe: async ({ ctx, topic }) => {
-        const [kind, postId] = topic.split(":");
-
-        return kind === "post" && (await ctx.runQuery(api.posts.canRead, { postId }));
+    topics: {
+        // A keyed topic: one per post.
+        post: {
+            key: { postId: v.id("posts") },
+            payload: v.object({ event: v.literal("comment_added"), commentId: v.id("comments") }),
+        },
+        // A keyless topic: just "feed".
+        feed: { payload: v.object({ postId: v.id("posts") }) },
     },
+    onSubscribe: async ({ ctx, topic, key }) => topic === "post" && (await ctx.runQuery(api.posts.canRead, { postId: key.postId })),
 });
 ```
+
+`onSubscribe` receives the topic already parsed: `topic` is one of the declared names,
+and `key` has the shape that topic declares, so `key.postId` is typed once you have
+narrowed on `topic`. `raw` is the wire topic exactly as the browser sent it. There is
+no string to split.
 
 `defineLiveStream` returns `connectPath` (`/live/posts/connect`), `controlPath`
 (`/live/posts/control`), and the two route handlers. Codegen does not mount them.
@@ -44,17 +57,58 @@ app.get(posts.connectPath, posts.connect);
 app.post(posts.controlPath, posts.control);
 ```
 
+### What codegen reads
+
+Codegen reads each `defineLiveStream` from its literals, and it must be a named export (a default export or a local is refused with `LIVE_STREAM_NOT_EXPORTED`): the `id`, the topic
+names, and each topic's `key` field names in the order you wrote them. A non-literal
+`id`, a spread or computed `topics` or `key` map, or a topic given as a reference to a
+declaration elsewhere is refused with `LIVE_STREAM_NOT_LITERAL`. Two streams may not
+share an `id` or an export name (`LIVE_STREAM_DUPLICATE`).
+
+Codegen recognises `defineLiveStream` by its import from `@lunora/server` (or `lunorash/server`), so an alias
+(`import { defineLiveStream as stream }`) and a namespace member (`server.defineLiveStream`) both work. A
+function of the same name declared locally or imported from another module is not read as a stream, and
+neither is one your own barrel file re-exports: import it from the package directly.
+
+A topic name and a key field must be plain identifiers: letters, digits and `_`,
+starting with a letter. A topic named `room` is refused, because its wire topic would
+start with the reserved `room:` prefix. A key value is a string on the wire, so a key
+field must be a string validator: `v.string()`, `v.id(...)`, a string `v.literal(...)`, or a
+`v.union(...)` of those. `v.literal(1)` and a union with a non-string member are refused.
+`defineLiveStream` refuses a declaration that breaks any of these rules when it runs,
+and codegen refuses a bad name or key field at build time. Only `defineLiveStream` checks
+the validator kinds, since codegen does not read validators.
+
+Codegen writes `_generated/live.ts`, a module of typed topic references. It imports the
+stream as a type only, so it pulls no server code into a client bundle:
+
+```ts
+import { live } from "../lunora/_generated/live";
+
+live.posts.post({ postId }); // a reference to the "post" topic of that post
+live.posts.feed(); // a reference to the "feed" topic
+```
+
+The reference carries the stream and the encoded topic, and its type carries the payload.
+The generated module has no runtime import, so a backend-only worker can publish with
+it. It encodes each key value by the rule the server parses with: percent-encoded and
+joined with `:` in the order you declared the fields, so a value containing `:` stays one
+segment and can never read as another topic.
+
 ## Publish
 
-Publish with `ctx.live.publish(topic, payload, { stream })`. The `stream` is the
-`id` of the stream whose subscribers should see the event. A subscriber follows a
-topic through the stream that authorized it, so a publish reaches only that
-stream's subscribers.
+Publish with `ctx.live.publish(ref, payload)`. The reference names the stream, so there
+is no stream option to get wrong, and `payload` is typed by the topic. The payload is
+also checked at the shard against the topic's validator: a payload it rejects, or a
+topic the stream never declared, is refused with `BAD_REQUEST`. That covers a queue
+consumer whose message body is not typed.
 
 ```ts
 // An HTTP action
-await ctx.live.publish(`post:${postId}`, { event: "comment_added", commentId }, { stream: "posts" });
+await ctx.live.publish(live.posts.post({ postId }), { event: "comment_added", commentId });
 ```
+
+Pass `{ shardKey }` as a third argument to publish on another shard.
 
 The three publishing contexts differ in where the event goes:
 
@@ -68,8 +122,9 @@ On the action context, `ctx.live` is typed optional, since the same type serves
 every target. Codegen refuses the build, with `platform_unsupported_feature`, when a
 handler reads `ctx.live` on a target that withholds live streams.
 
-A topic is at most 256 characters. A payload is at most 4096 bytes once it is
-JSON-encoded. A topic starting with `room:` or `__lunora_socket__:` is reserved and
+A topic is at most 256 characters once encoded, which percent-encoding makes longer than
+the raw key, so bound your key validators (`v.string().max(64)`). A payload is at most
+4096 bytes once it is JSON-encoded. A topic starting with `room:` or `__lunora_socket__:` is reserved and
 refused with `FORBIDDEN_TOPIC`. A refused publish rejects, so the caller sees the
 error. A publish to a topic nobody follows does nothing.
 
@@ -78,72 +133,80 @@ Put an id in the payload if duplicates matter.
 
 ## Follow a topic in the browser
 
-`connectLiveStream` opens one connection and returns a handle. Call `subscribe`
-once per topic:
+Each framework package exports a hook that follows one topic. Pass it the reference:
 
-```ts
-import { connectLiveStream } from "@lunora/client";
+```tsx
+import { live } from "../lunora/_generated/live";
 
-const live = connectLiveStream("/live/posts/connect", { withCredentials: true });
-
-const off = live.subscribe({
-    onError: ({ status }) => console.warn(`subscribe refused: ${status}`),
-    onEvent: (payload) => render(payload),
-    topic: "post:123",
-});
-
-// later
-off();
-live.close();
-```
-
-`subscribeLiveTopic` is the shared form. It keeps one connection per URL, credentials
-setting, retry settings, and header set, opens it for the first subscriber, and closes
-it after the last one unsubscribes:
-
-```ts
-import { subscribeLiveTopic } from "@lunora/client";
-
-const unsubscribe = subscribeLiveTopic({
-    onEvent: (payload) => render(payload),
-    topic: "post:123",
-    url: "/live/posts/connect",
+const { lastEvent, error } = useLiveTopic(live.posts.post({ postId }), {
+    onEvent: (payload) => refresh(payload.commentId),
 });
 ```
+
+The stream's route is resolved against the `LunoraClient` from the framework's provider,
+so you write no URL and no topic string, and `lastEvent` and `onEvent` are typed by the
+payload the topic declares. Hooks share one connection when their stream route and connection options
+(`shardKey`, `sessionKey`, credentials, headers, retry tuning) match, and the
+connection closes after the last one unmounts.
+
+| Framework | Hook              | Result                                      | Needs the client from                           |
+| --------- | ----------------- | ------------------------------------------- | ----------------------------------------------- |
+| React     | `useLiveTopic`    | `{ lastEvent, error }` as plain values      | `<LunoraProvider>`                              |
+| Vue       | `useLiveTopic`    | `{ lastEvent, error }` as refs              | `useLunora()`, the provided client              |
+| Solid     | `createLiveTopic` | `{ lastEvent, error }` as accessors         | `useLunora()`, the provided client              |
+| Svelte    | `liveTopic`       | a readable store of `{ lastEvent, error }`  | `getLunoraClient()`, so call it during init     |
+| Angular   | `liveTopic`       | `{ lastEvent, error }` as read-only signals | `LUNORA_CLIENT`, or an explicit `client` option |
+
+`lastEvent` is `undefined` until the first event arrives. `error` is set when the
+shard refuses the subscription. The second argument takes `onEvent`, `onError`,
+`shardKey` (follow a `.shardBy` shard, and publish to the same one), `sessionKey`
+(see the limits below), and the transport tuning `headers`, `withCredentials`,
+`retryDelay` and `maxDelayMs`. Svelte and Angular read the client when you call
+them, so call them during component init (or pass `client` and `destroyRef` to the
+Angular one).
+
+The topic can be reactive: pass a getter or ref in Vue, an accessor in Solid, a
+store in Svelte, a function in Angular. A new topic moves the subscription. A new
+`onEvent` or `onError` is read at call time and never reopens it.
+
+### Without a framework
+
+`subscribeLiveTopic` is the transport layer the hooks call. It takes the connect URL
+and the wire topic as strings, which is why an app normally goes through a hook and a
+reference instead. It keeps one connection per URL, credentials setting, retry settings,
+header set and `sessionKey`, opens it for the first subscriber, and closes it after the
+last one unsubscribes. `liveTopicSubscription(client, ref, options)` turns a reference
+into those options:
+
+```ts
+import { liveTopicSubscription, subscribeLiveTopic } from "@lunora/client";
+
+const unsubscribe = subscribeLiveTopic(liveTopicSubscription(client, live.posts.post({ postId }), { onEvent: (payload) => render(payload) }));
+```
+
+`connectLiveStream` opens one connection and returns a handle you subscribe on topic by
+topic, if you want to manage the connection yourself.
 
 Pass `sessionKey` when the stream is cookie-authenticated and the signed-in user can
 change while a page stays open; see the limits at the end of this page.
 
-To pick a shard, put it in the connect URL: `/live/posts/connect?shard=<key>`. The
-control calls carry the same shard, so the subscription lands on the connection's
-shard.
+A `shardKey` option puts the shard on the connect URL (`?shard=<key>`). The control
+calls carry the same shard, so the subscription lands on the connection's shard.
 
 A connection follows at most 64 topics. A subscribe past that is refused with 429
 `TOO_MANY_LIVE_TOPICS`, which `onError` reports. A shard holds at most 1024 live
 connections, a signed-in caller at most 32, and an anonymous client address at most 32.
 A connect past one of those limits is refused with 503 `LIVE_CONNECTION_LIMIT`.
 
-### Framework hooks
-
-Each framework package exports a hook that follows one topic. Each wraps
-`subscribeLiveTopic`, so it shares the connection and takes the same options. The
-result is `{ lastEvent, error }`, in that framework's reactive form:
-
-| Framework | Hook              | Result                                      |
-| --------- | ----------------- | ------------------------------------------- |
-| React     | `useLiveTopic`    | `{ lastEvent, error }` as plain values      |
-| Vue       | `useLiveTopic`    | `{ lastEvent, error }` as refs              |
-| Solid     | `createLiveTopic` | `{ lastEvent, error }` as accessors         |
-| Svelte    | `liveTopic`       | a readable store of `{ lastEvent, error }`  |
-| Angular   | `liveTopic`       | `{ lastEvent, error }` as read-only signals |
-
-`lastEvent` is `undefined` until the first event arrives. `error` is set when the
-shard refuses the subscription.
-
 ## Authorization
 
 Read this before you ship a stream.
 
+- **A subscribe is parsed before anything else runs.** A topic the stream did not
+  declare, one with the wrong number of key segments, a segment its validator rejects,
+  or a spelling that is not the canonical encoding (`post:%31` for `post:1`) is denied
+  with the same 403 as any other denial. `onSubscribe` is never called for it, and
+  `allowAnonymousControl` does not change that.
 - **Without `onSubscribe`, every subscribe is denied.** The only exception is
   `allowAnonymousControl: true`, which admits a caller with no identity to any topic.
   An authenticated caller is still denied. Use it only for a genuinely public stream.

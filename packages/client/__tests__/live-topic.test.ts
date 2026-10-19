@@ -1,7 +1,8 @@
 import { encodeWire } from "@lunora/wire";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { subscribeLiveTopic } from "../src/live-topic";
+import type { LiveTopicRef } from "../src/live-topic";
+import { liveTopicSubscription, subscribeLiveTopic } from "../src/live-topic";
 
 /** The request URL as a string, whichever form `fetch` was called with. */
 const urlOf = (input: RequestInfo | URL): string => {
@@ -215,5 +216,56 @@ describe(subscribeLiveTopic, () => {
         offPlain();
         offCreds();
         await vi.advanceTimersByTimeAsync(5);
+    });
+});
+
+describe(liveTopicSubscription, () => {
+    const post = { __lunoraLive: "posts", topic: "post:1" } as LiveTopicRef<{ text: string }>;
+
+    it("builds the stream's connect route under the client's base URL, with the reference's wire topic", () => {
+        expect.assertions(3);
+
+        expect(liveTopicSubscription({ url: "https://api.test" }, post)).toStrictEqual({
+            onEvent: undefined,
+            topic: "post:1",
+            url: "https://api.test/live/posts/connect",
+        });
+        // A trailing slash on the base joins cleanly, and a same-origin client stays relative.
+        expect(liveTopicSubscription({ url: "https://api.test/" }, post).url).toBe("https://api.test/live/posts/connect");
+        expect(liveTopicSubscription({ url: "" }, post).url).toBe("/live/posts/connect");
+    });
+
+    it("puts a shard on the connect URL, where the control calls read it from", () => {
+        expect.assertions(1);
+
+        expect(liveTopicSubscription({ url: "https://api.test" }, post, { shardKey: "tenant 1" }).url).toBe(
+            "https://api.test/live/posts/connect?shard=tenant+1",
+        );
+    });
+
+    it("passes the transport tuning through and keeps the shard out of it", () => {
+        expect.assertions(2);
+
+        const onEvent = vi.fn<(payload: { text: string }) => void>();
+        const subscription = liveTopicSubscription({ url: "https://api.test" }, post, {
+            headers: { authorization: "Bearer t" },
+            onEvent,
+            retryDelay: 5,
+            shardKey: "s",
+            withCredentials: true,
+        });
+
+        expect(subscription).toMatchObject({ headers: { authorization: "Bearer t" }, onEvent, retryDelay: 5, withCredentials: true });
+        expect(subscription).not.toHaveProperty("shardKey");
+    });
+
+    it("types onEvent by the topic's payload, so a handler for the wrong payload does not compile", () => {
+        expect.assertions(1);
+
+        liveTopicSubscription({ url: "" }, post, { onEvent: (payload) => expectTypeOf(payload).toEqualTypeOf<{ text: string }>() });
+        // @ts-expect-error -- the topic carries `{ text: string }`, not a number
+        const wrong = liveTopicSubscription({ url: "" }, post, { onEvent: (payload: number) => payload });
+
+        expect(wrong.topic).toBe("post:1");
     });
 });

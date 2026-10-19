@@ -156,7 +156,7 @@ interface HttpActionContext {
      * `@lunora/server`'s `LivePublisher`. Present on every worker; built with
      * `liveStreams: false` (a target that does not serve live streams), its `publish` rejects.
      */
-    live?: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
+    live?: { publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void> };
 
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -643,7 +643,13 @@ type QueueConsumerHandler = (
  * its own copy and this package stays decoupled from it.
  */
 interface QueueLivePublisherLike {
-    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void>;
+}
+
+/** The live topic reference a publish is addressed with: `_generated/live.ts` hands it out, and the stream id rides in it. */
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
 }
 
 /**
@@ -3234,12 +3240,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      */
     const publishLiveToShard = async (
         origin: string,
-        topic: string,
+        ref: LiveTopicRefLike,
         payload: unknown,
-        publishOptions: { shardKey?: string; stream: string },
+        publishOptions: { shardKey?: string } | undefined,
         caller: "trusted" | { identity: ResolvedIdentity | null },
     ): Promise<void> => {
-        const shardKey = publishOptions.shardKey ?? defaultShard;
+        const { __lunoraLive: stream, topic } = ref;
+        const shardKey = publishOptions?.shardKey ?? defaultShard;
 
         if (caller === "trusted") {
             // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
@@ -3253,7 +3260,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             shardKey,
             new Request(new URL(LIVE_PUBLISH_PATH, origin), {
                 // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
-                body: JSON.stringify({ data: encodeWire(payload ?? null), stream: publishOptions.stream, topic }),
+                body: JSON.stringify({ data: encodeWire(payload ?? null), stream, topic }),
                 headers: { "content-type": "application/json" },
                 method: "POST",
             }),
@@ -4296,7 +4303,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 options.liveStreams === false
                     ? unsupportedLivePublisher()
                     : {
-                          publish: (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }) =>
+                          publish: (topic: LiveTopicRefLike, payload: unknown, publishOptions?: { shardKey?: string }) =>
                               publishLiveToShard(request.url, topic, payload, publishOptions, { identity }),
                       },
             runAction: run,

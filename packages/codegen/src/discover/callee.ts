@@ -15,10 +15,10 @@
  * proves origin, and the security markers (`platformAdmin`, `defineIdentityGuard`)
  * use it for that reason.
  */
-import type { Identifier, Node, SourceFile } from "ts-morph";
+import type { CallExpression, Identifier, Node, SourceFile } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
 
-import { isServerSurfaceModule } from "../module-specifiers";
+import { isServerPackageModule, isServerSurfaceModule } from "../module-specifiers";
 
 /**
  * The simple name of a callee — a bare identifier's text, or a property
@@ -161,4 +161,30 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
  */
 const isServerImport = (callee: Node, exportName: string): boolean => TsNode.isIdentifier(callee) && surfaceImportNameOf(callee) === exportName;
 
-export { calleeName, importAliases, isServerImport, resolveCalleeKind, resolvesToImportedName };
+/**
+ * Whether `call` invokes the `@lunora/server` factory `exportName`, proven by import and read syntactically (see
+ * {@link importAliases}): a named import of it (an alias counts) or a member of a namespace import
+ * (`server.defineX(...)`). A same-named function declared locally, or imported from anywhere else, is not one, which is what
+ * separates it from {@link resolvesToImportedName}. Unlike {@link isServerImport} it reads the import declarations, not the symbol,
+ * so it answers without type information, and it also accepts a namespace member.
+ */
+const callsServerFactory = (call: CallExpression, exportName: string): boolean => {
+    const callee = call.getExpression();
+    const sourceFile = call.getSourceFile();
+
+    if (TsNode.isIdentifier(callee)) {
+        return importAliases(sourceFile, exportName, isServerPackageModule).has(callee.getText());
+    }
+
+    if (!TsNode.isPropertyAccessExpression(callee) || callee.getName() !== exportName) {
+        return false;
+    }
+
+    const namespace = callee.getExpression().getText();
+
+    return sourceFile
+        .getImportDeclarations()
+        .some((declaration) => declaration.getNamespaceImport()?.getText() === namespace && isServerPackageModule(declaration.getModuleSpecifierValue()));
+};
+
+export { calleeName, callsServerFactory, importAliases, isServerImport, resolveCalleeKind, resolvesToImportedName };
