@@ -200,10 +200,13 @@ const createAlarms = (
         }
     };
 
-    /** Delete the durable row only if it still holds the timestamp that just fired. */
-    const consume = (firedAt: number): void => {
-        database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt);
-    };
+    /**
+     * Claim the alarm that just fired by deleting its row, and report whether
+     * this call is the one that did. The delete is conditional on the timestamp
+     * and atomic in SQLite, so when two processes share one database file and
+     * both re-armed the same row, exactly one sees `changes === 1` and delivers.
+     */
+    const consume = (firedAt: number): boolean => database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt).changes > 0;
 
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
@@ -260,7 +263,11 @@ const createAlarms = (
             // it on the next construction over this database. Conditional on
             // the timestamp: a transaction may have persisted a newer alarm
             // while this timer was still armed, and that row is not ours.
-            consume(ms);
+            if (!consume(ms)) {
+                // Another process over this file claimed the row first (or a
+                // newer alarm replaced it); delivering again would fire it twice.
+                return;
+            }
 
             (async (): Promise<void> => {
                 await onAlarm?.();
