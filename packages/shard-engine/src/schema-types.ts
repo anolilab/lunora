@@ -850,6 +850,12 @@ export interface DatabaseWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
+
+    /**
+     * The unvalidated bulk insert. It applies column defaults and the parsed output of `v.from` transform
+     * columns (so stored rows match every other write) and nothing else: `.check()` validators, foreign
+     * key existence checks and triggers are all skipped, because the caller vouches for the data.
+     */
     insertManyUnsafe?: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,

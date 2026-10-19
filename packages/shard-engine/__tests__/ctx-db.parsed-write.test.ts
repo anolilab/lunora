@@ -28,6 +28,14 @@ const numericString = {
     },
 };
 
+const lowercased = {
+    "~standard": {
+        validate: (value: unknown) => (typeof value === "string" ? { value: value.toLowerCase() } : { issues: [{ message: "expected a string" }] }),
+        vendor: "test",
+        version: 1 as const,
+    },
+};
+
 const reversedBytes = {
     "~standard": {
         validate: (value: unknown) =>
@@ -56,6 +64,8 @@ const schema = {
                     .$onUpdateFn(() => "5"),
             },
         },
+        // Only the KEYS carry a transform; the values are plain strings.
+        labelled: { indexes: [], shape: { labels: v.record(v.from(lowercased) as unknown as ReturnType<typeof v.string>, v.string()), title: v.string() } },
         // A transform over bytes: the stored output is the input reversed.
         payloads: {
             indexes: [],
@@ -464,5 +474,35 @@ describe("insertManyUnsafe stores a v.from column as its parsed output", () => {
         const [id] = await writer.insertManyUnsafe!("plain", [{ label: "x" }]);
 
         await expect(stored(id!, "label")).resolves.toBe("x");
+    });
+});
+
+describe("ctx.db writes store the parsed output of a v.from record key", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("insert stores the transformed keys", async () => {
+        expect.assertions(1);
+
+        const id = await writer.insert("labelled", { labels: { Alpha: "x", BETA: "y" }, title: "t" });
+
+        await expect(stored(id, "labels")).resolves.toStrictEqual({ alpha: "x", beta: "y" });
+    });
+
+    it("patch stores the transformed keys of a record it sets", async () => {
+        expect.assertions(1);
+
+        const id = await writer.insert("labelled", { labels: {}, title: "t" });
+
+        await writer.patch(id, { labels: { Gamma: "z" } });
+
+        await expect(stored(id, "labels")).resolves.toStrictEqual({ gamma: "z" });
     });
 });

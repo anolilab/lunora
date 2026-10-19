@@ -3963,8 +3963,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureRankBackfilledForTable(tableName);
 
             // Build every row up front: column defaults + a minted (or, for trusted
-            // import, an explicit) id. **No `.check()` validators and no before/after
-            // triggers run** — the caller vouches for the data; that is the "unsafe".
+            // import, an explicit) id. **No `.check()` validators, no foreign key existence
+            // check and no before/after triggers run** — the caller vouches for the data;
+            // that is the "unsafe". Only the transform columns are applied (below) so stored
+            // rows match every other write.
             // One `_commitSeq` per CHUNK, not per row. Each chunk below is a single
             // atomic multi-row INSERT, and a sequence identifies a commit rather
             // than a row — so rows that land together must compare equal, which is

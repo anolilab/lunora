@@ -80,8 +80,20 @@ const hookedFromColumn = (): ValidatorLike => {
     return { _meta: { column: { defaultFn: () => "1", notNull: true, onUpdateFn: () => "5" } }, kind: "from", parse: numericOutput };
 };
 
+/** `v.record(v.from(lowercase), v.string())`: only the KEYS carry a transform. */
+const lowercasedKeyRecord = (): ValidatorLike => {
+    const lowercaseKey: ValidatorLike = { _meta: { column: { notNull: true } }, kind: "from", parse: (value: unknown) => String(value).toLowerCase() };
+
+    return {
+        _meta: { column: { notNull: true }, keyValidator: lowercaseKey, valueValidator: col("string") } as ValidatorLike["_meta"],
+        kind: "record",
+        parse: (value: unknown) => Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key.toLowerCase(), item])),
+    };
+};
+
 const schema = {
     tables: {
+        labelled: { indexes: [], shape: { labels: lowercasedKeyRecord() }, shardMode: { kind: "global" } },
         nested: {
             indexes: [],
             shape: { box: objectWithFrom(), deep: doublyOptionalFrom(), label: col("string"), scores: arrayOfFrom(), stamp: hookedFromColumn() },
@@ -371,5 +383,28 @@ describe("createSqlCtxDb runs an update hook's value through the column's transf
         await writer.patch(id, { label: "b" });
 
         await expect(stored(id, "stamp")).resolves.toBe(5);
+    });
+});
+
+describe("createSqlCtxDb stores the parsed output of a v.from record key", () => {
+    beforeEach(() => {
+        harness = createSqliteHarness();
+        writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("insert and patch store the transformed keys", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("labelled", { labels: { Alpha: "x" } });
+
+        await expect(stored(id, "labels")).resolves.toStrictEqual({ alpha: "x" });
+
+        await writer.patch(id, { labels: { Beta: "y" } });
+
+        await expect(stored(id, "labels")).resolves.toStrictEqual({ beta: "y" });
     });
 });

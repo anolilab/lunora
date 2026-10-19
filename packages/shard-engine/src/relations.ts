@@ -755,9 +755,10 @@ const hasTransform = (validator: ValidatorLike): boolean => {
         return cached;
     }
 
-    // `v.record`'s value validator is not on the structural `_meta` type.
-    const meta: (NonNullable<ValidatorLike["_meta"]> & { readonly valueValidator?: ValidatorLike }) | undefined = validator._meta;
-    const children = [meta?.inner, meta?.valueValidator, ...(meta?.members ?? []), ...Object.values(meta?.shape ?? {})];
+    // `v.record`'s key and value validators are not on the structural `_meta` type.
+    const meta: (NonNullable<ValidatorLike["_meta"]> & { readonly keyValidator?: ValidatorLike; readonly valueValidator?: ValidatorLike }) | undefined =
+        validator._meta;
+    const children = [meta?.inner, meta?.keyValidator, meta?.valueValidator, ...(meta?.members ?? []), ...Object.values(meta?.shape ?? {})];
     const result = validator.kind === "from" || children.some((child) => child !== undefined && hasTransform(child));
 
     transformCache.set(validator, result);
@@ -900,6 +901,43 @@ const holdsStoredOutput = (field: string, value: unknown, options: RowValidatorO
     options.trusted === true || (options.only !== undefined && !options.only.has(field)) || isStored(field, value);
 
 /**
+ * A copy of a declared default that no write can alias: plain objects, arrays, dates, byte
+ * buffers, maps and sets are copied deeply; any other object (a `URL`, a class instance) is
+ * handed out as is, because `structuredClone` throws on it or flattens it to a plain object.
+ */
+const cloneDefault = (value: unknown): unknown => {
+    if (typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    if (value instanceof Date) {
+        return new Date(value);
+    }
+
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return structuredClone(value);
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => cloneDefault(item));
+    }
+
+    if (value instanceof Map) {
+        return new Map([...value].map(([key, item]) => [cloneDefault(key), cloneDefault(item)]));
+    }
+
+    if (value instanceof Set) {
+        return new Set([...value].map((item) => cloneDefault(item)));
+    }
+
+    if (!isPlain(value)) {
+        return value;
+    }
+
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDefault(item)]));
+};
+
+/**
  * Fill any field absent from `document` that declares a `.default()` literal or
  * `.$defaultFn()` factory. The factory wins when both are present; a literal is
  * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
@@ -935,7 +973,7 @@ const applyInsertDefaults = (
             // every insert after it.
             const { defaultValue } = column;
 
-            result[field] = typeof defaultValue === "object" && defaultValue !== null ? structuredClone(defaultValue) : defaultValue;
+            result[field] = cloneDefault(defaultValue);
         }
     }
 

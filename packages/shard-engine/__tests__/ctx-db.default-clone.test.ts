@@ -15,6 +15,16 @@ import createSqliteExec from "./_helpers/node-sqlite";
 const schema = {
     tables: {
         notes: { indexes: [], shape: { tags: v.array(v.string()).default([]), title: v.string() } },
+        // Values the wire codec round-trips but `structuredClone` cannot copy (a `URL`) or copies lossily.
+        links: {
+            indexes: [],
+            shape: {
+                at: v.any().default(new Date(1_700_000_000_000)),
+                nested: v.any().default({ home: new URL("https://example.com/home") }),
+                target: v.any().default(new URL("https://example.com/a?b=1")),
+                title: v.string(),
+            },
+        },
     },
 } as unknown as SchemaLike;
 
@@ -52,5 +62,27 @@ describe("insert applies an object default without sharing it", () => {
 
         expect(row?.["tags"]).toStrictEqual([]);
         expect(seen?.["tags"]).toStrictEqual([]);
+    });
+
+    it("keeps a URL default a URL, on its own and inside a plain object", async () => {
+        expect.assertions(4);
+
+        const id = await writer.insert("links", { title: "x" });
+        const row = await writer.get(id);
+
+        expect(row?.["target"]).toBeInstanceOf(URL);
+        expect((row?.["target"] as URL).href).toBe("https://example.com/a?b=1");
+        expect((row?.["nested"] as { home: unknown }).home).toBeInstanceOf(URL);
+        expect((row?.["nested"] as { home: URL }).home.href).toBe("https://example.com/home");
+    });
+
+    it("keeps a Date default a Date", async () => {
+        expect.assertions(2);
+
+        const id = await writer.insert("links", { title: "x" });
+        const row = await writer.get(id);
+
+        expect(row?.["at"]).toBeInstanceOf(Date);
+        expect((row?.["at"] as Date).getTime()).toBe(1_700_000_000_000);
     });
 });
