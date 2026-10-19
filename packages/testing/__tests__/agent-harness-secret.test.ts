@@ -125,6 +125,22 @@ describe("agentHarness — requestSecretTool", () => {
         expect(harness.messages("thread-1").find((message) => message.toolCallId === "call_2")?.content).toMatch(TOOL_FAILED);
     });
 
+    it("refuses a supply made after its wait expired, before the run settles", async () => {
+        expect.assertions(2);
+
+        const harness = agentHarness(billingAgent([]), {
+            script: [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")],
+        });
+
+        const run = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1" });
+
+        await harness.awaitWait("run-1", "secret:0:call_1");
+        harness.expire("run-1", "secret:0:call_1");
+
+        await expect(harness.supply("thread-1", "call_1", SECRET)).rejects.toThrow(/no pending secret request/u);
+        await expect(run).resolves.toMatchObject({ stopped: "final" });
+    });
+
     it("treats an elapsed wait as no value supplied", async () => {
         expect.assertions(2);
 

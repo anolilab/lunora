@@ -271,6 +271,8 @@ const createRuntime = (
     /** The run that owns the pending request, and its slot (the wait's key); undefined when no pending request names the call. */
     declineSecret: (threadKey: string, callId: string) => { instanceId: string; slot: string } | undefined;
     dispatches: HarnessDispatch[];
+    /** Close the pending request of a run's secret wait, once that wait has expired. */
+    expireSecretRequest: (instanceId: string, slot: string) => void;
     messages: Map<string, HarnessMessage>;
     run: AgentRunFunction;
     /** The run that owns the pending request, and its slot (the wait's key), so its wait can be woken. */
@@ -543,7 +545,15 @@ const createRuntime = (
         return Promise.resolve(handler(args));
     };
 
-    return { declineSecret, dispatches, messages, run, supplySecret, threads };
+    const expireSecretRequest = (instanceId: string, slot: string): void => {
+        for (const request of requests.values()) {
+            if (request.instanceId === instanceId && request.slot === slot && request.status === "pending") {
+                request.status = "expired";
+            }
+        }
+    };
+
+    return { declineSecret, dispatches, expireSecretRequest, messages, run, supplySecret, threads };
 };
 
 /**
@@ -661,6 +671,12 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         dispatches: runtime.dispatches,
         expire: (instanceId: string, name: string) => {
             waits.expire(instanceId, name);
+
+            // A secret wait's deadline closes its request too, as the production deadline check does, so a
+            // supply made before settlement is refused rather than stored for the run to take.
+            if (name.startsWith("secret:")) {
+                runtime.expireSecretRequest(instanceId, name.slice("secret:".length));
+            }
         },
         journalEntries: (): unknown[] => [...journal],
         messages: (threadKey: string): AgentMessageRow[] =>
