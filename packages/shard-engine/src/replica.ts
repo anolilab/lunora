@@ -29,15 +29,19 @@
  * cannot be followed, and the owner refuses the control channel outright rather
  * than handing back a synthetic timeline a follower would agree with forever.
  *
+ * A **compacted log** the replica has fallen behind cannot be reconciled by
+ * replay, so the replica takes a fresh snapshot instead: every snapshot row is
+ * upserted and every local row the snapshot lacks is deleted, in one
+ * transaction, so rows changed or removed in the gap cannot survive it.
+ *
  * A **forked timeline** (the owner was reset or rolled back, so its CDC epoch
- * changed) or a **compacted log** the replica has fallen behind cannot be
- * reconciled by replay, so the replica reports `unavailable` and the caller
- * sends the read to the owner.
- * ponytail: divergence is a dead end, not a self-heal — and since a Durable
- * Object is never destroyed, "for this DO's lifetime" means indefinitely, at
- * the cost of one wasted hop per read in that region. Wiring
- * `storage.deleteAll()` + a fresh bootstrap is the upgrade path if resets stop
- * being rare, operator-driven events.
+ * changed) cannot be reconciled either way, so the replica reports
+ * `unavailable` and the caller sends the read to the owner.
+ * ponytail: a fork is a dead end, not a self-heal — and since a Durable Object
+ * is never destroyed, "for this DO's lifetime" means indefinitely, at the cost
+ * of one wasted hop per read in that region. Wiring `storage.deleteAll()` + a
+ * fresh bootstrap is the upgrade path if resets stop being rare,
+ * operator-driven events.
  */
 
 import { decodeWire, encodeWire } from "@lunora/wire";
@@ -206,8 +210,14 @@ interface ReplicaOwnerHost extends ShardSiblingHost {
  * The follower half: what a replica needs to APPLY what its owner sends.
  */
 interface ReplicaFollowerHost extends ShardSiblingHost {
-    /** Replay a changelog page through the schema-aware writer (the `applyCdc` path). */
+    /**
+     * Replay a changelog page through the schema-aware writer (the `applyCdc` path), atomically.
+     * Resolves once the page has COMMITTED: any refresh work after the commit is the host's to
+     * absorb, because a rejection here is read as "the page was not applied".
+     */
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    /** Every row this replica holds, so a re-snapshot can delete the ones its owner no longer has. */
+    exportRows: () => Promise<ExportRow[]>;
     /** Insert a bootstrap snapshot verbatim (explicit ids preserved), reporting what did not land. */
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{ errors: ReadonlyArray<unknown> }>;
     /** Surface a failure the follow loop absorbed (a page that would not apply) so an operator can see why reads fell back to the owner. */
@@ -371,7 +381,7 @@ const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Re
  * retry the identical doomed round trip forever instead of bootstrapping, and
  * never latch divergent, because the floor it needed to see was in the response
  * that failed to be built. Answering with the floor and an empty page routes it
- * through `hasDiverged` → `bootstrap`, which is the recovery that exists.
+ * through `divergenceOf` into a re-snapshot, which is the recovery that exists.
  */
 const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Response => {
     const floor = host.ownerFloor();
@@ -392,8 +402,8 @@ const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Res
     // cursor outright, for exactly the reason the floor is answered here: a
     // thrown response reaches the follower as a bare non-2xx it reads as "owner
     // unreachable", so it would retry the identical doomed round trip forever
-    // instead of bootstrapping. The rewound cursor routes it through
-    // `hasDiverged` into `bootstrap`, which is the recovery that exists.
+    // instead of reporting the fork. The rewound cursor routes it through
+    // `divergenceOf`, which reads it as a fork and stops following.
     if (sinceSeq > ownerCursor) {
         return replicaResponse({ changes: [], cursor: ownerCursor, epoch, ...(floor === undefined ? {} : { floor }) });
     }
@@ -448,16 +458,70 @@ const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): P
     return new Response("unknown replica frame", { status: 400 });
 };
 
+/** Whether the platform flagged a failure as transient: worth retrying (`retryable`), or caused by load (`overloaded`). */
+const isTransient = (error: unknown): boolean => {
+    const flags = error as { overloaded?: unknown; retryable?: unknown } | null | undefined;
+
+    return typeof error === "object" && (flags?.retryable === true || flags?.overloaded === true);
+};
+
+/**
+ * Why `page` can no longer be replayed onto `state`, or `undefined` when it can.
+ *
+ * `"fork"`: the owner's timeline is not the one we replayed — a new epoch, or a
+ * high-watermark below our applied position. Neither is reconcilable by replay
+ * OR by snapshot: applying the page anyway would fabricate a state neither side
+ * ever held.
+ *
+ * `"compacted"`: same timeline, but the owner's log no longer reaches back to our
+ * position. The history exists nowhere, yet the owner's current rows are a
+ * complete, trustworthy state to converge on, so a fresh snapshot recovers it.
+ */
+const divergenceOf = (state: ReplicaState, page: ReplicaPullResult): "compacted" | "fork" | undefined => {
+    // An absent `floor` means the owner's log holds nothing right now: a
+    // shard that has never written (fine — we are at 0 as well), or one whose
+    // log was compacted away entirely, which leaves nothing to replay the gap
+    // from. What separates them is that the second one hands back an EMPTY
+    // page whose high-watermark is nevertheless ahead of us: writes happened
+    // and were compacted before we saw them. A page WITH changes and a
+    // cursor ahead is just an ordinary catch-up.
+    const compactedEmpty = page.changes.length === 0 && page.cursor > state.appliedSeq;
+    const floor = page.floor ?? (compactedEmpty ? page.cursor : 0);
+    const compactedPastUs = floor > 0 && floor > state.appliedSeq + 1;
+
+    // The owner's high-watermark BELOW our applied position is a rollback on
+    // the owner, and it is the case the epoch cannot report: a point-in-time
+    // restore reverts the owner's whole SQLite database, the `__cdc_meta` row
+    // holding that epoch included, so the epoch comes back identical while
+    // the log underneath it is a different timeline. Our own applied position
+    // is then the only surviving record of the timeline we replayed, and
+    // following on means replaying a second timeline's changes over a first
+    // one's rows. Detectable only while the owner is still behind us — once
+    // it has written back past our cursor neither side can tell, the same
+    // blind spot `ShardDO.sealForkedTimeline` documents for its subscribers.
+    const rewoundBeneathUs = page.cursor < state.appliedSeq;
+
+    if (page.epoch !== state.epoch || rewoundBeneathUs) {
+        return "fork";
+    }
+
+    return compactedPastUs ? "compacted" : undefined;
+};
+
+/** The `table`+`id` identity of a row, for matching a snapshot against what a replica holds. */
+const rowKey = (table: string, id: string): string => `${table}\u0000${id}`;
+
 /**
  * A replica's follow loop. One instance per replica DO, built once from the
  * DO name; owner-role DOs never have one.
  */
 class ShardReplica {
     /**
-     * Set once the replica proves it cannot follow this owner (forked timeline
-     * or compacted gap). Sticky for the DO's lifetime: re-checking on every read
-     * would re-pay the round trip to learn the same answer, and the condition is
-     * not one that clears itself.
+     * Set once the replica proves it cannot follow this owner (forked timeline,
+     * an oversized or lossy snapshot, or a page that can never be applied).
+     * Sticky for the DO's lifetime: re-checking on every read would re-pay the
+     * round trip to learn the same answer, and the condition is not one that
+     * clears itself.
      */
     private divergent = false;
 
@@ -563,6 +627,7 @@ class ShardReplica {
      */
     private async catchUp(from: ReplicaState, minSeq: number | undefined): Promise<ReplicaReadiness> {
         let state = from;
+        let resnapshotted = false;
 
         for (let round = 0; round < MAX_PULL_ROUNDS; round += 1) {
             // eslint-disable-next-line no-await-in-loop -- catching up is inherently sequential: each page's cursor is the next page's `sinceSeq`.
@@ -572,8 +637,20 @@ class ShardReplica {
                 return this.whenOwnerUnreachable(state, minSeq);
             }
 
-            if (this.hasDiverged(state, page)) {
-                return "unavailable";
+            const divergence = divergenceOf(state, page);
+
+            if (divergence !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- the snapshot replaces the position every later pull starts from.
+                const recovered = await this.recover(state, divergence, resnapshotted);
+
+                if (typeof recovered === "string") {
+                    return recovered;
+                }
+
+                resnapshotted = true;
+                state = recovered;
+
+                continue;
             }
 
             // An empty page means the owner has nothing more, so stop rather than
@@ -592,11 +669,32 @@ class ShardReplica {
             state = applied;
 
             if (exhausted || this.isFreshEnough(state, minSeq)) {
-                return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
+                return this.verdict(state, minSeq);
             }
         }
 
+        return this.verdict(state, minSeq);
+    }
+
+    /** What `state` is worth to the read once paging has stopped: fresh enough, or stale. */
+    private verdict(state: ReplicaState, minSeq: number | undefined): ReplicaReadiness {
         return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
+    }
+
+    /**
+     * Act on a divergence: a fork latches {@link divergent}; a compacted gap is closed by a re-snapshot.
+     * Only one re-snapshot runs per catch-up: an owner trimming faster than a snapshot can be taken is
+     * reported as unavailable (reads go to the owner), not looped on or latched.
+     * @returns the position to keep following from, or the verdict to stop with
+     */
+    private async recover(state: ReplicaState, divergence: "compacted" | "fork", resnapshotted: boolean): Promise<ReplicaReadiness | ReplicaState> {
+        if (divergence === "fork") {
+            this.divergent = true;
+
+            return "unavailable";
+        }
+
+        return resnapshotted ? "unavailable" : ((await this.resnapshot(state)) ?? "unavailable");
     }
 
     /**
@@ -624,18 +722,12 @@ class ShardReplica {
      * DO. It latches {@link divergent} instead, like any other timeline the
      * replica cannot follow: the cursor stays put (the host applies a page
      * atomically or not at all), reads go to the owner, and a restarted DO tries
-     * again.
+     * again. A failure the platform marks as transient does not latch; see
+     * {@link applyAtomically}.
      * @returns the new position, or `undefined` when the page could not be applied
      */
     private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState | undefined> {
-        try {
-            if (page.changes.length > 0) {
-                await this.host.applyChanges(page.changes);
-            }
-        } catch (error) {
-            this.divergent = true;
-            this.host.reportError?.("replica.applyPage", error);
-
+        if (!(await this.applyAtomically("replica.applyPage", page.changes))) {
             return undefined;
         }
 
@@ -647,49 +739,35 @@ class ShardReplica {
     }
 
     /**
-     * Whether `page` can no longer be replayed onto `state` — the owner's
-     * timeline forked under us, or its log was compacted past our position.
-     * Either way replay cannot reconstruct the gap, and applying the page
-     * anyway would fabricate a state neither side ever held.
+     * Replay `changes` as one atomic step and report whether they committed. Resolution means committed
+     * (see {@link ReplicaFollowerHost.applyChanges}), so a rejection leaves the replica exactly where it was.
      *
-     * Latches {@link divergent} as a side effect: the condition does not clear
-     * itself, so re-deciding it on every read would only re-pay the round trip.
+     * The failure is reported either way. It latches {@link divergent} unless the platform flagged it as
+     * transient (`retryable`, or `overloaded`): a transient failure says nothing about the changes, so the
+     * next sync pulls the same page again instead of cutting the replica off until the DO restarts.
      */
-    private hasDiverged(state: ReplicaState, page: ReplicaPullResult): boolean {
-        // An absent `floor` means the owner's log holds nothing right now: a
-        // shard that has never written (fine — we are at 0 as well), or one whose
-        // log was compacted away entirely, which leaves nothing to replay the gap
-        // from. What separates them is that the second one hands back an EMPTY
-        // page whose high-watermark is nevertheless ahead of us: writes happened
-        // and were compacted before we saw them. A page WITH changes and a
-        // cursor ahead is just an ordinary catch-up.
-        const compactedEmpty = page.changes.length === 0 && page.cursor > state.appliedSeq;
-        const floor = page.floor ?? (compactedEmpty ? page.cursor : 0);
-        const compactedPastUs = floor > 0 && floor > state.appliedSeq + 1;
-
-        // The owner's high-watermark BELOW our applied position is a rollback on
-        // the owner, and it is the case the epoch cannot report: a point-in-time
-        // restore reverts the owner's whole SQLite database, the `__cdc_meta` row
-        // holding that epoch included, so the epoch comes back identical while
-        // the log underneath it is a different timeline. Our own applied position
-        // is then the only surviving record of the timeline we replayed, and
-        // following on means replaying a second timeline's changes over a first
-        // one's rows. Detectable only while the owner is still behind us — once
-        // it has written back past our cursor neither side can tell, the same
-        // blind spot `ShardDO.sealForkedTimeline` documents for its subscribers.
-        const rewoundBeneathUs = page.cursor < state.appliedSeq;
-
-        if (page.epoch === state.epoch && !compactedPastUs && !rewoundBeneathUs) {
-            return false;
+    private async applyAtomically(scope: string, changes: ReadonlyArray<CdcChange>): Promise<boolean> {
+        if (changes.length === 0) {
+            return true;
         }
 
-        this.divergent = true;
+        try {
+            await this.host.applyChanges(changes);
 
-        return true;
+            return true;
+        } catch (error) {
+            if (!isTransient(error)) {
+                this.divergent = true;
+            }
+
+            this.host.reportError?.(scope, error);
+
+            return false;
+        }
     }
 
-    /** Take the owner's snapshot, or `undefined` when it can't be had (unreachable, or too large for one response). */
-    private async bootstrap(): Promise<ReplicaState | undefined> {
+    /** The owner's snapshot, or `undefined` when it can't be had (unreachable, or too large for one response). */
+    private async fetchSnapshot(): Promise<ReplicaBootstrapResult | undefined> {
         const response = await this.request({ type: "replica_bootstrap" });
 
         if (response === undefined) {
@@ -703,6 +781,62 @@ class ShardReplica {
             // a replica holding an arbitrary prefix of the shard.
             this.divergent = true;
 
+            return undefined;
+        }
+
+        return result;
+    }
+
+    /**
+     * Converge a replica that holds rows onto a fresh snapshot, because the owner's log no longer reaches back
+     * to its position. The snapshot is replayed through the schema-aware writer as one atomic page: every
+     * snapshot row is upserted and every local row it lacks is deleted. An append-only import would keep
+     * the stale version of each row changed in the gap, and the rows deleted in it, and then serve both as fresh.
+     * ponytail: rewrites every row, changed or not; diff against the local documents if snapshots get large.
+     * @returns the position the snapshot was taken at, or `undefined` when it could not be applied
+     */
+    private async resnapshot(from: ReplicaState): Promise<ReplicaState | undefined> {
+        const snapshot = await this.fetchSnapshot();
+
+        if (snapshot === undefined) {
+            return undefined;
+        }
+
+        const changes: CdcChange[] = [];
+        const kept = new Set<string>();
+
+        for (const { doc, table } of snapshot.rows) {
+            const id = String(doc["_id"]);
+
+            kept.add(rowKey(table, id));
+            changes.push({ doc, id, op: "insert", seq: snapshot.cursor, table, ts: 0 });
+        }
+
+        for (const { doc, table } of await this.host.exportRows()) {
+            const id = String(doc["_id"]);
+
+            if (!kept.has(rowKey(table, id))) {
+                changes.push({ id, op: "delete", seq: snapshot.cursor, table, ts: 0 });
+            }
+        }
+
+        if (!(await this.applyAtomically("replica.resnapshot", changes))) {
+            return undefined;
+        }
+
+        // `syncedAtMs` stays `from`'s: the replica provably matches its owner only once a pull comes back drained.
+        const state: ReplicaState = { appliedSeq: snapshot.cursor, epoch: snapshot.epoch, syncedAtMs: from.syncedAtMs };
+
+        writeReplicaState(this.host.sql(), state);
+
+        return state;
+    }
+
+    /** Take the owner's snapshot into an empty replica, or `undefined` when it can't be had. */
+    private async bootstrap(): Promise<ReplicaState | undefined> {
+        const result = await this.fetchSnapshot();
+
+        if (result === undefined) {
             return undefined;
         }
 
