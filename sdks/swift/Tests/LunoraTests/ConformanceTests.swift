@@ -128,6 +128,7 @@ final class ConformanceTests: XCTestCase {
             case "offline_unset_identity_stamps_token_digest": try caseOfflineUnsetIdentityStampsTokenDigest()
             case "offline_online_only_refused_when_disconnected": try caseOfflineOnlineOnlyRefusedWhenDisconnected()
             case "offline_online_only_sends_when_connected": try caseOfflineOnlineOnlySendsWhenConnected()
+            case "offline_online_only_transport_failure_refused": try caseOfflineOnlineOnlyTransportFailureRefused()
             case "offline_online_only_leaves_normal_writes_queued": try caseOfflineOnlineOnlyLeavesNormalWritesQueued()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
