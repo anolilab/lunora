@@ -1,5 +1,3 @@
-/* eslint-disable n/no-unsupported-features/node-builtins -- workerd provides the Web Crypto global (`crypto.randomUUID`); agent code runs in Workers, never under Node */
-
 /**
  * `wrapUntrusted` — embed text from an untrusted source (an inbound email or
  * webhook payload, a fetched page, a tool result) into a prompt so the model
@@ -72,6 +70,8 @@ const renderHeaders = (headers: Headers | Readonly<Record<string, string>>): str
  * @experimental
  */
 const wrapUntrusted = (value: string, headers?: Headers | Readonly<Record<string, string>>): string => {
+    // workerd provides the Web Crypto global; agent code runs in Workers, never under Node.
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- the global is Web Crypto on workerd, not a Node builtin
     const tag = `untrusted-data-${crypto.randomUUID()}`;
     const parts = headers === undefined ? [] : ["Headers:", ...renderHeaders(headers), "", "Body:"];
 
