@@ -1,3 +1,16 @@
+## @lunora/react [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.242...@lunora/react@1.0.0-alpha.243) (2026-10-19)
+
+### Bug Fixes
+
+* **do:** bound subscription work and apply replica pages atomically ([#1265](https://github.com/anolilab/lunora/issues/1265)) ([d3b5c5c](https://github.com/anolilab/lunora/commit/d3b5c5ccc5c1c7ca72636cd4b2d8232143f79547))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.153
+
 ## @lunora/react [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.241...@lunora/react@1.0.0-alpha.242) (2026-10-19)
 
 ### Features
