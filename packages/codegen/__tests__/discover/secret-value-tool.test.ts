@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,6 +44,21 @@ describe("discover/secret-value-tool", () => {
 
         writeAgents(`
             import { defineAgent, requestSecretTool as ask } from "@lunora/agent";
+            export const support = defineAgent({ model: "m", tools: { ask: ask() } });
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects the tool in a helper that codegen.exclude skips but an agent still imports", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["seed/**"] } };\n`, "utf8");
+        mkdirSync(join(workdir, "seed"));
+        writeFileSync(join(workdir, "seed", "tools.ts"), `import { requestSecretTool } from "@lunora/agent";\nexport const ask = requestSecretTool;\n`, "utf8");
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+            import { ask } from "./seed/tools";
             export const support = defineAgent({ model: "m", tools: { ask: ask() } });
         `);
 
