@@ -405,7 +405,7 @@ describe("telemetry names under a sensitive scope, beyond the event and span han
 
         // A span body that accepts any call, so the bridge can run without a real tracing object.
         const span = new Proxy({}, { get: () => () => undefined });
-        const enterSpan = vi.fn(async (_name: string, body: (value: unknown) => unknown) => body(span));
+        const enterSpan = vi.fn<(name: string, body: (value: unknown) => unknown) => Promise<unknown>>(async (_name, body) => body(span));
         const recorded: SpanEvent[] = [];
         const tracer = createTracer({
             anchor,
