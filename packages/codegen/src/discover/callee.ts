@@ -165,8 +165,8 @@ const isServerImport = (callee: Node, exportName: string): boolean => TsNode.isI
  * Whether `call` invokes the `@lunora/server` factory `exportName`, proven by import and read syntactically (see
  * {@link importAliases}): a named import of it (an alias counts) or a member of a namespace import
  * (`server.defineX(...)`). A same-named function declared locally, or imported from anywhere else, is not one, which is what
- * separates it from {@link resolvesToImportedName}. Narrower than {@link isServerImport} only in reading the import and not the symbol,
- * so it also answers without type information.
+ * separates it from {@link resolvesToImportedName}. Unlike {@link isServerImport} it reads the import declarations, not the symbol,
+ * so it answers without type information, and it also accepts a namespace member.
  */
 const callsServerFactory = (call: CallExpression, exportName: string): boolean => {
     const callee = call.getExpression();
