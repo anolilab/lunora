@@ -31,9 +31,10 @@ export interface SqlRunResult {
  * write and reports `rowsAffected` — the matched-rows count that drives the
  * MySQL optimistic-concurrency guard (which has no `RETURNING`).
  *
- * Note: companion writes (aggregate/rank/FTS/CDC) run as separate sequential
- * statements after the row write on every engine, so they share D1's
- * at-least-once caveat — there is no cross-statement transaction here.
+ * Note: companion writes (aggregate/rank/FTS/CDC) run after the row write, not
+ * in its transaction, so they share D1's at-least-once caveat. On the `sqlite`
+ * dialect a write's aggregate/rank/CDC statements go out as one ordered,
+ * atomic `batch`; elsewhere they run as sequential statements.
  */
 export interface SqlExec {
     all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;

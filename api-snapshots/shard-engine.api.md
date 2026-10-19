@@ -257,7 +257,10 @@ interface AppendAuditEntry {
 interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    findHolders: (holderTable: string, field: string, value: unknown, page: {
+        limit: number;
+        select?: ReadonlyArray<string>;
+    }) => Promise<Record<string, unknown>[]>;
     onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
     onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;

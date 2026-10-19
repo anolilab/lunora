@@ -669,6 +669,43 @@ describe("ctx-db relations", () => {
 
             await expect(writer.get("u1")).resolves.toBeNull();
         });
+
+        const seedMessages = async (writer: DatabaseWriterLike, authorId: string, count: number): Promise<void> => {
+            const documents = Array.from({ length: count }, (_, index) => {
+                return { authorId, body: `m${String(index)}` };
+            });
+
+            await writer.insertMany!("messages", documents, { limit: count });
+        };
+
+        it("cascade walks more holders than one page", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter(buildSchema("cascade"));
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+            await seedMessages(writer, "u1", 1200);
+            await seedMessages(writer, "u2", 3);
+
+            await writer.delete("u1");
+
+            await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(0);
+            await expect(writer.count("messages", { authorId: "u2" })).resolves.toBe(3);
+        });
+
+        it("refuses a cascade over CASCADE_MAX_ROWS holders before deleting anything", { timeout: 60_000 }, async () => {
+            expect.assertions(3);
+
+            const writer = makeWriter(buildSchema("cascade"));
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await seedMessages(writer, "u1", 10_001);
+
+            await expect(writer.delete("u1")).rejects.toMatchObject({ code: "CASCADE_LIMIT" });
+            await expect(writer.get("u1")).resolves.not.toBeNull();
+            await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(10_001);
+        });
     });
 
     describe("cross-backend relation load (DO parent → D1 child)", () => {
