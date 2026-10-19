@@ -5,6 +5,7 @@ import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGener
 export interface StoredMessage {
     approvalScope?: "thread";
     content: string;
+    expiresAt?: number;
     messageKey: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;

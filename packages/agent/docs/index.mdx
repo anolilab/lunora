@@ -260,6 +260,8 @@ per user or per app. Only the thread's verified owner can record one: on a threa
 with no owner (an app that sets no identity) a plain approve or reject still
 works for any caller, but `approve_for_thread` is refused, because a grant would
 let anyone who knows the thread key skip the gate for every later call.
+Once the paused call's approval window closes (`approvalTimeout`), a late `approve_for_thread` is
+refused too: the run has already rejected that call, and no grant may outlive it.
 
 **An unanswered approval is not pending forever.** The wait carries a timeout —
 `approvalTimeout` on the agent config, default `"3 days"`, **clamped to one

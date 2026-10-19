@@ -384,20 +384,26 @@ const approvalTimeoutMs = (configured: number | string | undefined): number => {
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
     const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
+    const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
 
-    await persist({
-        content: `Awaiting approval to run tool "${call.name}".`,
-        messageKey: `${instanceId}:approval:${call.id}`,
-        role: "tool",
-        status: "awaiting_approval",
-        toolCallId: call.id,
-        toolName: call.name,
+    // Memoized by name: a replay after the decision must not re-insert the marker that
+    // the decision retired, nor move its deadline forward from the replay's clock.
+    await step.do(`approval:request:${call.id}`, async (): Promise<void> => {
+        await persist({
+            content: `Awaiting approval to run tool "${call.name}".`,
+            expiresAt: Date.now() + timeoutMs,
+            messageKey: `${instanceId}:approval:${call.id}`,
+            role: "tool",
+            status: "awaiting_approval",
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+        await patchThread({ status: "awaiting_input" });
     });
-    await patchThread({ status: "awaiting_input" });
 
     const decision = await step
         .waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
-            timeout: approvalTimeoutMs(agent.approvalTimeout),
+            timeout: timeoutMs,
             type: `agent-approval:${call.id}`,
         })
         .then((event): ApprovalDecision => {

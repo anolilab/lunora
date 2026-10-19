@@ -1550,6 +1550,44 @@ describe(runAgentLoop, () => {
         expect(result?.content).toBe("charged");
     });
 
+    it("persists the approval marker once across replays, with a deadline, so a replay never re-opens a decided call", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* the paused invocation never settles */
+        });
+        await flushMicrotasks();
+
+        const marker = [...runtime.messages.values()].find((message) => message.status === "awaiting_approval");
+
+        expect(marker?.expiresAt).toBeTypeOf("number");
+
+        journal.events.set("approval:call_1", { decision: "approve" });
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // The request step is memoized: it ran for the first pause and never again, so no
+        // replay re-inserted the marker or moved its deadline.
+        expect(journal.invoked.filter((name) => name === "approval:request:call_1")).toHaveLength(1);
+        expect(runtime.messages.has("thread-1:wf-1:approval:call_1")).toBe(false);
+    });
+
     it("defaults the approval wait timeout to 3 days when the agent sets none", async () => {
         const agent = defineAgent({
             model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",

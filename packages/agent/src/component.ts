@@ -115,6 +115,12 @@ const agentExtension: SchemaExtension<
             approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
             createdAt: v.number(),
+
+            /**
+             * When a pending approval stops accepting a lasting grant. Set on the marker
+             * when the run pauses, because a timeout runs no mutation to retire it.
+             */
+            expiresAt: v.optional(v.number()),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
             seq: v.number(),
@@ -380,6 +386,15 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
         throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" to grant for thread "${threadKey}"`);
     }
 
+    // A timeout ends the wait without running any mutation, so the marker can still read
+    // "awaiting_approval" after the run has already rejected the call. The deadline is the only
+    // thing that closes that window.
+    const { expiresAt } = marker;
+
+    if (typeof expiresAt === "number" && Date.now() >= expiresAt) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has timed out`);
+    }
+
     const toolName = marker["toolName"] as string;
     const existing = await database
         .query(GRANTS_TABLE)
@@ -388,6 +403,21 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
 
     if (!existing) {
         await database.insert(GRANTS_TABLE, { createdAt: Date.now(), threadKey, toolName });
+    }
+};
+
+/**
+ * Retire the pending approval marker in the mutation that decides it. The loop only deletes the marker after its wait
+ * resolves, so until then a second decision on the same call would still find it pending and could record a grant.
+ */
+const retireApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    if (marker?.["status"] === "awaiting_approval") {
+        await database.delete(marker["_id"] as never);
     }
 };
 
@@ -838,6 +868,7 @@ export const agentComponent = (): AgentComponent => {
         .input({
             approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
+            expiresAt: v.optional(v.number()),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
             status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
@@ -879,6 +910,7 @@ export const agentComponent = (): AgentComponent => {
                 seq,
                 threadKey: args.threadKey,
                 ...(args.approvalScope === undefined ? {} : { approvalScope: args.approvalScope }),
+                ...(args.expiresAt === undefined ? {} : { expiresAt: args.expiresAt }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.stepName === undefined ? {} : { stepName: args.stepName }),
                 ...(args.toolCallId === undefined ? {} : { toolCallId: args.toolCallId }),
@@ -1358,6 +1390,8 @@ export const agentComponent = (): AgentComponent => {
                 ownedSecretThread(thread, context.auth, "grant a lasting approval for a tool");
                 await grantApprovalForThread(context.db, args.threadKey, args.instanceId, args.toolCallId);
             }
+
+            await retireApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
 
             await handle.sendEvent(args.instanceId, {
                 payload: {
