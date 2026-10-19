@@ -27,4 +27,11 @@ describe(isDevEnvironment, () => {
 
         expect(isDevEnvironment({ ENVIRONMENT: "production", NODE_ENV: "development" })).toBe(false);
     });
+
+    it("is false when a non-string var sits beside a dev one", () => {
+        expect.assertions(2);
+
+        expect(isDevEnvironment({ ENVIRONMENT: { name: "production" }, WORKER_ENV: "development" })).toBe(false);
+        expect(isDevEnvironment({ NODE_ENV: 1, WORKER_ENV: "development" })).toBe(false);
+    });
 });

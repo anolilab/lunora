@@ -13,9 +13,10 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
  * vars is production too — fail closed either way.
  */
 const isDevEnvironment = (env: Record<string, unknown>): boolean => {
-    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value): value is string => typeof value === "string" && value !== "");
+    // A recognised var holding a non-string is still SET: it vetoes dev rather than being skipped.
+    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value) => value !== undefined && value !== null && value !== "");
 
-    return values.length > 0 && values.every((value) => DEV_ENVIRONMENT_PATTERN.test(value));
+    return values.length > 0 && values.every((value) => typeof value === "string" && DEV_ENVIRONMENT_PATTERN.test(value));
 };
 
 export default isDevEnvironment;
