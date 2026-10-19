@@ -134,6 +134,43 @@ describe("discover/secret-value-tool", () => {
         expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
     });
 
+    it("detects a second alias re-exported from the same module as the first", () => {
+        expect.assertions(1);
+
+        writeFile("source.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        writeFile("tools.ts", `export { requestSecretTool as askFirst } from "./source";\nexport { requestSecretTool as askSecond } from "./source";`);
+        writeAgents(`
+            import { askSecond } from "./tools";
+            export const support = { ask: askSecond({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a tool a barrel re-exports as the default export", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export { requestSecretTool as default } from "@lunora/agent";`);
+        writeAgents(`
+            import ask from "./tools";
+            export const support = { ask: ask({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a namespace a barrel re-exports with export * as, read for the tool", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export * as agent from "@lunora/agent";`);
+        writeAgents(`
+            import { agent } from "./tools";
+            export const support = { ask: agent.requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
     it("ignores a barrel that re-exports other names from the agent package", () => {
         expect.assertions(1);
 

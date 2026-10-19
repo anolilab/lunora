@@ -282,54 +282,101 @@ const boundToolNames = (file: SourceFile): Set<string> => {
 };
 
 /**
- * The names a re-export makes visible, given the names `forwarded` carries through it: every
- * one for `export *`, otherwise the listed ones under their aliases.
+ * What a module makes of `requestSecretTool`: the names it exports the tool under (`names`), and the
+ * namespace bindings it exports (`export * as agent from …`) mapped to the tool names those carry
+ * (`namespaces`), so `agent.requestSecretTool(…)` reads through them.
  */
-const namesReexported = (declaration: ExportDeclaration, forwarded: ReadonlySet<string>): string[] => {
-    if (!declaration.hasNamedExports()) {
-        return [...forwarded];
-    }
+interface SecretToolExports {
+    names: Set<string>;
+    namespaces: Map<string, Set<string>>;
+}
 
-    return declaration
-        .getNamedExports()
-        .filter((entry) => !entry.isTypeOnly() && forwarded.has(entry.getNameNode().getText()))
-        .map((entry) => visibleNameOf(entry));
+const toolExports = (names: Iterable<string>): SecretToolExports => {
+    return { names: new Set(names), namespaces: new Map() };
 };
 
 /**
- * The names a re-export carries through it. A local `export { ask }` carries the bound names;
+ * Accumulate into `exported` what a re-export makes visible, given what `forwarded` carries through it:
+ * every name for `export *`, the listed ones under their aliases otherwise. A namespace export binds the
+ * forwarded names as one object, so its members are read off the binding rather than imported directly.
+ */
+const reexportedBy = (declaration: ExportDeclaration, forwarded: SecretToolExports, exported: SecretToolExports): void => {
+    const namespaceExport = declaration.getNamespaceExport();
+
+    if (namespaceExport !== undefined) {
+        if (forwarded.names.size > 0) {
+            exported.namespaces.set(namespaceExport.getName(), forwarded.names);
+        }
+
+        return;
+    }
+
+    if (!declaration.hasNamedExports()) {
+        forwarded.names.forEach((name) => exported.names.add(name));
+        forwarded.namespaces.forEach((members, name) => exported.namespaces.set(name, members));
+
+        return;
+    }
+
+    for (const entry of declaration.getNamedExports()) {
+        if (entry.isTypeOnly()) {
+            continue;
+        }
+
+        const original = entry.getNameNode().getText();
+        const visible = visibleNameOf(entry);
+
+        if (forwarded.names.has(original)) {
+            exported.names.add(visible);
+        }
+
+        const members = forwarded.namespaces.get(original);
+
+        if (members !== undefined) {
+            exported.namespaces.set(visible, members);
+        }
+    }
+};
+
+/**
+ * What a re-export carries through it. A local `export { ask }` carries the bound names;
  * the agent carries the tool; a relative module carries what `resolve` finds in it.
  */
-const forwardedThrough = (declaration: ExportDeclaration, bound: ReadonlySet<string>, resolve: (target: SourceFile) => Set<string>): ReadonlySet<string> => {
+const forwardedThrough = (
+    declaration: ExportDeclaration,
+    bound: ReadonlySet<string>,
+    resolve: (target: SourceFile) => SecretToolExports,
+): SecretToolExports => {
     const specifier = declaration.getModuleSpecifierValue();
 
     if (specifier === undefined) {
-        return bound;
+        return toolExports(bound);
     }
 
     if (specifier === AGENT_MODULE_SPECIFIER) {
-        return new Set([REQUEST_SECRET_TOOL]);
+        return toolExports([REQUEST_SECRET_TOOL]);
     }
 
     const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
 
-    return target === undefined ? new Set<string>() : resolve(target);
+    return target === undefined ? toolExports([]) : resolve(target);
 };
 
 /**
- * The names under which `file` exports `requestSecretTool` from `@lunora/agent`: its own
- * name or an alias, or a value it binds to the tool (`export const x = requestSecretTool({...})`).
- * A relative re-export is followed, so a barrel that only forwards the tool counts; `seen`
- * breaks cycles.
+ * What `file` exports of `requestSecretTool` from `@lunora/agent`: under its own name or an alias, or as a
+ * value it binds to the tool (`export const x = requestSecretTool({...})`), and as namespace bindings.
+ * A relative re-export is followed, so a barrel that only forwards the tool counts. `onPath` holds the
+ * modules being visited: a module is cut only while it is its own ancestor, so a second re-export of the
+ * same module (a sibling alias) still resolves.
  */
-const requestSecretToolExportsOf = (file: SourceFile, seen: Set<SourceFile>): Set<string> => {
-    const exported = new Set<string>();
+const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): SecretToolExports => {
+    const exported = toolExports([]);
 
-    if (seen.has(file)) {
+    if (onPath.has(file)) {
         return exported;
     }
 
-    seen.add(file);
+    onPath.add(file);
 
     const bound = boundToolNames(file);
 
@@ -338,11 +385,11 @@ const requestSecretToolExportsOf = (file: SourceFile, seen: Set<SourceFile>): Se
             continue;
         }
 
-        const forwarded = forwardedThrough(declaration, bound, (target) => requestSecretToolExportsOf(target, seen));
-
-        for (const name of namesReexported(declaration, forwarded)) {
-            exported.add(name);
-        }
+        reexportedBy(
+            declaration,
+            forwardedThrough(declaration, bound, (target) => requestSecretToolExportsOf(target, onPath)),
+            exported,
+        );
     }
 
     for (const statement of file.getVariableStatements()) {
@@ -352,25 +399,27 @@ const requestSecretToolExportsOf = (file: SourceFile, seen: Set<SourceFile>): Se
 
         for (const declared of statement.getDeclarations()) {
             if (isToolReference(declared.getInitializer(), bound)) {
-                exported.add(declared.getName());
+                exported.names.add(declared.getName());
             }
         }
     }
 
+    onPath.delete(file);
+
     return exported;
 };
 
-/** The names an import declaration brings in from the secret tool: the agent's, or a relative module's re-exports. */
-const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile): Set<string> => {
+/** What an import declaration brings in from the secret tool: the agent's, or a relative module's exports of it. */
+const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile): SecretToolExports => {
     const specifier = declaration.getModuleSpecifierValue();
 
     if (specifier === AGENT_MODULE_SPECIFIER) {
-        return new Set([REQUEST_SECRET_TOOL]);
+        return toolExports([REQUEST_SECRET_TOOL]);
     }
 
     const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
 
-    return target === undefined ? new Set<string>() : requestSecretToolExportsOf(target, new Set([importer]));
+    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer]));
 };
 
 /** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
@@ -378,6 +427,20 @@ const readsNamespaceMember = (file: SourceFile, namespace: string, names: Readon
     file
         .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
         .some((access) => access.getExpression().getText() === namespace && names.has(access.getName()));
+
+/**
+ * Whether a named import wires the tool: it imports a name the module exports the tool under, or a namespace
+ * binding (`export * as agent`) whose local name reads the tool off it.
+ */
+const namedImportWiresTool = (file: SourceFile, named: ImportSpecifier, exported: SecretToolExports): boolean => {
+    if (exported.names.has(named.getNameNode().getText())) {
+        return true;
+    }
+
+    const members = exported.namespaces.get(named.getNameNode().getText());
+
+    return members !== undefined && readsNamespaceMember(file, visibleNameOf(named), members);
+};
 
 /**
  * Whether a source file value-imports `requestSecretTool` from `@lunora/agent`, by a
@@ -392,17 +455,20 @@ const fileWiresRequestSecretTool = (file: SourceFile): boolean =>
             return false;
         }
 
-        const names = importedToolNames(declaration, file);
+        const exported = importedToolNames(declaration, file);
 
-        if (names.size === 0) {
+        if (exported.names.size === 0 && exported.namespaces.size === 0) {
             return false;
         }
 
+        const defaultImport = declaration.getDefaultImport();
         const namespace = declaration.getNamespaceImport();
 
         return (
-            declaration.getNamedImports().some((named) => !named.isTypeOnly() && names.has(named.getNameNode().getText())) ||
-            (namespace !== undefined && readsNamespaceMember(file, namespace.getText(), names))
+            // A default import binds the module's `default` export, so only a barrel that re-exports the tool as `default` wires it.
+            (defaultImport !== undefined && exported.names.has("default")) ||
+            declaration.getNamedImports().some((named) => !named.isTypeOnly() && namedImportWiresTool(file, named, exported)) ||
+            (namespace !== undefined && readsNamespaceMember(file, namespace.getText(), exported.names))
         );
     });
 
