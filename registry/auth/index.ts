@@ -227,7 +227,13 @@ export const mountAuth = async (env: AuthEnv, request: Request): Promise<Respons
 
     // Dev-only auto-migrate. In production, pre-apply the schema at deploy time.
     if (isDevEnvironment(env as unknown as Record<string, unknown>)) {
-        migrated ??= ensureMigrated(buildMigrationAuth(env));
+        // A rejected migration (D1 briefly unavailable) is not cached: clear the
+        // guard so the next auth request retries instead of rethrowing forever.
+        migrated ??= ensureMigrated(buildMigrationAuth(env)).catch((error: unknown) => {
+            migrated = undefined;
+
+            throw error;
+        });
         await migrated;
     }
 
