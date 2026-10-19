@@ -73,6 +73,15 @@ import { recordSchemaVersion } from "./schema-history";
  */
 const INDEX_SORT_KEYS = dsql`_creationTime, id`;
 
+/**
+ * Suffix of the default-order index on a table. It is the only framework index on
+ * the table itself: the rank, geo, aggregate and search companions (`__rank_`,
+ * `__geo_`, `__agg_`, `__fts_`) index their own companion tables, so a lookup by
+ * `tbl_name` never sees them. A declared index named `_x` is `<table>__x`, which
+ * is why the exclusion is this exact name and not the whole `<table>__` prefix.
+ */
+const BY_CREATION_INDEX_SUFFIX = "__by_creation";
+
 /** How a sort-keyed index's `CREATE INDEX` statement ends, rendered from {@link INDEX_SORT_KEYS}. */
 const INDEX_SORT_KEYS_TAIL = `, ${renderSql("sqlite", INDEX_SORT_KEYS).sql})`;
 
@@ -241,8 +250,8 @@ const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void 
  * a table's declarations kept taxing every write.
  *
  * Only indexes this module could have created are candidates: named
- * `<table>_<something>` (the `<table>__` prefix is internal — the default-order
- * index lives there), and built over the document column's JSON path or ending in
+ * `<table>_<something>` (bar the default-order {@link BY_CREATION_INDEX_SUFFIX}
+ * index), and built over the document column's JSON path or ending in
  * the {@link INDEX_SORT_KEYS} suffix. An index added by hand under another shape,
  * and the implicit indexes SQLite makes for constraints (`sql` is NULL), are left
  * alone.
@@ -256,7 +265,7 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
     for (const { name, sql: statement } of held) {
         const createdHere =
             name.startsWith(`${tableName}_`) &&
-            !name.startsWith(`${tableName}__`) &&
+            name !== `${tableName}${BY_CREATION_INDEX_SUFFIX}` &&
             statement !== null &&
             (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
 
@@ -556,7 +565,7 @@ export const runShardMigrations = (
         // partial index plus a persisted cursor, and would leave the reads this
         // exists for on the O(table) plan for as long as it ran — which on a
         // table big enough to care is the expensive state, not the build.
-        runDrizzle(sql, createIndexSql(`${tableName}__by_creation`, tableName, INDEX_SORT_KEYS, false));
+        runDrizzle(sql, createIndexSql(`${tableName}${BY_CREATION_INDEX_SUFFIX}`, tableName, INDEX_SORT_KEYS, false));
 
         migrateSecondaryIndexes(sql, tableName, definition, blocked);
         migrateSearchIndexes(sql, tableName, definition);

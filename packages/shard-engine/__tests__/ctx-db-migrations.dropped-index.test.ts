@@ -75,3 +75,33 @@ describe("runShardMigrations — an index that is no longer declared", () => {
         expect(indexNames()).toContain("notes__by_creation");
     });
 });
+
+describe("runShardMigrations — an index whose name starts with an underscore", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("drops a declared `_x` index when it is removed, and stops enforcing it", async () => {
+        expect.assertions(3);
+
+        const underscored = table({ slug: { kind: "string" } }, [{ fields: ["slug"], name: "_x", unique: true }]);
+
+        runShardMigrations(harness.sql, underscored);
+
+        expect(indexNames()).toContain("notes__x");
+
+        runShardMigrations(harness.sql, plainColumn);
+
+        expect(indexNames()).not.toContain("notes__x");
+
+        const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: plainColumn, sql: harness.sql });
+
+        await writer.insert("notes", { slug: "dup" });
+
+        await expect(writer.insert("notes", { slug: "dup" })).resolves.toBeTypeOf("string");
+    });
+});
