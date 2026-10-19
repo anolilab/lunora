@@ -90,13 +90,16 @@ describe(wrapUntrusted, () => {
             "Set-Cookie": "session=s2",
             "X-API-Key": "key-value",
             "X-Access-Token": "token-value",
+            "X-Auth": "Bearer x-auth-value",
+            "X-CSRF-Token": "csrf-value",
+            "X-Jwt-Assertion": "jwt-value",
             "x-webhook-secret": "secret-value",
             "X-Request-Id": "req-42",
         });
         const wrapped = wrapUntrusted("body", headers);
         const inside = enclosedBy(wrapped, tagIdOf(wrapped));
 
-        for (const leaked of ["abc123", "session=s1", "session=s2", "key-value", "token-value", "secret-value"]) {
+        for (const leaked of ["abc123", "session=s1", "session=s2", "key-value", "token-value", "secret-value", "x-auth-value", "csrf-value", "jwt-value"]) {
             expect(inside).not.toContain(leaked);
         }
 
@@ -104,6 +107,8 @@ describe(wrapUntrusted, () => {
         expect(inside).toContain("cookie: [redacted]");
         expect(inside).toContain("set-cookie: [redacted]");
         expect(inside).toContain("x-api-key: [redacted]");
+        expect(inside).toContain("x-auth: [redacted]");
+        expect(inside).toContain("x-jwt-assertion: [redacted]");
         expect(inside).toContain("x-request-id: req-42");
         expect(inside).toContain("Body:\nbody");
     });
