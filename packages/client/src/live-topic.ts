@@ -12,6 +12,9 @@
  * and reconnect it for nothing.
  */
 
+import type { LiveTopicRef } from "../../../shared/live-stream";
+import { liveConnectPath } from "../../../shared/live-stream";
+import { joinUrl, withQuery } from "./client-urls";
 import type { ConnectLiveStreamOptions, LiveStream, LiveStreamSubscribeError } from "./live-stream";
 import { connectLiveStream } from "./live-stream";
 
@@ -97,5 +100,43 @@ const subscribeLiveTopic = (options: SubscribeLiveTopicOptions): (() => void) =>
     };
 };
 
-export { subscribeLiveTopic };
-export type { SubscribeLiveTopicOptions };
+/**
+ * What a framework hook takes besides the topic reference: the transport tuning of
+ * {@link SubscribeLiveTopicOptions}, with `onEvent` typed by the topic's declared payload.
+ */
+interface LiveTopicOptions<Payload = unknown> extends Omit<SubscribeLiveTopicOptions, "onEvent" | "topic" | "url"> {
+    /** Called for every event on the topic. The payload is the type the topic declares. */
+    onEvent?: (payload: Payload) => void;
+
+    /**
+     * Follow the topic on this shard: the connect URL gets `?shard=<key>`, and the control calls carry it too. Omit it
+     * for the default shard. Publish to the same shard with `{ shardKey }`, since delivery never crosses shards.
+     */
+    shardKey?: string;
+}
+
+/**
+ * Resolve a topic reference to the string-based options {@link subscribeLiveTopic} takes: the connect URL is the
+ * stream's route under the client's base URL, and the topic is the reference's encoded wire topic. Every framework
+ * hook goes through this, so they all build the same connection (and so share it).
+ */
+const liveTopicSubscription = <Payload>(
+    client: { readonly url: string },
+    ref: LiveTopicRef<Payload>,
+    options: LiveTopicOptions<Payload> = {},
+): SubscribeLiveTopicOptions => {
+    const { onEvent, shardKey, ...transport } = options;
+    const { __lunoraLive: stream, topic } = ref;
+
+    return {
+        ...transport,
+        onEvent: onEvent as ((payload: unknown) => void) | undefined,
+        topic,
+        url: joinUrl(client.url, withQuery(liveConnectPath(stream), { shard: shardKey })),
+    };
+};
+
+export { liveTopicSubscription, subscribeLiveTopic };
+export type { LiveTopicOptions, SubscribeLiveTopicOptions };
+
+export { type LiveTopicRef } from "../../../shared/live-stream";

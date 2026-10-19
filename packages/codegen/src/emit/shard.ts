@@ -10,6 +10,7 @@ import type {
     AgentIR,
     ContainerIR,
     EnvIR,
+    LiveStreamIR,
     MaskMetadataIR,
     MutatorIR,
     QueueIR,
@@ -54,7 +55,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { baseSpecifiers, GENERATED_HEADER } from "./shared";
+import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -97,6 +98,13 @@ interface EmitShardOptions {
      * gate) — wires `ctx.live.publish` onto the action ctx, so an action running on
      * this shard (a scheduled job) publishes to its own stream subscribers.
      */
+
+    /**
+     * The exported `defineLiveStream` declarations, read from their literals. The shard imports each stream and
+     * checks every publish against it (`liveStreams()`), so a payload its topic's validator rejects is refused at
+     * the one place all three publishers (HTTP, queue, action) arrive. Used only when `liveStreams` is set.
+     */
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
@@ -143,6 +151,7 @@ const emitShard = ({
     hasSockets = false,
     lazyFunctions = false,
     hasVectors = true,
+    liveStreamDeclarations = [],
     liveStreams = false,
     maskMetadata,
     mutators = [],
@@ -348,6 +357,53 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         rlsData,
     });
 
+    // The declared streams the shard checks every publish against. Value imports (the validators run here), so this is
+    // the server graph and not the client-safe `_generated/live.ts`. A lazy shard keeps that graph out of its startup, the
+    // way it does for functions: each stream's module is imported on the first publish to it, through `loadLiveStream`.
+    const declaredStreams = liveStreams ? liveStreamDeclarations : [];
+
+    for (const stream of declaredStreams) {
+        assertIdentifier(stream.exportName, "live stream export name");
+
+        if (!IMPORT_PATH_RE.test(stream.filePath)) {
+            throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe live stream file path: ${JSON.stringify(stream.filePath)}`);
+        }
+    }
+
+    const liveStreamImports = lazyFunctions
+        ? []
+        : declaredStreams.map((stream) => `import { ${stream.exportName} as liveStream_${stream.exportName} } from "../${stream.filePath}.js";`);
+    const eagerLiveStreamsOverride = `        protected override liveStreams() {
+            return { ${declaredStreams.map((stream) => `${renderObjectKey(stream.id)}: liveStream_${stream.exportName}`).join(", ")} };
+        }
+`;
+    const lazyLiveStreamsOverride = `        private readonly liveStreamLoaders = new Map<string, () => Promise<{ validatePublish: (topic: string, payload: unknown) => unknown }>>([
+${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, () => import("../${stream.filePath}.js").then((module) => module.${stream.exportName})],`).join("\n")}
+        ]);
+
+        private readonly loadedLiveStreams = new Map<string, { validatePublish: (topic: string, payload: unknown) => unknown }>();
+
+        protected override loadLiveStream(stream: string): Promise<void> | undefined {
+            const load = this.loadedLiveStreams.has(stream) ? undefined : this.liveStreamLoaders.get(stream);
+
+            return load === undefined
+                ? undefined
+                : load().then((declaration) => {
+                      this.loadedLiveStreams.set(stream, declaration);
+                  });
+        }
+
+        // Only the streams a publish has already loaded: a stream not yet loaded was either never published to or is
+        // unknown, and either way \`declaredLivePayload\` refuses what this does not hold.
+        protected override liveStreams() {
+            return Object.fromEntries(this.loadedLiveStreams);
+        }
+`;
+    let liveStreamsOverride = "";
+
+    if (declaredStreams.length > 0) {
+        liveStreamsOverride = lazyFunctions ? lazyLiveStreamsOverride : eagerLiveStreamsOverride;
+    }
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
         `import { applyCdcChanges, createStableIdFactory, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}${hasVectorIndexes ? "backfillVectorIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
@@ -395,6 +451,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
+        ...liveStreamImports,
         // Local-first sync registries are pulled in alongside the function table
         // only when the project declares them, so the import list stays minimal.
         `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
@@ -793,8 +850,8 @@ ${schema.tables
     const liveBuild = liveStreams
         ? `
             const live = {
-                publish: async (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }): Promise<void> => {
-                    await this.publishLiveFromAction(topic, payload, publishOptions);
+                publish: async (ref: { __lunoraLive: string; topic: string }, payload: unknown, publishOptions?: { shardKey?: string }): Promise<void> => {
+                    await this.publishLiveFromAction(ref.topic, payload, { ...publishOptions, stream: ref.__lunoraLive });
                 },
             };
 `
@@ -902,7 +959,7 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
-${roomHandlerOverride}${socketRouteOverride}${shardRegistryFragments.override}${shardInitOverride}
+${roomHandlerOverride}${socketRouteOverride}${liveStreamsOverride}${shardRegistryFragments.override}${shardInitOverride}
         // One \`onQueryChange\` dispatch. Mirrors \`executeSubscription\` — the
         // socket-terminated half of the same reactivity — and differs only in who
         // consumes the result: the base's \`dispatchReactors\` stores the digest as

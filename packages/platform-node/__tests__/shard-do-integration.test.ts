@@ -123,7 +123,7 @@ describe("queue consumer on a Node-backed worker", () => {
             const worker = createWorker({
                 queue: async (_batch, _env, _context, _trigger, live, fetchImpl) => {
                     consumerFetch = fetchImpl;
-                    await live.publish("orders", { id: 1 }, { shardKey: "tenant-42", stream: "orders" });
+                    await live.publish({ __lunoraLive: "orders", topic: "orders" }, { id: 1 }, { shardKey: "tenant-42" });
                 },
                 queueFetchImpl: hostFetch,
                 shardDO: createNodeShardNamespace(registry.directory),

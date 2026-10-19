@@ -308,9 +308,9 @@ interface CreateInfiniteQueryResult<T> {
 ### `CreateLiveTopicResult` (interface)
 
 ```ts
-interface CreateLiveTopicResult {
+interface CreateLiveTopicResult<Payload = unknown> {
     error: Accessor<LiveStreamSubscribeError | undefined>;
-    lastEvent: Accessor<unknown>;
+    lastEvent: Accessor<Payload | undefined>;
 }
 ```
 
@@ -707,7 +707,7 @@ const createInfiniteQuery: <F extends FunctionReference>(function_: F, args: "sk
 ### `createLiveTopic` (const)
 
 ```ts
-const createLiveTopic: (options: SubscribeLiveTopicOptions | Accessor<SubscribeLiveTopicOptions>) => CreateLiveTopicResult;
+const createLiveTopic: <Payload>(topic: LiveTopicRef<Payload> | Accessor<LiveTopicRef<Payload>>, options?: LiveTopicOptions<Payload> | Accessor<LiveTopicOptions<Payload>>) => CreateLiveTopicResult<Payload>;
 ```
 
 ### `createMutation` (const)

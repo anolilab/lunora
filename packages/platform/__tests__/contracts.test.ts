@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
-import { CLOUDFLARE_CAPABILITIES, LUNORA_ROLE_PREFIX, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
+import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, LUNORA_ROLE_PREFIX, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
 
 describe("@lunora/platform contracts", () => {
     it("exports the Cloudflare capability matrix", () => {
@@ -11,6 +11,16 @@ describe("@lunora/platform contracts", () => {
         expect(CLOUDFLARE_CAPABILITIES.name).toBe("Cloudflare");
         expect(CLOUDFLARE_CAPABILITIES.features.shardedState?.level).toBe("native");
         expect(CLOUDFLARE_CAPABILITIES.features.websocketHibernation?.level).toBe("native");
+    });
+
+    // Typed live topics change how a topic string is produced and checked, not what a host must provide:
+    // `ctx.live` stays backed by the shard's own SSE handlers, so no rating moves.
+    it("rates live streams native on cloudflare and celld, emulated on node", () => {
+        expect.assertions(3);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.liveStreams?.level).toBe("native");
+        expect(CELLD_CAPABILITIES.features.liveStreams?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.liveStreams?.level).toBe("emulated");
     });
 
     // Every telemetry surface that needs a HOST primitive carries a rating, so a
