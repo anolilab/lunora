@@ -605,7 +605,6 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
     }
 
     const outcome = await awaitSecret(turnContext, call, consumerTool, label, slot);
-    const outcome = await awaitSecret(turnContext, call, consumerTool, label, slot);
 
     await persist({
         // The request id is the handle: the consuming tool resolves it inside the thread.
