@@ -185,6 +185,19 @@ export const listItems = query({
         expect(loaded(project, commonPath)).toBe(true);
     });
 
+    it("ignores a directory named like a `_generated/` file instead of crashing on it", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(lunoraDirectory, "_generated", "archive.ts"), { recursive: true });
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, join(lunoraDirectory, "_generated", "archive.ts"))).toBe(false);
+        expect(() => {
+            refreshCodegenProject(project, lunoraDirectory);
+        }).not.toThrow();
+    });
+
     it("keeps the `_generated/` files a cold start seeded through a warm refresh", () => {
         expect.assertions(1);
 

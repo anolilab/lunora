@@ -40,6 +40,7 @@ const generatedSeedFiles = (lunoraDirectory: string): string[] => {
         ? readdirSync(generatedDirectory)
               .filter((name) => name.endsWith(".ts"))
               .map((name) => join(generatedDirectory, name))
+              .filter((path) => statSync(path).isFile())
         : [];
 };
 
