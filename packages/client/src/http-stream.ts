@@ -396,9 +396,9 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 };
 
 /**
- * The coded error a non-2xx stream response carries: the flat `{ code, error, why }` envelope the
- * HTTP routes send before a stream opens. `undefined` for any other body, so the caller keeps its
- * generic status error.
+ * The status error for a non-2xx stream response whose body is the flat `{ code, error, why }`
+ * envelope the HTTP routes send before a stream opens. It keeps the status code and carries the
+ * server's message and `why`. `undefined` for any other body, so the caller keeps its generic status error.
  */
 const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
     if (typeof body !== "object" || body === null) {
@@ -411,7 +411,11 @@ const statusErrorOf = (body: unknown, status: number): LunoraError | undefined =
         return undefined;
     }
 
-    return new LunoraError(code, error, { status, why: typeof why === "string" ? why : undefined });
+    // The code stays `HTTP_STREAM_STATUS`, which callers branch on; the server's code rides in the message.
+    return new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${status.toString()}, ${code}): ${error}`, {
+        status,
+        why: typeof why === "string" ? why : undefined,
+    });
 };
 
 /**

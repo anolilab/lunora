@@ -178,8 +178,8 @@ describe("httpStream", () => {
         expect((error as Error & { why?: string }).why).toBe("row moved");
     });
 
-    it("keeps the code and why of a non-2xx response's error envelope", async () => {
-        expect.assertions(2);
+    it("keeps HTTP_STREAM_STATUS as the code, and the server's message and why, for a non-2xx error envelope", async () => {
+        expect.assertions(3);
 
         const { fetchImpl } = fetchReturning([JSON.stringify({ code: "INVALID_INPUT", error: "bad args", why: "limit must be positive" })], { status: 400 });
 
@@ -187,7 +187,8 @@ describe("httpStream", () => {
             (error_: unknown) => error_ as Error & { code?: string; why?: string },
         );
 
-        expect((error as Error & { code?: string }).code).toBe("INVALID_INPUT");
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_STATUS");
+        expect((error as Error & { message?: string }).message).toContain("bad args");
         expect((error as Error & { why?: string }).why).toBe("limit must be positive");
     });
 
