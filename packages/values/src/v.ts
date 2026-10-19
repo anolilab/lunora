@@ -927,7 +927,9 @@ const literal = <T extends bigint | boolean | number | string | null>(literalVal
             "literal",
             (value, context) => {
                 if (value !== literalValue) {
-                    fail(context, `literal(${String(literalValue)})`, value);
+                    // The literal is what a caller must guess: under a sensitive marker the expectation names
+                    // only the kind, so neither the message nor `expected` (nor a union summary) carries it.
+                    fail(context, context.redact === true ? "literal" : `literal(${String(literalValue)})`, value);
                 }
 
                 return value as T;
