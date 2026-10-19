@@ -21,7 +21,9 @@ export const dispatchByKind = (
             return client.action(reference, args, options);
         }
         case "mutation": {
-            return client.mutation(reference, args, options);
+            // The operator sees the answer now, so a write is never parked in the offline queue, where a
+            // sensitive argument would be persisted before the console could refuse it.
+            return client.mutation(reference, args, { ...options, onlineOnly: true });
         }
         default: {
             return client.query(reference, args, options);
