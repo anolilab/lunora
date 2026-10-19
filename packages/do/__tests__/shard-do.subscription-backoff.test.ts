@@ -132,7 +132,7 @@ describe("shardDO: failing subscription backoff", () => {
 
         // First failure retries on the next flush (it may be transient); after
         // that the subscription is latched and skipped until its backoff elapses.
-        expect(shard.runs - seedRuns).toBeLessThanOrEqual(2);
+        expect(shard.runs - seedRuns).toBe(2);
     });
 
     it("tells the client once, not once per flush", async () => {
