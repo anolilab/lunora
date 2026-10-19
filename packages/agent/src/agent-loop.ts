@@ -1,6 +1,7 @@
 import { usageStatus } from "@lunora/ai/create";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
+import { SECRET_VALUE_MAX_TTL_MS } from "@lunora/platform";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
@@ -468,7 +469,9 @@ const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> 
 const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, label: string): Promise<SecretOutcome> => {
     const { agent, deleteMessage, instanceId, openSecretRef, patchThread, persist, run, settleSecretRef, step, threadKey } = turnContext;
     const markerKey = `${instanceId}:secret:${call.id}`;
-    const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
+    // The supplied value outlives the request by the grace, and the host keeps a value at most
+    // SECRET_VALUE_MAX_TTL_MS. A longer deadline would let a lost wake-up find the value gone.
+    const timeoutMs = Math.min(approvalTimeoutMs(agent.approvalTimeout), SECRET_VALUE_MAX_TTL_MS - SECRET_WAIT_GRACE_MS);
 
     await step.do(`secret:request:${call.id}`, async (): Promise<void> => {
         await run(openSecretRef, {

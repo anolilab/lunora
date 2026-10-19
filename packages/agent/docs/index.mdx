@@ -324,8 +324,8 @@ retry, the failure the loop records and telemetry never see the value.
 Each pause writes a request row, which is the authority for the request: pending,
 supplied, declined, expired or consumed. Supply, decline, expiry and consumption
 are each a compare-and-set on that row, so the owner's answer and the loop's
-timeout cannot both win. The wait is armed for `approvalTimeout` plus a 60-second
-grace, and a supply is refused once the request's deadline has passed, even if the
+timeout cannot both win. The wait is armed for `approvalTimeout`, capped one minute
+under a day, plus a 60-second grace, and a supply is refused once the request's deadline has passed, even if the
 loop has not yet settled it. When the wait ends, the loop reads the row once. A
 supply that landed before the timeout is honoured. A pending request becomes
 `expired`, and a later supply is refused.
@@ -354,9 +354,9 @@ that fails after the supply committed is not rethrown, and the owner is not aske
 retry, because the retry would be a `CONFLICT`. If the wake-up truly never arrived,
 the run does not notice until its wait ends at the deadline, where the loop reads
 the row and honours the supply. The stored value is kept for the longer of 15
-minutes and the time left to that deadline, up to the host's 24-hour ceiling, so
-with an `approvalTimeout` of more than a day a wake-up that is truly lost can find
-the value expired. Keep the timeout for secret requests under a day if that matters.
+minutes and the time left to that deadline plus the grace. The deadline is capped
+so that always fits the host's 24-hour ceiling, which is why a secret request waits
+at most a day however long `approvalTimeout` is.
 
 `agents:agentSecretRequests({ threadKey })` lists a thread's requests for the
 owner, with status, tool name, deadline and the `label` the model gave the request
