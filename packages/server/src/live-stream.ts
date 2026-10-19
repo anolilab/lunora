@@ -205,9 +205,10 @@ interface LiveStream<Topics extends LiveTopics = LiveTopics> {
     /**
      * Check a publish against the declaration: the wire `topic` must be a declared
      * topic in its canonical spelling and `payload` must satisfy its validator.
+     * @returns the payload as the validator parsed it, which is what subscribers must receive
      * @throws LunoraError `BAD_REQUEST` (400) when either does not
      */
-    validatePublish: (topic: string, payload: unknown) => void;
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 
 /** Read and JSON-parse a request body, returning `undefined` on a malformed payload. */
@@ -295,7 +296,7 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
         }
     };
 
-    const validatePublish = (topic: string, payload: unknown): void => {
+    const validatePublish = (topic: string, payload: unknown): unknown => {
         const parsed = parseTopic(topic);
 
         if (parsed === undefined) {
@@ -305,7 +306,7 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
         const { declaration } = parsed;
 
         try {
-            parseValidatorMap({ payload: declaration.payload }, { payload }, "topic");
+            return parseValidatorMap({ payload: declaration.payload }, { payload }, "topic").payload;
         } catch (error) {
             throw badPayload(topic, error);
         }

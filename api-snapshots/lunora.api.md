@@ -2155,10 +2155,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `encodeLiveTopic` (const)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `getErrorCode` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

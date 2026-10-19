@@ -54,19 +54,55 @@ describe("discoverLiveStreams", () => {
         ]);
     });
 
-    it("finds nothing when no live stream is declared, and skips one that is not exported", () => {
-        expect.assertions(2);
+    it("finds nothing when no live stream is declared", () => {
+        expect.assertions(1);
 
         write("plain.ts", `export const answer = 42;\n`);
 
         expect(discover()).toStrictEqual([]);
+    });
 
-        write(
-            "local.ts",
-            `import { defineLiveStream, v } from "@lunora/server";\n\nconst local = defineLiveStream({ id: "x", topics: { a: { payload: v.null() } } });\n\nvoid local;\n`,
-        );
+    it("reads quoted spellings of id, topics and key the same as bare ones", () => {
+        expect.assertions(1);
 
-        expect(discover()).toStrictEqual([]);
+        write("live.ts", stream(`{ "id": "posts", "topics": { post: { "key": { postId: v.string() }, payload: v.null() }, "feed": { payload: v.null() } } }`));
+
+        expect(discover()).toStrictEqual([
+            {
+                exportName: "posts",
+                filePath: "live",
+                id: "posts",
+                topics: [
+                    { fields: ["postId"], name: "post" },
+                    { fields: [], name: "feed" },
+                ],
+            },
+        ]);
+    });
+
+    it.each([
+        [
+            "a default export",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nexport default defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } });\n`,
+        ],
+        [
+            "a local only",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nconst posts = defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } });\n\nvoid posts;\n`,
+        ],
+        [
+            "a variable exported only as default",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nconst posts = defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } });\n\nexport default posts;\n`,
+        ],
+        [
+            "an inline call",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nexport const routes = [defineLiveStream({ id: "posts", topics: { a: { payload: v.null() } } })];\n`,
+        ],
+    ])("refuses a stream that is %s, rather than leaving it unpublishable", (_label, source) => {
+        expect.assertions(1);
+
+        write("live.ts", source);
+
+        expect(discover).toThrow(expect.objectContaining({ code: "LIVE_STREAM_NOT_EXPORTED" }));
     });
 
     it.each([

@@ -82,7 +82,6 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/bindings": "1.0.0-alpha.123",
-        "@lunora/client": "1.0.0-alpha.228",
         "@lunora/do": "1.0.0-alpha.229",
         "@lunora/payment": "1.0.0-alpha.222",
         "@lunora/server": "1.0.0-alpha.220",

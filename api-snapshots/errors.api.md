@@ -641,6 +641,22 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Socket route path is not a string literal";
     };
+    readonly LIVE_STREAM_DUPLICATE: {
+        readonly status: 500;
+        readonly title: "Duplicate live stream id or export name";
+    };
+    readonly LIVE_STREAM_NOT_EXPORTED: {
+        readonly status: 500;
+        readonly title: "Live stream is not a named export";
+    };
+    readonly LIVE_STREAM_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Live stream declaration is not a literal";
+    };
+    readonly LIVE_TOPIC_INVALID: {
+        readonly status: 500;
+        readonly title: "Live topic name or key field is not allowed";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
@@ -698,6 +714,10 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
+    };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;

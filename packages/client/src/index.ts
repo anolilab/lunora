@@ -30,7 +30,7 @@ export { httpStream } from "./http-stream";
 export type { ConnectLiveStreamOptions, LiveStream, LiveStreamEvent, LiveStreamSubscribeError, LiveStreamSubscribeOptions } from "./live-stream";
 export { connectLiveStream } from "./live-stream";
 export type { LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "./live-topic";
-export { encodeLiveTopic, liveTopicSubscription, subscribeLiveTopic } from "./live-topic";
+export { liveTopicSubscription, subscribeLiveTopic } from "./live-topic";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {

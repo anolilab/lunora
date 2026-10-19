@@ -2,7 +2,7 @@ import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type { LiveTopicRef } from "../src/live-topic";
-import { encodeLiveTopic, liveTopicSubscription, subscribeLiveTopic } from "../src/live-topic";
+import { liveTopicSubscription, subscribeLiveTopic } from "../src/live-topic";
 
 /** The request URL as a string, whichever form `fetch` was called with. */
 const urlOf = (input: RequestInfo | URL): string => {
@@ -264,8 +264,8 @@ describe(liveTopicSubscription, () => {
 
         liveTopicSubscription({ url: "" }, post, { onEvent: (payload) => expectTypeOf(payload).toEqualTypeOf<{ text: string }>() });
         // @ts-expect-error -- the topic carries `{ text: string }`, not a number
-        liveTopicSubscription({ url: "" }, post, { onEvent: (payload: number) => payload });
+        const wrong = liveTopicSubscription({ url: "" }, post, { onEvent: (payload: number) => payload });
 
-        expect(encodeLiveTopic("post", ["id"], { id: "1" })).toBe("post:1");
+        expect(wrong.topic).toBe("post:1");
     });
 });

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Node as MorphNode, ObjectLiteralElementLike, ObjectLiteralExpression, Project, PropertyAssignment } from "ts-morph";
-import { Node } from "ts-morph";
+import type { CallExpression, Node as MorphNode, ObjectLiteralElementLike, ObjectLiteralExpression, Project, PropertyAssignment, SourceFile } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import { isLiveIdentifier, isReservedLiveTopicName } from "../../../../shared/live-stream";
 import { diagnosticAt } from "../diagnostics";
@@ -31,6 +31,12 @@ const hidesMembers = (literal: ObjectLiteralExpression): boolean =>
 /** The name of a member of a map {@link hidesMembers} already vetted: every member is a plain or shorthand property. */
 const memberName = (member: ObjectLiteralElementLike): string => propertyKeyName(member as PropertyAssignment);
 
+/** The member of `literal` that spells `name` at runtime, so `"key": {…}` and `key: {…}` read the same. */
+const propertyNamed = (literal: ObjectLiteralExpression, name: string): ObjectLiteralElementLike | undefined =>
+    literal
+        .getProperties()
+        .find((property) => (Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) && propertyKeyName(property) === name);
+
 const notLiteral = (node: MorphNode, detail: string): LunoraError => {
     const located = diagnosticAt(node, `defineLiveStream ${detail}`);
 
@@ -39,7 +45,7 @@ const notLiteral = (node: MorphNode, detail: string): LunoraError => {
 
 /** The object literal a property is initialised with, or a `LIVE_STREAM_NOT_LITERAL` error naming what to write instead. */
 const literalOf = (owner: ObjectLiteralExpression, property: string, expectation: string): ObjectLiteralExpression => {
-    const member = owner.getProperty(property);
+    const member = propertyNamed(owner, property);
     const initializer = Node.isPropertyAssignment(member) ? member.getInitializer() : undefined;
 
     if (initializer === undefined || !Node.isObjectLiteralExpression(initializer)) {
@@ -72,7 +78,7 @@ const topicOf = (streamId: string, member: ObjectLiteralElementLike): LiveTopicI
         );
     }
 
-    const keyProperty = declaration.getProperty("key");
+    const keyProperty = propertyNamed(declaration, "key");
 
     if (keyProperty === undefined) {
         return { fields: [], name };
@@ -103,7 +109,7 @@ const streamOf = (call: CallExpression, exportName: string, lunoraDirectory: str
         throw notLiteral(options, "cannot spread its options or use a computed key: codegen must read `id` and `topics` as literals");
     }
 
-    const idProperty = options.getProperty("id");
+    const idProperty = propertyNamed(options, "id");
     const idValue = Node.isPropertyAssignment(idProperty) ? idProperty.getInitializer() : undefined;
 
     if (idValue === undefined || !Node.isStringLiteral(idValue)) {
@@ -121,34 +127,8 @@ const streamOf = (call: CallExpression, exportName: string, lunoraDirectory: str
     };
 };
 
-/**
- * Every exported `defineLiveStream({ … })` in `lunora/`, read from its literals: the stream `id`, each topic
- * name, and each topic's `key` field names in declared order. A non-literal id, or a spread or computed
- * `topics` / `key` map, throws `LIVE_STREAM_NOT_LITERAL` (the `SOCKET_PATH_NOT_LITERAL` precedent), since the
- * generated encoder and the typed references cannot be derived from a name codegen cannot read.
- */
-const discoverLiveStreams = (project: Project, lunoraDirectory: string): LiveStreamIR[] => {
-    const streams: LiveStreamIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        for (const declaration of sourceFile.getVariableDeclarations()) {
-            const call = declaration.getInitializer();
-
-            if (call === undefined || !Node.isCallExpression(call) || !isDefineLiveStream(call)) {
-                continue;
-            }
-
-            const exportName = addressableExportNameOf(declaration, "binding");
-
-            // Not exported: nothing can import it, so there is no reference to type.
-            if (exportName !== undefined) {
-                streams.push(streamOf(call, exportName, lunoraDirectory));
-            }
-        }
-    }
-
+/** Reject two streams that share an id or an export name: both name routes or `live.<export>` keys that must be unique. */
+const assertUnique = (streams: ReadonlyArray<LiveStreamIR>): void => {
     const seen = new Map<string, string>();
 
     for (const stream of streams) {
@@ -169,6 +149,44 @@ const discoverLiveStreams = (project: Project, lunoraDirectory: string): LiveStr
             seen.set(key, stream.filePath);
         }
     }
+};
+
+/** Every `defineLiveStream` call in one source file, each bound to the named export it must be. */
+const streamsIn = (sourceFile: SourceFile, lunoraDirectory: string): LiveStreamIR[] =>
+    sourceFile
+        .getDescendantsOfKind(SyntaxKind.CallExpression)
+        .filter((call) => isDefineLiveStream(call))
+        .map((call) => {
+            const declaration = call.getParent();
+            const exportName = Node.isVariableDeclaration(declaration) ? addressableExportNameOf(declaration, "binding") : undefined;
+
+            // Nothing can import a stream that is not a named export, so no reference could ever be typed for it, and the shard
+            // would not know it to check a publish. Refuse it rather than leave a mounted stream that is silently unpublishable.
+            if (exportName === undefined) {
+                throw new LunoraError(
+                    "LIVE_STREAM_NOT_EXPORTED",
+                    diagnosticAt(
+                        call,
+                        "defineLiveStream must be assigned to a named export (`export const posts = defineLiveStream({ … })`), not a default export, a local, or an inline call, so codegen can type its references",
+                    ).message,
+                );
+            }
+
+            return streamOf(call, exportName, lunoraDirectory);
+        });
+
+/**
+ * Every `defineLiveStream({ … })` in `lunora/`, which must be a named export, read from its literals: the stream `id`, each topic
+ * name, and each topic's `key` field names in declared order. A non-literal id, or a spread or computed
+ * `topics` / `key` map, throws `LIVE_STREAM_NOT_LITERAL` (the `SOCKET_PATH_NOT_LITERAL` precedent), since the
+ * generated encoder and the typed references cannot be derived from a name codegen cannot read.
+ */
+const discoverLiveStreams = (project: Project, lunoraDirectory: string): LiveStreamIR[] => {
+    const streams = listLunoraSourceFiles(lunoraDirectory).flatMap((filePath) =>
+        streamsIn(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath), lunoraDirectory),
+    );
+
+    assertUnique(streams);
 
     return streams;
 };

@@ -139,4 +139,4 @@ const liveTopicSubscription = <Payload>(
 export { liveTopicSubscription, subscribeLiveTopic };
 export type { LiveTopicOptions, SubscribeLiveTopicOptions };
 
-export { encodeLiveTopic, type LiveTopicRef } from "../../../shared/live-stream";
+export { type LiveTopicRef } from "../../../shared/live-stream";

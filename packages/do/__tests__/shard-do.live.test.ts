@@ -937,8 +937,9 @@ describe("shardDO live streams", () => {
 
 /**
  * A shard that knows its app's declared streams, the way the generated subclass does. The stub stands in
- * for `defineLiveStream`'s `validatePublish`: it admits one topic and one payload shape, and records
- * what it was handed so the test sees the DECODED payload, not the wire form.
+ * for `defineLiveStream`'s `validatePublish`: it admits one topic and one payload shape, returns only the
+ * declared fields (as an object validator does), and records what it was handed so the test sees the DECODED
+ * payload, not the wire form.
  */
 class DeclaredLiveShard extends LiveShard {
     public readonly validated: { payload: unknown; topic: string }[] = [];
@@ -946,12 +947,16 @@ class DeclaredLiveShard extends LiveShard {
     protected override liveStreams() {
         return {
             s: {
-                validatePublish: (topic: string, payload: unknown): void => {
+                validatePublish: (topic: string, payload: unknown): unknown => {
                     this.validated.push({ payload, topic });
 
-                    if (topic !== "feed" || typeof (payload as { text?: unknown } | null)?.text !== "string") {
+                    const { text } = (payload ?? {}) as { text?: unknown };
+
+                    if (topic !== "feed" || typeof text !== "string") {
                         throw new LunoraError("BAD_REQUEST", `refused ${topic}`, { status: 400 });
                     }
+
+                    return { text };
                 },
             },
         };
@@ -981,6 +986,21 @@ describe("shardDO live publish against declared streams", () => {
         await expect(reader.next()).resolves.toMatchObject({ data: { data: { text: "hi" }, topic: "feed" }, event: "live" });
         // The validator saw the decoded payload, not the wire envelope.
         expect(shard.validated).toStrictEqual([{ payload: { text: "hi" }, topic: "feed" }]);
+    });
+
+    it("delivers what the validator parsed, not what the publisher sent", async () => {
+        expect.assertions(1);
+
+        const shard = declared();
+        const { connectionId, response } = await connect(shard);
+        const reader = new SseReader(response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", connectionId, stream: "s", subscriptionId: "s1", topic: "feed" });
+        await publish(shard, { data: encodeWire({ extra: "not declared", text: "hi" }), stream: "s", topic: "feed" });
+
+        // Exact match: `toMatchObject` would let the undeclared field through.
+        await expect(reader.next()).resolves.toEqual({ data: { data: { text: "hi" }, topic: "feed" }, event: "live" });
     });
 
     it("refuses a payload the declaration rejects, over the HTTP publish route, and delivers nothing", async () => {

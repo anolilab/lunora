@@ -17,14 +17,14 @@ const posts: LiveStreamIR = {
     ],
 };
 
-/** Evaluate the emitted module with the real encoder injected for its client import, returning its `live` object. */
+/** Evaluate the emitted module, which has no runtime import to inject, and return its `live` object. */
 const evaluate = (source: string): Record<string, Record<string, (key?: Record<string, string>) => unknown>> => {
     const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
     // A top-level `var` in a vm context lands on the sandbox, which is how `live` comes back out.
     const body = outputText.replaceAll(/^import .*$/gmu, "").replace("export const live =", "var live =");
-    const sandbox: { encodeLiveTopic: typeof encodeLiveTopic; live?: unknown } = { encodeLiveTopic };
+    const sandbox: { live?: unknown } = {};
 
-    // eslint-disable-next-line sonarjs/code-eval -- evaluates the emitter's own output, in a context holding only the encoder
+    // eslint-disable-next-line sonarjs/code-eval -- evaluates the emitter's own output, in an empty context
     runInNewContext(body, sandbox);
 
     return sandbox.live as never;
@@ -43,9 +43,10 @@ describe("emitLive", () => {
         const source = emitLive([posts]);
 
         expect(source).toContain('import type { posts as postsStream } from "../live.js";');
-        expect(source).not.toMatch(/^import (?!type)[^\n]*"\.\.\//mu);
+        expect(source).not.toMatch(/^import (?!type)/mu);
         expect(source).not.toContain("defineLiveStream");
-        expect(source).toContain('import { encodeLiveTopic } from "@lunora/client";');
+        // The only package it names is the server's, for types: a backend-only worker can import it to publish.
+        expect([...source.matchAll(/from "([^"]+)"/gu)].map((match) => match[1])).toStrictEqual(["@lunora/server", "../live.js"]);
     });
 
     it("takes the specifiers from the umbrella when the project depends on it", () => {
@@ -53,16 +54,16 @@ describe("emitLive", () => {
 
         const source = emitLive([posts], true);
 
-        expect(source).toContain('from "lunorash/client"');
         expect(source).toContain('from "lunorash/server"');
+        expect(source).not.toContain('"@lunora/');
     });
 
-    it("imports neither the encoder nor the key type when every topic is keyless", () => {
+    it("imports no key type when every topic is keyless", () => {
         expect.assertions(2);
 
         const source = emitLive([{ ...posts, topics: [{ fields: [], name: "feed" }] }]);
 
-        expect(source).not.toContain("encodeLiveTopic");
+        expect(source).not.toContain("encodeURIComponent");
         expect(source).not.toContain("LiveTopicKey");
     });
 
@@ -77,5 +78,19 @@ describe("emitLive", () => {
         // A delimiter in a key is escaped, so it stays one segment.
         expect(refs.post({ kind: "a:b", postId: "p%1" })).toEqual({ __lunoraLive: "posts-stream", topic: "post:p%251:a%3Ab" });
         expect(refs.feed()).toEqual({ __lunoraLive: "posts-stream", topic: "feed" });
+    });
+
+    it("encodes every key exactly as the shared encoder the server parses with", () => {
+        expect.assertions(1);
+
+        const { posts: refs } = evaluate(emitLive([posts])) as { posts: { post: (key: Record<string, string>) => { topic: string } } };
+        const values = ["", "plain", "a:b", "p%1", "%3A", "a b", "ü€", "x/y?z#w", "::"];
+        const topics = values.flatMap((postId) =>
+            values.map((kind) => {
+                return { actual: refs.post({ kind, postId }).topic, expected: encodeLiveTopic("post", ["postId", "kind"], { kind, postId }) };
+            }),
+        );
+
+        expect(topics.filter(({ actual, expected }) => actual !== expected)).toStrictEqual([]);
     });
 });

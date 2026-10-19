@@ -1726,7 +1726,7 @@ const takeToken = (ws: ShardSocketLike, buckets: WeakMap<ShardSocketLike, { last
  */
 /** What the shard needs of a declared live stream: the publish check `defineLiveStream` exposes. */
 interface LiveStreamDeclaration {
-    validatePublish: (topic: string, payload: unknown) => void;
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 
 interface LiveSubscriber {
@@ -6417,10 +6417,8 @@ abstract class ShardDO {
             throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
         }
 
-        this.assertDeclaredLivePublish(stream, topic, wireData);
-
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
-        const dataJson = JSON.stringify(wireData ?? null);
+        const dataJson = JSON.stringify(this.declaredLivePayload(stream, topic, wireData) ?? null);
 
         // Measured in UTF-8 bytes like the room broadcast: `.length` counts UTF-16 units, so
         // multibyte text would pass the cap at several times its byte size.
@@ -6447,13 +6445,14 @@ abstract class ShardDO {
     /**
      * Refuse a publish the app never declared: an unknown stream, an undeclared or non-canonical
      * topic, or a payload its validator rejects. Skipped when the shard knows no declarations.
+     * @returns the wire payload to deliver: the validator's parsed result, re-encoded
      * @throws LunoraError `BAD_REQUEST` (400)
      */
-    protected assertDeclaredLivePublish(stream: string, topic: string, wireData: unknown): void {
+    protected declaredLivePayload(stream: string, topic: string, wireData: unknown): unknown {
         const declared = this.liveStreams();
 
         if (declared === undefined) {
-            return;
+            return wireData;
         }
 
         const declaration = Object.hasOwn(declared, stream) ? declared[stream] : undefined;
@@ -6463,7 +6462,8 @@ abstract class ShardDO {
         }
 
         try {
-            declaration.validatePublish(topic, decodeWire(wireData));
+            // Deliver what the validator parsed, not what the publisher sent: a stripped field or a coerced value must not reach subscribers.
+            return encodeWire(declaration.validatePublish(topic, decodeWire(wireData)));
         } catch (error) {
             if (isLunoraError(error)) {
                 throw error;

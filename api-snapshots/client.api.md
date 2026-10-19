@@ -1766,12 +1766,6 @@ const createStream: <T>(options: {
 };
 ```
 
-### `encodeLiveTopic` (const)
-
-```ts
-const encodeLiveTopic: (name: string, fields: readonly string[], key: Readonly<Record<string, string>>) => string;
-```
-
 ### `getErrorCode` (const)
 
 ```ts

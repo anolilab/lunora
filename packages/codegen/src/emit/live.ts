@@ -10,9 +10,10 @@ import { assertIdentifier, assertPropertyIdentifier, baseSpecifiers, GENERATED_H
  * bundle. So the stream is imported as a TYPE only, and the value a reference is made of is plain data
  * (`{ __lunoraLive, topic }`). The payload and key types are inferred from the declaration, never restated.
  *
- * The wire topic comes from `encodeLiveTopic`, the one encoder the server parses with. The key fields are
- * emitted in the declaration's order, so `live.posts.post({ postId })` lays its segments out the way the
- * server expects regardless of the order the caller wrote the object in.
+ * The module has no runtime import, so a backend-only worker that only publishes can use it without the client
+ * package. The key is encoded inline, by the rule `parseLiveTopic` inverts on the server: each value
+ * percent-encoded, joined with `:`, in the DECLARATION's field order. So `live.posts.post({ postId })` lays its
+ * segments out the way the server expects regardless of the order the caller wrote the object in.
  */
 const emitLive = (streams: ReadonlyArray<LiveStreamIR>, useUmbrella = false): string => {
     if (streams.length === 0) {
@@ -42,24 +43,24 @@ const emitLive = (streams: ReadonlyArray<LiveStreamIR>, useUmbrella = false): st
                 return `        ${topic.name}: (): ${reference} => ({ __lunoraLive: ${id}, topic: ${JSON.stringify(topic.name)} }),`;
             }
 
-            const fields = `[${topic.fields.map((field) => JSON.stringify(field)).join(", ")}]`;
+            // Each key value is percent-encoded and joined with `:` in the DECLARED field order, the rule `parseLiveTopic` inverts on
+            // the server. It is spelled inline so this module needs no runtime package: a backend-only worker imports it to publish.
+            const segments = topic.fields.map((field) => `\${encodeURIComponent(key.${field})}`).join(":");
 
             return `        ${topic.name}: (key: LiveTopicKey<${declaration}>): ${reference} => ({
             __lunoraLive: ${id},
-            topic: encodeLiveTopic(${JSON.stringify(topic.name)}, ${fields}, key),
+            topic: \`${topic.name}:${segments}\`,
         }),`;
         });
 
         return `    ${stream.exportName}: {\n${references.join("\n")}\n    },`;
     });
 
-    // Only a keyed topic needs the encoder and the key type; importing them for keyless topics alone would trip `noUnusedLocals` in the app.
+    // Only a keyed topic needs the key type; importing it for keyless topics alone would trip `noUnusedLocals` in the app.
     const hasKeyedTopic = streams.some((stream) => stream.topics.some((topic) => topic.fields.length > 0));
-    const encoderImport = hasKeyedTopic ? `import { encodeLiveTopic } from "${specifiers.client}";\n` : "";
-    const serverTypes = hasKeyedTopic ? "LiveTopicKey, LiveTopicPayload" : "LiveTopicPayload";
+    const serverTypes = hasKeyedTopic ? "LiveTopicKey, LiveTopicPayload, LiveTopicRef" : "LiveTopicPayload, LiveTopicRef";
 
-    return `${GENERATED_HEADER}import type { LiveTopicRef } from "${specifiers.client}";
-${encoderImport}import type { ${serverTypes} } from "${specifiers.server}";
+    return `${GENERATED_HEADER}import type { ${serverTypes} } from "${specifiers.server}";
 
 ${imports.join("\n")}
 

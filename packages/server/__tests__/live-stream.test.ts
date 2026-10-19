@@ -539,15 +539,13 @@ describe("ctx.live.publish types", () => {
 describe("defineLiveStream validatePublish", () => {
     const stream = defineLiveStream({ id: "posts", topics });
 
-    it("accepts a declared topic carrying a valid payload", () => {
-        expect.assertions(2);
+    it("accepts a declared topic carrying a valid payload, and returns it as the validator parsed it", () => {
+        expect.assertions(3);
 
-        expect(() => {
-            stream.validatePublish("post:1", { text: "hi" });
-        }).not.toThrow();
-        expect(() => {
-            stream.validatePublish("feed", null);
-        }).not.toThrow();
+        expect(stream.validatePublish("post:1", { text: "hi" })).toStrictEqual({ text: "hi" });
+        expect(stream.validatePublish("feed", null)).toBeNull();
+        // An object validator drops what it did not declare, so a subscriber must get the parsed value, not the sent one.
+        expect(stream.validatePublish("post:1", { extra: 1, text: "hi" })).toStrictEqual({ text: "hi" });
     });
 
     it("rejects a payload that does not satisfy the declared validator with BAD_REQUEST", () => {

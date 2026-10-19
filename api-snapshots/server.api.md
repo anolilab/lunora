@@ -1141,7 +1141,7 @@ interface LiveStream<Topics extends LiveTopics = LiveTopics> {
     controlPath: string;
     id: string;
     readonly topics: Topics;
-    validatePublish: (topic: string, payload: unknown) => void;
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 ```
 

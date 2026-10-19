@@ -551,7 +551,7 @@ abstract class ShardDO {
     protected currentShardKey(): string;
     protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number;
     protected liveStreams(): Readonly<Record<string, LiveStreamDeclaration>> | undefined;
-    protected assertDeclaredLivePublish(stream: string, topic: string, wireData: unknown): void;
+    protected declaredLivePayload(stream: string, topic: string, wireData: unknown): unknown;
     protected publishLiveFromAction(topic: string, payload: unknown, options: {
         shardKey?: string;
         stream: string;
@@ -975,7 +975,7 @@ interface EvaluationInput {
 
 ```ts
 interface LiveStreamDeclaration {
-    validatePublish: (topic: string, payload: unknown) => void;
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 ```
 

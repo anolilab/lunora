@@ -134,8 +134,8 @@ class EmittedShardContract extends ShardDO {
      * values keyed by id; the base checks each publish against them.
      */
     // eslint-disable-next-line class-methods-use-this -- mirrors the emitted override, which returns module constants
-    protected override liveStreams(): Readonly<Record<string, { validatePublish: (topic: string, payload: unknown) => void }>> {
-        return { s: { validatePublish: () => undefined } };
+    protected override liveStreams(): Readonly<Record<string, { validatePublish: (topic: string, payload: unknown) => unknown }>> {
+        return { s: { validatePublish: (_topic: string, payload: unknown) => payload } };
     }
 
     /**

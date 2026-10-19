@@ -59,7 +59,7 @@ app.post(posts.controlPath, posts.control);
 
 ### What codegen reads
 
-Codegen reads each exported `defineLiveStream` from its literals: the `id`, the topic
+Codegen reads each `defineLiveStream` from its literals, and it must be a named export (a default export or a local is refused with `LIVE_STREAM_NOT_EXPORTED`): the `id`, the topic
 names, and each topic's `key` field names in the order you wrote them. A non-literal
 `id`, a spread or computed `topics` or `key` map, or a topic given as a reference to a
 declaration elsewhere is refused with `LIVE_STREAM_NOT_LITERAL`. Two streams may not
@@ -84,7 +84,8 @@ live.posts.feed(); // a reference to the "feed" topic
 ```
 
 The reference carries the stream and the encoded topic, and its type carries the payload.
-The key goes through one encoder on both sides. Each key value is percent-encoded and
+The generated module has no runtime import, so a backend-only worker can publish with
+it. It encodes each key value by the rule the server parses with: percent-encoded and
 joined with `:` in the order you declared the fields, so a value containing `:` stays one
 segment and can never read as another topic.
 
