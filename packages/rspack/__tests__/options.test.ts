@@ -23,6 +23,7 @@ describe(resolveOptions, () => {
 
         expect(resolveOptions({ projectRoot: workdir })).toStrictEqual({
             apiSpec: "openapi",
+            explicitTarget: undefined,
             lazyFunctions: false,
             projectRoot: workdir,
             schemaDir: "lunora",

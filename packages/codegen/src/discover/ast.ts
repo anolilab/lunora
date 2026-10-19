@@ -1,8 +1,8 @@
 import type { Stats } from "node:fs";
-import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative, sep } from "node:path";
 
-import { FIND_UP_STOP, findUpSync, matcher } from "@visulima/fs";
+import { matcher } from "@visulima/fs";
 import type {
     BindingElement,
     Block,
@@ -21,7 +21,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import { readProjectConfigLiterals } from "../project-config-file";
-import { findProjectConfigFile } from "../project-config-path";
+import { findCodegenConfigFile, findProjectConfigFile } from "../project-config-path";
 import { propertyKeyName, propertyNameText } from "./property-name";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
@@ -84,15 +84,7 @@ const NOTHING_EXCLUDED = (): boolean => false;
  * never silently treated as "no excludes" without a word.
  */
 const configuredExcludes = (lunoraDirectory: string): ((relativePath: string) => boolean) => {
-    // The project root (its `package.json`, or the repo root) ends the search: a
-    // config above it belongs to another project.
-    const configFile = findUpSync(
-        (directory) =>
-            findProjectConfigFile(directory) ?? (existsSync(join(directory, "package.json")) || existsSync(join(directory, ".git")) ? FIND_UP_STOP : undefined),
-        {
-            cwd: dirname(resolve(lunoraDirectory)),
-        },
-    );
+    const configFile = findCodegenConfigFile(lunoraDirectory);
     const stats = configFile === undefined ? undefined : statSync(configFile, { throwIfNoEntry: false });
 
     if (configFile === undefined || stats === undefined) {
