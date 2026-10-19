@@ -75,25 +75,20 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
 | 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
 
-## Audit 2026-10-19 — deferred findings
+## Audit 2026-10-19 — still open after PR #1272
 
-Full table with evidence in [issue #1271](https://github.com/anolilab/lunora/issues/1271).
-Plans 532–535 carry the S-sized fixes. These need a decision or an M-sized change
-and are recorded here so the next audit does not re-report them:
+Full table with evidence in [issue #1271](https://github.com/anolilab/lunora/issues/1271);
+direction findings in [#1274](https://github.com/anolilab/lunora/issues/1274). Plans
+532–535 and the second revision of #1272 fixed the rest. Recorded here so the next
+audit does not re-report them:
 
-- **Bearer in the WebSocket URL** (`client/src/lunora-client.ts:5936`): carry it in the `connect` envelope; L, protocol change.
-- **React double fetch per mount** (`react/src/use-query.ts:112,133`): HTTP snapshot + WS seed; resolve `queryFn` from the first push; M.
-- **Per-dispatch observability writes** (`do/src/shard-do.ts:8451,9962`): request log + metrics upserts on every read; decide prod defaults.
-- **CDC without retention** (`do/src/cdc-retention.ts:206-212`): default a retention when `cdc: true`, or emit a `doctor` diagnostic.
-- **Cascade bounding** (`shard-engine/src/relations.ts:689-707`): page holders; typed refusal above a ceiling; M.
-- **Write-flush fan-out O(sockets)** (`do/src/shard-do.ts:13056`): table → socket index from `subMemos`; M.
-- **`.global()` writes as sequential D1 round trips** (`sql-store/src/ctx-db.ts:2700-2751`): batch independent companions; M.
-- **Global delete local probe** (`shard-engine/src/ctx-db.ts:2785-2830`) and **companion-signature memo per request** (`ctx-db-companions.ts:641`): S each.
-- **`ShardRegistryDO` / `EventLogDO` without a caller secret** (vs `session-do.ts:103`): decide whether to require it on `alpha`.
-- **Browser crawl limits** (`browser/src/crawl-client.ts:62-70`): clamp `limit`/`depth`, refuse link-following without an allowlist; S.
-- **Node scheduler/alarm multi-process claim** (`platform-node/src/node-scheduler-host.ts:287`): claim rows or document single-process.
+- **ShardDO has no caller secret** (`do/src/shard-do.ts:14818-14845`): safe by host topology; add `LUNORA_SHARD_SECRET` like the registry/event-log secrets if a host ever exposes shard RPC on a socket.
+- **Relay hub** (`shard-engine/src/relay-hub.ts`): cohort registry has no refcount and pins the op-log floor (`:1165-1170, 796-814, 566-570`); sibling HMAC signs bytes only, no seq/target binding, no key rotation (`sibling-channel.ts:45-67`); owner promotion latch is in-memory and counts owner-local sockets (`:605, 737-751`). M each, protocol design.
+- **Persisted bearer fingerprint** (`len:fnv1a32:djb2`, `@lunora/client` and all 8 SDKs): offline oracle for low-entropy tokens; reference client moves first.
+- **SDK vendoring path untested** (`cli/src/commands/sdk/vendor.ts:210-273`): `generated-check.sh` always passes `--from`.
 - **Agent default history read unbounded** (`agent/src/agent-loop.ts:813`), **RAG lexical join O(corpus)** (`ai/src/rag/sql-lexical-store.ts:216`), **`payments.check` ledger fold** (`payment/src/database-store.ts:299`), **`payment_events` / scheduler `dead:` retention**.
 - **Studio edit runs codegen twice** (`config/src/studio-host/schema-edit-handler.ts:155`), **codegen fixpoint re-infers everything per pass** (`codegen/src/run-codegen.ts:208`), **watcher refreshes the whole program** (`codegen-project.ts:117`).
+- **Studio chart `<style>` from config strings** (`studio/src/components/evilcharts/ui/chart.tsx:169`): confirm no SQL alias can reach it.
 
 ## Perf audit 2026-10-16 — measured and rejected
 
