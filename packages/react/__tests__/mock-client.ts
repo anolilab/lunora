@@ -49,8 +49,12 @@ interface SubEntry {
  * `live: true` gives the client a `WebSocket` implementation, so query hooks
  * resolve from the first `emit` instead of `queryImpl` over HTTP. The default
  * models a client with no socket: every hook falls back to `query`.
+ * `follower: true` models a `crossTabSync` tab that is not the leader.
  */
-const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown, { live = false }: { live?: boolean } = {}): MockClientHooks => {
+const createMockClient = (
+    queryImpl?: (ref: string, args: unknown) => unknown,
+    { follower = false, live = false }: { follower?: boolean; live?: boolean } = {},
+): MockClientHooks => {
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
@@ -173,6 +177,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown, {
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
         identityEpoch: () => 0,
+        isCrossTabFollower: () => follower,
         onIdentityChange: (): Unsubscribe => () => undefined,
         // The PUBLIC getter the hooks read (`client.isReady`), not the private
         // `readyResolved` field behind it — this object is a plain literal cast

@@ -2497,6 +2497,17 @@ class LunoraClient {
         return this.WebSocketImpl;
     }
 
+    /**
+     * `true` while {@link LunoraClientOptions.crossTabSync} is on and this tab
+     * is not the elected leader, including the election window before it knows
+     * whether another tab leads. Such a tab holds no socket: its subscriptions
+     * see only the frames the leader relays for queries the leader holds too,
+     * so a read that must resolve goes over HTTP instead of waiting on a push.
+     */
+    public isCrossTabFollower(): boolean {
+        return this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
+    }
+
     // --- Client Query (local state) ----------------------------------------
 
     /**

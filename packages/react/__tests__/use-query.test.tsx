@@ -396,6 +396,33 @@ describe("useQuery", () => {
             expect(mock.query).toHaveBeenCalledTimes(1);
         });
 
+        it("fetches over HTTP on a cross-tab follower whose leader never relays the query", async () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => "http snapshot", { follower: true, live: true });
+
+            render(
+                <LunoraProvider client={mock.asClient}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            await waitFor(() => {
+                expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("http snapshot"));
+            });
+
+            expect(mock.query).toHaveBeenCalledTimes(1);
+
+            // A frame the leader does relay still updates the follower.
+            await act(async () => {
+                mock.emit("posts:list", "relayed");
+            });
+
+            await waitFor(() => {
+                expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("relayed"));
+            });
+        });
+
         it("a remount after unmounting mid-wait resolves from the new subscription", async () => {
             expect.hasAssertions();
 

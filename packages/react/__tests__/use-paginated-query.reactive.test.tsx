@@ -121,6 +121,7 @@ const createReactiveBackend = (initial: string[]) => {
         close: vi.fn<() => void>(),
         getAuthToken: vi.fn<() => string | null>(() => null),
         getWebSocketImpl: () => WebSocket,
+        isCrossTabFollower: () => false,
         mutation: vi.fn<() => Promise<unknown>>(),
         onAuthTokenChange: vi.fn<() => Unsubscribe>(() => () => undefined),
         onIdentityChange: vi.fn<() => Unsubscribe>(() => () => undefined),

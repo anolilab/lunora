@@ -155,8 +155,9 @@ class LunoraSubscriptionRegistry {
      *
      * Returns the value already pushed when the subscription is live, else
      * waits for its first defined push. `fetch` (the HTTP query) runs instead
-     * when nothing can push — no `WebSocket` implementation, or server
-     * rendering, where no effect ever attaches — or when the subscription
+     * when nothing can push — no `WebSocket` implementation, server
+     * rendering, where no effect ever attaches, or a `crossTabSync` tab that
+     * is not the leader and so has no socket — or when the subscription
      * errors before its first value; a push that lands while that fallback is
      * in flight wins over its result.
      *
@@ -180,7 +181,10 @@ class LunoraSubscriptionRegistry {
             return current;
         }
 
-        if (!live.errored && (await nextPush(live, signal))) {
+        // ponytail: a cross-tab follower cannot tell whether the leader holds this
+        // query, so it pays one HTTP snapshot per mount, as does a lone tab still
+        // inside its first `leaderTimeout`; a relayed push still wins below.
+        if (!live.errored && !this.client.isCrossTabFollower() && (await nextPush(live, signal))) {
             return this.liveValue(queryClient, queryKey, signal, fetch);
         }
 

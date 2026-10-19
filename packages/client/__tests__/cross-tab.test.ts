@@ -1485,3 +1485,27 @@ describe("follower epoch rule (cross-tab)", () => {
         }
     }, 10_000);
 });
+
+describe("lunoraClient.isCrossTabFollower", () => {
+    it("is true only while crossTabSync is on and this tab is not the leader", () => {
+        expect.assertions(3);
+
+        const plain = new LunoraClient({ url: TEST_URL, WebSocket: createMockWebSocket([]) });
+        const synced = new LunoraClient({ crossTabSync: true, url: TEST_URL, WebSocket: createMockWebSocket([]) });
+
+        try {
+            expect(plain.isCrossTabFollower()).toBe(false);
+
+            // Still inside the claim window: no leader known, and no socket here.
+            expect(synced.isCrossTabFollower()).toBe(true);
+
+            vi.spyOn(TabCoordinator.prototype, "isLeader").mockReturnValue(true);
+
+            expect(synced.isCrossTabFollower()).toBe(false);
+        } finally {
+            vi.restoreAllMocks();
+            plain.close();
+            synced.close();
+        }
+    });
+});
