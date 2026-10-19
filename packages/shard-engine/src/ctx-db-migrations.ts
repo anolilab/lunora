@@ -491,6 +491,11 @@ export const runShardMigrations = (
          * throwing: every other table, index and companion still migrates. The
          * blocked index stays absent (or keeps its previous shape) until a later
          * pass finds the table de-duplicated.
+         *
+         * Opt-in on purpose: the returned list is the host's only signal that a
+         * unique index is missing. A host that ignores it (the in-process host, the
+         * conformance suite) must leave this off and let the migration throw, or it
+         * would serve writes with no uniqueness enforcement and no diagnostic.
          */
         deferBlockedUniqueIndexes?: boolean;
         schemaSnapshot?: { hash: string; json: string };
