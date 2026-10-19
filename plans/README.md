@@ -88,6 +88,8 @@ audit does not re-report them:
 - **SDK vendoring path untested** (`cli/src/commands/sdk/vendor.ts:210-273`): `generated-check.sh` always passes `--from`.
 - **Agent default history read unbounded** (`agent/src/agent-loop.ts:813`), **RAG lexical join O(corpus)** (`ai/src/rag/sql-lexical-store.ts:216`), **`payments.check` ledger fold** (`payment/src/database-store.ts:299`), **`payment_events` / scheduler `dead:` retention**.
 - **Studio edit runs codegen twice** (`config/src/studio-host/schema-edit-handler.ts:155`), **codegen fixpoint re-infers everything per pass** (`codegen/src/run-codegen.ts:208`), **watcher refreshes the whole program** (`codegen-project.ts:117`).
+- **Request log writes every successful dispatch** (`do/src/shard-do.ts:11663`): `LUNORA_REQUEST_LOG_SAMPLE` defaults to 1.0; metrics now flush every 8 dispatches. Decide a production sample default.
+- **Payment reconcile has no conditional write** (`payment/src/reconcile.ts:139-158`): a webhook landing between the `after` read and the upsert is still overwritten; needs a version-conditional upsert on `PaymentStore`.
 - **Studio chart `<style>` from config strings** (`studio/src/components/evilcharts/ui/chart.tsx:169`): confirm no SQL alias can reach it.
 
 ## Perf audit 2026-10-16 — measured and rejected
