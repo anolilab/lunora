@@ -181,13 +181,23 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
     // The cold-start set (see `programSeedFiles`) minus the security-scan entries,
     // which live outside `lunora/`. Keeping `_generated/` in it stops the removal
     // below from dropping them on every warm run.
-    const diskPaths = [...lunoraSeedFiles(lunoraDirectory), ...generatedSeedFiles(lunoraDirectory)];
+    // The tsconfig's declarations too: one generated after the Project was built (a
+    // `worker-configuration.d.ts` from `wrangler types`) is otherwise never added,
+    // so a warm run keeps resolving types without it.
+    const tsconfigPath = findTsconfig(lunoraDirectory);
+    const diskPaths = [
+        ...lunoraSeedFiles(lunoraDirectory),
+        ...generatedSeedFiles(lunoraDirectory),
+        ...(tsconfigPath === undefined ? [] : ambientDeclarationFiles(tsconfigPath)),
+    ];
 
     for (const path of diskPaths) {
         const existing = project.getSourceFile(path);
 
         if (existing === undefined) {
-            project.addSourceFileAtPath(path);
+            // From the text, as the cold start does: a root-level file added from disk
+            // walks the project root's tree, `node_modules` included.
+            project.createSourceFile(path, readFileSync(path, "utf8"), { overwrite: true });
         } else {
             existing.refreshFromFileSystemSync();
         }

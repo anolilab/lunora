@@ -262,4 +262,34 @@ export const listItems = query({
 
         expect(loaded(project, generatedPath)).toBe(true);
     });
+
+    it("adds a tsconfig declaration generated after the Project was built, on the next refresh", () => {
+        expect.assertions(2);
+
+        const generatedDeclaration = join(workdir, "worker-configuration.d.ts");
+
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { strict: true }, files: ["worker-configuration.d.ts"], include: ["lunora/**/*"] }),
+            "utf8",
+        );
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        expect(loaded(project, generatedDeclaration)).toBe(false);
+
+        // `wrangler types` writes the file while a dev session is running.
+        writeFileSync(generatedDeclaration, "interface Env {}\n", "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+
+        expect(loaded(project, generatedDeclaration)).toBe(true);
+    });
+
+    it("takes the last of duplicate `program` keys, as the runtime config does", () => {
+        expect.assertions(1);
+
+        writeConfig(`export default { codegen: { program: "lunora", program: "tsconfig" } };\n`);
+
+        expect(loaded(createCodegenProject(lunoraDirectory), componentPath)).toBe(true);
+    });
 });
