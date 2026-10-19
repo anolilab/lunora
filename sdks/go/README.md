@@ -136,9 +136,10 @@ has no caller left to tell — reaches `client.OnMutationSettled`.
 A write that must never sit on disk — a credential, a one-time token — sets
 `OnlineOnly: true`. It is never queued, persisted or replayed: where a normal write
 would be queued, `Submit` returns an `OfflineError` coded `OFFLINE_NOT_QUEUED`
-before anything reaches the queue or the persistence adapter. It does not wait for
-a flush or queue behind pending writes, so it may land before an older queued write
-to the same document.
+before anything reaches the queue or the persistence adapter. A send that gets no
+reply while the socket is down is refused the same way, with the transport error
+as its cause (`errors.Unwrap`). It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
 
 A replay failure is classified by ONE rule on the single-call and batch paths:
 a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
