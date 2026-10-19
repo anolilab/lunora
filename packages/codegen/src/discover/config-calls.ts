@@ -167,8 +167,8 @@ const viteConfigCalls = (projectRoot: string): ConfigCallIR[] => {
         }
 
         // Syntax only, so it never joins the shared Project: a file added after the
-        // program exists throws the program and its type checker away, and a
-        // `"lunora"`-scope Project does not hold the Vite config to begin with.
+        // program exists throws the program and its type checker away, and the seeded
+        // Project does not hold the Vite config to begin with.
         const sourceFile = new Project({
             compilerOptions: { allowJs: true },
             skipFileDependencyResolution: true,

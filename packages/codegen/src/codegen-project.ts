@@ -231,8 +231,10 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
  * disk (the classic stale-deleted-file cache bug).
  *
  * Files outside `lunoraDirectory` — e.g. a shared validator or type pulled in
- * via the user's tsconfig — are also `refreshFromFileSystemSync()`ed, but only
- * the ones already loaded into the Project; none are added. `resolveValidatorAlias`
+ * via the user's tsconfig — are also `refreshFromFileSystemSync()`ed. Beyond the
+ * ones already loaded, a refresh adds only what the seeds name: the tsconfig's
+ * declaration and global-declaration files, and the files a `lunoraDirectory`
+ * source newly imports (see `resolveSourceFileDependencies` below). `resolveValidatorAlias`
  * (parse-validator.ts) follows `getAliasedSymbol()` across module boundaries, so a
  * validator defined outside `lunoraDirectory` is genuinely read from whatever
  * source the Project currently holds — leaving those files stale made a reused
