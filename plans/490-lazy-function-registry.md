@@ -1,7 +1,7 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** TODO — design and measurements only; nothing in this plan is implemented. The
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. Cheap levers and the §9 startup budget are still open. The
 email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
 

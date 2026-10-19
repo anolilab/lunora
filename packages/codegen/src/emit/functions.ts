@@ -776,8 +776,41 @@ export const loadFunction = async (functionPath: string): Promise<RegisteredLuno
 
     return getLoadedFunction(functionPath);
 };
+
 `
         : "";
+
+    // The smoke check looks for this export, so it exists only when there is at least one lazy entry to check.
+    const smokeLoaderPrelude =
+        lazyFunctions && manifestBody !== ""
+            ? `
+/**
+ * Evaluate every lazy module now and report the ones that fail, keyed by function path. A lazy
+ * registry defers a broken module's error to its first call; \`lunora build\` and \`deploy\` run this
+ * inside workerd so the error surfaces before the Worker ships instead of in front of a user.
+ */
+export const loadAllFunctions = async (): Promise<{ checked: number; failures: ReadonlyArray<{ functionPath: string; message: string }> }> => {
+    const functionPaths = Object.keys(LUNORA_FUNCTION_MANIFEST);
+    // Concurrent, so the total is bounded by the slowest module rather than by all of them added up. A module
+    // shared by several functions is evaluated once (loadFunction keeps its pending promise), and failures keep manifest order.
+    const failures = (
+        await Promise.all(
+            functionPaths.map(async (functionPath) => {
+                try {
+                    await loadFunction(functionPath);
+
+                    return undefined;
+                } catch (error) {
+                    return { functionPath, message: error instanceof Error ? error.message : String(error) };
+                }
+            }),
+        )
+    ).filter((failure) => failure !== undefined);
+
+    return { checked: functionPaths.length, failures };
+};
+`
+            : "";
 
     return relocateBaseQualifiers(
         `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}${rooms.typeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
@@ -827,7 +860,7 @@ ${rooms.channelField}    /**
      */
     x402?: { readonly price: number | string };
 ${sensitiveArgsField}}
-${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}
+${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}${smokeLoaderPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).

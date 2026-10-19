@@ -2762,6 +2762,12 @@ const applyModify: (text: string, path: ReadonlyArray<number | string>, value: u
 const assertWranglerSatisfiesSchema: (options: AssertWranglerOptions, warn: (message: string) => void, remedy: string) => void;
 ```
 
+### `bindingsNeedingDatabase` (const)
+
+```ts
+const bindingsNeedingDatabase: (projectRoot: string, env: NodeJS.ProcessEnv, wranglerEnvironment?: string | undefined, configPath?: string) => string[];
+```
+
 ### `buildBindingManifest` (const)
 
 ```ts
