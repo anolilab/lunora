@@ -51,8 +51,9 @@ alerts setup` from an audit. Show the change and get explicit approval first.
     `lunora advisor` lint ids are listed below.
 
 3. **Runtime signal, only if the user points you at a worker that has served
-   traffic.** `lunora insights` (local by default). Production needs an explicit
-   `--prod --url …` and the user's admin token; do not go looking for one.
+   traffic.** `lunora insights` (local by default). Production needs `--prod` and
+   the user's admin token, plus `--url …` when the checkout has no production
+   link; do not go looking for a token.
 4. **Account signal.** `lunora cloudflare alerts` (status) reads last month's
    usage and which products have a usage alert. Needs Cloudflare credentials;
    ask first. Budget alerts have no API, so they are always _not inspected_.
