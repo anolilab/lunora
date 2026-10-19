@@ -10,7 +10,6 @@ import {
     derivePortOffset,
     describeDevPorts,
     findCheckoutRoot,
-    hashPortOffset,
     LEGACY_PLAYGROUND_PORT,
     LEGACY_STUDIO_PORT,
     PINNED_PORT_BASES,
@@ -19,9 +18,10 @@ import {
     staleDevOrigin,
 } from "../../../shared/dev-ports";
 
-const OFFSET_RANGE = 2999;
+/** The explicit offsets the blocked-port check is exercised over. */
+const EXPLICIT_OFFSETS = 2999;
 
-const offsets = Array.from({ length: OFFSET_RANGE }, (_, index) => index + 1);
+const offsets = Array.from({ length: EXPLICIT_OFFSETS }, (_, index) => index + 1);
 
 const pairIsBlocked = (offset: number): boolean =>
     [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES].some((base) => BLOCKED_PORTS.has(base + offset));
@@ -52,14 +52,13 @@ describe("derivePortOffset", () => {
         const accepted = offsets.map((offset) => tryExplicitOffset(offset)).filter((ports): ports is DevPorts => ports !== undefined);
         const rejectedCount = offsets.filter((offset) => pairIsBlocked(offset)).length;
 
-        expect(accepted).toHaveLength(OFFSET_RANGE - rejectedCount);
+        expect(accepted).toHaveLength(EXPLICIT_OFFSETS - rejectedCount);
         expect(accepted.some((ports) => BLOCKED_PORTS.has(ports.playground) || BLOCKED_PORTS.has(ports.studio))).toBe(false);
         expect(accepted.every((ports) => ports.studio <= 65_535)).toBe(true);
 
         const derived = derivePortOffset("/some/worktree");
 
-        expect(derived).toBeGreaterThanOrEqual(1);
-        expect(derived).toBeLessThanOrEqual(OFFSET_RANGE);
+        expect(derived).toBeGreaterThan(0);
         expect(pairIsBlocked(derived)).toBe(false);
     });
 
@@ -72,24 +71,33 @@ describe("derivePortOffset", () => {
         expect(unusable).toStrictEqual([]);
     });
 
-    it("skips forward past offsets whose pair hits a blocked port", () => {
+    it("keeps every derivable checkout, and the main one, on disjoint usable ports", () => {
         expect.hasAssertions();
 
-        // Offset 826 puts the studio on :6000 and 827 puts the playground there; both are browser-blocked.
-        const rootFor = (target: number): string => {
-            for (let index = 0; index < 1_000_000; index += 1) {
-                const candidate = `/skip/${String(index)}`;
+        // Every offset a root can hash to, found by probing roots until the set stops growing.
+        const derivable = new Set<number>([0]);
 
-                if (hashPortOffset(candidate) === target) {
-                    return candidate;
-                }
+        for (let index = 0; index < 20_000; index += 1) {
+            derivable.add(derivePortOffset(`/probe/${String(index)}`));
+        }
+
+        const owners = new Map<number, number>();
+        const ports = [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_PORT, ...PINNED_PORT_BASES];
+
+        for (const offset of derivable) {
+            for (const base of ports) {
+                const port = base + offset;
+
+                expect(port).toBeLessThanOrEqual(65_535);
+                expect(BLOCKED_PORTS.has(port)).toBe(false);
+                // Two checkouts sharing a port would fail the second one's strictPort start.
+                expect(owners.get(port) ?? offset).toBe(offset);
+
+                owners.set(port, offset);
             }
+        }
 
-            throw new Error(`no root hashes to ${String(target)}`);
-        };
-
-        expect(derivePortOffset(rootFor(826))).toBe(828);
-        expect(derivePortOffset(rootFor(827))).toBe(828);
+        expect(derivable.size).toBeGreaterThan(200);
     });
 });
 
