@@ -304,16 +304,18 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toContain("did not finish evaluating the lazy modules");
         });
 
-        it("only warns when something other than the smoke Worker answers", async () => {
+        it("blocks when something other than the smoke Worker answers, and names the route to check", async () => {
             expect.assertions(2);
 
             vi.stubGlobal(
                 "fetch",
-                vi.fn<() => Promise<Response>>(async () => new Response("<html></html>", { status: 200 })),
+                vi.fn<() => Promise<Response>>(async () => new Response("<html>app shell</html>", { status: 200, headers: { "content-type": "text/html" } })),
             );
 
-            await expect(run()).resolves.toBeUndefined();
-            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unexpected response (HTTP 200)"));
+            const error = await run();
+
+            expect(error).toContain("something other than the probe's result (HTTP 200, text/html: <html>app shell</html>)");
+            expect(error).toContain("run_worker_first");
         });
     });
 

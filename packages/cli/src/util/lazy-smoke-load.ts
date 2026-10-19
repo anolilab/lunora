@@ -1,6 +1,9 @@
+import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { DevProcess, DevProcessOptions, DevProcessSpawner, DriverToolchain } from "@lunora/config";
 import { acceptsConnection, resolveSchemaDirectory, startDevProcess } from "@lunora/config";
@@ -20,6 +23,9 @@ const SMOKE_PORT_ATTEMPTS = 3;
 
 /** Upper bound on booting workerd and evaluating every module — a large app takes a while. */
 const SMOKE_TIMEOUT_MS = 120_000;
+
+/** How long a stopped smoke process tree gets to exit on SIGTERM before SIGKILL. */
+const GROUP_STOP_MS = 5000;
 
 /** Failing modules listed in the error before the rest are summarised. */
 const MAX_LISTED_MODULES = 10;
@@ -147,8 +153,8 @@ const locateSmokeEntry = ({ composedEntry, cwd, environment, toolchain }: SmokeL
 
 /**
  * Ask the booted smoke Worker to evaluate every lazy module. A module failure, a Worker that errors
- * with a 5xx after booting, or one that never answers is the project's fault; anything else
- * (a response that is not ours) throws a plain error and the caller skips the check.
+ * with a 5xx after booting, one that never answers, or one that answers with something that is not the
+ * probe's result is the project's fault and blocks. Only a result from another run's Worker is passed over (`undefined`).
  */
 const probeLazyModules = async (port: number, runId: string): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
     const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, { signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) }).catch(
@@ -168,7 +174,15 @@ const probeLazyModules = async (port: number, runId: string): Promise<{ checked:
         );
     }
 
-    const body = (await response.json().catch(() => undefined)) as Partial<{ checked: number; failures: unknown[]; run: unknown }> | undefined;
+    const text = await response.text().catch(() => "");
+    let body: Partial<{ checked: number; failures: unknown[]; run: unknown }> | undefined;
+
+    try {
+        body = JSON.parse(text) as Partial<{ checked: number; failures: unknown[]; run: unknown }>;
+    } catch {
+        body = undefined;
+    }
+
     const { checked, failures, run } = body ?? {};
 
     if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
@@ -176,7 +190,97 @@ const probeLazyModules = async (port: number, runId: string): Promise<{ checked:
         return run === runId ? { checked, failures } : undefined;
     }
 
-    throw new SmokeLoadError(`unexpected response (HTTP ${String(response.status)})`, true);
+    // Not ours and not another run's: the project's routes answered in front of the Worker, so the project cannot ship as it is.
+    const contentType = response.headers.get("content-type") ?? "no content type";
+    const snippet = text.replaceAll(/\s+/gu, " ").trim().slice(0, 120);
+
+    throw new SmokeLoadError(
+        `the smoke Worker answered with something other than the probe's result (HTTP ${String(response.status)}, ${contentType}${snippet === "" ? "" : `: ${snippet}`}). ` +
+            "A route that does not send /_lunora/* to the Worker first answers with the app's assets, so check run_worker_first. Pass --no-smoke-load to ship anyway.",
+    );
+};
+
+/** A `wrangler dev` started in a process group of its own, so the whole tree can be signalled together. */
+interface SmokeGroup {
+    child: ChildProcess;
+    /** Removes the handlers that kill the group if the CLI exits or is interrupted first. */
+    dispose: () => void;
+}
+
+/** A group leader's pid is the group id, and a group with no members left is an error to signal, not a failure. */
+const signalGroup = (pid: number, signal: NodeJS.Signals): void => {
+    try {
+        process.kill(-pid, signal);
+    } catch {
+        // ESRCH: nothing is left in the group.
+    }
+};
+
+const groupAlive = (pid: number): boolean => {
+    try {
+        process.kill(-pid, 0);
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * Kills the group if the CLI exits, or is interrupted, before the check stops it. Interrupts are re-raised once the group
+ * is gone, so the CLI still dies with the signal it was sent.
+ */
+const killGroupOnExit = (pid: number): (() => void) => {
+    const kill = (): void => {
+        signalGroup(pid, "SIGKILL");
+    };
+    // A `once` listener is gone by the time it runs, so re-raising the signal reaches the default action.
+    const onSignal = (signal: NodeJS.Signals): void => {
+        kill();
+        process.kill(process.pid, signal);
+    };
+    const dispose = (): void => {
+        process.removeListener("exit", kill);
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+    };
+
+    process.once("exit", kill);
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+
+    return dispose;
+};
+
+/**
+ * `stop()` signals only the package-manager process it spawned, and the `wrangler` under it can outlive that and keep
+ * serving after the run directory is gone. Stopping the whole group clears the tree: SIGTERM, then SIGKILL past the grace.
+ */
+const stopSmokeGroup = async (group: SmokeGroup | undefined): Promise<void> => {
+    if (group === undefined) {
+        return;
+    }
+
+    group.dispose();
+
+    const { pid } = group.child;
+
+    if (pid === undefined) {
+        return;
+    }
+
+    signalGroup(pid, "SIGTERM");
+
+    const deadline = Date.now() + GROUP_STOP_MS;
+
+    while (groupAlive(pid) && Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop -- polling for the group to exit is sequential by nature
+        await delay(50);
+    }
+
+    if (groupAlive(pid)) {
+        signalGroup(pid, "SIGKILL");
+    }
 };
 
 /**
@@ -218,6 +322,8 @@ const reportProbe = (cwd: string, { checked, failures }: { checked: number; fail
  * What a failed smoke check means. A failure of the project's modules or entry blocks, with the cause. A
  * check that could not say anything (skipped) warns. Anything else means the Worker did not start, which
  * blocks: a broken entry throws at load time, and that must not ship just because local wrangler could not confirm it.
+ * Wrangler can also fail for reasons outside the project (a remote-only binding, a missing assets directory), so the
+ * message names both causes.
  */
 const reportSmokeError = (error: unknown, output: string[], logger: Logger): string | undefined => {
     if (error instanceof SmokeLoadError && !error.skipped) {
@@ -233,7 +339,10 @@ const reportSmokeError = (error: unknown, output: string[], logger: Logger): str
     }
 
     const tail = output.slice(-5).join("\n");
-    const message = `the smoke Worker did not start (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}. Fix the entry, or pass --no-smoke-load to ship anyway.`;
+    const message =
+        `the smoke Worker did not start (${error instanceof Error ? error.message : String(error)})${tail === "" ? "" : `\n${tail}`}. ` +
+        "Either the entry fails when it loads, or local wrangler cannot run the project (a remote-only binding or a missing assets directory). " +
+        "Fix whichever it is, or pass --no-smoke-load to ship anyway.";
 
     logger.error(message);
 
@@ -352,6 +461,19 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
     const output: string[] = [];
     let directory: string | undefined;
+    let group: SmokeGroup | undefined;
+
+    // Only when the caller did not inject a launcher. Windows has no process groups to signal, so it spawns plainly.
+    const grouped = process.platform !== "win32";
+    const spawnInGroup: DevProcessSpawner = (command, args, spawnOptions) => {
+        const child = spawn(command, [...args], { cwd: spawnOptions.cwd, detached: grouped, shell: spawnOptions.shell, stdio: ["ignore", "pipe", "pipe"] });
+
+        if (grouped && child.pid !== undefined) {
+            group = { child, dispose: killGroupOnExit(child.pid) };
+        }
+
+        return child;
+    };
 
     try {
         directory = createRunDirectory(cwd);
@@ -382,7 +504,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                 args,
                 command,
                 cwd,
-                spawn: launcher,
+                spawn: launcher ?? spawnInGroup,
                 label: "wrangler dev (smoke-load)",
                 notFound: "`wrangler` was not found",
                 onLine: (line) => {
@@ -394,6 +516,10 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
             });
 
             if (server === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this tree still holds the port
+                await stopSmokeGroup(group);
+                group = undefined;
+
                 continue;
             }
 
@@ -407,8 +533,11 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                     return undefined;
                 }
             } finally {
-                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this wrangler still holds its port
+                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this tree still holds its port
                 await server.stop();
+                // eslint-disable-next-line no-await-in-loop -- the next attempt must not start while this tree still holds its port
+                await stopSmokeGroup(group);
+                group = undefined;
             }
         }
 
@@ -416,6 +545,9 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     } catch (error) {
         return reportSmokeError(error, output, logger);
     } finally {
+        // The tree is stopped before the run directory it runs out of is removed.
+        await stopSmokeGroup(group);
+
         if (directory !== undefined) {
             try {
                 rmSync(directory, { force: true, recursive: true });
