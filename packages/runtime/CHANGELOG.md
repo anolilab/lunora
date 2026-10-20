@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.222...@lunora/runtime@1.0.0-alpha.223) (2026-10-20)
+
+### Features
+
+* **runtime:** add enrichSink and filterSink ([#1261](https://github.com/anolilab/lunora/issues/1261)) ([019e599](https://github.com/anolilab/lunora/commit/019e5999b4c3fdb299956bc9976d1fdcae11a7d9))
+
 ## @lunora/runtime [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.221...@lunora/runtime@1.0.0-alpha.222) (2026-10-19)
 
 ### Features
