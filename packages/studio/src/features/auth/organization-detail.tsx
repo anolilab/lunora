@@ -102,7 +102,12 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
         fireAndForget(pollAll());
     };
 
-    useAutoRefresh(pollAll, true);
+    // One timer per read: a failing team read backs off only itself, not the members or invitations lists.
+    useAutoRefresh(() => membersQuery.poll(), true);
+    useAutoRefresh(() => invitationsQuery.poll(), true);
+    useAutoRefresh(() => teamsQuery.poll(), teamsEnabled);
+    useAutoRefresh(() => rolesQuery.poll(), rolesEnabled);
+    useAutoRefresh(() => teamMembersQuery.poll(), selectedTeam !== null);
 
     const closeDialog = (): void => {
         setDialog(null);

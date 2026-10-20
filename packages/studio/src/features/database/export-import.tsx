@@ -145,9 +145,11 @@ const countNdjsonRows = async (file: Blob): Promise<number> => {
  * Hand an NDJSON file to `onChunk` in batches of at most {@link IMPORT_CHUNK_ROWS} rows and {@link IMPORT_CHUNK_BYTES} bytes, in file order,
  * reading it as it goes.
  */
-const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[]) => Promise<void>): Promise<void> => {
+const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[], startLine: number) => Promise<void>): Promise<void> => {
     let chunk: ExportRow[] = [];
     let chunkBytes = 0;
+    let chunkStart = 0;
+    let previousLine = 0;
 
     for await (const { line, lineNumber } of ndjsonLines(file)) {
         const row = parseNdjsonLine(line, lineNumber);
@@ -158,19 +160,27 @@ const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[]) => Pr
 
         const bytes = lineBytes(line);
 
-        if (chunk.length > 0 && (chunk.length === IMPORT_CHUNK_ROWS || chunkBytes + bytes > IMPORT_CHUNK_BYTES)) {
-            await onChunk(chunk);
+        // The server numbers a chunk's rows from its first line, so a blank line in between must end the chunk.
+        const gap = lineNumber !== previousLine + 1;
+
+        if (chunk.length > 0 && (gap || chunk.length === IMPORT_CHUNK_ROWS || chunkBytes + bytes > IMPORT_CHUNK_BYTES)) {
+            await onChunk(chunk, chunkStart);
 
             chunk = [];
             chunkBytes = 0;
         }
 
+        if (chunk.length === 0) {
+            chunkStart = lineNumber;
+        }
+
         chunk.push(row);
         chunkBytes += bytes;
+        previousLine = lineNumber;
     }
 
     if (chunk.length > 0) {
-        await onChunk(chunk);
+        await onChunk(chunk, chunkStart);
     }
 };
 
@@ -269,7 +279,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
         let sent = 0;
 
-        const sendChunk = async (rows: ExportRow[]): Promise<void> => {
+        const sendChunk = async (rows: ExportRow[], startLine: number): Promise<void> => {
             setProgress(
                 t("Importing rows {from}–{to} of {total}…", {
                     from: sent + 1,
@@ -278,7 +288,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 }),
             );
 
-            const result = (await client.query(IMPORT_SHARD, { rows, startLine: sent + 1 }, callOptions(shardKey))) as ImportShardResult;
+            const result = (await client.query(IMPORT_SHARD, { rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
             total.conflicts += result.conflicts;
             total.errors.push(...result.errors);
@@ -314,7 +324,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         } else if (failure.rows > 0) {
             setImportResult(total);
             setError(
-                t("Import stopped after {rows} rows: {message}. The counts below cover the rows already written.", {
+                t("Import stopped after {rows} rows: {message}. The counts below cover completed chunks only; the failed chunk may also have written rows.", {
                     message: failure.message,
                     rows: failure.rows,
                 }),

@@ -12,7 +12,7 @@ import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorCode, errorMessage, fireAndForget, isTerminalPollError } from "../../lib/internal";
+import { adminRef, callOptions, errorCode, errorMessage, fireAndForget } from "../../lib/internal";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */
@@ -145,22 +145,12 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     // The current bookmark advances on every shard write; poll it so it doesn't go
     // stale (there's no Refresh button). Lightweight — only updates the displayed
     // bookmark, never toggles `busy` or clobbers an in-flight preview/restore.
-    useAutoRefresh(
-        () =>
-            (async (): Promise<void> => {
-                try {
-                    const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+    // A failed read rejects on purpose: useAutoRefresh backs off on it, and stops on a refused credential. The last-known bookmark stays.
+    useAutoRefresh(async (): Promise<void> => {
+        const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
 
-                    setCurrent(result.current);
-                } catch (error_) {
-                    // A refused credential must reach useAutoRefresh so it stops; a transient read failure keeps the last-known bookmark.
-                    if (isTerminalPollError(error_)) {
-                        throw error_;
-                    }
-                }
-            })(),
-        !unavailable,
-    );
+        setCurrent(result.current);
+    }, !unavailable);
 
     const onTimeChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setTime(event.target.value);

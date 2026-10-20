@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { useRef, useState } from "react";
 
+import { settlePolls } from "../../../hooks/use-auto-refresh";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
 import type { FacetResult } from "../../../lib/admin";
 import { errorMessage, fireAndForget } from "../../../lib/internal";
@@ -80,6 +81,9 @@ export const useFacets = (): UseFacets => {
             }
 
             setFacets((current) => (column in current ? { ...current, [column]: { error: errorMessage(error), loading: false, result: null } } : current));
+
+            // Rethrown so a poll that refetches this column sees the failure; the state above is what the sidebar shows.
+            throw error;
         }
     };
 
@@ -102,9 +106,7 @@ export const useFacets = (): UseFacets => {
         }
     };
 
-    const refetchFacets = async (fetcher: FacetFetcher): Promise<void> => {
-        await Promise.all(Object.keys(facetsRef.current).map(async (column) => fetchFacet(column, fetcher)));
-    };
+    const refetchFacets = (fetcher: FacetFetcher): Promise<void> => settlePolls(Object.keys(facetsRef.current).map((column) => fetchFacet(column, fetcher)));
 
     const clearFacets = (): void => {
         setFacets({});

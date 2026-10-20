@@ -174,6 +174,21 @@ describe("exportImportPanel", () => {
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
     });
 
+    it("starts a new chunk after a blank line, so the server numbers its errors by the file's own lines", async () => {
+        expect.assertions(1);
+
+        const mock = createClient();
+        const row = (id: string): string => JSON.stringify({ doc: { __id__: id }, table: "messages" });
+
+        render(renderPanel(mock));
+
+        importText(`${row("m1")}\n\n${row("m2")}`);
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+    });
+
     it("refuses a single row too wide for any request before writing a chunk", async () => {
         expect.assertions(2);
 
