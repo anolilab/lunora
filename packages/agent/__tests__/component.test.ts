@@ -42,12 +42,22 @@ interface FakeRow extends Record<string, unknown> {
  * `query(t).withIndex(name, (q) => q.eq(...).eq(...)).first()/.collect()`,
  * `insert`, `patch`.
  */
-/** Collect the `.eq(...)` conditions a `withIndex` callback declares. */
-const collectConditions = (build: (q: unknown) => unknown): [string, unknown][] => {
-    const conditions: [string, unknown][] = [];
+/** Collect the `.eq`/`.gte`/`.lt` conditions a `withIndex` callback declares, as row predicates. */
+const collectConditions = (build: (q: unknown) => unknown): ((row: FakeRow) => boolean)[] => {
+    const conditions: ((row: FakeRow) => boolean)[] = [];
     const builder = {
         eq: (field: string, value: unknown) => {
-            conditions.push([field, value]);
+            conditions.push((row) => row[field] === value);
+
+            return builder;
+        },
+        gte: (field: string, value: unknown) => {
+            conditions.push((row) => String(row[field]) >= String(value));
+
+            return builder;
+        },
+        lt: (field: string, value: unknown) => {
+            conditions.push((row) => String(row[field]) < String(value));
 
             return builder;
         },
@@ -79,7 +89,7 @@ const INDEX_ORDER_FIELDS: Record<string, string> = {
 
 const makeIndexQuery = (candidates: FakeRow[], indexName: string, build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
-    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
+    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every((predicate) => predicate(row)));
     const ordered = (direction: "asc" | "desc"): FakeRow[] => {
         const field = INDEX_ORDER_FIELDS[indexName];
 
@@ -1310,6 +1320,21 @@ describe("approvals inbox", () => {
 
         expect(pending.map((item) => item["threadKey"])).toStrictEqual(["t-a"]);
         expect(pending[0]).toMatchObject({ agent: "support", instanceId: "wf-a", toolCallId: "call_a", toolName: "refund" });
+    });
+
+    it("clamps a zero or fractional limit to a usable count", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-a", owner: "user-a", threadInstanceId: "wf-a", toolCallId: "call_a" });
+        await parkRun(functions, ctx, { key: "t-b", owner: "user-a", threadInstanceId: "wf-b", toolCallId: "call_b" });
+
+        const inbox = (limit: number) => callMutation(functions.agentPendingApprovals, { ...ctx, auth: { userId: "user-a" } }, { limit });
+
+        // A zero limit floors to one thread; a fractional one truncates.
+        await expect(inbox(0)).resolves.toHaveLength(1);
+        await expect(inbox(1.9)).resolves.toHaveLength(1);
+        await expect(inbox(2.7)).resolves.toHaveLength(2);
     });
 
     it("returns nothing for an anonymous caller", async () => {

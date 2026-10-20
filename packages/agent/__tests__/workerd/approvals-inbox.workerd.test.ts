@@ -1,0 +1,131 @@
+/**
+ * Real-workerd coverage for the approvals inbox (`agentPendingApprovals`): owner
+ * scoping, the current-instance filter, the `limit` clamp and newest-first thread
+ * order, plus the per-thread prefix read on `byMessageKey`. Runs the component's
+ * own functions over a Durable Object's SQLite (see `./test-worker.ts`), so the
+ * `byOwnerStatus` index and the `gte`/`lt` range are workerd's, not a double's.
+ *
+ * Only runs with `LUNORA_WORKERD_TESTS=1`; `pnpm --filter "@lunora/agent" run test`
+ * covers the `node` project alone.
+ */
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+
+interface Approval {
+    agent: string;
+    instanceId: string;
+    threadKey: string;
+    threadUpdatedAt: number;
+    toolCallId: string;
+}
+
+/** A fresh store under its own name, so no suite shares SQLite state with another. */
+const store = (name: string) => {
+    const stub = env.AGENT_STORE.get(env.AGENT_STORE.idFromName(name));
+    const call = async (fn: string, args: Record<string, unknown>, auth?: { userId?: string }): Promise<unknown> =>
+        JSON.parse(await stub.call(fn, args, auth)) as unknown;
+
+    return {
+        /**
+         * Start a run on `key` as `instanceId` (owned by `owner`), park it on one approval marker, and leave it
+         * `awaiting_input`. A paused thread counts as in flight, so a takeover of an earlier instance passes `replace`.
+         */
+        park: async (key: string, owner: string | undefined, instanceId: string, toolCallId: string, takeOver = false): Promise<void> => {
+            await call("agentEnsureThread", {
+                agent: "support",
+                instanceId,
+                key,
+                ...(owner === undefined ? {} : { owner }),
+                ...(takeOver ? { onConcurrentRun: "replace" } : {}),
+            });
+            await call("agentAppendMessage", {
+                content: `Awaiting approval to run tool "refund".`,
+                messageKey: `${instanceId}:approval:${toolCallId}`,
+                role: "tool",
+                status: "awaiting_approval",
+                threadKey: key,
+                toolCallId,
+                toolName: "refund",
+            });
+            await call("agentPatchThread", { key, status: "awaiting_input" });
+        },
+        /** The inbox as `userId` sees it; no `userId` is an anonymous caller. */
+        inbox: async (userId?: string, limit?: number): Promise<Approval[]> =>
+            (await call("agentPendingApprovals", limit === undefined ? {} : { limit }, userId === undefined ? {} : { userId })) as Approval[],
+        call,
+    };
+};
+
+describe("approvals inbox on real workerd storage", () => {
+    it("lists the caller's own paused approvals and never another owner's", async () => {
+        const { inbox, park } = store("owner");
+
+        await park("t-a", "user-a", "wf-a", "call_a");
+        await park("t-b", "user-b", "wf-b", "call_b");
+
+        const pending = await inbox("user-a");
+
+        expect(pending.map((item) => item.threadKey)).toStrictEqual(["t-a"]);
+        expect(pending[0]).toMatchObject({ agent: "support", instanceId: "wf-a", toolCallId: "call_a" });
+    });
+
+    it("returns nothing for an anonymous caller and never an ownerless thread", async () => {
+        const { inbox, park } = store("anonymous");
+
+        await park("t-open", undefined, "wf-open", "call_open");
+
+        await expect(inbox()).resolves.toStrictEqual([]);
+        await expect(inbox("user-a")).resolves.toStrictEqual([]);
+    });
+
+    it("excludes a marker minted by an earlier instance of the thread", async () => {
+        const { inbox, park } = store("stale");
+
+        await park("t-1", "user-a", "wf-1", "call_old");
+        // wf-2 takes the thread over, leaving wf-1's marker behind.
+        await park("t-1", "user-a", "wf-2", "call_new", true);
+
+        const pending = await inbox("user-a");
+
+        expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_new"]);
+    });
+
+    it("reads only the current instance's markers, however long the thread's history", async () => {
+        const { call, inbox, park } = store("prefix");
+
+        await park("t-long", "user-a", "wf-1", "call_real");
+        // Keys either side of the `<instanceId>:approval:` prefix, all still `awaiting_approval`.
+        await call("agentAppendMessage", { content: "x", messageKey: "wf-1:approval", role: "tool", status: "awaiting_approval", threadKey: "t-long" });
+        await call("agentAppendMessage", { content: "x", messageKey: "wf-1:approval;z", role: "tool", status: "awaiting_approval", threadKey: "t-long" });
+        for (let index = 0; index < 30; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- seq is allocated in append order
+            await call("agentAppendMessage", { content: `m${String(index)}`, messageKey: `m-${String(index)}`, role: "user", threadKey: "t-long" });
+        }
+
+        const pending = await inbox("user-a");
+
+        expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_real"]);
+    });
+
+    it("clamps the limit to [1, 200] and returns threads newest first", async () => {
+        const { inbox, park } = store("limit");
+
+        // One more than the ceiling, so an unclamped limit would return all of them.
+        for (let index = 0; index < 205; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- one thread per iteration keeps the seeding order deterministic
+            await park(`t-${String(index).padStart(3, "0")}`, "user-a", `wf-${String(index)}`, `call_${String(index)}`);
+        }
+
+        const defaulted = await inbox("user-a");
+        const capped = await inbox("user-a", 1000);
+        const floored = await inbox("user-a", 0);
+
+        expect(defaulted).toHaveLength(50);
+        expect(capped).toHaveLength(200);
+        expect(floored).toHaveLength(1);
+
+        const updatedAt = capped.map((item) => item.threadUpdatedAt);
+
+        expect(updatedAt).toStrictEqual([...updatedAt].toSorted((a, b) => b - a));
+    });
+});

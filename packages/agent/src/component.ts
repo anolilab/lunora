@@ -25,6 +25,10 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
 const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_BARE_TABLE}`;
 const REQUESTS_TABLE: "agent_secret_requests" = `${AGENT_EXTENSION_KEY}_${REQUESTS_BARE_TABLE}`;
 
+/** Default and ceiling for the approvals inbox `limit`. The ceiling caps the per-thread fan-out, since `.take()` has none. */
+const DEFAULT_APPROVALS_LIMIT = 50;
+const MAX_APPROVALS_LIMIT = 200;
+
 /**
  * How many runs may park behind the one in flight under
  * `onConcurrentRun: "queue"` before further starts are rejected.
@@ -1356,9 +1360,9 @@ export const agentComponent = (): AgentComponent => {
      * instance that does not own the thread), so surfacing it would hand the
      * client a triple that can only fail.
      *
-     * ponytail: per-thread `byThread` collect is O(messageCount) of each paused
-     * thread; fine while paused threads are few. A `byThreadStatus` messages
-     * index is the upgrade if a thread accumulates long pauses.
+     * `limit` is clamped to `[1, MAX_APPROVALS_LIMIT]`. Each thread's message read
+     * is a prefix range on `byMessageKey`, so it touches only that instance's
+     * markers and never the whole history.
      */
     const agentPendingApprovals = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx: context }): Promise<Record<string, unknown>[]> => {
         const { userId } = context.auth;
@@ -1371,7 +1375,7 @@ export const agentComponent = (): AgentComponent => {
             .query(THREADS_TABLE)
             .withIndex("byOwnerStatus", (q) => q.eq("owner", userId).eq("status", "awaiting_input"))
             .order("desc")
-            .take(args.limit ?? 50);
+            .take(Math.min(MAX_APPROVALS_LIMIT, Math.max(1, Math.trunc(args.limit ?? DEFAULT_APPROVALS_LIMIT))));
         // At most `limit` threads, each read independently: fan out, then flatten in thread order.
         const perThread = await Promise.all(
             threads.map(async (thread) => {
@@ -1381,14 +1385,17 @@ export const agentComponent = (): AgentComponent => {
                     return [];
                 }
 
+                // Markers are keyed `<instanceId>:approval:<toolCallId>`. `;` is the byte after `:`,
+                // so the range `[markerPrefix, markerUpper)` holds exactly this instance's markers.
                 const markerPrefix = `${instanceId}:approval:`;
+                const markerUpper = `${instanceId}:approval;`;
                 const rows = await context.db
                     .query(MESSAGES_TABLE)
-                    .withIndex("byThread", (q) => q.eq("threadKey", thread["key"]))
+                    .withIndex("byMessageKey", (q) => q.eq("threadKey", thread["key"]).gte("messageKey", markerPrefix).lt("messageKey", markerUpper))
                     .collect();
 
                 return rows
-                    .filter((row) => row["status"] === "awaiting_approval" && String(row["messageKey"]).startsWith(markerPrefix))
+                    .filter((row) => row["status"] === "awaiting_approval")
                     .map((row) =>
                         definedColumns({
                             agent: thread["agent"],
