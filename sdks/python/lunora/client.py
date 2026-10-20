@@ -196,7 +196,7 @@ def build_shape_subscribe_frame(
     return frame
 
 
-def _run_callbacks(calls: list, what: str = "callback") -> None:
+def _run_callbacks(calls: list, what: str) -> None:
     """Run consumer callbacks, each in its own guard.
 
     One callback raising must not stop the ones queued after it: a frame fans
