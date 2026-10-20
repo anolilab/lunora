@@ -1,7 +1,8 @@
 /**
  * The read-only pre-deploy checks `lunora deploy` and `lunora prepare` share:
  * Docker and container sources, the D1 placeholder, localhost origins in vars,
- * and the `--migrate` preflight — plus deploy's open-shard-access gate.
+ * and the `--migrate` preflight. The open-shard-access gate is separate: it runs
+ * first, before codegen or provisioning writes anything (`runOpenShardGate`).
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
@@ -771,9 +772,9 @@ const runOpenShardGate = (
 };
 
 /**
- * The read-only half of the pre-deploy gates: deploy's open-shard-access gate,
- * the D1-placeholder hard-block, the localhost-origin var check, and the
- * container source + Docker preflights.
+ * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
+ * localhost-origin var check, and the container source + Docker preflights. The
+ * open-shard-access gate is not here; `runOpenShardGate` runs it before any write.
  * Returns the first error message, or `undefined` when all pass.
  *
  * Separate from the container BUILD so `lunora prepare` can run the checks
