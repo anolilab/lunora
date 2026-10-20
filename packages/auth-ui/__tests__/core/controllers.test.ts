@@ -834,4 +834,38 @@ describe("resend cooldown", () => {
 
         expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
     });
+
+    it("gives no cooldown to an address edited while its request was in flight", async () => {
+        vi.useFakeTimers();
+
+        let release: () => void = () => {};
+        const pending = (value: unknown): Promise<unknown> =>
+            new Promise((resolve) => {
+                release = () => {
+                    resolve(ok(value));
+                };
+            });
+
+        const forgotClient = stubClient({ forgetPassword: vi.fn(() => pending({ status: true })) });
+        const forgot = createForgotPasswordController(makeContext(forgotClient).context);
+
+        forgot.actions.setField("email", "typo@b.co");
+        const inFlight = forgot.actions.submit();
+        forgot.actions.setField("email", "a@b.co");
+        release();
+        await inFlight;
+
+        expect(forgot.getState().resendAvailableAt).toBeUndefined();
+
+        const otpClient = stubClient({ emailOtp: { sendVerificationOtp: vi.fn(() => pending({ success: true })) } });
+        const otp = createEmailOtpController(makeContext(otpClient).context);
+
+        otp.actions.setEmail("typo@b.co");
+        const codeInFlight = otp.actions.sendCode();
+        otp.actions.setEmail("a@b.co");
+        release();
+        await codeInFlight;
+
+        expect(otp.getState().resendAvailableAt).toBeUndefined();
+    });
 });

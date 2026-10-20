@@ -99,8 +99,10 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             // The code request spent the token; the widget stays mounted across steps, so ask again.
             resetCaptchaIfSpent(mark);
             sentTo = state.email.value.trim();
+            // An edit made while the code was in flight moved the form to another address; that one gets no cooldown.
+            const stillSent = store.get().email.value.trim() === sentTo;
             store.update({
-                resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
+                resendAvailableAt: stillSent ? Date.now() + RESEND_COOLDOWN_MS : undefined,
                 status: "idle",
                 step: "verify",
                 successMessage: context.localization.emailOtpSent,

@@ -190,10 +190,13 @@ const createFormController = <TField extends string>(context: ControllerContext,
                 sentValues = sent;
             }
 
+            // An edit made while the request was in flight moved the form to another destination; that one gets no cooldown.
+            const unchanged = (Object.keys(sent) as TField[]).every((name) => values()[name] === sent[name]);
+
             store.set({
                 ...state(),
                 fields: { ...state().fields },
-                ...(options.resendCooldown ? { resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS } : {}),
+                ...(options.resendCooldown ? { resendAvailableAt: unchanged ? Date.now() + RESEND_COOLDOWN_MS : undefined } : {}),
                 status: "success",
                 successMessage: result.successMessage,
             });
