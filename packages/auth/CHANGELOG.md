@@ -1,3 +1,14 @@
+## @lunora/auth [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.222...@lunora/auth@1.0.0-alpha.223) (2026-10-20)
+
+### Bug Fixes
+
+* **auth-ui,templates,cli:** captcha reset, resend cooldown, single app definition, open-shard deploy gate ([#1278](https://github.com/anolilab/lunora/issues/1278)) ([8718fe1](https://github.com/anolilab/lunora/commit/8718fe12223aa635a7d332210e8fb344014b19f9))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.390
+
 ## @lunora/auth [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.221...@lunora/auth@1.0.0-alpha.222) (2026-10-20)
 
 
