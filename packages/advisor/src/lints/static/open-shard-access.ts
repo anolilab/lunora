@@ -20,7 +20,7 @@ import type { Lint } from "../../types";
 const openShardAccess: Lint = {
     categories: ["SECURITY"],
     description:
-        "The app enables `allowUnauthenticatedShardAccess`, so any caller — signed in or not — may target any shard. The templates ship it for the local demo; it must not reach production by accident.",
+        "The app enables, or may enable, `allowUnauthenticatedShardAccess`, so any caller — signed in or not — may target any shard. The templates ship it for the local demo; it must not reach production by accident.",
     facing: "EXTERNAL",
     level: "ERROR",
     name: "open_shard_access",
