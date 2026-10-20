@@ -372,6 +372,30 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("services/parser/src/index.ts:2"))).toBe(true);
     });
 
+    it("refuses a service's environment-specific entrypoint when deploying that environment", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+        mkdirSync(join(workdir, "services", "parser", "src"), { recursive: true });
+        writeFileSync(
+            join(workdir, "services", "parser", "wrangler.jsonc"),
+            `{ "name": "parser", "main": "src/index.ts", "env": { "production": { "main": "src/prod.ts" } } }\n`,
+            "utf8",
+        );
+        writeFileSync(join(workdir, "services", "parser", "src", "index.ts"), `export const options = () => ({});\n`, "utf8");
+        writeFileSync(
+            join(workdir, "services", "parser", "src", "prod.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, env: "production", logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("services/parser/src/prod.ts:2"))).toBe(true);
+    });
+
     it("does not gate a service the deploy does not publish, under --skip-services", async () => {
         expect.assertions(1);
 

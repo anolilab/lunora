@@ -650,7 +650,8 @@ const findOpenShardAccess = (
         ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
         ...(appWrangler === undefined ? [] : wranglerMainEntry(cwd, appWrangler, environment)),
         // Each service this run publishes is an entrypoint of its own, deployed before the app.
-        ...servicePaths.flatMap((servicePath) => wranglerMainEntry(cwd, servicePath)),
+        // A service takes the same `--env` as the app: its environment's `main` is what that environment ships.
+        ...servicePaths.flatMap((servicePath) => wranglerMainEntry(cwd, servicePath, environment)),
     ];
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
     const files = [
