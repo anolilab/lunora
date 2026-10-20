@@ -99,10 +99,10 @@
         "@lunora/ai": "1.0.0-alpha.140",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mail": "1.0.0-alpha.118",
+        "@lunora/platform": "1.0.0-alpha.66",
         "@lunora/server": "1.0.0-alpha.224",
         "@lunora/values": "1.0.0-alpha.76",
         "@lunora/workflow": "1.0.0-alpha.89",
-        "@lunora/platform": "1.0.0-alpha.66",
         "@modelcontextprotocol/sdk": "catalog:mcp",
         "ai": "catalog:ai",
         "yaml": "catalog:content"
