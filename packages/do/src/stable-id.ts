@@ -1,4 +1,4 @@
-/* eslint-disable no-bitwise, import/prefer-default-export -- the hash is bit arithmetic; the one export is re-exported from the package index */
+/* eslint-disable no-bitwise -- the hash is bit arithmetic */
 
 /**
  * `ctx.newId()`: an id that a replay of the same mutation reproduces.
@@ -53,5 +53,33 @@ export const createStableIdFactory = (mutationId: string | undefined, scope: str
         sequence += 1;
 
         return stableUuid(`${scope}\u0000${mutationId}\u0000${sequence.toString()}`);
+    };
+};
+
+/**
+ * The `ctx.random` for one handler run: a number in `[0, 1)` for each call, in the
+ * run's sequence, like {@link createStableIdFactory}. The hashed text carries its own
+ * domain tag, so random value N is not a function of the id N that shares its input.
+ *
+ * The values are DERIVED, not random: anyone who knows the scope and the replay key
+ * can compute them. Use `crypto.getRandomValues` for anything an attacker must not
+ * guess. Without a replay key this is `Math.random`, and a query, an action or a
+ * nested call has no replay key, so a value there is not replay-stable.
+ * @param mutationId the call's replay key, or `undefined` when there is none.
+ * @param scope the same scope string {@link createStableIdFactory} takes.
+ */
+export const createStableRandomFactory = (mutationId: string | undefined, scope: string): (() => number) => {
+    if (mutationId === undefined || mutationId.length === 0) {
+        // eslint-disable-next-line sonarjs/pseudo-random -- no replay key: this call is not replayed, so there is no sequence to reproduce
+        return () => Math.random();
+    }
+
+    let sequence = 0;
+
+    return () => {
+        sequence += 1;
+
+        // 2^53 is the range cyrb53 returns, so the quotient is in [0, 1).
+        return cyrb53(`random\u0000${scope}\u0000${mutationId}\u0000${sequence.toString()}`) / 2 ** 53;
     };
 };

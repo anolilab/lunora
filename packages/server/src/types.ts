@@ -2493,6 +2493,9 @@ interface QueryCtx {
      */
     readonly now: number;
 
+    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    readonly random: () => number;
+
     /**
      * Compose a read-only subquery in-process, reusing this query's read
      * context (same transaction, same `db`). Executes the referenced query's
@@ -2575,6 +2578,9 @@ interface MutationCtx {
      * base.
      */
     readonly origin?: string;
+
+    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    readonly random: () => number;
 
     /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
@@ -2694,6 +2700,9 @@ interface ActionCtx {
      * {@link MutationCtx.origin}.
      */
     readonly origin?: string;
+
+    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    readonly random: () => number;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;

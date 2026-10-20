@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SensitiveScope, TransactionHeadroomTracker, SchemaLike, ShardDOState, DeliveryAuthorization, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SubscriptionIdentity, SystemReaderStorageLike, TelemetrySink } from "@lunora/do";
-import { applyCdcChanges, createStableIdFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@lunora/do";
+import { applyCdcChanges, createStableIdFactory, createStableRandomFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import type { ArtifactsBindingLike, ArtifactsClient } from "@lunora/bindings/artifacts";
@@ -1207,6 +1207,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
             };
 
+            const stableKey = options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
+            const stableScope = JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -1217,10 +1220,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // subscription-driven build (`options.identity`) is not a replay.
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
-                newId: createStableIdFactory(
-                    options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined,
-                    JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]),
-                ),
+                // `ctx.random()` shares the replay key and scope, so a replay reproduces both sequences.
+                newId: createStableIdFactory(stableKey, stableScope),
+                random: createStableRandomFactory(stableKey, stableScope),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare

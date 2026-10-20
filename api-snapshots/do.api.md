@@ -861,6 +861,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 const createStableIdFactory: (mutationId: string | undefined, scope: string) => (() => string);
 ```
 
+### `createStableRandomFactory` (const)
+
+```ts
+const createStableRandomFactory: (mutationId: string | undefined, scope: string) => (() => number);
+```
+
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.

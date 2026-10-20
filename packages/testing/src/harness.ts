@@ -763,6 +763,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            random: () => (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) / 2 ** 32,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -787,6 +788,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            random: () => (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) / 2 ** 32,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -843,6 +845,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            random: () => (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) / 2 ** 32,
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 

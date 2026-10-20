@@ -114,6 +114,7 @@ interface ActionCtx {
     readonly newId: () => string;
     readonly now: number;
     readonly origin?: string;
+    readonly random: () => number;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
@@ -1521,6 +1522,7 @@ interface MutationCtx {
     readonly newId: () => string;
     readonly now: number;
     readonly origin?: string;
+    readonly random: () => number;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
@@ -1805,6 +1807,7 @@ interface QueryCtx {
     readonly metrics: LunoraMetrics;
     readonly newId: () => string;
     readonly now: number;
+    readonly random: () => number;
     readonly runQuery: RunQuery;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
