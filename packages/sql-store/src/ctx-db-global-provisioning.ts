@@ -14,6 +14,7 @@
  * - a table that needs an `ALTER` (a missing column, with its backfill),
  * - an index whose stored column list differs from the declared one (drop-and-recreate with a duplicate probe),
  * - an index the schema no longer declares (dropped),
+ * - a database that holds tables but no index ledger yet (the sequential route adopts its existing indexes first),
  * - an existing table whose legacy storage rewrites have not recorded their completion marker,
  * - a catalog read the engine refuses.
  *
@@ -32,13 +33,17 @@ import { sql } from "drizzle-orm";
 
 import type { GlobalIndexSpec, LegacyColumnRewrite } from "./ctx-db-migrations";
 import {
+    foldIdentifier,
     globalTableColumnsDdl,
     globalTableIndexSpecs,
+    INDEX_LEDGER_TABLE,
+    indexLedgerDdl,
     indexShapeChanged,
     legacyRewrites,
     legacyRowPredicate,
     MIGRATION_STATE_TABLE,
     provisionGlobalTablesSequentially,
+    recordIndexStatement,
     undeclaredFrameworkIndexes,
     wantedGlobalColumns,
 } from "./ctx-db-migrations";
@@ -52,22 +57,18 @@ import { queryAll, runInOrder } from "./sql-exec";
  */
 const BATCH_STATEMENT_LIMIT = 50;
 
-/**
- * An identifier as SQLite compares it: ASCII letters folded to lower case, everything else untouched. Not `toLowerCase()`,
- * which also folds non-ASCII letters that SQLite keeps distinct.
- */
-const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
-
 /** What the database holds right now, as two catalog reads report it. All names are {@link foldIdentifier}-folded, because SQLite treats table, column and index names case-insensitively. */
 interface Catalog {
     /** Column names per existing table, read from its stored `CREATE TABLE` text. */
     columns: ReadonlyMap<string, ReadonlySet<string>>;
+    /** Whether {@link INDEX_LEDGER_TABLE} exists; a database without it predates the ledger. */
+    hasLedger: boolean;
     /** Stored `CREATE INDEX` text per existing index name (`undefined` for an implicit index the engine made). */
     indexes: ReadonlyMap<string, string | undefined>;
-    /** The indexes each existing table holds, by folded table name. */
-    indexesByTable: ReadonlyMap<string, { name: string; sql: string | undefined }[]>;
     /** Names recorded in {@link MIGRATION_STATE_TABLE}. */
     markers: ReadonlySet<string>;
+    /** The framework-created indexes the ledger records per table, by folded table name. */
+    owned: ReadonlyMap<string, string[]>;
     tables: ReadonlySet<string>;
 }
 
@@ -168,6 +169,42 @@ const columnNamesOfCreateTable = (statement: string): Set<string> => {
     return names;
 };
 
+/** The rewrite markers and the index ledger, in one read (two round trips for a whole catalog, whatever the database holds). */
+const readBookkeeping = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tables: ReadonlySet<string>,
+): Promise<{ hasLedger: boolean; markers: Set<string>; owned: Map<string, string[]> }> => {
+    const markers = new Set<string>();
+    const owned = new Map<string, string[]>();
+    const hasLedger = tables.has(foldIdentifier(INDEX_LEDGER_TABLE));
+    const reads: SQL[] = [];
+
+    if (tables.has(foldIdentifier(MIGRATION_STATE_TABLE))) {
+        reads.push(sql`SELECT 'marker' AS kind, name, NULL AS owner FROM ${sql.identifier(MIGRATION_STATE_TABLE)}`);
+    }
+
+    if (hasLedger) {
+        reads.push(sql`SELECT 'index' AS kind, "l"."name" AS name, "l"."table_name" AS owner FROM ${sql.identifier(INDEX_LEDGER_TABLE)} AS "l"`);
+    }
+
+    if (reads.length === 0) {
+        return { hasLedger, markers, owned };
+    }
+
+    for (const row of await queryAll(exec, dialect, sql.join(reads, sql` UNION ALL `))) {
+        if (row["kind"] === "marker") {
+            markers.add(String(row["name"]));
+        } else {
+            const owner = foldIdentifier(String(row["owner"]));
+
+            owned.set(owner, [...(owned.get(owner) ?? []), String(row["name"])]);
+        }
+    }
+
+    return { hasLedger, markers, owned };
+};
+
 /** The catalog, or `undefined` when the engine will not answer (the caller then provisions sequentially). */
 const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catalog | undefined> => {
     try {
@@ -175,7 +212,6 @@ const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catal
         const tables = new Set<string>();
         const columns = new Map<string, Set<string>>();
         const indexes = new Map<string, string | undefined>();
-        const indexesByTable = new Map<string, { name: string; sql: string | undefined }[]>();
 
         for (const row of objects) {
             const name = String(row["name"]);
@@ -194,26 +230,19 @@ const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catal
                 );
             } else {
                 indexes.set(foldIdentifier(name), statement);
-
-                const owner = foldIdentifier(String(row["tbl_name"]));
-
-                indexesByTable.set(owner, [...(indexesByTable.get(owner) ?? []), { name, sql: statement }]);
             }
         }
 
-        const markers = new Set<string>();
+        const { hasLedger, markers, owned } = await readBookkeeping(exec, dialect, tables);
 
-        if (tables.has(foldIdentifier(MIGRATION_STATE_TABLE))) {
-            for (const row of await queryAll(exec, dialect, sql`SELECT name FROM ${sql.identifier(MIGRATION_STATE_TABLE)}`)) {
-                markers.add(String(row["name"]));
-            }
-        }
-
-        return { columns, indexes, indexesByTable, markers, tables };
+        return { columns, hasLedger, indexes, markers, owned, tables };
     } catch {
         return undefined;
     }
 };
+
+/** The ledger entry for an index the planner creates; the default-order index is never dropped, so it is not recorded. */
+const recordStatements = (spec: GlobalIndexSpec): SQL[] => (spec.kind === "default-order" ? [] : [recordIndexStatement(spec.name, spec.table)]);
 
 const createIndexStatement = (spec: GlobalIndexSpec): SQL => {
     const unique = spec.unique ? sql`UNIQUE ` : sql``;
@@ -252,8 +281,10 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
 
     if (!catalog.tables.has(foldIdentifier(tableName))) {
         return [
+            // Idempotent, and in every unit so that whichever batch runs first creates the ledger the others record into.
+            ...(catalog.hasLedger ? [] : [indexLedgerDdl()]),
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columnsDdl})`,
-            ...specs.map((spec) => createIndexStatement(spec)),
+            ...specs.flatMap((spec) => [createIndexStatement(spec), ...recordStatements(spec)]),
             ...markerStatements(dialect, tableName, rewrites),
         ];
     }
@@ -269,7 +300,7 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
     }
 
     // An index left behind by a declaration the schema dropped is removed by the sequential path.
-    if (undeclaredFrameworkIndexes(dialect, tableName, specs, catalog.indexesByTable.get(foldIdentifier(tableName)) ?? []).length > 0) {
+    if (undeclaredFrameworkIndexes(dialect, specs, catalog.owned.get(foldIdentifier(tableName)) ?? []).length > 0) {
         return undefined;
     }
 
@@ -277,7 +308,7 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
 
     for (const spec of specs) {
         if (!catalog.indexes.has(foldIdentifier(spec.name))) {
-            statements.push(createIndexStatement(spec));
+            statements.push(createIndexStatement(spec), ...recordStatements(spec));
             continue;
         }
 
@@ -320,6 +351,11 @@ const packBatches = (units: ReadonlyArray<Unit>): Unit[][] => {
     return batches;
 };
 
+/** Does the database hold some of this schema's `.global()` tables but no index ledger yet? */
+const predatesLedger = (schema: SchemaLike, catalog: Catalog): boolean =>
+    !catalog.hasLedger &&
+    Object.entries(schema.tables).some(([tableName, definition]) => definition.shardMode?.kind === "global" && catalog.tables.has(foldIdentifier(tableName)));
+
 /**
  * Auto-provision every `.global()` table from the schema, in as few round trips as the engine allows.
  *
@@ -341,6 +377,14 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
     const catalog = await readCatalog(exec, dialect);
 
     if (catalog === undefined) {
+        await provisionGlobalTablesSequentially(exec, schema, dialect);
+
+        return;
+    }
+
+    // The sequential route adopts the indexes a pre-ledger database already holds before it sweeps for stale ones; a batch
+    // that created the ledger first would make it skip that.
+    if (predatesLedger(schema, catalog)) {
         await provisionGlobalTablesSequentially(exec, schema, dialect);
 
         return;

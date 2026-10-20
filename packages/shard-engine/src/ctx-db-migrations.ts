@@ -86,6 +86,16 @@ const BY_CREATION_INDEX_SUFFIX = "__by_creation";
 const INDEX_SORT_KEYS_TAIL = `, ${renderSql("sqlite", INDEX_SORT_KEYS).sql})`;
 
 /**
+ * Reserved table recording the secondary and `.unique()` indexes this module created, by name. It is what decides which
+ * index {@link dropUndeclaredIndexes} may drop: an index someone made by hand is not in it, however closely its name and
+ * SQL resemble ours. `name` compares case-insensitively because SQLite does for an index name.
+ */
+const INDEX_LEDGER_TABLE = "__lunora_framework_indexes";
+
+/** An identifier as SQLite compares it: ASCII letters folded, everything else untouched. Not `toLowerCase()`, which also equates `ä` and `Ä`. */
+const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/**
  * Raised when a UNIQUE index cannot be built because existing rows already violate
  * it. A distinct type so a caller that opted into deferral
  * (`deferBlockedUniqueIndexes`) can tell this recoverable state from a real
@@ -157,7 +167,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
 const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
     const existing = runDrizzle<{ sql: null | string }>(
         sql,
-        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName}`,
+        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE`,
     ).toArray();
 
     const current = existing[0]?.sql;
@@ -208,8 +218,10 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
  * along, and re-scanning for it on every cold start would be pure cost.
  */
 const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolean =>
-    runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} LIMIT 1`).toArray()
-        .length > 0;
+    runDrizzle(
+        sql,
+        dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE LIMIT 1`,
+    ).toArray().length > 0;
 
 /**
  * Create one index, probing for duplicates first when it is UNIQUE and not yet
@@ -243,38 +255,76 @@ const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void 
 };
 
 /**
- * Drop the expression indexes this module created for a table that its schema no
- * longer declares.
+ * Whether an index that predates the ledger looks like one this module created: named `<table>_<something>` (bar the
+ * default-order {@link BY_CREATION_INDEX_SUFFIX} index) and built over the document column's JSON path or ending in the
+ * {@link INDEX_SORT_KEYS} suffix. Only used once, to adopt the indexes of a database that has no ledger yet.
+ */
+const looksFrameworkCreated = (tableName: string, name: string, statement: null | string): boolean =>
+    foldIdentifier(name).startsWith(`${foldIdentifier(tableName)}_`) &&
+    foldIdentifier(name) !== foldIdentifier(`${tableName}${BY_CREATION_INDEX_SUFFIX}`) &&
+    statement !== null &&
+    (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
+
+/** Note that this module owns the index `indexName` on `tableName`. */
+const recordFrameworkIndex = (sql: SqlExec, indexName: string, tableName: string): void => {
+    runDrizzle(sql, dsql`INSERT OR IGNORE INTO ${dsql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`);
+};
+
+/**
+ * Create the ledger of framework-created indexes. A database that has none yet predates it, so the first run adopts every
+ * index the old name-and-SQL-shape rule would have called ours: a stale one is then still dropped exactly once, and from
+ * then on only the ledger decides.
+ *
+ * The adoption follows the CREATE in the same synchronous turn, which a Durable Object commits as one write.
+ */
+const ensureIndexLedger = (sql: SqlExec, tableNames: ReadonlyArray<string>): void => {
+    const existed =
+        runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${INDEX_LEDGER_TABLE} COLLATE NOCASE`).toArray().length > 0;
+
+    runDrizzle(sql, dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(INDEX_LEDGER_TABLE)} (name TEXT PRIMARY KEY COLLATE NOCASE, table_name TEXT NOT NULL)`);
+
+    if (existed) {
+        return;
+    }
+
+    for (const tableName of tableNames) {
+        const held = runDrizzle<{ name: string; sql: null | string }>(
+            sql,
+            dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} COLLATE NOCASE AND sql IS NOT NULL`,
+        ).toArray();
+
+        for (const { name, sql: statement } of held) {
+            if (looksFrameworkCreated(tableName, name, statement)) {
+                recordFrameworkIndex(sql, name, tableName);
+            }
+        }
+    }
+};
+
+/**
+ * Drop the indexes this module created for a table that its schema no longer declares.
  *
  * `CREATE INDEX IF NOT EXISTS` only ever adds, so a `.unique()` taken off a column
  * kept rejecting duplicates (as `ConflictError`) forever, and an index removed from
  * a table's declarations kept taxing every write.
  *
- * Only indexes this module could have created are candidates: named
- * `<table>_<something>` (bar the default-order {@link BY_CREATION_INDEX_SUFFIX}
- * index), and built over the document column's JSON path or ending in
- * the {@link INDEX_SORT_KEYS} suffix. An index added by hand under another shape,
- * and the implicit indexes SQLite makes for constraints (`sql` is NULL), are left
- * alone.
+ * Only indexes in the {@link INDEX_LEDGER_TABLE} are candidates, so an index added
+ * by hand is left alone whatever it looks like — and so is one on a system field
+ * (`_creationTime`), which no shape test could have told from a hand-made one.
  */
 const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: ReadonlySet<string>): void => {
     // SQLite folds ASCII case in an identifier, so `By_Slug` IS `by_slug`: an index renamed that way
     // is the declared one, and dropping it would leave the table with nothing.
-    const declaredFolded = new Set([...declared].map((name) => name.toLowerCase()));
-    const held = runDrizzle<{ name: string; sql: null | string }>(
+    const declaredFolded = new Set([...declared].map((name) => foldIdentifier(name)));
+    const owned = runDrizzle<{ name: string }>(
         sql,
-        dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} AND sql IS NOT NULL`,
+        dsql`SELECT "l"."name" FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} AS "l" WHERE "l"."table_name" = ${tableName} COLLATE NOCASE`,
     ).toArray();
 
-    for (const { name, sql: statement } of held) {
-        const createdHere =
-            name.startsWith(`${tableName}_`) &&
-            name !== `${tableName}${BY_CREATION_INDEX_SUFFIX}` &&
-            statement !== null &&
-            (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
-
-        if (createdHere && !declaredFolded.has(name.toLowerCase())) {
+    for (const { name } of owned) {
+        if (!declaredFolded.has(foldIdentifier(name))) {
             runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE ${dsql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
         }
     }
 };
@@ -302,6 +352,7 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         deferIfBlocked(blocked, () => {
             dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
             createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+            recordFrameworkIndex(sql, indexName, tableName);
         });
     }
 
@@ -320,6 +371,7 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
             // The name only differs from a held one by the field's case, whose path is another expression.
             dropIndexIfShapeChanged(sql, indexName, tableName, reference, true, [reference]);
             createIndexGuarded(sql, indexName, tableName, reference, true, [reference]);
+            recordFrameworkIndex(sql, indexName, tableName);
         });
     }
 
@@ -529,6 +581,12 @@ export const runShardMigrations = (
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);
+    ensureIndexLedger(
+        sql,
+        Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName),
+    );
 
     const declaredCompanions: string[] = [];
 

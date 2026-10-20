@@ -166,6 +166,30 @@ describe.each(routes)("global table migrations (%s) — a rank companion whose s
         expect(String(columns[0]?.["sql"])).not.toContain("__sort_k1__");
     });
 
+    it("rebuilds a rank companion whose index changed only in case while gaining a sort key", async () => {
+        expect.assertions(2);
+
+        const ranked = (name: string, sortBy: { direction: "asc" | "desc"; field: string }[]): SchemaLike =>
+            notes({ name: column("string"), score: column("number") }, [], [{ name, on: "notes", sortBy }]);
+
+        const before = await migrate(ranked("leaderboard", [{ direction: "desc", field: "score" }]));
+
+        await before.insert("notes", { _id: "p1", name: "a", score: 10 }, { allowExplicitId: true });
+
+        const widened = await migrate(
+            ranked("Leaderboard", [
+                { direction: "desc", field: "score" },
+                { direction: "asc", field: "name" },
+            ]),
+        );
+
+        await expect(widened.insert("notes", { _id: "p2", name: "b", score: 20 }, { allowExplicitId: true })).resolves.toBe("p2");
+
+        const page = await widened.rankPage("notes", "Leaderboard", { take: 10 });
+
+        expect(page.page.map((row) => row["_id"])).toStrictEqual(["p2", "p1"]);
+    });
+
     it("reshapes the sorted btree when only a sort direction changes", async () => {
         expect.assertions(3);
 

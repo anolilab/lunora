@@ -366,7 +366,7 @@ const dropIndexIfShapeChanged = async (
     const held = await queryAll(
         exec,
         dialect,
-        sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} COLLATE NOCASE AND tbl_name = ${spec.table}`,
+        sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} COLLATE NOCASE AND tbl_name = ${spec.table} COLLATE NOCASE`,
     );
     const current = held[0]?.["sql"];
 
@@ -487,38 +487,93 @@ const globalTableIndexSpecs = (tableName: string, definition: SchemaLike["tables
 const UNIQUE_INDEX_STATEMENT = /^\s*create\s+unique\s/iu;
 
 /**
- * The names, among the indexes a table holds, of those this module created for a declaration the schema no longer has.
+ * Reserved table recording the secondary and `.unique()` indexes this module created for `.global()` tables, by name. It
+ * decides which index {@link undeclaredFrameworkIndexes} may drop: an index someone made by hand is not in it, however
+ * closely its name and SQL resemble ours. `name` compares case-insensitively because SQLite does for an index name. The DO
+ * twin keeps the same table under the same name.
+ */
+const INDEX_LEDGER_TABLE = "__lunora_framework_indexes";
+
+/** The DDL of {@link INDEX_LEDGER_TABLE}; idempotent. */
+const indexLedgerDdl = (): SQL =>
+    sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(INDEX_LEDGER_TABLE)} (name TEXT PRIMARY KEY COLLATE NOCASE, table_name TEXT NOT NULL)`;
+
+/** Note that this module owns the index `indexName` on `tableName`. */
+const recordIndexStatement = (indexName: string, tableName: string): SQL =>
+    sql`INSERT OR IGNORE INTO ${sql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`;
+
+/** An identifier as SQLite compares it: ASCII letters folded to lower case, everything else untouched. Not `toLowerCase()`, which also folds non-ASCII letters that SQLite keeps distinct. */
+const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/**
+ * Create the ledger of framework-created indexes for these tables. A database that has none yet predates it, so the first
+ * run adopts every index the old name-and-SQL-shape rule would have called ours (named `<table>_<something>`, bar the
+ * default-order index, and UNIQUE or ending in the {@link indexSortKeys} suffix): a stale one is then still dropped
+ * exactly once, and from then on only the ledger decides. SQLite only, like the rest of the drop logic.
+ */
+// ponytail: the CREATE and the adoption are separate round trips; a connection lost between them leaves stale legacy indexes undropped, as before the ledger existed.
+const ensureIndexLedger = async (exec: SqlCtxExec, dialect: SqlDialect, tableNames: ReadonlyArray<string>): Promise<void> => {
+    if (dialect.name !== "sqlite") {
+        return;
+    }
+
+    const existing = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ${INDEX_LEDGER_TABLE} COLLATE NOCASE`,
+    );
+
+    if (existing.length > 0) {
+        return;
+    }
+
+    await queryRun(exec, dialect, indexLedgerDdl());
+
+    const sortKeys = indexSortKeys(dialect);
+    const sortKeysTail = sortKeys === undefined ? undefined : `, ${dialect.render(sortKeys).sql})`;
+
+    for (const tableName of tableNames) {
+        const prefix = `${foldIdentifier(tableName)}_`;
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        const held = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} COLLATE NOCASE AND sql IS NOT NULL`,
+        );
+
+        for (const row of held) {
+            const name = String(row["name"]);
+            const statement = String(row["sql"]);
+
+            if (
+                foldIdentifier(name).startsWith(prefix) &&
+                foldIdentifier(name) !== foldIdentifier(`${tableName}__by_creation`) &&
+                (UNIQUE_INDEX_STATEMENT.test(statement) || (sortKeysTail !== undefined && statement.trimEnd().endsWith(sortKeysTail)))
+            ) {
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+                await queryRun(exec, dialect, recordIndexStatement(name, tableName));
+            }
+        }
+    }
+};
+
+/**
+ * The names, among those the ledger holds for a table, of the indexes this module created for a declaration the schema no
+ * longer has.
  *
  * `CREATE INDEX IF NOT EXISTS` only ever adds, so a `.unique()` taken off a column kept rejecting duplicates for good.
- * Only what this module could have created is a candidate: named `<table>_<something>`, and either UNIQUE or ending in the
- * {@link indexSortKeys} suffix. An index added by hand under another shape, and the implicit indexes the engine makes for
- * constraints (`sql` is NULL), are left alone — the DO twin (`dropUndeclaredIndexes`) draws the same line. SQLite only,
- * like the rest of the shape checks: the engine that backs `.global()` is D1.
+ * Only what the ledger names is a candidate, so an index added by hand is left alone whatever it looks like — the DO twin
+ * (`dropUndeclaredIndexes`) draws the same line. SQLite only, like the rest of the shape checks: the engine that backs
+ * `.global()` is D1.
  */
-const undeclaredFrameworkIndexes = (
-    dialect: SqlDialect,
-    tableName: string,
-    specs: ReadonlyArray<GlobalIndexSpec>,
-    held: ReadonlyArray<{ name: string; sql: string | undefined }>,
-): string[] => {
+const undeclaredFrameworkIndexes = (dialect: SqlDialect, specs: ReadonlyArray<GlobalIndexSpec>, owned: ReadonlyArray<string>): string[] => {
     if (dialect.name !== "sqlite") {
         return [];
     }
 
-    const prefix = `${tableName.toLowerCase()}_`;
-    const declared = new Set(specs.map((spec) => spec.name.toLowerCase()));
-    const sortKeys = indexSortKeys(dialect);
-    const sortKeysTail = sortKeys === undefined ? undefined : `, ${dialect.render(sortKeys).sql})`;
+    const declared = new Set(specs.map((spec) => foldIdentifier(spec.name)));
 
-    return held
-        .filter(({ name, sql: statement }) => {
-            if (statement === undefined || !name.toLowerCase().startsWith(prefix) || declared.has(name.toLowerCase())) {
-                return false;
-            }
-
-            return UNIQUE_INDEX_STATEMENT.test(statement) || (sortKeysTail !== undefined && statement.trimEnd().endsWith(sortKeysTail));
-        })
-        .map(({ name }) => name);
+    return owned.filter((name) => !declared.has(foldIdentifier(name)));
 };
 
 /** Drop the indexes a global table holds for declarations it no longer has (see {@link undeclaredFrameworkIndexes}). */
@@ -527,14 +582,21 @@ const dropUndeclaredGlobalIndexes = async (exec: SqlCtxExec, tableName: string, 
         return;
     }
 
-    const rows = await queryAll(exec, dialect, sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName}`);
-    const held = rows.map((row) => {
-        return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
-    });
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT "l"."name" FROM ${sql.identifier(INDEX_LEDGER_TABLE)} AS "l" WHERE "l"."table_name" = ${tableName} COLLATE NOCASE`,
+    );
 
-    for (const name of undeclaredFrameworkIndexes(dialect, tableName, specs, held)) {
+    for (const name of undeclaredFrameworkIndexes(
+        dialect,
+        specs,
+        rows.map((row) => String(row["name"])),
+    )) {
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(INDEX_LEDGER_TABLE)} WHERE ${sql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
     }
 };
 
@@ -556,6 +618,11 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await createIndexGuarded(exec, dialect, spec);
+
+        if (dialect.name === "sqlite") {
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            await queryRun(exec, dialect, recordIndexStatement(spec.name, spec.table));
+        }
     }
 
     await dropUndeclaredGlobalIndexes(exec, tableName, specs, dialect);
@@ -1202,9 +1269,24 @@ const legacyRewrites = (tableName: string, definition: SchemaLike["tables"][stri
  * and for any table the batched planner will not handle (drift that needs an ALTER, a changed index, an unfinished rewrite).
  */
 const provisionGlobalTablesSequentially = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, only?: ReadonlySet<string>): Promise<void> => {
+    let ledgerReady = false;
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind !== "global" || (only !== undefined && !only.has(tableName))) {
             continue;
+        }
+
+        // Lazily, so a pass that has nothing to provision (the batched route's empty remainder) spends no round trip on it.
+        if (!ledgerReady) {
+            ledgerReady = true;
+            // eslint-disable-next-line no-await-in-loop -- once, before the first table.
+            await ensureIndexLedger(
+                exec,
+                dialect,
+                Object.entries(schema.tables)
+                    .filter(([, other]) => other.shardMode?.kind === "global")
+                    .map(([name]) => name),
+            );
         }
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes.
@@ -1341,7 +1423,7 @@ const dropRankCompanionIfColumnsChanged = async (
         return;
     }
 
-    const rows = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${rankTable}`);
+    const rows = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${rankTable} COLLATE NOCASE`);
     const statement = rows[0]?.["sql"];
 
     // An absent table has nothing to drop.
@@ -1411,15 +1493,19 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
 export type { GlobalIndexSpec, LegacyColumnRewrite };
 export {
     declaredIndexColumnList,
+    foldIdentifier,
     globalTableColumnsDdl,
     globalTableIndexSpecs,
+    INDEX_LEDGER_TABLE,
     indexColumnList,
+    indexLedgerDdl,
     indexShapeChanged,
     legacyRewrites,
     legacyRowPredicate,
     MIGRATION_STATE_TABLE,
     provisionGlobalTable,
     provisionGlobalTablesSequentially,
+    recordIndexStatement,
     runSqlAggregateMigrations,
     runSqlRankMigrations,
     undeclaredFrameworkIndexes,
