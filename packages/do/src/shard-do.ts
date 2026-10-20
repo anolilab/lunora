@@ -7970,6 +7970,16 @@ abstract class ShardDO {
                 }
 
                 attachment.authenticated = true;
+
+                // Persisted before the relay announce and the identity frame below: a subscribe
+                // handled during the announce await reads the stored flag, not this local copy.
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+                } catch {
+                    refuseUnauthenticatedSocket(ws);
+
+                    return;
+                }
             }
 
             // Tell the client which user this socket was authenticated as, and

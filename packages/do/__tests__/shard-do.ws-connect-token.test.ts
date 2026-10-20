@@ -23,15 +23,16 @@ const createFakeWebSocket = (): FakeWebSocket => {
             this.closes.push({ code, reason });
         },
         closes: [],
+        // Storage hands out copies, as hibernation does: a read is not a live handle on what was saved.
         deserializeAttachment() {
-            return this.attachment;
+            return this.attachment === undefined ? undefined : structuredClone(this.attachment);
         },
         send(data: string) {
             this.sent.push(data);
         },
         sent: [],
         serializeAttachment(value: unknown) {
-            this.attachment = value as SocketAttachment | undefined;
+            this.attachment = value === undefined ? undefined : (structuredClone(value) as SocketAttachment);
         },
     };
 };
@@ -143,6 +144,27 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(true);
         expect(ws.attachment?.authenticated).toBe(true);
         expect(ws.attachment?.connected).toBe(true);
+    });
+
+    it("persists the authenticated flag before the relay announce, so a subscribe during that await is not refused", async () => {
+        expect.assertions(1);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+        const flagAtAnnounce: (boolean | undefined)[] = [];
+
+        // A relay's announce awaits the owner, and a subscribe can arrive meanwhile: what storage holds
+        // at that instant is what that subscribe will read.
+        Reflect.set(shard, "relay", {
+            announce: async () => {
+                flagAtAnnounce.push(ws.attachment?.authenticated);
+            },
+        });
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
+
+        expect(flagAtAnnounce).toStrictEqual([true]);
     });
 
     it("does not run onDisconnect for a socket refused at the gate, since it never ran onConnect", async () => {
