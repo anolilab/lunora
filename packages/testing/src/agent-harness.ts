@@ -408,7 +408,14 @@ const createRuntime = (
 
         return { request, slot: request.slot };
     };
-    const requestOf = (args?: Record<string, unknown>) => requests.get(requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string));
+    // Settle, take and discard act only on a row the calling instance owns; a row a later run reopened is
+    // invisible to a stale caller, as the component's mutations treat it. No instanceId keeps the slot-only lookup.
+    const requestOf = (args?: Record<string, unknown>): SecretRequest | undefined => {
+        const request = requests.get(requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string));
+        const instanceId = args?.["instanceId"] as string | undefined;
+
+        return instanceId === undefined || request?.instanceId === instanceId ? request : undefined;
+    };
 
     // A replay of the owning run keeps its row. A row left by an earlier run that reused the
     // tool-call id is retired first, which discards its value, and then starts over as pending.

@@ -238,6 +238,72 @@ describe("agentHarness — concurrent runs", () => {
 
         await expect(inner).resolves.toMatchObject({ stopped: "final" });
     });
+
+    it("does not let a stale run expire a request that a newer run reopened on the same slot", async () => {
+        expect.assertions(4);
+
+        const used: string[] = [];
+        const harness = agentHarness(billingAgent(used), {});
+        const stale = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("stale")];
+        const owner = [
+            toolCallTurn("call_1", "requestKey", { label: "API key" }),
+            toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            finalTurn("charged"),
+        ];
+
+        const first = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1", script: stale });
+
+        await harness.awaitWait("run-1", "secret:0:call_1");
+
+        // run-2 reopens the slot: run-1's row is retired and run-2 owns the pending request.
+        const second = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-2", script: owner });
+
+        await harness.awaitWait("run-2", "secret:0:call_1");
+
+        // run-1's wait lapses now, so its settle runs against run-2's pending row.
+        harness.expire("run-1", "secret:0:call_1");
+
+        await expect(first).resolves.toMatchObject({ stopped: "final", text: "stale" });
+
+        await harness.supply("thread-1", "call_1", SECRET);
+
+        await expect(second).resolves.toStrictEqual({ stopped: "final", text: "charged", turns: 3 });
+        expect(used).toStrictEqual([SECRET]);
+        expect(
+            harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret").map((dispatch) => dispatch.args?.["instanceId"]),
+        ).toStrictEqual(["run-2"]);
+    });
+
+    it("does not let a stale run take or discard a value that a newer run was supplied under the same slot", async () => {
+        expect.assertions(4);
+
+        const used: string[] = [];
+        const harness = agentHarness(billingAgent(used), {});
+        const stale = [
+            toolCallTurn("call_1", "requestKey", { label: "API key" }),
+            toolCallTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            finalTurn("stale"),
+        ];
+        const owner = [toolCallTurn("call_1", "requestKey", { label: "API key" }), finalTurn("owner done")];
+
+        const first = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-1", script: stale });
+
+        await harness.awaitWait("run-1", "secret:0:call_1");
+
+        const second = harness.run({ input: "charge my card", owner: "user-1", threadKey: "thread-1" }, { instanceId: "run-2", script: owner });
+
+        await harness.awaitWait("run-2", "secret:0:call_1");
+        await harness.supply("thread-1", "call_1", SECRET);
+
+        await expect(second).resolves.toStrictEqual({ stopped: "final", text: "owner done", turns: 2 });
+
+        // run-1's lapsed wait settles against run-2's supplied row, which run-1 must not take from or discard.
+        harness.expire("run-1", "secret:0:call_1");
+
+        await expect(first).resolves.toMatchObject({ stopped: "final", text: "stale" });
+        expect(used).toStrictEqual([]);
+        expect(harness.dispatches.filter((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toStrictEqual([]);
+    });
 });
 
 describe("request-log redaction of the supply mutation's arguments", () => {
