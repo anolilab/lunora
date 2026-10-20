@@ -12,6 +12,12 @@
  * the supplied signal) aborts the fetch, which reaches the server handler as
  * `request.signal`.
  *
+ * A runtime whose `fetch` resolves with no `body` stream — React Native, whose
+ * `whatwg-fetch` polyfill defines no `body` on `Response` — is read whole
+ * through `response.text()` instead: the same frames, dispatched in one drain,
+ * so every chunk of the route arrives together when the response lands rather
+ * than as the handler yields it.
+ *
  * A frame may also carry an SSE `id:` (the server emits one for a chunk a
  * handler wrapped in `sseEvent`) and a `retry:` (an integer reconnect delay in
  * ms). The last `id:` seen is tracked and replayed as the request's
@@ -274,22 +280,13 @@ interface SseFrameObservers {
 }
 
 /**
- * Read the SSE response body, pushing parsed chunks into `handle` until a
- * terminal frame (`complete` / `error`) or EOF. Returns `true` when a terminal
- * frame finished the stream and `false` on a bare EOF — a transport
- * interruption the caller may retry. Runs inside the async pump — all thrown
- * read errors are routed to the consumer by the caller's catch.
+ * The frame buffer both body paths share: `append` folds decoded text in with
+ * `\r\n` normalised (across read boundaries too), and `drain` dispatches every
+ * complete frame to the handle. `drain` returns `true` once a terminal frame
+ * (`complete` / `error` / a malformed chunk) ended the stream — the signal its
+ * caller stops reading the body.
  */
-const pumpSseBody = async (
-    body: ReadableStream<Uint8Array>,
-    handle: UntypedHandle,
-    observers: SseFrameObservers,
-    attemptAbort: AbortController,
-    idleTimeoutMs = 0,
-): Promise<boolean> => {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-
+const createSseFrameBuffer = (handle: UntypedHandle, observers: SseFrameObservers): { append: (text: string) => void; drain: () => boolean } => {
     let buffer = "";
     // A `\r` that ended the previous chunk may be the first half of a `\r\n`
     // split across two reads, so it waits for the next chunk before normalising.
@@ -309,7 +306,7 @@ const pumpSseBody = async (
     };
 
     /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
-    const drainFrames = (): boolean => {
+    const drain = (): boolean => {
         let separatorIndex = buffer.indexOf("\n\n");
 
         while (separatorIndex !== -1) {
@@ -340,6 +337,27 @@ const pumpSseBody = async (
         return false;
     };
 
+    return { append, drain };
+};
+
+/**
+ * Read the SSE response body, pushing parsed chunks into `handle` until a
+ * terminal frame (`complete` / `error`) or EOF. Returns `true` when a terminal
+ * frame finished the stream and `false` on a bare EOF — a transport
+ * interruption the caller may retry. Runs inside the async pump — all thrown
+ * read errors are routed to the consumer by the caller's catch.
+ */
+const pumpSseBody = async (
+    body: ReadableStream<Uint8Array>,
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+    attemptAbort: AbortController,
+    idleTimeoutMs = 0,
+): Promise<boolean> => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const frames = createSseFrameBuffer(handle, observers);
+
     const releaseReader = (): Promise<void> =>
         reader.cancel().then(
             () => undefined,
@@ -357,9 +375,9 @@ const pumpSseBody = async (
 
             // The server writes `\n`-only frames; normalise `\r\n` defensively so a
             // proxy that rewrites line endings doesn't break frame detection.
-            append(decoder.decode(value, { stream: true }));
+            frames.append(decoder.decode(value, { stream: true }));
 
-            if (drainFrames()) {
+            if (frames.drain()) {
                 // Terminal frame seen — release the connection and stop reading.
                 // eslint-disable-next-line no-await-in-loop -- runs at most once: the terminal frame exits the loop via the return below.
                 await releaseReader();
@@ -370,13 +388,13 @@ const pumpSseBody = async (
 
         // Flush any bytes the decoder buffered, then drain one last time.
         // A `\r` still carried here is a lone trailing one, which ends no frame.
-        append(decoder.decode());
+        frames.append(decoder.decode());
 
         // The pump always writes `complete` or `error` before closing, so an EOF
         // that drains no terminal frame is a transport-level interruption. Whether
         // that fails the stream or triggers a reconnect is the caller's decision, so
         // it is reported here as `false` rather than failed.
-        return drainFrames();
+        return frames.drain();
     } catch (error: unknown) {
         // An idle timeout or a throwing observer/dispatch: drop the connection and surface the error at
         // once. A body whose `cancel()` never settles must not hold the error (and the reconnect) hostage.
@@ -385,6 +403,25 @@ const pumpSseBody = async (
 
         throw error;
     }
+};
+
+/**
+ * Pump an SSE body a runtime delivers whole rather than as a stream: React
+ * Native's `fetch` (the `whatwg-fetch` polyfill `react-native` loads) resolves
+ * with a `Response` that defines no `body`, so `text()` is the only read. The
+ * buffered payload is appended once and drained in one pass — the same frames
+ * through the same dispatch, so `id:`s, `retry:`s and terminal frames behave
+ * exactly as on the streamed path; the chunks simply arrive together when the
+ * response lands rather than as the handler yields them.
+ */
+const pumpBufferedSseBody = async (response: Response, handle: UntypedHandle, observers: SseFrameObservers): Promise<boolean> => {
+    const frames = createSseFrameBuffer(handle, observers);
+
+    frames.append(await response.text());
+
+    // A payload that drains no terminal frame reads as a bare EOF: a transport
+    // interruption the caller fails or reconnects on, not an error raised here.
+    return frames.drain();
 };
 
 /**
@@ -645,9 +682,21 @@ const httpStream = <Ref extends HttpStreamRef>(
             }
 
             if (!response.body) {
-                handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
+                // React Native's `fetch` (the `whatwg-fetch` polyfill
+                // `react-native` loads) resolves with a `Response` that defines
+                // no `body`, so the payload is read whole via `text()` instead
+                // of the reader loop. A response exposing neither read is a
+                // broken `fetch` implementation, which keeps the explicit
+                // `HTTP_STREAM_NO_BODY` failure.
+                if (typeof response.text !== "function") {
+                    handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response exposes neither a body stream nor a text() read"));
 
-                return undefined;
+                    return undefined;
+                }
+
+                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers);
+
+                return { completed, error: interrupted };
             }
 
             const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs);

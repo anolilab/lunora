@@ -465,6 +465,12 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `502` — HTTP stream response has no body
 
+The `fetch` implementation resolved with a response that exposes neither a
+`body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime
+limitation. A response that has no `body` stream but can be read as text (React
+Native's `whatwg-fetch` polyfill) is consumed through the buffered `text()`
+fallback instead, so a route streamed on React Native does not hit this code.
+
 ### `HTTP_STREAM_STATUS`
 
 `502` — HTTP stream request failed
