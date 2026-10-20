@@ -115,7 +115,7 @@ loop {
             }
             let _ = reader_tx.send(Event::Closed);
         });
-        if writer.lock().unwrap().send_json(&build_connect_frame(Some(&client.client_id), None)).is_ok() {
+        if writer.lock().unwrap().send_json(&build_connect_frame(Some(&client.client_id), None, Some(session))).is_ok() {
             let (w, f) = (Arc::clone(&writer), Arc::clone(&failed));
             client.attach_socket(Box::new(move |frame: &Value| {
                 let sent = w.lock().unwrap().send_json(frame).is_ok();

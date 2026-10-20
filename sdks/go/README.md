@@ -128,7 +128,7 @@ for attempt := 0; ; attempt++ {
 		}
 		// connect goes out before the sender is attached, so a subscribe on another
 		// goroutine cannot write ahead of it.
-		if err := write(lunora.BuildConnectFrame(client.ClientID(), nil)); err == nil {
+		if err := write(lunora.BuildConnectFrame(client.ClientID(), nil, session)); err == nil {
 			client.AttachSocket(write)
 			if client.ResendSubscriptions() == nil {
 				scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard

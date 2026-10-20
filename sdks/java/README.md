@@ -31,6 +31,7 @@ retries and socket library:
 Client client = new Client("https://my-app.example.com", myPoster);
 client.identity(currentUserId);
 client.authToken(currentBearer);
+client.wsToken(() -> currentBearer); // the session credential, sent in the first connect frame
 // The client id is minted per instance. Pin a stable per-device one only when
 // the offline queue is durable — a replayed write is namespaced server-side
 // under the id that issued it.
@@ -72,8 +73,7 @@ String shard = null; // this socket's shard key; null is the default shard
 while (!Thread.currentThread().isInterrupted()) {
     Thread retry = null;
     try (Socket socket = connect()) { // your socket library
-        // connect goes out before the sender is attached, so a subscribe on another thread cannot write ahead of it.
-        socket.send(Json.write(Client.buildConnectFrame(null, null)));
+        // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
         client.attachSocket(frame -> socket.send(Json.write(frame)));
         client.resendSubscriptions();
         var report = client.flushOfflineQueue(shard);

@@ -500,7 +500,7 @@ class Client(
      * subscription. The app must not send `connect` itself.
      */
     fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
-        sender(buildConnectFrame(token = wsToken?.invoke()))
+        sender(buildConnectFrame(clientId = clientId, token = wsToken?.invoke()))
         synchronized(lock) {
             send = sender
             wasEverConnected = true

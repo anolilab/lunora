@@ -475,7 +475,7 @@ public final class Client {
      * surfaces on the first write instead of silently filling a queue that will never flush.
      */
     public void attachSocket(FrameSender sender) {
-        sender.send(buildConnectFrame(null, null, resolve(wsTokenProvider)));
+        sender.send(buildConnectFrame(clientId, null, resolve(wsTokenProvider)));
 
         synchronized (lock) {
             this.sender = sender;

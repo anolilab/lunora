@@ -90,7 +90,7 @@ while !Task.isCancelled {
     if let socket = try? await connect() { // your socket library
         var flushRetry: Task<Void, Never>?
         // connect goes out before the sender is attached, so a subscribe on another task cannot write ahead of it.
-        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame()))) != nil {
+        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame(clientID: client.clientID, token: session)))) != nil {
             // A failed write closes the socket: the receive below then throws, ending the run.
             client.attachSocket { frame in
                 do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }

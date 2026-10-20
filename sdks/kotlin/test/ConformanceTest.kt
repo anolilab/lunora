@@ -257,6 +257,7 @@ private fun socketCredentialsStayOutOfTheUrl() {
 
     check(first[0]["type"] == "connect", "connect must be the first frame an open sends")
     check(first[0]["token"] == "session-one", "connect must carry the session credential as token")
+    check(first[0]["clientId"] == client.clientId, "attachSocket's connect must carry the client id")
     check(
         client.wsUrl("room-1") == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one",
         "the ticket must be the only thing in the socket URL's token parameter",
