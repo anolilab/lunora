@@ -110,6 +110,8 @@ const createParityClient = (): ParityClient => {
         expectIdentityResolution: () => undefined,
         getAuthToken: () => null,
         getCurrentUser: async () => null,
+        // No socket: a query with no held value takes the HTTP path, which this fake never settles.
+        getWebSocketImpl: () => undefined,
         identityEpoch: () => 0,
         isReady: true,
         mutation,
