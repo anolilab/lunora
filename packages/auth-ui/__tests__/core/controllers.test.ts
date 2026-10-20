@@ -780,6 +780,36 @@ describe("captcha re-arm", () => {
         }
     });
 
+    it("resets a widget whose solve a later solve on another widget replaced, and a failed form then sends nothing", async () => {
+        const { api, solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+        solves[1]?.("token-b");
+
+        // Widget A still shows solved, but the store only holds B's token now, so A is reset.
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        // B's token goes out with A's form, which fails; the failure resets the widget that spent it.
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return fail("Something went wrong");
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(api.reset).toHaveBeenCalledWith("widget-2");
+        expect(captchaHeaders()).toStrictEqual({});
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
     it("drops a token the spent widget solved again while its request was pending", async () => {
         const { solves, teardowns } = await mountTwoWidgets();
 

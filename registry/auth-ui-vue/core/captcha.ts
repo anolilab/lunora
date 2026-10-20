@@ -157,10 +157,26 @@ const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Reco
     return { [CAPTCHA_HEADER]: token };
 };
 
-/** Publish a token and the widget that produced it; the owner is what a later reset targets. */
+/**
+ * Publish a token and the widget that produced it; the owner is what a later reset targets.
+ *
+ * The store holds one token, so a solve on another widget replaces the earlier one.
+ * The replaced widget still shows solved with nothing behind it, so it is reset. The
+ * new token is stored first, so a reset that fires its expiry callback finds it in place.
+ */
 const storeToken = (token: string | undefined, owner: CaptchaWidget | undefined): void => {
+    const superseded = tokenOwner;
+
     tokenOwner = token === undefined ? undefined : owner;
     store.set({ token });
+
+    if (token !== undefined && superseded !== undefined && superseded !== owner) {
+        try {
+            superseded.api.reset?.(superseded.id);
+        } catch {
+            // A widget that cannot reset must not block the new solve.
+        }
+    }
 };
 
 /** Publish a solved token. Exported for tests; {@link renderCaptcha} uses {@link storeToken} to tag its widget. */
