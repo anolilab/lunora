@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.339...@lunora/codegen@1.0.0-alpha.340) (2026-10-20)
+
+### Bug Fixes
+
+* **codegen:** refuse ctx.fetch outside actions ([#1253](https://github.com/anolilab/lunora/issues/1253)) ([3f138bf](https://github.com/anolilab/lunora/commit/3f138bf7328c87769810c1815a43688ab2dd5295))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.247
+* **@lunora/agent:** upgraded to 1.0.0-alpha.236
+* **@lunora/container:** upgraded to 1.0.0-alpha.89
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/queue:** upgraded to 1.0.0-alpha.123
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.145
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.92
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/do:** upgraded to 1.0.0-alpha.237
+* **@lunora/payment:** upgraded to 1.0.0-alpha.230
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/codegen [1.0.0-alpha.339](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.338...@lunora/codegen@1.0.0-alpha.339) (2026-10-20)
 
 
