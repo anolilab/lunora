@@ -31,7 +31,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "@lunora/platform";
-import { assertSecretValueSize, clampSecretValueTtl, encryptingSecretValueHost, findSocketTagBudgetViolation } from "@lunora/platform";
+import { clampSecretValueTtl, encryptingSecretValueHost, findSocketTagBudgetViolation } from "@lunora/platform";
 
 /**
  * Raw cursor returned by Cloudflare's `SqlStorage.exec` — already iterable with

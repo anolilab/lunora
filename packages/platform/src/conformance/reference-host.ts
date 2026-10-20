@@ -19,8 +19,8 @@ import type {
     SocketHandle,
     SocketHost,
 } from "../index";
+import { clampSecretValueTtl, encryptingSecretValueHost } from "../index";
 import { findSocketTagBudgetViolation } from "../socket-host";
-import { assertSecretValueSize, clampSecretValueTtl, encryptingSecretValueHost } from "../index";
 
 /**
  * A fresh base64 AES-256 key for a test host. Generated per host rather than
