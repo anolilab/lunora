@@ -14,6 +14,7 @@ import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } 
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
+import type { BinaryExpression, ElementAccessExpression } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
@@ -366,8 +367,6 @@ const OPEN_SHARD_SCAN_ROOT_FILES = [
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
 /** Test files in every source extension; `isTestPath` covers the `.ts`/`.tsx` ones and the test folders. */
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
-/** Codegen output and installed packages never carry app options. Test folders and files go through `isTestPath`. */
-const SKIPPED_DIRECTORY_NAMES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
 const OPEN_SHARD_OPTION = "allowUnauthenticatedShardAccess";
 const PATH_SEPARATOR = /[\\/]/u;
 /** Build output and installed code: a bundle that inlines the runtime is not app source, so its options are not read. */
@@ -476,7 +475,10 @@ const appSourceFiles = (root: string, directory: string, visited = new Set<strin
         const relativePath = relative(root, full).split(sep).join("/");
 
         if (info.isDirectory()) {
-            return SKIPPED_DIRECTORY_NAMES.has(entry) || isTestPath(`${relativePath}/`) ? [] : appSourceFiles(root, full, visited);
+            // Build output and dot-folders (`.svelte-kit`, `.open-next`) are not walked, the same rule as the imported modules: a bundle carries the runtime inlined.
+            const skipped = NON_SOURCE_DIRECTORIES.has(entry) || entry.startsWith(".") || isTestPath(`${relativePath}/`);
+
+            return skipped ? [] : appSourceFiles(root, full, visited);
         }
 
         return info.isFile() && SOURCE_FILE.test(entry) && !TEST_FILE.test(entry) && !isTestPath(relativePath) ? [full] : [];
@@ -549,6 +551,31 @@ const importedModules = (roots: string[], project: Project, cwd: string): string
     return found;
 };
 
+/** The literal bracket key of an element access (`x["name"]`), or `undefined` for any other key. */
+const literalElementKey = (access: ElementAccessExpression): string | undefined => {
+    const key = access.getArgumentExpression();
+
+    return key !== undefined && (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key)) ? key.getLiteralValue() : undefined;
+};
+
+/** The key an assignment target writes, when it is a dot access or a literal bracket access. */
+const assignedKey = (target: Node): string | undefined => {
+    if (Node.isPropertyAccessExpression(target)) {
+        return target.getName();
+    }
+
+    return Node.isElementAccessExpression(target) ? literalElementKey(target) : undefined;
+};
+
+/** Whether `expression` assigns something other than a literal `false` to the open-shard option, by dot or literal bracket key. */
+const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
+    if (expression.getOperatorToken().getKind() !== SyntaxKind.EqualsToken) {
+        return false;
+    }
+
+    return assignedKey(expression.getLeft()) === OPEN_SHARD_OPTION && !isLiteralFalse(expression.getRight());
+};
+
 /**
  * Every open-shard member in the app that is not a literal `false`.
  *
@@ -583,7 +610,7 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
 
         const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
 
-        return [
+        const members = [
             ...source.getDescendantsOfKind(SyntaxKind.PropertyAssignment),
             ...source.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment),
             ...source.getDescendantsOfKind(SyntaxKind.GetAccessor),
@@ -595,9 +622,16 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
 
                 return memberKeyName(member.getNameNode()) === OPEN_SHARD_OPTION && !isSafe;
             })
-            .map((member) => {
-                return { file: relative(cwd, file), line: member.getStartLineNumber() };
-            });
+            .map((member) => member.getStartLineNumber());
+        // An assignment to the option (`options.name = …`, `options["name"] = …`) sets it on an object the runtime reads, so it counts too.
+        const assignments = source
+            .getDescendantsOfKind(SyntaxKind.BinaryExpression)
+            .filter((expression) => isOpenShardAssignment(expression))
+            .map((expression) => expression.getStartLineNumber());
+
+        return [...members, ...assignments].map((line) => {
+            return { file: relative(cwd, file), line };
+        });
     });
 };
 

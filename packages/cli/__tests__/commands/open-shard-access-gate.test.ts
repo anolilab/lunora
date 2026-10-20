@@ -281,6 +281,31 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("open-options.ts:2"))).toBe(true);
     });
 
+    it.each(["options.allowUnauthenticatedShardAccess = true;", 'options["allowUnauthenticatedShardAccess"] = someValue;'])(
+        "refuses an assignment to the open-shard option: %s",
+        async (statement) => {
+            expect.assertions(1);
+
+            writeAppConfig("");
+            writeFileSync(join(workdir, "src", "options-setup.ts"), `export const options = {};\n${statement}\n`, "utf8");
+
+            const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+        },
+    );
+
+    it("does not read a bundle inside the Lunora directory's dist folder, which inlines the runtime", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "lunora", "dist"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "dist", "bundle.js"), `export const options = { allowUnauthenticatedShardAccess: options.open };\n`, "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(0);
+    });
+
     it("does not read a build bundle the Vite config imports, which inlines the runtime", async () => {
         expect.assertions(1);
 
