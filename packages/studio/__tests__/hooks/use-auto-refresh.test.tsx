@@ -3,7 +3,8 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useAutoRefresh } from "../../src/hooks/use-auto-refresh";
+import { settlePolls, useAutoRefresh } from "../../src/hooks/use-auto-refresh";
+import { isTerminalPollError } from "../../src/lib/internal";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
 
@@ -205,5 +206,55 @@ describe("useAutoRefresh", () => {
         await vi.advanceTimersByTimeAsync(1000);
 
         expect(onTick).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("settlePolls", () => {
+    it("holds the rejection until every poll has settled, so a failing read does not cut a sibling short", async () => {
+        expect.assertions(2);
+
+        let finishSlow: () => void = () => undefined;
+        const slow = new Promise<void>((resolve) => {
+            finishSlow = resolve;
+        });
+        let rejected = false;
+
+        const outcome = settlePolls([Promise.reject(new Error("boom")), slow]).catch(() => {
+            rejected = true;
+        });
+
+        // A fixed run of microtasks, long enough for a `Promise.all` to have rejected already; no timer involved.
+        let probe: Promise<void> = Promise.resolve();
+
+        for (let step = 0; step < 20; step += 1) {
+            probe = probe.then(() => undefined);
+        }
+
+        await probe;
+
+        expect(rejected).toBe(false);
+
+        finishSlow();
+        await outcome;
+
+        expect(rejected).toBe(true);
+    });
+
+    it("resolves when every poll succeeds", async () => {
+        expect.assertions(1);
+
+        await expect(settlePolls([Promise.resolve(1), Promise.resolve(2)])).resolves.toBeUndefined();
+    });
+});
+
+describe("isTerminalPollError", () => {
+    it.each([
+        ["ADMIN_FORBIDDEN", true],
+        ["UNAUTHORIZED", true],
+        ["NETWORK_ERROR", false],
+    ])("treats code %s as terminal: %s", (code, expected) => {
+        expect.assertions(1);
+
+        expect(isTerminalPollError(Object.assign(new Error("x"), { code }))).toBe(expected);
     });
 });

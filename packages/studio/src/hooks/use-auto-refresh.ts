@@ -1,13 +1,10 @@
 import { useLunora } from "@lunora/react";
 import { useEffect, useRef } from "react";
 
-import { errorCode } from "../lib/internal";
+import { isTerminalPollError } from "../lib/internal";
 
 /** The longest a failing poll backs off to, in milliseconds. */
 const MAX_BACKOFF_MS = 60_000;
-
-/** Error codes no retry will fix: polling stops on them until `enabled` toggles or the client changes. */
-const TERMINAL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
 
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
     (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
@@ -74,9 +71,7 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
         };
 
         const failed = (error: unknown): void => {
-            const code = errorCode(error);
-
-            if (code !== undefined && TERMINAL_CODES.has(code)) {
+            if (isTerminalPollError(error)) {
                 return;
             }
 
@@ -120,4 +115,17 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
         };
         // `client` is not read in the effect: a replaced client (new credentials) must restart a timer that a terminal error stopped.
     }, [client, enabled, intervalMs]);
+};
+
+/**
+ * Wait for every poll to settle, then reject with the first failure. A failing read must not cut a sibling short, and the tick reports
+ * failure only once nothing it started is still in flight.
+ */
+export const settlePolls = async (polls: ReadonlyArray<Promise<unknown>>): Promise<void> => {
+    const settled = await Promise.allSettled(polls);
+    const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+
+    if (failure !== undefined) {
+        throw failure.reason;
+    }
 };

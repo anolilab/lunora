@@ -1,5 +1,8 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
+/** Error codes no retry will fix: an admin or session rejection a poller must stop on rather than back off from. */
+const TERMINAL_POLL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
+
 /**
  * Dispatch a Lunora RPC through the client method that matches the function's
  * `kind`: an `action` runs via `client.action`, a `mutation` via `client.mutation`,
@@ -66,6 +69,13 @@ export const errorCode = (error: unknown): string | undefined => {
     const { code } = error as { code?: unknown };
 
     return typeof code === "string" ? code : undefined;
+};
+
+/** Whether a poll failure is one no retry will fix. A poll callback that catches its own error must rethrow this so the timer stops. */
+export const isTerminalPollError = (error: unknown): boolean => {
+    const code = errorCode(error);
+
+    return code !== undefined && TERMINAL_POLL_CODES.has(code);
 };
 
 /**

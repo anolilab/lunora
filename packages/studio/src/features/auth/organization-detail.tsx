@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 import { AuthPager, useOwnedOffset } from "./auth-pager";
@@ -95,7 +95,7 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
             polls.push(teamMembersQuery.poll());
         }
 
-        return Promise.all(polls).then(() => undefined);
+        return settlePolls(polls);
     };
 
     const refetchAll = (): void => {

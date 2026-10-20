@@ -79,7 +79,8 @@ const NDJSON_PIECE_BYTES = 1024 * 1024;
  * a partial line whole.
  */
 const ndjsonLines = async function* (file: Blob): AsyncGenerator<{ line: string; lineNumber: number }> {
-    const decoder = new TextDecoder();
+    // fatal: a non-UTF-8 file fails validation instead of importing U+FFFD in place of its characters.
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     let carry = "";
     let lineNumber = 0;
 

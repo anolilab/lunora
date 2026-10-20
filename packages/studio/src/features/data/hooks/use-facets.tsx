@@ -32,7 +32,7 @@ interface UseFacets {
     /** Latest `facets` mirrored into a ref, so poll ticks / filter handlers read the current set without re-binding. */
     facetsRef: RefObject<Record<string, FacetState>>;
     /** Refetch every toggled-on facet over the view bound into `fetcher` (after a filter change or on a poll tick). */
-    refetchFacets: (fetcher: FacetFetcher) => void;
+    refetchFacets: (fetcher: FacetFetcher) => Promise<void>;
     /** Toggle a column into / out of the facet sidebar. Turning it on seeds a loading slot and (when `fetcher` is non-null) fetches its summary for the active view; turning it off drops it. Pass `null` when no table is selected to seed the slot without fetching. */
     toggleFacet: (column: string, fetcher: FacetFetcher | null) => void;
 }
@@ -102,10 +102,8 @@ export const useFacets = (): UseFacets => {
         }
     };
 
-    const refetchFacets = (fetcher: FacetFetcher): void => {
-        for (const column of Object.keys(facetsRef.current)) {
-            fireAndForget(fetchFacet(column, fetcher));
-        }
+    const refetchFacets = async (fetcher: FacetFetcher): Promise<void> => {
+        await Promise.all(Object.keys(facetsRef.current).map(async (column) => fetchFacet(column, fetcher)));
     };
 
     const clearFacets = (): void => {

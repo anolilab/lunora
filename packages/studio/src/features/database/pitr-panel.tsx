@@ -12,7 +12,7 @@ import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorCode, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorCode, errorMessage, fireAndForget, isTerminalPollError } from "../../lib/internal";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */
@@ -152,8 +152,11 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
 
                     setCurrent(result.current);
-                } catch {
-                    // Leave the last-known bookmark on a transient read failure.
+                } catch (error_) {
+                    // A refused credential must reach useAutoRefresh so it stops; a transient read failure keeps the last-known bookmark.
+                    if (isTerminalPollError(error_)) {
+                        throw error_;
+                    }
                 }
             })(),
         !unavailable,

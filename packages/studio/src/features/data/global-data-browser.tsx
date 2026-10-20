@@ -4,11 +4,11 @@ import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
-import { facetFilterValue } from "../../lib/internal";
+import { facetFilterValue, fireAndForget } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
@@ -120,9 +120,7 @@ export const GlobalDataBrowser = ({
 
     // Refetch every toggled-on facet for the active view — called after a filter
     // changes (and on each poll tick) so the summaries track the previewed rows.
-    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): void => {
-        refetchFacetsViaHook(facetFetcher(table, activeFilters));
-    };
+    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): Promise<void> => refetchFacetsViaHook(facetFetcher(table, activeFilters));
 
     // D1 is HTTP-only (no subscription channel), so poll to keep the table list
     // and the current page current without a manual reload — `useAutoRefresh`
@@ -130,14 +128,13 @@ export const GlobalDataBrowser = ({
     // always sees the latest selection/filters; it re-runs the two TanStack reads
     // and the open facets.
     useAutoRefresh(() => {
-        const polls = [tablesQuery.poll()];
+        const polls: Promise<void>[] = [tablesQuery.poll()];
 
         if (selectedTable !== null) {
-            polls.push(pageQuery.poll());
-            refetchFacets(selectedTable, filtersRef.current);
+            polls.push(pageQuery.poll(), refetchFacets(selectedTable, filtersRef.current));
         }
 
-        return Promise.all(polls);
+        return settlePolls(polls);
     }, true);
 
     // The table last applied to the selection (cross-tier jump, deep link, or
@@ -177,7 +174,7 @@ export const GlobalDataBrowser = ({
         setOffset(0);
 
         if (selectedTable !== null) {
-            refetchFacets(selectedTable, next);
+            fireAndForget(refetchFacets(selectedTable, next));
         }
     };
 
