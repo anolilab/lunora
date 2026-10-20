@@ -3737,21 +3737,22 @@ abstract class ShardDO {
             // satisfies.
             const hookArgs = info.event as unknown as Record<string, unknown>;
 
-            try {
-                // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
-                await this.withSensitiveScope(functionPath, hookArgs, (sensitive) =>
-                    this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
+            await this.withSensitiveScope(functionPath, hookArgs, async (sensitive) => {
+                try {
+                    await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
                         this.withSystemDispatch(() => this.handleRpc(functionPath, hookArgs, undefined, undefined, undefined, sensitive)),
-                    ),
-                );
-            } catch (error: unknown) {
-                this.logs.push({
-                    functionPath,
-                    level: "error",
-                    message: this.sensitiveFailureMessage(functionPath, hookArgs, error),
-                    timestamp: Date.now(),
-                });
-            }
+                    );
+                } catch (error: unknown) {
+                    // Written while the scope is still open: it holds the values the hook's validator admitted.
+                    this.logs.push({
+                        functionPath,
+                        level: "error",
+                        message: sensitive.text(error instanceof Error ? error.message : String(error)),
+                        timestamp: Date.now(),
+                    });
+                }
+            });
         }
     }
 
@@ -16504,36 +16505,35 @@ abstract class ShardDO {
         for (const functionPath of paths) {
             const authorizerArgs = event as unknown as Record<string, unknown>;
 
-            try {
-                // Same dispatch shape as `dispatchLifecycle`: the socket's verified
-                // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
-                // is RLS-scoped to them) under a trusted system dispatch (so the
-                // internal-visibility gate lets it through). The registration is a
-                // QUERY, so `handleRpc` runs it without a write span.
-                //
-                // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
-                const verdict = await this.withSensitiveScope(functionPath, authorizerArgs, (sensitive) =>
-                    this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+            // Same dispatch shape as `dispatchLifecycle`: the socket's verified
+            // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
+            // is RLS-scoped to them) under a trusted system dispatch (so the
+            // internal-visibility gate lets it through). The registration is a
+            // QUERY, so `handleRpc` runs it without a write span.
+            //
+            // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
+            const verdict = await this.withSensitiveScope(functionPath, authorizerArgs, async (sensitive) => {
+                try {
+                    return await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
                         this.withSystemDispatch(() => this.handleRpc(functionPath, authorizerArgs, undefined, undefined, undefined, sensitive)),
-                    ),
-                );
+                    );
+                } catch (error: unknown) {
+                    // Unlike a lifecycle hook — whose failure is logged and otherwise
+                    // ignored — a failed authorizer is a DENIAL. There is no safe way to
+                    // read "the check crashed" as permission. Written while the scope is
+                    // still open, so the message masks the values the validator admitted.
+                    this.logs.push({
+                        functionPath,
+                        level: "error",
+                        message: sensitive.text(error instanceof Error ? error.message : String(error)),
+                        timestamp: Date.now(),
+                    });
 
-                if (verdict !== true) {
-                    allowed = false;
-
-                    break;
+                    return false;
                 }
-            } catch (error: unknown) {
-                // Unlike a lifecycle hook — whose failure is logged and otherwise
-                // ignored — a failed authorizer is a DENIAL. There is no safe way to
-                // read "the check crashed" as permission.
-                this.logs.push({
-                    functionPath,
-                    level: "error",
-                    message: this.sensitiveFailureMessage(functionPath, authorizerArgs, error),
-                    timestamp: Date.now(),
-                });
+            });
 
+            if (verdict !== true) {
                 allowed = false;
 
                 break;
@@ -16971,14 +16971,11 @@ abstract class ShardDO {
 
         // Declared out here so the `catch` scrubs with it and the `finally` releases it.
         let sensitive: SensitiveScope | undefined;
-        let dispatchArgs: Record<string, unknown> = {};
 
         try {
             // The inbound frame is wire-encoded; decoding it here keeps a malformed
             // payload inside the logged dispatch instead of throwing out of the socket handler.
             const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
-
-            dispatchArgs = args;
 
             sensitive = this.openSensitiveScope(route.functionPath, args);
 
@@ -16991,7 +16988,7 @@ abstract class ShardDO {
             // A failure after the handler's writes committed (a deferred step that would not run) leaves those
             // writes durable, so the frames announcing them are still owed, as for a room. Only a failure before
             // the commit drops them.
-            if (!this.absorbCommittedFailure(route.functionPath, dispatchArgs, error)) {
+            if (!this.absorbCommittedFailure(route.functionPath, error, sensitive)) {
                 const thrownText = error instanceof Error ? error.message : String(error);
 
                 this.logs.push({
@@ -17184,15 +17181,17 @@ abstract class ShardDO {
      * Whether a failure is one the room event survives: a post-commit step after durable writes.
      * It is logged, and the event's broadcasts and membership stand.
      */
-    private absorbCommittedFailure(functionPath: string, args: Record<string, unknown>, error: unknown): boolean {
+    private absorbCommittedFailure(functionPath: string, error: unknown, sensitive?: SensitiveScope): boolean {
         if (!isCommittedFailure(error)) {
             return false;
         }
 
+        const text = error instanceof Error ? error.message : String(error);
+
         this.logs.push({
             functionPath,
             level: "error",
-            message: this.sensitiveFailureMessage(functionPath, args, error),
+            message: sensitive?.text(text) ?? text,
             timestamp: Date.now(),
         });
 
@@ -17202,6 +17201,8 @@ abstract class ShardDO {
     /**
      * Refuse a room event that failed or could not run: log it, and if it was a join,
      * undo the membership it created and remember the refusal for the leave queued behind it.
+     * `sensitive` is the event's dispatch scope, still open where the handler failed; a refusal
+     * raised before any dispatch has none.
      */
     private refuseRoomEvent(
         ws: ShardSocketLike,
@@ -17210,12 +17211,14 @@ abstract class ShardDO {
         kind: RoomEventKind,
         joinEpoch: number | undefined,
         error: unknown,
-        args: Record<string, unknown> = {},
+        sensitive?: SensitiveScope,
     ): false {
+        const text = error instanceof Error ? error.message : String(error);
+
         this.logs.push({
             functionPath,
             level: "error",
-            message: this.sensitiveFailureMessage(functionPath, args, error),
+            message: sensitive?.text(text) ?? text,
             timestamp: Date.now(),
         });
 
@@ -17319,27 +17322,33 @@ abstract class ShardDO {
             shardKey: info.event.shardKey,
             userId: info.event.userId,
         };
-        let dispatchArgs: Record<string, unknown> = {};
+        // The client wire-encoded `message`; decode it back to real values here so a malformed
+        // payload is refused by the caller's catch, not thrown out of the socket handler.
+        const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
 
-        try {
-            // The client wire-encoded `message`; decode it back to real values here
-            // so a malformed payload is logged, not thrown out of the socket handler.
-            const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
-
-            dispatchArgs = args;
-
-            await this.withSensitiveScope(functionPath, args, (sensitive) =>
-                this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+        // The refusal is written inside the dispatch's scope: a validator-transformed marked value the
+        // handler threw is masked only by the scope the handler admitted it into.
+        const admitted = await this.withSensitiveScope(functionPath, args, async (sensitive) => {
+            try {
+                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
                     this.withSystemDispatch(() => this.handleRpc(functionPath, args, undefined, undefined, undefined, sensitive)),
-                ),
-            );
-        } catch (error: unknown) {
-            // A failure after the write committed (a deferred schedule that would not enqueue) leaves
-            // the room's writes durable. Members must still hear them and a join keeps its membership,
-            // so only a failure before the commit is refused.
-            if (!this.absorbCommittedFailure(functionPath, dispatchArgs, error)) {
-                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error, dispatchArgs);
+                );
+
+                return true;
+            } catch (error: unknown) {
+                // A failure after the write committed (a deferred schedule that would not enqueue) leaves
+                // the room's writes durable. Members must still hear them and a join keeps its membership,
+                // so only a failure before the commit is refused.
+                if (this.absorbCommittedFailure(functionPath, error, sensitive)) {
+                    return true;
+                }
+
+                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error, sensitive);
             }
+        });
+
+        if (!admitted) {
+            return false;
         }
 
         // A join that committed clears any earlier refusal of the same topic.

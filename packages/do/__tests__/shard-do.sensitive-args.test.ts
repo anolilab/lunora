@@ -744,3 +744,166 @@ describe("shardDO masks a marked byte value in every form a handler logs it", ()
         }
     });
 });
+
+/** A socket that records the frames it is sent and keeps its attachment across calls, as a hibernating socket does. */
+class SensitiveSocket {
+    public readonly frames: unknown[] = [];
+    private attachment: unknown;
+
+    public constructor(initial: unknown) {
+        this.attachment = initial;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: a close is not observed by these assertions
+    public close(): void {}
+
+    public deserializeAttachment(): unknown {
+        return this.attachment;
+    }
+
+    public send(data: string): void {
+        this.frames.push(JSON.parse(data));
+    }
+
+    public serializeAttachment(value: unknown): void {
+        this.attachment = value;
+    }
+}
+
+/**
+ * Each failure site admits a validator-transformed marked value into its dispatch's scope, then throws
+ * the transformed value. The raw value is not a substring of the transformed one, so only the admitted
+ * spelling can mask it: a message scrubbed by a scope rebuilt from the raw args leaks the lowercased text.
+ */
+class TransformFailureShard extends ShardDO {
+    public constructor(
+        state: ShardDOState,
+        private readonly rooms: Record<string, string>,
+        private readonly whisperPaths: string[],
+    ) {
+        super(state, {});
+    }
+
+    public runDisconnect(event: Record<string, unknown>): Promise<void> {
+        return this.dispatchLifecycle("disconnect", { event, identity: null, ip: undefined, userId: undefined } as never);
+    }
+
+    public override handleRpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        _headroom?: unknown,
+        _scope?: unknown,
+        _bookmarks?: unknown,
+        sensitive?: SensitiveScope,
+    ): Promise<unknown> {
+        if (functionPath === "vault:hook") {
+            const parsed = String(args["value"]).trim().toLowerCase();
+
+            this.admitSensitiveValues(sensitive, { value: parsed }, new Set(["value"]));
+
+            return Promise.reject(new Error(`hook rejected ${parsed}`));
+        }
+
+        if (functionPath === "whisper:authorize") {
+            const parsed = String(args["topic"]).trim().toLowerCase();
+
+            this.admitSensitiveValues(sensitive, { topic: parsed }, new Set(["topic"]));
+
+            return Promise.reject(new Error(`authorizer rejected ${parsed}`));
+        }
+
+        if (functionPath === "rooms:chat" && args["kind"] === "message") {
+            const parsed = String(args["message"]).trim().toLowerCase();
+
+            this.admitSensitiveValues(sensitive, { message: parsed }, new Set(["message"]));
+
+            return Promise.reject(new Error(`room rejected ${parsed}`));
+        }
+
+        return Promise.resolve(undefined);
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: the marked names are fixed per path
+    protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
+        if (functionPath === "vault:hook") {
+            return new Set(["value"]);
+        }
+
+        if (functionPath === "whisper:authorize") {
+            return new Set(["topic"]);
+        }
+
+        return functionPath === "rooms:chat" ? new Set(["message"]) : new Set();
+    }
+
+    protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
+        if (event === "disconnect") {
+            return ["vault:hook"];
+        }
+
+        return event === "whisper" ? this.whisperPaths : [];
+    }
+
+    protected override roomHandlerPath(topic: string): string | undefined {
+        return this.rooms[topic];
+    }
+}
+
+const transformShard = (sockets: SensitiveSocket[], whisperPaths: string[] = []): TransformFailureShard => {
+    const state = {
+        acceptWebSocket() {},
+        getWebSockets: () => sockets,
+        storage: { sql: {} },
+    } as unknown as ShardDOState;
+
+    return new TransformFailureShard(state, { "room:chat": "rooms:chat" }, whisperPaths);
+};
+
+const logEntries = (shard: ShardDO): { functionPath?: string; message: string }[] =>
+    (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+
+const errorLogs = (shard: ShardDO, functionPath: string): string[] =>
+    logEntries(shard)
+        .filter((entry) => entry.functionPath === functionPath)
+        .map((entry) => entry.message);
+
+describe("failure messages are scrubbed by the scope their dispatch was using", () => {
+    it("masks a transformed marked value that a lifecycle hook throws", async () => {
+        expect.assertions(2);
+
+        const shard = transformShard([]);
+
+        await shard.runDisconnect({ value: "  Hunter2-Token  " });
+
+        expect(errorLogs(shard, "vault:hook")).toStrictEqual([`hook rejected ${SENSITIVE_ARG_MASK}`]);
+        expect(JSON.stringify(logEntries(shard))).not.toContain("hunter2-token");
+    });
+
+    it("masks a transformed marked value that a whisper authorizer throws", async () => {
+        expect.assertions(2);
+
+        const socket = new SensitiveSocket({ subs: {}, userId: "member" });
+        const shard = transformShard([socket], ["whisper:authorize"]);
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ topic: "Hunter2-Token", type: "whisper_subscribe" }));
+
+        expect(errorLogs(shard, "whisper:authorize")).toStrictEqual([`authorizer rejected ${SENSITIVE_ARG_MASK}`]);
+        expect(JSON.stringify(logEntries(shard))).not.toContain("hunter2-token");
+    });
+
+    it("masks a transformed marked value that a room handler throws on a message, in the refusal's record", async () => {
+        expect.assertions(2);
+
+        const socket = new SensitiveSocket({ subs: {}, userId: "member" });
+        const shard = transformShard([socket]);
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ topic: "room:chat", type: "whisper_subscribe" }));
+        await shard.webSocketMessage(
+            socket as unknown as WebSocket,
+            JSON.stringify({ data: encodeWire("  Hunter2-Token  "), topic: "room:chat", type: "whisper" }),
+        );
+
+        expect(errorLogs(shard, "rooms:chat")).toStrictEqual([`room rejected ${SENSITIVE_ARG_MASK}`]);
+        expect(JSON.stringify(logEntries(shard))).not.toContain("hunter2-token");
+    });
+});
