@@ -587,7 +587,10 @@ const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
  * `Object.assign` or a spread from a variable, and any file outside `schemaDir`,
  * `src/`, the root Vite config, `lunora.config.*` and the Wrangler `main` of the
  * environment being deployed, and any module those import only through a bare
- * specifier, a path alias or a dynamic `import()`.
+ * specifier, a path alias or a dynamic `import()`. Build and dist folders and
+ * dot-folders are not read at all: a bundle inlines the runtime, so an
+ * app-authored module kept under such a name is not seen either. Rename the
+ * folder, or pass `--allow-open-shards`, if that matters.
  */
 const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShardAccess[] => {
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])].filter((directory) => existsSync(join(cwd, directory)));
