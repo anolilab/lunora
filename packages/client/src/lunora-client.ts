@@ -4794,7 +4794,7 @@ class LunoraClient {
         // frames landing during it advance `serverCursor` — so a baseline sampled
         // after the wait would claim the caller had seen changes that arrived after
         // their write was composed. See `OutboxMutation.baselineSeq`.
-        const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
+        const composedBaselineSeq = this.composedBaselineFor(options.replayBaseline, options.shardKey);
 
         // Before any optimistic layer is applied and before anything can reach the
         // queue or a persistence adapter.
@@ -5727,6 +5727,11 @@ class LunoraClient {
      * claim the client had seen NOTHING, which makes every field look changed and
      * would have the shard discard every patch it sends.
      */
+    /** A replay pins its baseline; a fresh write is composed against the shard's cursor now. */
+    private composedBaselineFor(replayBaseline: null | number | undefined, shardKey: string | undefined): number | undefined {
+        return replayBaseline === undefined ? this.baselineCursorFor(shardKey) : (replayBaseline ?? undefined);
+    }
+
     private baselineCursorFor(shardKey: string | undefined): number | undefined {
         const key = connectionKey(shardKey);
         let highest: number | undefined;
