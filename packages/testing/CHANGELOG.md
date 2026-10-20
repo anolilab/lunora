@@ -1,3 +1,17 @@
+## @lunora/testing [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.288...@lunora/testing@1.0.0-alpha.289) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.234
+* **@lunora/queue:** upgraded to 1.0.0-alpha.121
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.143
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/observability:** upgraded to 1.0.0-alpha.159
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/testing [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.287...@lunora/testing@1.0.0-alpha.288) (2026-10-20)
 
 ### Features
