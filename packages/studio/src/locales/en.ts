@@ -354,6 +354,7 @@ const MESSAGE_IDS = [
     "Read and write this table through the typed data model.",
     "Move widget down",
     "Move widget up",
+    "Re-enter the sensitive values before running this again.",
     "Recent errors",
     "Recent logs",
     "Recently visited shards — click to switch",

@@ -3,6 +3,8 @@ import { LunoraError } from "@lunora/errors";
 import type { CollectionConfig } from "@tanstack/db";
 import { BTreeIndex } from "@tanstack/db";
 
+import type { LunoraCollectionUtils } from "./collection-error-state";
+import { createErrorState } from "./collection-error-state";
 import type { Row } from "./internals";
 import { makeDiffEmit, toMap } from "./internals";
 
@@ -668,6 +670,8 @@ export interface LunoraCollectionOptions<TRow extends Row> {
     config: CollectionConfig<TRow, string>;
     /** Re-point a `scopeBy` collection's subscription (omit `args` to detach). No-op for unscoped collections. */
     scope: (args?: Record<string, unknown>) => void;
+    /** Subscription health; the same object is on the created collection as `collection.utils`. */
+    utils: LunoraCollectionUtils;
 }
 
 /**
@@ -752,6 +756,9 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     let emit: ((next: Map<string, TRow>) => void) | undefined;
     let unsubscribe: (() => void) | undefined;
     let onErrorHandler: ((error: SubscriptionError) => void) | undefined;
+
+    const { setError, utils } = createErrorState();
+
     // The last scope args a `scopeBy` collection was pointed at. Remembered here
     // (outside `sync.sync`) so a sync restart after gc cleanup re-opens the same
     // scope instead of remounting empty, and so a `scope(...)` issued before sync
@@ -801,6 +808,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // Typed `unknown` so the one callback satisfies both sync sources: a `list`
         // query's `(data: ReturnOf<F>)` and a shape's `(rows: Record<string, unknown>[])`.
         const onRows = (data: unknown): void => {
+            // Rows arriving again is the recovery: the error state belongs to the failing stretch only.
+            setError(undefined);
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
 
@@ -866,6 +875,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         defaultIndexType: BTreeIndex,
         getKey,
         id: options.id ?? options.list?.__lunoraRef ?? `shape:${options.shape?.name ?? ""}`,
+        utils,
         // `"eager"` syncs at creation; omitted otherwise so the wire stays
         // byte-identical to the lazy default (sync on first subscriber).
         ...(options.load === "eager" ? { startSync: true } : {}),
@@ -875,7 +885,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
                 // Surface a subscription error and move the collection out of
                 // `loading`, so a rejected subscription never hangs it forever.
+                // `markReady` is all TanStack gives a sync source for that, so the
+                // failure is recorded on `utils` as well: otherwise the collection
+                // reads as a successful load that found no rows.
                 const onError = (error: SubscriptionError): void => {
+                    setError(error);
                     writer.markReady();
                     options.onError?.(error);
                 };
@@ -906,6 +920,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                 return () => {
                     emit = undefined;
                     onErrorHandler = undefined;
+                    // A restarted sync begins from a clean slate, not the previous session's failure.
+                    setError(undefined);
                     // The subscription feeding the registry is going; a restart
                     // re-attaches it (`openSubscription` resolves the registry).
                     detach();
@@ -942,6 +958,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
         unsubscribe?.();
         unsubscribe = undefined;
+        // The previous scope's failure is not this scope's: clear it before the new subscription can report its own.
+        setError(undefined);
         // A watermark stashed for the previous shard's frame must not resolve this one's gate.
         pendingFrameWatermark = undefined;
         // Clear the previous scope's rows from the synced view.
@@ -964,5 +982,6 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         checkpoints: followsScope && options.checkpoints === undefined ? followScopeCheckpoints(currentCheckpoints) : currentCheckpoints(),
         config,
         scope,
+        utils,
     };
 };

@@ -3,6 +3,15 @@ import type { FunctionReference } from "../../../shared/function-reference";
 export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
+ * The `onlineOnly` option a call to the function reference `F` may take. A
+ * function with a `v.sensitive` argument is emitted as `… & { readonly sensitive:
+ * true }`, and is always online-only: its arguments never reach the offline queue,
+ * the outbox or a persistence adapter. For it the option may be omitted or `true`;
+ * `false` is a type error. Every other reference is unchanged.
+ */
+export type OnlineOnlyOption<F> = F extends { readonly sensitive: true } ? { onlineOnly?: true } : unknown;
+
+/**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)
  * emitted by `@lunora/codegen` as `httpStreams.<namespace>.<name>`.
  *
@@ -579,6 +588,16 @@ export interface LunoraClientOptions {
      */
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
+
+    /**
+     * Deadline (ms) for one HTTP RPC round trip (`query`, `mutation`, a replayed
+     * write), covering the response body as well as the connection. A request
+     * that stalls past it fails with a retryable `TransportError` — and a durable
+     * write is re-queued under the same `mutationId` — instead of freezing every
+     * write queued behind it on the shard. `action` is exempt: it may legitimately
+     * run for longer. Defaults to 30000 (30s); set to `0` (or negative) to disable.
+     */
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
 
@@ -1228,6 +1247,8 @@ export interface FunctionArgumentDescriptor {
     name: string;
     /** True when the arg is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the arg is marked `v.sensitive` — a secret the caller supplies, never queued offline. */
+    sensitive?: true;
     /** Target table for an `id` arg (`v.id("table")`). */
     table?: string;
 }

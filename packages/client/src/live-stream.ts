@@ -23,7 +23,9 @@
 import { decodeWire } from "@lunora/wire";
 
 import { LIVE_CONNECTION_HEADER, LIVE_EVENT_NAME } from "../../../shared/live-stream";
+import { SOCKET_STABLE_MS } from "./client-tuning";
 import { createReconnect } from "./reconnect";
+import readOrIdle from "./stream-idle";
 
 /** Options for {@link connectLiveStream}. */
 interface ConnectLiveStreamOptions {
@@ -31,6 +33,15 @@ interface ConnectLiveStreamOptions {
     fetch?: typeof fetch;
     /** Extra headers sent on both the stream and the control requests. */
     headers?: Record<string, string>;
+
+    /**
+     * Treat a connection that delivers nothing — not even a keepalive — for this many milliseconds as
+     * dead, and reconnect. Every target that serves live streams (Cloudflare Workers, the Node host
+     * and celld) runs the same `ShardDO` live handlers, and they write a `:ka` comment every 25s
+     * while a stream is open, so the default is `75000`. Set `0` to disable the bound when a proxy
+     * or a server of your own in front of the shard does not forward comment frames.
+     */
+    idleTimeoutMs?: number;
     /** Ceiling for the reconnect backoff, in ms. Defaults to `30000`. */
     maxDelayMs?: number;
     /** Base reconnect delay in ms. Defaults to `1000`. */
@@ -150,6 +161,7 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     const fetchImpl = options.fetch ?? fetch;
     const controlUrl = controlUrlFor(url);
     const maxDelayMs = options.maxDelayMs ?? 30_000;
+    const idleTimeoutMs = options.idleTimeoutMs ?? 75_000;
     const reconnect = createReconnect({ initialDelayMs: options.retryDelay ?? 1000, maxDelayMs });
     const credentials: RequestCredentials = options.withCredentials === true ? "include" : "same-origin";
     // A `?shard=` connect is served by that shard's DO, so its control calls must
@@ -161,6 +173,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
     let connectionId: string | undefined;
     let aborter: AbortController | undefined;
+    /** Restarts the reconnect backoff once a connection has stayed up for a stable window; cleared when it ends. */
+    let stableTimer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
     let idCounter = 0;
 
@@ -343,7 +357,13 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
         const header = response.headers.get(LIVE_CONNECTION_HEADER);
 
         connectionId = header ?? undefined;
-        reconnect.reset();
+
+        // A 2xx is not proof of a usable stream: a server that accepts and drops at once would
+        // otherwise be retried at the base delay forever. The backoff restarts only once the
+        // connection has stayed up for a stable window.
+        stableTimer = setTimeout(() => {
+            reconnect.reset();
+        }, SOCKET_STABLE_MS);
 
         // Subscriptions are registered before the connection reports ready, so
         // an event published right after `ready` resolves reaches a subscriber.
@@ -379,8 +399,20 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the loop exits via the `done` break or the abort below; TS cannot see the reader's side effect
         while (true) {
-            // eslint-disable-next-line no-await-in-loop -- sequential by nature: read a chunk, dispatch its frames, read the next
-            const { done, value } = await reader.read();
+            let chunk: ReadableStreamReadResult<Uint8Array>;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential by nature: read a chunk, dispatch its frames, read the next
+                chunk = await readOrIdle(reader, idleTimeoutMs);
+            } catch (error) {
+                // A silent connection (or a failed read) is dead: release it so the run loop reconnects.
+                reader.cancel().catch(() => undefined);
+                aborter?.abort();
+
+                throw error;
+            }
+
+            const { done, value } = chunk;
 
             if (done) {
                 break;
@@ -426,6 +458,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             } catch {
                 // A fetch failure or a mid-stream throw falls through to the backoff.
             }
+
+            clearTimeout(stableTimer);
 
             // The connection that id names is gone. A subscribe made during the backoff must not send it:
             // it would be refused, and its refusal would abort the next connect attempt.

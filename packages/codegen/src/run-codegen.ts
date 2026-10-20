@@ -66,6 +66,7 @@ import {
     queueAliasFindings,
 } from "./emit";
 import { emitServiceDeclarations } from "./emit/service-declarations";
+import { isSensitiveFunction } from "./emit/shared";
 import { emitApp } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
@@ -715,6 +716,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasFlags,
         hasNotify,
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
+        hasSensitiveArgs: agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition)),
+        // The gate's verdict on the app-declared `requestSecretTool` import. `true` only
+        // when the import exists AND the target rates `secretValues` supported.
+        hasSecretValues: platformGate.signals.secretValues === true,
         hasSockets: roomsSupported && functions.some((definition) => definition.lifecycle === "socket"),
         lazyFunctions,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The

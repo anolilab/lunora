@@ -35,6 +35,7 @@ const createForgotPasswordController = (context: ControllerContext, options: For
         fields: {
             email: { validate: (value, _values, localization) => validateEmail(value, localization) },
         },
+        resendCooldown: true,
         submit: async (values, context_) => {
             const email = values.email.trim();
 

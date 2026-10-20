@@ -1,3 +1,53 @@
+## @lunora/advisor [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.244...@lunora/advisor@1.0.0-alpha.245) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+
+## @lunora/advisor [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.243...@lunora/advisor@1.0.0-alpha.244) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+
+## @lunora/advisor [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.242...@lunora/advisor@1.0.0-alpha.243) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+
+## @lunora/advisor [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.241...@lunora/advisor@1.0.0-alpha.242) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+
+## @lunora/advisor [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.240...@lunora/advisor@1.0.0-alpha.241) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+
+## @lunora/advisor [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.239...@lunora/advisor@1.0.0-alpha.240) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/advisor [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.238...@lunora/advisor@1.0.0-alpha.239) (2026-10-19)
 
 ### Bug Fixes

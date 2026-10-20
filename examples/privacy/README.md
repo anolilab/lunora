@@ -70,7 +70,7 @@ pnpm --filter @lunora-example/privacy run test
 pnpm --filter @lunora-example/privacy run dev
 ```
 
-Then open <http://localhost:5173>. Every privacy call needs a signed-in session, and
+Then open the URL the dev server prints (<http://localhost:5173> in the main checkout). Every privacy call needs a signed-in session, and
 this example has no sign-in, so the page shows `UNAUTHENTICATED` until you add
 `@lunora/auth` (see `examples/auth-playground`).
 

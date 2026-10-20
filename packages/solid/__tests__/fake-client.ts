@@ -14,7 +14,7 @@ const keyOf = (functionPath: string, args: Record<string, unknown>): string => `
 export interface FakeSubscription {
     args: Record<string, unknown>;
     /** Push a subscription-scoped error to the live `onError` sink (no-op if none registered). */
-    error: (error: { code?: string; message: string }) => void;
+    error: (error: { code?: string; message: string; why?: string }) => void;
     functionPath: string;
     push: (value: unknown) => void;
     shardKey?: string;
@@ -38,7 +38,7 @@ export interface FakeClient {
     asClient: LunoraClient;
     /** Await a macrotask so a stream consumer's `for await` loop drains queued chunks into its signal. */
     flush: () => Promise<void>;
-    mutationCalls: { args: unknown; functionPath: string }[];
+    mutationCalls: { args: unknown; functionPath: string; options?: unknown }[];
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
     /** Set the auth token (and optionally the subject) — fires `onAuthTokenChange`. */
@@ -55,7 +55,7 @@ export interface FakeClient {
 export const createFakeClient = (): FakeClient => {
     const subscriptions: FakeSubscription[] = [];
     const streamCalls: FakeStreamCall[] = [];
-    const mutationCalls: { args: unknown; functionPath: string }[] = [];
+    const mutationCalls: { args: unknown; functionPath: string; options?: unknown }[] = [];
 
     let mutationResult: unknown;
     let mutationThrow: Error | undefined;
@@ -100,8 +100,8 @@ export const createFakeClient = (): FakeClient => {
             };
         },
         setAuthToken: setAuthTokenFake,
-        mutation: (function_: FunctionReference, args: unknown) => {
-            mutationCalls.push({ args, functionPath: function_.__lunoraRef });
+        mutation: (function_: FunctionReference, args: unknown, options?: unknown) => {
+            mutationCalls.push({ args, functionPath: function_.__lunoraRef, options });
 
             if (mutationThrow) {
                 return Promise.reject(mutationThrow);
@@ -132,7 +132,7 @@ export const createFakeClient = (): FakeClient => {
             function_: FunctionReference,
             args: Record<string, unknown>,
             callback: (data: unknown) => void,
-            options?: { onError?: (error: { code?: string; message: string }) => void; shardKey?: string },
+            options?: { onError?: (error: { code?: string; message: string; why?: string }) => void; shardKey?: string },
         ): Unsubscribe => {
             const sub: FakeSubscription = {
                 args,

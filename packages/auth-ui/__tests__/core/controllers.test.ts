@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, AuthResponse, ControllerContext } from "../../src/core";
 import {
+    captchaHeaders,
     createActiveMemberController,
     createAnonymousController,
     createEmailOtpController,
@@ -12,6 +13,7 @@ import {
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
+    renderCaptcha,
     resolveContext,
 } from "../../src/core";
 
@@ -317,6 +319,20 @@ describe(createEmailOtpController, () => {
         });
     });
 
+    it.each(["setCode", "setEmail"] as const)("clears the sent banner on %s", async (action) => {
+        const { context } = makeContext(stubClient());
+        const controller = createEmailOtpController(context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+
+        expect(controller.getState().successMessage).toBeDefined();
+
+        controller.actions[action]("1");
+
+        expect(controller.getState().successMessage).toBeUndefined();
+    });
+
     it("can go back to the request step", async () => {
         const { context } = makeContext(stubClient());
         const controller = createEmailOtpController(context);
@@ -593,5 +609,425 @@ describe(createAnonymousController, () => {
         await controller.actions.signIn();
 
         expect(controller.getState().status).toBe("error");
+    });
+});
+
+describe("captcha re-arm", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    /** Mount a solved hCaptcha widget; returns its API stub and the teardown. */
+    const mountSolvedWidget = async (): Promise<{ api: { reset: ReturnType<typeof vi.fn> }; view: () => void }> => {
+        let solve: ((token: string) => void) | undefined;
+        let markRendered: () => void = () => {};
+        const rendered = new Promise<void>((resolve) => {
+            markRendered = resolve;
+        });
+        const api = {
+            render: vi.fn((_element: Element, parameters: { callback: (token: string) => void }) => {
+                solve = parameters.callback;
+                markRendered();
+
+                return "widget-1";
+            }),
+            reset: vi.fn(),
+        };
+
+        vi.stubGlobal("hcaptcha", api);
+        // jsdom never fetches the provider script; fire its `load` by hand.
+        vi.spyOn(document.head, "appendChild").mockImplementation(<T extends Node>(node: T): T => {
+            queueMicrotask(() => node.dispatchEvent(new Event("load")));
+
+            return node;
+        });
+
+        // A teardown function; named `view` for testing-library's naming rule.
+        const view = renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" });
+
+        await rendered;
+
+        solve?.("solved-token");
+
+        return { api, view };
+    };
+
+    it("resets the widget and drops the token the failed request spent", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const client = stubClient({
+            signIn: {
+                email: vi.fn(() => {
+                    // What the real client does: the request carries the token.
+                    captchaHeaders();
+
+                    return fail("Invalid email or password");
+                }),
+            },
+        });
+        const controller = createSignInController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        controller.actions.setField("password", "secret1234");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("error");
+        expect(captchaHeaders()).toStrictEqual({});
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
+    it("resets the widget after a successful resendable request, so the resend asks again", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return ok({ status: true });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("success");
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
+    /** Mount two hCaptcha widgets (`widget-1`, `widget-2`) and expose their solve and expiry callbacks. */
+    const mountTwoWidgets = async (): Promise<{
+        api: { render: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn> };
+        expirations: (() => void)[];
+        solves: ((token: string) => void)[];
+        teardowns: (() => void)[];
+    }> => {
+        const solves: ((token: string) => void)[] = [];
+        const expirations: (() => void)[] = [];
+        let markRendered: () => void = () => {};
+        const rendered = new Promise<void>((resolve) => {
+            markRendered = resolve;
+        });
+        const api = {
+            render: vi.fn((_element: Element, parameters: { callback: (token: string) => void; "expired-callback"?: () => void }) => {
+                solves.push(parameters.callback);
+                expirations.push(parameters["expired-callback"] ?? (() => {}));
+
+                if (solves.length === 2) {
+                    markRendered();
+                }
+
+                return `widget-${String(solves.length)}`;
+            }),
+            reset: vi.fn(),
+        };
+
+        vi.stubGlobal("hcaptcha", api);
+        vi.spyOn(document.head, "appendChild").mockImplementation(<T extends Node>(node: T): T => {
+            queueMicrotask(() => node.dispatchEvent(new Event("load")));
+
+            return node;
+        });
+
+        const teardowns = [
+            renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" }),
+            renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" }),
+        ];
+
+        await rendered;
+
+        return { api, expirations, solves, teardowns };
+    };
+
+    it("keeps a token solved while another form's request was still pending", async () => {
+        const { api, expirations, solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+
+        // Form A's request carries token A and stays pending.
+        let finish: () => void = () => {};
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return new Promise((resolve) => {
+                    finish = () => {
+                        resolve(ok({ status: true }));
+                    };
+                });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        const pending = controller.actions.submit();
+
+        // The user solves widget B while A is in flight, then A's own token expires.
+        solves[1]?.("token-b");
+        expirations[0]?.();
+        finish();
+        await pending;
+
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+        expect(api.reset).not.toHaveBeenCalledWith("widget-2");
+        expect(Object.values(captchaHeaders())).toStrictEqual(["token-b"]);
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
+    it("resets a widget whose solve a later solve on another widget replaced, and a failed form then sends nothing", async () => {
+        const { api, solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+        solves[1]?.("token-b");
+
+        // Widget A still shows solved, but the store only holds B's token now, so A is reset.
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        // B's token goes out with A's form, which fails; the failure resets the widget that spent it.
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return fail("Something went wrong");
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(api.reset).toHaveBeenCalledWith("widget-2");
+        expect(captchaHeaders()).toStrictEqual({});
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
+    it("drops a token the spent widget solved again while its request was pending", async () => {
+        const { solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+
+        let finish: () => void = () => {};
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return new Promise((resolve) => {
+                    finish = () => {
+                        resolve(ok({ status: true }));
+                    };
+                });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        const pending = controller.actions.submit();
+
+        // Widget A is solved again while its request is pending; the reset that follows must drop this answer too.
+        solves[0]?.("token-a2");
+        finish();
+        await pending;
+
+        expect(captchaHeaders()).toStrictEqual({});
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
+    it("still settles the form when a provider's reset throws", async () => {
+        const { api, view } = await mountSolvedWidget();
+
+        api.reset.mockImplementation(() => {
+            throw new Error("widget gone");
+        });
+
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return ok({ status: true });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("success");
+        expect(captchaHeaders()).toStrictEqual({});
+
+        api.reset.mockReset();
+        view();
+    });
+
+    it("re-arms the widget after a code request that spent the token", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const client = stubClient({
+            emailOtp: {
+                sendVerificationOtp: vi.fn(() => {
+                    captchaHeaders();
+
+                    return ok({ success: true });
+                }),
+            },
+        });
+        const controller = createEmailOtpController(makeContext(client).context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+
+        expect(controller.getState().step).toBe("verify");
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+
+        view();
+    });
+
+    it("leaves a solved widget alone when the request never carried its token", async () => {
+        const { api, view } = await mountSolvedWidget();
+        const failing = createSignInController(makeContext(stubClient({ signIn: { email: vi.fn(() => fail("Invalid email or password")) } })).context);
+        const resend = createForgotPasswordController(makeContext(stubClient()).context);
+
+        failing.actions.setField("email", "a@b.co");
+        failing.actions.setField("password", "secret1234");
+        await failing.actions.submit();
+        resend.actions.setField("email", "a@b.co");
+        await resend.actions.submit();
+
+        expect(api.reset).not.toHaveBeenCalled();
+        expect(captchaHeaders()).toStrictEqual({ "x-captcha-response": "solved-token" });
+
+        view();
+    });
+});
+
+describe("resend cooldown", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("refuses a second reset email within the cooldown and allows it after", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        await controller.actions.submit();
+        await controller.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+        expect(controller.getState().resendAvailableAt).toBe(Date.now() + 30_000);
+
+        vi.advanceTimersByTime(30_000);
+        await controller.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a second one-time code within the cooldown, even from the request step again", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const controller = createEmailOtpController(makeContext(client).context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+        controller.actions.back();
+        await controller.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(30_000);
+        await controller.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+
+    it("lifts the cooldown when the address is corrected, but not for the same one", async () => {
+        vi.useFakeTimers();
+
+        const client = stubClient();
+        const forgot = createForgotPasswordController(makeContext(client).context);
+
+        forgot.actions.setField("email", "typo@b.co");
+        await forgot.actions.submit();
+        forgot.actions.setField("email", "typo@b.co");
+
+        expect(forgot.getState().resendAvailableAt).toBeDefined();
+
+        forgot.actions.setField("email", "a@b.co");
+
+        expect(forgot.getState().resendAvailableAt).toBeUndefined();
+
+        await forgot.actions.submit();
+
+        expect(client.forgetPassword as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+
+        const otp = createEmailOtpController(makeContext(client).context);
+
+        otp.actions.setEmail("typo@b.co");
+        await otp.actions.sendCode();
+        otp.actions.back();
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the resend cooldown across a reset, so the same address is still refused", async () => {
+        const client = stubClient();
+        const otp = createEmailOtpController(makeContext(client).context);
+
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+        otp.actions.reset();
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives no cooldown to an address edited while its request was in flight", async () => {
+        vi.useFakeTimers();
+
+        let release: () => void = () => {};
+        const pending = (value: unknown): Promise<unknown> =>
+            new Promise((resolve) => {
+                release = () => {
+                    resolve(ok(value));
+                };
+            });
+
+        const forgotClient = stubClient({ forgetPassword: vi.fn(() => pending({ status: true })) });
+        const forgot = createForgotPasswordController(makeContext(forgotClient).context);
+
+        forgot.actions.setField("email", "typo@b.co");
+        const inFlight = forgot.actions.submit();
+        forgot.actions.setField("email", "a@b.co");
+        release();
+        await inFlight;
+
+        expect(forgot.getState().resendAvailableAt).toBeUndefined();
+
+        const otpClient = stubClient({ emailOtp: { sendVerificationOtp: vi.fn(() => pending({ success: true })) } });
+        const otp = createEmailOtpController(makeContext(otpClient).context);
+
+        otp.actions.setEmail("typo@b.co");
+        const codeInFlight = otp.actions.sendCode();
+        otp.actions.setEmail("a@b.co");
+        release();
+        await codeInFlight;
+
+        expect(otp.getState().resendAvailableAt).toBeUndefined();
     });
 });

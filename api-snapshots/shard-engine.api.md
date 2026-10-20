@@ -2413,9 +2413,12 @@ interface RenderedSql {
 ```ts
 interface ReplicaFollowerHost extends ShardSiblingHost {
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    exportRows: () => Promise<ExportRow[]>;
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{
         errors: ReadonlyArray<unknown>;
     }>;
+    reportError?: (scope: string, error: unknown) => void;
+    transactionLimits: () => Partial<TransactionLimits>;
 }
 ```
 
@@ -3677,6 +3680,12 @@ const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: s
 
 ```ts
 const applyCdcChanges: (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>) => Promise<void>;
+```
+
+### `applyInsertDefaults` (const)
+
+```ts
+const applyInsertDefaults: (definition: TableDefinitionLike, document: Record<string, unknown>, auth: ServerDefaultContextLike["auth"]) => Record<string, unknown>;
 ```
 
 ### `applyOnDelete` (const)
@@ -5157,7 +5166,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, options?: RowValidatorOptions) => Record<string, unknown>;
 ```
 
 ### `runShardMigrations` (const)
@@ -5165,11 +5174,12 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 ```ts
 const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
     cdc?: boolean;
+    deferBlockedUniqueIndexes?: boolean;
     schemaSnapshot?: {
         hash: string;
         json: string;
     };
-}) => void;
+}) => ReadonlyArray<string>;
 ```
 
 ### `runSocketPool` (const)
@@ -5825,6 +5835,18 @@ interface ResolveContext {
 
 ```ts
 type RowPredicate = (document: Record<string, unknown>) => boolean;
+```
+
+### `RowValidatorOptions` (interface)
+
+```ts
+interface RowValidatorOptions {
+    only?: ReadonlySet<string>;
+    previous?: () => Readonly<Record<string, unknown>> | undefined;
+    supplied?: Readonly<Record<string, unknown>>;
+    tolerateStoredNull?: boolean;
+    trusted?: boolean;
+}
 ```
 
 ### `SchemaVersionRow` (interface)

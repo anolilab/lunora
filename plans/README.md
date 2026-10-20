@@ -104,5 +104,4 @@ follow-on ships or is rejected.
 | [334](./334-mutation-determinism.md)                | Runtime determinism for query/mutation bodies                           |
 | [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
-| [435](./435-platform-budget-tck-design.md)          | Portability-budget leg of the platform TCK                              |
 | [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |

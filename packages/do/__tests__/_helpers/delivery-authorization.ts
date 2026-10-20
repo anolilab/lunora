@@ -117,7 +117,7 @@ const cleanupDatabases = (): void => {
     }
 };
 
-const setup = (shardKey?: string): Setup => {
+const setup = (shardKey?: string, env: Record<string, unknown> = {}): Setup => {
     const database = createSqliteExec();
     databases.push(database);
     runShardMigrations(database.sql, messagesSchema, { cdc: true });
@@ -131,7 +131,7 @@ const setup = (shardKey?: string): Setup => {
         getWebSockets: () => [socket as unknown as WebSocket],
         storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
     };
-    const makeShard = (): TestShard => new TestShard(state, { LUNORA_RELAY_SECRET: secret }, { deliveryAuthorization: authority });
+    const makeShard = (): TestShard => new TestShard(state, { LUNORA_RELAY_SECRET: secret, ...env }, { deliveryAuthorization: authority });
     const shard = makeShard();
     const send = (target: TestShard = shard, sinceSeq?: number): Promise<void> =>
         target.webSocketMessage(

@@ -44,16 +44,21 @@ public struct LunoraAPIError: Error, CustomStringConvertible {
     /// came from one. See ``LunoraClient/isTransient(_:)``.
     public let transient: Bool
 
+    /// The transport failure this error was raised over, when there is one: an
+    /// online-only write refused because its send got no reply. Nil otherwise.
+    public let underlying: Error?
+
     /// A reply the server SUCCEEDED with whose `result` does not decode. The call
     /// committed, so a queued write carrying it settles `committed` — with this
     /// error on its settled event — and is never retried.
     public static let wireDecodeFailed = "WIRE_DECODE_FAILED"
 
-    public init(code: String, message: String, data: Any? = nil, transient: Bool = false) {
+    public init(code: String, message: String, data: Any? = nil, transient: Bool = false, underlying: Error? = nil) {
         self.code = code
         self.message = message
         self.data = data
         self.transient = transient
+        self.underlying = underlying
     }
 
     public var description: String { "\(code): \(message)" }

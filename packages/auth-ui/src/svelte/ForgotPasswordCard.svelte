@@ -37,7 +37,7 @@
     >
         <FormBanner error={$form.formError} success={$form.successMessage} />
         <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
-        <SubmitButton pending={$form.status === "submitting"}>{t.forgotPassword}</SubmitButton>
+        <SubmitButton availableAt={$form.resendAvailableAt} pending={$form.status === "submitting"}>{t.forgotPassword}</SubmitButton>
     </form>
     {#snippet footer()}
         <AuthLink href={signInLink}>{t.backToSignIn}</AuthLink>

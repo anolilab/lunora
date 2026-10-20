@@ -12,6 +12,7 @@
  */
 export type { ChangePlan, PlanDelete, PlanInsert, PlanPatch, PlanWriter } from "./apply-plan";
 export { applyPlanToCollections, applyPlanToDb } from "./apply-plan";
+export type { LunoraCollectionUtils } from "./collection-error-state";
 export type {
     CheckpointFallbackEvent,
     CheckpointRegistry,

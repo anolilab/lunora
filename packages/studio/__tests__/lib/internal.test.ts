@@ -38,8 +38,8 @@ describe("dispatchByKind", () => {
 
         const client = makeClient();
 
-        await expect(dispatchByKind(client, "mutation", REF, {}, {})).resolves.toBe("mutation-result");
-        expect(client.mutation).toHaveBeenCalledTimes(1);
+        await expect(dispatchByKind(client, "mutation", REF, {}, { shardKey: "room-1" })).resolves.toBe("mutation-result");
+        expect(client.mutation).toHaveBeenCalledExactlyOnceWith(REF, {}, { onlineOnly: true, shardKey: "room-1" });
     });
 
     it("routes a query — and any unknown/undefined kind — to client.query", async () => {

@@ -3,6 +3,13 @@ import isStaleVersion from "./persisted-version";
 import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
+    /**
+     * Set on a write that was queued because its direct send failed in a way that
+     * says nothing about its fate (see `LunoraClient.mutation`). Its caller is still
+     * waiting and was never told it failed, so the replay counts its transient
+     * failures and rejects it after a few, rather than retrying for ever.
+     */
+    readonly ambiguousSend?: boolean;
     readonly args: Record<string, unknown>;
 
     /**
@@ -35,6 +42,14 @@ interface QueuedMutation<T = unknown> {
      * a reload and a requeue.
      */
     identity?: string | null;
+
+    /**
+     * Position in the order this session ISSUED its writes, taken before the first send. A write whose
+     * direct send failed ambiguously is queued only once that send gives up, behind writes issued (and
+     * queued) while it was in flight; this puts it back ahead of them. Absent on hydrated records,
+     * which are older than anything issued this session.
+     */
+    readonly issueSeq?: number;
 
     /**
      * `true` when a live caller is still awaiting this write's `mutation()`
@@ -87,6 +102,9 @@ type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) =>
 interface OfflineQueueDeps {
     /** Invoked when an entry is discarded on capacity overflow (carries `OFFLINE_QUEUE_OVERFLOW`). */
     onEvict?: EvictHandler;
+    /** Invoked when a write that was out for replay settles, which `onSizeChange` does not cover: the queue was already shorter. */
+    onReplayingChange?: () => void;
+
     /** Invoked with the new depth after any size change (drives the client's pending-sync count). */
     onSizeChange?: (size: number) => void;
     /** Durable store; when present, writes are mirrored and restored across reloads. */
@@ -171,10 +189,28 @@ class OfflineQueue {
 
     private readonly onSizeChange: ((size: number) => void) | undefined;
 
+    private readonly onReplayingChange: (() => void) | undefined;
+
     /** App/schema version stamped on persisted writes; mismatched records are purged on hydrate. */
     private readonly version: string | undefined;
 
     private readonly items: QueuedMutation[] = [];
+
+    /** Ids of writes a flush has {@link OfflineQueue.drain}ed and neither requeued nor discarded yet, which are on the wire or about to be. */
+    private readonly replayingIds = new Set<string>();
+
+    /** Appends still in flight, by write id, each resolving to whether the record landed. Anything that touches a record durably waits on its append first. */
+    private readonly appending = new Map<string, Promise<boolean>>();
+
+    /**
+     * Writes enqueued this session and not yet settled (see {@link OfflineQueue.discard}). Unlike `items`
+     * this survives a replay temporarily draining the queue, so a failed append is tracked for as long as
+     * the write is unsettled, and a retry derives its record from the entry as it is NOW.
+     */
+    private readonly unsettled = new Map<string, QueuedMutation>();
+
+    /** Ids whose append was rejected (a quota error, a closed connection), kept to be tried again — see {@link OfflineQueue.flushUnpersisted}. */
+    private readonly unpersisted = new Set<string>();
 
     public constructor(options: OfflineQueueOptions = {}, deps: OfflineQueueDeps = {}) {
         this.maxItems = options.maxItems ?? 1000;
@@ -183,6 +219,7 @@ class OfflineQueue {
         this.persistence = deps.persistence;
         this.onEvict = deps.onEvict;
         this.onSizeChange = deps.onSizeChange;
+        this.onReplayingChange = deps.onReplayingChange;
         this.version = deps.version;
     }
 
@@ -190,30 +227,78 @@ class OfflineQueue {
         return this.items.length;
     }
 
+    /** Writes drained for replay and not yet settled or requeued: out of {@link OfflineQueue.size}, but still unsettled. */
+    public get replaying(): number {
+        return this.replayingIds.size;
+    }
+
     public enqueue<T>(entry: QueuedMutation<T>): void {
         const item = entry as QueuedMutation;
 
         item.id ??= nextId();
-        this.items.push(item);
 
-        this.persistence
-            ?.append({
-                args: item.args,
-                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
-                clientId: item.clientId,
-                functionPath: item.functionPath,
-                id: item.id,
-                identity: item.identity,
-                shardKey: item.shardKey,
-                ...(this.version === undefined ? {} : { version: this.version }),
-            })
-            .catch((error: unknown) => {
-                reportPersistenceError(this.onPersistenceError, "append", error, item.id);
-            });
+        // Behind everything issued before it, ahead of anything issued after it; a record without an
+        // issue number (hydrated from a prior session) is older than any numbered write.
+        let index = this.items.length;
+
+        while (item.issueSeq !== undefined && index > 0 && (this.items[index - 1]?.issueSeq ?? -1) > item.issueSeq) {
+            index -= 1;
+        }
+
+        this.items.splice(index, 0, item);
+        this.unsettled.set(item.id, item);
+
+        this.persist(this.recordOf(item, item.id));
 
         this.evictOverflow();
 
         this.notifySize();
+    }
+
+    /**
+     * Remove a settled write's durable record — after its append, if that is
+     * still in flight. A write that replays quickly can settle before its append
+     * has landed; a `remove` that overtook it found nothing, and the record then
+     * landed behind it and replayed in the next session.
+     */
+    public discard(id: string): void {
+        this.unsettled.delete(id);
+        this.unpersisted.delete(id);
+
+        if (this.replayingIds.delete(id)) {
+            this.onReplayingChange?.();
+        }
+
+        const { persistence } = this;
+
+        if (!persistence) {
+            return;
+        }
+
+        (this.appending.get(id) ?? Promise.resolve())
+            .then(async () => persistence.remove(id))
+            .catch((error: unknown) => {
+                reportPersistenceError(this.onPersistenceError, "remove", error, id);
+            });
+    }
+
+    /**
+     * Try again to persist every write whose append was rejected. Called when the
+     * page is being hidden: the last chance to get a still-queued write into
+     * durable storage before a reload or a discard of the tab loses it.
+     *
+     * A write whose append is still in flight is skipped: `visibilitychange` and `pagehide` fire
+     * back to back, and a second append for the same id would hit a unique-id constraint (or store
+     * the record twice) and leave the write wrongly tracked as unpersisted.
+     */
+    public flushUnpersisted(): void {
+        for (const id of this.unpersisted) {
+            const item = this.unsettled.get(id);
+
+            if (item && !this.appending.has(id)) {
+                this.persist(this.recordOf(item, id));
+            }
+        }
     }
 
     /**
@@ -345,18 +430,8 @@ class OfflineQueue {
                 continue;
             }
 
-            const record: PersistedMutation = {
-                args: item.args,
-                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
-                clientId: item.clientId,
-                functionPath: item.functionPath,
-                id,
-                identity: to,
-                shardKey: item.shardKey,
-                ...(this.version === undefined ? {} : { version: this.version }),
-            };
-
-            this.rewriteStamp(id, record).catch((error: unknown) => {
+            // A retry of an append that fails later derives its record from `item`, so it carries this stamp too.
+            this.rewriteStamp(id, this.recordOf(item, id)).catch((error: unknown) => {
                 // `rewriteStamp` reports and contains every failure of the durable
                 // write itself; what reaches here is a failure of the REPORTING (an
                 // `onPersistenceError` handler that throws and a `console.warn` that
@@ -392,6 +467,7 @@ class OfflineQueue {
             const drained = [...this.items];
 
             this.items.length = 0;
+            this.markReplaying(drained);
             this.notifySize();
 
             return drained;
@@ -406,6 +482,7 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.items.push(...kept);
+        this.markReplaying(drained);
         this.notifySize();
 
         return drained;
@@ -420,6 +497,12 @@ class OfflineQueue {
     public requeue(items: QueuedMutation[]): void {
         if (items.length === 0) {
             return;
+        }
+
+        for (const item of items) {
+            if (item.id !== undefined) {
+                this.replayingIds.delete(item.id);
+            }
         }
 
         this.items.unshift(...items);
@@ -466,15 +549,93 @@ class OfflineQueue {
         // intact on purpose — closing a tab must not discard writes a future
         // session will restore via `hydrate`; use the adapter's `clear()` to
         // purge them (e.g. on logout).
-        for (const item of this.items) {
+        // A write a replay has drained is out of `items` but still unsettled: its caller is still waiting too.
+        for (const item of new Set([...this.items, ...this.unsettled.values()])) {
             const error = new Error("CLIENT_CLOSED");
+            const id = item.id ?? "";
+            const reject = (persisted: boolean): void => {
+                (error as Error & { code?: string }).code = "CLIENT_CLOSED";
+                // The record outlives this client and replays in the next session: the
+                // write is not lost, whatever the rejection suggests.
+                (error as Error & { persisted?: boolean }).persisted = persisted;
+                item.reject(error);
+            };
+            const landing = this.appending.get(id);
 
-            (error as Error & { code?: string }).code = "CLIENT_CLOSED";
-            item.reject(error);
+            if (this.replayingIds.has(id)) {
+                // The in-flight replay can still settle the write and `discard` its record, and the server may commit it
+                // meanwhile: its fate is the replay's (and the idempotent mutation id's), so promise nothing.
+                reject(false);
+            } else if (landing === undefined) {
+                reject(this.persistence !== undefined && !this.unpersisted.has(id));
+            } else {
+                // An append in flight is in neither `unpersisted` nor storage yet, so the only honest
+                // answer is what the append turns out to be; a failure after this point has nobody
+                // left to retry it.
+                landing
+                    .catch(() => false)
+                    .then(reject)
+                    .catch(() => undefined);
+            }
         }
 
         this.items.length = 0;
+        this.replayingIds.clear();
+        // Nobody is left to retry these appends, and their closures must not outlive the client.
+        this.unsettled.clear();
+        this.unpersisted.clear();
         this.notifySize();
+    }
+
+    /** The durable form of a queued write. */
+    private recordOf(item: QueuedMutation, id: string): PersistedMutation {
+        return {
+            args: item.args,
+            ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
+            clientId: item.clientId,
+            functionPath: item.functionPath,
+            id,
+            identity: item.identity,
+            shardKey: item.shardKey,
+            ...(this.version === undefined ? {} : { version: this.version }),
+        };
+    }
+
+    /** Append `record`, remembering it as unpersisted if the append is rejected. */
+    private persist(record: PersistedMutation): void {
+        const { persistence } = this;
+
+        if (!persistence) {
+            return;
+        }
+
+        const landing = (async (): Promise<boolean> => {
+            try {
+                await persistence.append(record);
+                this.unpersisted.delete(record.id);
+
+                return true;
+            } catch (error: unknown) {
+                // Only an unsettled write is worth retrying; one settled meanwhile is gone for good. It stays
+                // so while a replay holds it out of `items`.
+                if (this.unsettled.has(record.id)) {
+                    this.unpersisted.add(record.id);
+                }
+
+                reportPersistenceError(this.onPersistenceError, "append", error, record.id);
+
+                return false;
+            }
+        })();
+
+        this.appending.set(record.id, landing);
+        landing
+            .finally(() => {
+                if (this.appending.get(record.id) === landing) {
+                    this.appending.delete(record.id);
+                }
+            })
+            .catch(() => undefined);
     }
 
     /**
@@ -505,6 +666,9 @@ class OfflineQueue {
         }
 
         try {
+            // A `replace` of a record that has not landed is a no-op, which would
+            // leave the old stamp behind when the append does land.
+            await this.appending.get(id);
             await store.replace(record);
         } catch (error: unknown) {
             reportPersistenceError(this.onPersistenceError, "replace", error, id);
@@ -525,9 +689,7 @@ class OfflineQueue {
 
             if (dropped) {
                 if (dropped.id) {
-                    this.persistence?.remove(dropped.id).catch((error: unknown) => {
-                        reportPersistenceError(this.onPersistenceError, "remove", error, dropped.id);
-                    });
+                    this.discard(dropped.id);
                 }
 
                 const error = new Error("offline queue overflow");
@@ -538,6 +700,14 @@ class OfflineQueue {
                 // hydrated entry's `reject` is a no-op, so without this an
                 // overflow eviction would silently drop a durable write.
                 this.onEvict?.(dropped, error);
+            }
+        }
+    }
+
+    private markReplaying(drained: QueuedMutation[]): void {
+        for (const item of drained) {
+            if (item.id !== undefined) {
+                this.replayingIds.add(item.id);
             }
         }
     }

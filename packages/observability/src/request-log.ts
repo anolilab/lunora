@@ -254,7 +254,7 @@ const redactValue = createRedactor(standardRules, { exclude: ["pass"] });
  * thread, where every span, event and metric pays it. `captureRaw` as in
  * {@link redactArgs}.
  */
-const redactSecrets = (value: unknown, captureRaw = false): unknown => {
+const redactCredentials = (value: unknown, captureRaw = false): unknown => {
     if (captureRaw || value === null || value === undefined) {
         return value;
     }
@@ -302,6 +302,548 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
 
     return redactValue(maskCredentials(value));
 };
+
+/** What a `v.sensitive` argument is replaced with before it reaches any log row, Logpush event or dev capture. */
+const SENSITIVE_ARG_MASK = "«sensitive»";
+
+/**
+ * Replace the named arguments of one dispatch with {@link SENSITIVE_ARG_MASK},
+ * leaving every other argument as it was. Applied BEFORE {@link redactArgs}: the
+ * `captureRaw` development escape hatch skips redaction entirely, so masking
+ * inside `redactArgs` would leak a marked value in dev. Returns `args` itself when
+ * nothing is sensitive, and never mutates the caller's object.
+ */
+const maskSensitiveArgs = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): Record<string, unknown> => {
+    if (sensitive.size === 0) {
+        return args;
+    }
+
+    return Object.fromEntries(Object.entries(args).map(([name, value]) => [name, sensitive.has(name) ? SENSITIVE_ARG_MASK : value]));
+};
+
+/**
+ * How deep {@link scrubValue} walks a structured value. Past it a container is
+ * masked whole rather than returned as it is, so a secret nested deeper than the
+ * walk cannot pass through unchanged. {@link sensitiveValues} has no such cut-off:
+ * it collects every value under a marked argument, or the secret would never be
+ * searched for.
+ */
+const MAX_SENSITIVE_DEPTH = 8;
+
+/**
+ * The shortest marked value replaced as a substring of free text. A substring this
+ * short occurs by chance inside ordinary words and numbers, so it is only ever
+ * replaced as a whole token ({@link SENSITIVE_TOKEN_MIN_LENGTH}).
+ */
+const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
+
+/**
+ * The shortest marked value replaced as a whole token inside free text (a CVV or a
+ * three-digit PIN is the case this exists for). Below it a value is masked only as the
+ * whole text, in its JSON string form, or where a value is written (see {@link maskSecret}).
+ * A numeric leaf of a marked object collects its decimal form (`{ count: 3 }` yields `"3"`),
+ * so whole-token masking of one digit would erase every standalone digit from the log lines.
+ */
+const SENSITIVE_TOKEN_MIN_LENGTH = 3;
+
+const escapeRegExp = (text: string): string => text.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
+/** Matches `secret` as a whole token: no letter or digit on either side. */
+const sensitiveTokenPattern = (secret: string): RegExp => new RegExp(String.raw`(?<![\p{L}\p{N}])${escapeRegExp(secret)}(?![\p{L}\p{N}])`, "gu");
+
+/** Matches `secret` as a whole token inside quotes, the way a serializer or a handler quotes a value. */
+const quotedTokenPattern = (secret: string): RegExp => new RegExp(String.raw`(?<=["'])${escapeRegExp(secret)}(?=["'])`, "gu");
+
+/**
+ * Matches `secret` as a whole token written right after one of `separators` (optionally spaced):
+ * `token=ab`, or `token: ab` when `:` is a separator.
+ */
+const assignedValuePattern = (secret: string, separators: string): RegExp =>
+    new RegExp(String.raw`(?<=[${separators}][ ]*)${escapeRegExp(secret)}(?![\p{L}\p{N}])`, "gu");
+
+/**
+ * The spellings of a boolean. Matched only where a value is written, never as prose: a `true` in
+ * an unrelated sentence or an unrelated JSON field is not the marked flag. A value is written
+ * quoted or after `=`. `:` is left out on purpose, since that is how an unrelated boolean sits in a
+ * JSON object body.
+ */
+const BOOLEAN_SPELLINGS: ReadonlySet<string> = new Set(["false", "true"]);
+
+/** A secret made only of digits: the decimal form of a numeric leaf, not a string a handler wrote. */
+const DIGITS_ONLY = /^\p{N}+$/u;
+
+/**
+ * The text forms of the named arguments of one dispatch: the string leaves of each
+ * marked value, the JSON-escaped spelling of each of those leaves, the decimal form of
+ * a number or boolean, and the JSON form of an object. A free-text sink (an error
+ * message, a span attribute) must not echo any of them back, and no key-name rule
+ * catches a handler quoting the argument it rejected.
+ */
+
+/**
+ * The spellings a non-empty string is searched for under: the raw text, and its
+ * JSON-escaped form when JSON changes it. A handler that logs `JSON.stringify(args)`
+ * quotes the escaped form (a quote, backslash or control character becomes an escape),
+ * never the raw one. Below the substring minimum only the raw text is kept: escaping
+ * can lengthen a short value past the threshold (`""` becomes four characters), which
+ * would search ordinary text for it at a looser rule than the value itself.
+ */
+const stringSpellings = (text: string): string[] => {
+    const escaped = JSON.stringify(text).slice(1, -1);
+
+    return escaped === text || text.length < SENSITIVE_SUBSTRING_MIN_LENGTH ? [text] : [text, escaped];
+};
+
+/**
+ * The UTF-8 text of a byte value, or `undefined` when the bytes are not UTF-8. A lenient decode would
+ * write U+FFFD for each bad byte, which is not the text a handler logs from them, so nothing is
+ * registered for those bytes.
+ */
+const decodeUtf8 = (bytes: Uint8Array): string | undefined => {
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+        return undefined;
+    }
+};
+
+const bytesOf = (value: ArrayBuffer | ArrayBufferView): Uint8Array =>
+    value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
+/**
+ * The encoded forms of a byte value, which a handler logs as text when it encodes the bytes itself.
+ * Each one is searched for in free text as it stands, so no escaping applies to them. They are
+ * the only spelling of bytes that is not valid UTF-8, which is why non-UTF-8 values need them.
+ */
+const encodedByteSpellings = (bytes: Uint8Array): string[] => {
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const base64 = btoa(Array.from(bytes, (byte) => String.fromCodePoint(byte)).join(""));
+    // Padding sits only at the end, so the text before the first `=` is the unpadded form.
+    const base64Url = base64.replaceAll("+", "-").replaceAll("/", "_").split("=")[0] ?? "";
+
+    return [...new Set([base64, base64Url, hex, hex.toUpperCase()])];
+};
+
+const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
+    const bytes = bytesOf(value);
+
+    if (bytes.length === 0) {
+        return [];
+    }
+
+    const text = decodeUtf8(bytes);
+
+    return [...(text === undefined || text.length === 0 ? [] : stringSpellings(text)), ...encodedByteSpellings(bytes)];
+};
+
+/**
+ * The message of an Error, which is not an enumerable property and so is never reached by walking
+ * the object's values. The name is not registered: it is a class label, and registering it would
+ * mask that label wherever it appears in the logs.
+ */
+const errorMessageSpellings = (value: object): string[] => (value instanceof Error && value.message.length > 0 ? stringSpellings(value.message) : []);
+
+/**
+ * The `cause` of an Error, and the `errors` of an AggregateError. Like the message, they are not
+ * enumerable properties, so walking the object's values never reaches them.
+ */
+const errorChildren = (value: object): unknown[] => {
+    if (!(value instanceof Error)) {
+        return [];
+    }
+
+    // `errors` is typed `any` by the lib, so it is read as the array it is documented to be.
+    return value instanceof AggregateError ? [value.cause, ...(value.errors as unknown[])] : [value.cause];
+};
+
+/**
+ * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
+ * and a `seen` set keeps a shared or cyclic reference from being walked twice.
+ */
+const collectSecretLeaves = (root: unknown, found: string[]): void => {
+    const seen = new Set<object>();
+    const pending: unknown[] = [root];
+
+    while (pending.length > 0) {
+        const value = pending.pop();
+
+        if (typeof value === "string") {
+            if (value.length > 0) {
+                found.push(...stringSpellings(value));
+            }
+        } else if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+            // A boolean's spelling is matched only where a value is written (see BOOLEAN_SPELLINGS), so
+            // an unrelated `true` in the invocation's logs is left alone.
+            found.push(String(value));
+        } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+            found.push(...byteSpellings(value));
+        } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+            seen.add(value);
+
+            found.push(...errorMessageSpellings(value));
+
+            for (const child of Object.values(value)) {
+                pending.push(child);
+            }
+
+            pending.push(...errorChildren(value));
+        }
+    }
+};
+
+const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
+
+    for (const name of sensitive) {
+        if (Object.hasOwn(args, name)) {
+            const root = args[name];
+
+            // The JSON form of the whole argument. Nested objects' JSON is a substring of
+            // it, so only the top level is registered.
+            // A byte value's JSON form is `{}`, which is not a secret: its text comes from the leaves below.
+            if (typeof root === "object" && root !== null && !(root instanceof ArrayBuffer) && !ArrayBuffer.isView(root)) {
+                found.push(stringifyFieldValue(root));
+            }
+
+            collectSecretLeaves(root, found);
+        }
+    }
+
+    return found;
+};
+
+/** The non-empty property names of one object. An array's keys are its positions, which are not data. */
+const propertyNamesOf = (value: object): string[] => (Array.isArray(value) ? [] : Object.keys(value).filter((key) => key.length > 0));
+
+/** Push the property names of every object under `root`, however deep. */
+const collectPropertyNames = (root: unknown, names: string[]): void => {
+    const seen = new Set<object>();
+    const pending: unknown[] = [root];
+
+    while (pending.length > 0) {
+        const value = pending.pop();
+
+        if (typeof value === "object" && value !== null && !seen.has(value)) {
+            seen.add(value);
+
+            for (const key of propertyNamesOf(value)) {
+                names.push(key);
+            }
+
+            for (const child of Object.values(value)) {
+                pending.push(child);
+            }
+        }
+    }
+};
+
+/**
+ * The property names of the marked arguments, taken from every object under them. A
+ * marked key can be used as a log field or span-attribute name, so it is matched as a
+ * whole field name only (see {@link SecretSet}): a name such as `value` is ordinary
+ * prose and must not be masked wherever it appears in text.
+ */
+const sensitiveNames = (args: Record<string, unknown>, sensitive: ReadonlySet<string>): string[] => {
+    const names: string[] = [];
+
+    for (const name of sensitive) {
+        if (Object.hasOwn(args, name)) {
+            collectPropertyNames(args[name], names);
+        }
+    }
+
+    return names;
+};
+
+/**
+ * Replace one registered secret in `text`. A boolean is masked only where a value is written
+ * (see {@link BOOLEAN_SPELLINGS}); the other spellings follow the length rules of
+ * {@link scrubSensitiveText}.
+ */
+const maskSecret = (text: string, secret: string): string => {
+    if (BOOLEAN_SPELLINGS.has(secret)) {
+        return text.replaceAll(quotedTokenPattern(secret), SENSITIVE_ARG_MASK).replaceAll(assignedValuePattern(secret, "="), SENSITIVE_ARG_MASK);
+    }
+
+    if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
+        return text.replaceAll(secret, SENSITIVE_ARG_MASK);
+    }
+
+    if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH) {
+        return text.includes(secret) ? text.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK) : text;
+    }
+
+    // Bare, a one- or two-character value matches ordinary prose, so it is masked only where a
+    // value is written: as its JSON string form (a logged `JSON.stringify({ token })` quotes it), or
+    // right after `=` or `:`. Prose does not write a value that way.
+    const quoted = text.replaceAll(JSON.stringify(secret), JSON.stringify(SENSITIVE_ARG_MASK));
+
+    // A digits-only secret is a numeric leaf of a marked object: `"retries":3` and `attempt: 3` are counts,
+    // not the secret. The cost is that a marked two-digit string written as `token=42` is not caught here;
+    // the marked object's JSON form is still registered, so it is masked wherever that form is logged.
+    return DIGITS_ONLY.test(secret) ? quoted : quoted.replaceAll(assignedValuePattern(secret, "=:"), SENSITIVE_ARG_MASK);
+};
+
+/**
+ * Replace each sensitive value found in free text with {@link SENSITIVE_ARG_MASK}.
+ * A whole-text match is masked at any length. Inside longer text a value of
+ * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more is replaced wherever it
+ * occurs; one of {@link SENSITIVE_TOKEN_MIN_LENGTH} or more only as a whole token;
+ * shorter ones only where a value is written (see {@link maskSecret}). Longest first, so a value that contains
+ * another is masked whole.
+ */
+const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {
+    if (secrets.includes(text)) {
+        return SENSITIVE_ARG_MASK;
+    }
+
+    let scrubbed = text;
+
+    for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
+        scrubbed = maskSecret(scrubbed, secret);
+    }
+
+    return scrubbed;
+};
+
+/**
+ * The marked values of one invocation. `texts` are replaced wherever they stand in a
+ * string, a field name included. `names` are matched only as a whole field name,
+ * since a property name of a marked object is not a value to search prose for.
+ */
+interface SecretSet {
+    names: ReadonlySet<string>;
+    texts: ReadonlyArray<string>;
+}
+
+const NO_SECRETS: SecretSet = { names: new Set<string>(), texts: [] };
+
+const hasSecrets = (secrets: SecretSet): boolean => secrets.texts.length > 0 || secrets.names.size > 0;
+
+/** A field name with the marked values removed: a marked name is replaced whole, a marked value inside it as in text. */
+const scrubFieldName = (key: string, secrets: SecretSet): string => (secrets.names.has(key) ? SENSITIVE_ARG_MASK : scrubSensitiveText(key, secrets.texts));
+
+/**
+ * `name`, or `name#2`, `name#3`… when an earlier key of `out` already holds it. Two
+ * marked keys both mask to the placeholder, and one must not overwrite the other. The
+ * suffix is deterministic in key order, so the same record always reads the same way.
+ */
+const uniqueFieldName = (out: Record<string, unknown>, name: string): string => {
+    if (!Object.hasOwn(out, name)) {
+        return name;
+    }
+
+    let index = 2;
+
+    while (Object.hasOwn(out, `${name}#${String(index)}`)) {
+        index += 1;
+    }
+
+    return `${name}#${String(index)}`;
+};
+
+/**
+ * Rebuild a container with each child passed through `scrubChild`, and each field name
+ * through {@link scrubFieldName}. Returns the container itself when nothing changed.
+ */
+const scrubContainer = (value: object, secrets: SecretSet, scrubChild: (child: unknown) => unknown): unknown => {
+    if (Array.isArray(value)) {
+        const mapped = value.map((item) => scrubChild(item));
+
+        return mapped.some((item, index) => item !== value[index]) ? mapped : value;
+    }
+
+    let changed = false;
+    const out: Record<string, unknown> = {};
+
+    for (const [key, child] of Object.entries(value)) {
+        const scrubbed = scrubChild(child);
+        const name = uniqueFieldName(out, scrubFieldName(key, secrets));
+
+        changed ||= scrubbed !== child || name !== key;
+        out[name] = scrubbed;
+    }
+
+    return changed ? out : value;
+};
+
+/**
+ * Whether a byte value holds a sensitive value, by its UTF-8 text or by one of its encoded forms. Non-UTF-8
+ * bytes have no text, so their encoded forms are the only thing they can match on. The encoded forms use a
+ * fixed alphabet, so a short secret matches them by chance far more often than it matches prose; they are
+ * searched with the free-text rules, not as bare substrings.
+ */
+const byteValueIsSensitive = (value: ArrayBuffer | ArrayBufferView, secrets: SecretSet): boolean => {
+    const bytes = bytesOf(value);
+
+    if (bytes.length === 0) {
+        return false;
+    }
+
+    const text = decodeUtf8(bytes);
+
+    return (
+        (text !== undefined && secrets.texts.some((secret) => text.includes(secret))) ||
+        encodedByteSpellings(bytes).some((form) => scrubSensitiveText(form, secrets.texts) !== form)
+    );
+};
+
+/**
+ * Scrub a structured value (a field, an attribute, a log argument) of the same
+ * sensitive values. Returns the original reference when nothing matched, so a
+ * caller can tell untouched data from a copy and an unmarked sibling keeps its
+ * identity.
+ */
+const scrubValue = (value: unknown, secrets: SecretSet, depth: number, ancestors = new Set<object>()): unknown => {
+    if (typeof value === "string") {
+        return scrubSensitiveText(value, secrets.texts);
+    }
+
+    // A byte value is masked whole when it matches a sensitive value. Its bytes are never walked as numbers:
+    // no single byte equals a registered text, so a walk would write every one of them out.
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return byteValueIsSensitive(value, secrets) ? SENSITIVE_ARG_MASK : value;
+    }
+
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        const text = String(value);
+
+        // A one- or two-digit leaf (`{ count: 3 }` under a marked object) must not blank every unrelated
+        // 0, 1 or 42 in the invocation's counts and status fields; a secret that short stays unmatched.
+        return text.length >= SENSITIVE_TOKEN_MIN_LENGTH && secrets.texts.includes(text) ? SENSITIVE_ARG_MASK : value;
+    }
+
+    if (value instanceof Error) {
+        const text = String(value);
+        const scrubbed = scrubSensitiveText(text, secrets.texts);
+
+        return scrubbed === text ? value : scrubbed;
+    }
+
+    if (typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    // A container past the depth limit is withheld whole, not returned as it is: the
+    // secrets were collected from the whole marked value, so one may sit down there.
+    // A reference to a container still being walked is withheld too, so a cycle
+    // cannot fan out into the walk.
+    if (depth >= MAX_SENSITIVE_DEPTH || ancestors.has(value)) {
+        return SENSITIVE_ARG_MASK;
+    }
+
+    ancestors.add(value);
+
+    const scrubbed = scrubContainer(value, secrets, (child) => scrubValue(child, secrets, depth + 1, ancestors));
+
+    ancestors.delete(value);
+
+    return scrubbed;
+};
+
+/**
+ * The sensitive values of ONE invocation, handed by value to everything that
+ * records on its behalf (ctx.log, ctx.trace, ctx.span, ctx.fetch, ctx.metrics and
+ * the dispatch's root span). It is the only place the values live: a scope is
+ * built when the dispatch starts and {@link SensitiveScope.clear}ed when it
+ * settles, after which it scrubs nothing. Nothing reads it from shared state, so
+ * two concurrent dispatches on one shard each scrub only their own values.
+ */
+interface SensitiveScope {
+    /**
+     * Admit more values into the invocation: a composed call runs inside the
+     * caller's invocation, so its own marked arguments are scrubbed from here on.
+     * `names` are that call's marked property names (see {@link sensitiveNames}).
+     * A no-op once the scope is cleared.
+     */
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+
+    /**
+     * Mark the dispatch settled. The values are forgotten once no `hold` is
+     * outstanding, so a record still open when the dispatch returns is scrubbed.
+     */
+    clear: () => void;
+
+    /** Scrub a field bag; `undefined` passes through. */
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+
+    /**
+     * Keep the values for a record opened under this scope and not yet written.
+     * Returns the release, which is idempotent. A record opened while the scope is
+     * live is scrubbed from the values as they stand then.
+     */
+    hold: () => () => void;
+
+    /**
+     * Scrub a telemetry name (an event, span or metric name, or a plain log message). A name that is exactly
+     * a marked property name masks whole; any other name is scrubbed as free text.
+     */
+    name: (name: string) => string;
+    /** Scrub a free-text string. */
+    text: (text: string) => string;
+    /** Scrub one structured value. */
+    value: <T>(value: T) => T;
+}
+
+/**
+ * Build the scope for one invocation from the values and property names of its marked
+ * arguments (see {@link sensitiveValues} and {@link sensitiveNames}). The arrays are
+ * copied, so the caller keeps no handle on the values it passed in.
+ */
+const createSensitiveScope = (values: ReadonlyArray<string>, names: ReadonlyArray<string> = []): SensitiveScope => {
+    let secrets: SecretSet = { names: new Set(names), texts: [...new Set(values)] };
+    let settled = false;
+    let holds = 0;
+
+    // A span or fetch that outlives its handler still has to scrub what it writes
+    // before it is buffered, so the values drop only when nothing is waiting on them.
+    const forgetIfIdle = (): void => {
+        if (settled && holds === 0) {
+            secrets = NO_SECRETS;
+        }
+    };
+
+    const scrubText = (text: string): string => (secrets.texts.length === 0 ? text : scrubSensitiveText(text, secrets.texts));
+
+    return {
+        add(more, moreNames = []) {
+            if (!settled && (more.length > 0 || moreNames.length > 0)) {
+                secrets = {
+                    names: new Set([...secrets.names, ...moreNames]),
+                    texts: [...new Set([...secrets.texts, ...more])],
+                };
+            }
+        },
+        clear() {
+            settled = true;
+            forgetIfIdle();
+        },
+        hold() {
+            holds += 1;
+
+            let released = false;
+
+            return () => {
+                if (!released) {
+                    released = true;
+                    holds -= 1;
+                    forgetIfIdle();
+                }
+            };
+        },
+        fields: <T extends Record<string, unknown> | undefined>(bag: T): T =>
+            bag === undefined || !hasSecrets(secrets) ? bag : (scrubValue(bag, secrets, 0) as T),
+        name: (name) => (secrets.names.has(name) ? SENSITIVE_ARG_MASK : scrubText(name)),
+        text: scrubText,
+        value: <T>(value: T): T => (hasSecrets(secrets) ? (scrubValue(value, secrets, 0) as T) : value),
+    };
+};
+
+/**
+ * The scope of an invocation with no marked arguments. Scrubs nothing, and admits
+ * nothing: it is shared by every such invocation, so `add` must not reach it.
+ */
+const NO_SENSITIVE_SCOPE: SensitiveScope = { ...createSensitiveScope([]), add: () => undefined };
 
 /**
  * SQL handles whose request-log table (and its back-filled columns) have already
@@ -1013,17 +1555,23 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
 
 export {
     appendRequestLogEntry,
+    createSensitiveScope,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    maskSensitiveArgs,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,
-    redactSecrets,
+    redactCredentials,
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
+    SENSITIVE_ARG_MASK,
+    sensitiveNames,
+    sensitiveValues,
 };
 export type {
     AppendRequestLogEntry,
@@ -1036,5 +1584,6 @@ export type {
     RequestLogResult,
     RequestLogWriteOptions,
     RequestOutcome,
+    SensitiveScope,
 };
 export { type ContextLogLevel } from "../../../shared/log-event";

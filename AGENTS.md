@@ -52,7 +52,7 @@ pnpm run dist:check               # built dist/ is production-clean
 pnpm run lint:package-json        # package.json key order (:fix)
 pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/auth-ui
 pnpm run test:templates           # templates/* scaffold, install, build, typecheck
-pnpm run test:workerd             # the `workerd` vitest projects (15 packages) — see below
+pnpm run test:workerd             # the `workerd` vitest projects (19 packages, one example) — see below
 pnpm run test:celld               # platform + engine TCK against a live celld (needs the `celld` binary)
 pnpm run e2e                      # Playwright suite in tests/e2e
 bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh, generated-check.sh too)
@@ -63,10 +63,15 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Stale `dist/`.** `dist/` is gitignored and built on demand; a raw `pnpm --filter … run test` / `lint:types` does not rebuild workspace deps, so upstream source changes surface as `X is not a function` or a missing export. Build first (`pnpm run build:packages`, or `--filter "@lunora/<pkg>..."` with the trailing `...`), or use the `:affected` scripts, which build deps for you.
 - **`api:check` needs a fresh build.** It reads `dist/`; running `api:update` against a stale build writes a wrong snapshot.
 - **`package.json` key order** is enforced by one CI job and nothing else — ESLint, Prettier, `lint:types`, `api:check`, `dist:check` are all blind to it. Classic failure: `peerDependencies` placed above `devDependencies`. Run `pnpm run lint:package-json` after editing any manifest.
-- **`pnpm run test` does not run the `workerd` suites.** Fifteen packages declare a second, `LUNORA_WORKERD_TESTS=1`-gated vitest project that only their own CI job runs, and the gate is permanent: coverage collects through `node:inspector`, which workerd does not implement, so `test:coverage` **hangs** with them on — and sandboxed environments cannot open the localhost loopback the runtime needs to boot at all. A full local sweep therefore goes green over a broken Durable Object or D1 path; `node:sqlite` does not reproduce workerd's SQLite (it builds with `SQLITE_DQS=0`, so a bare double-quoted column that resolves to nothing raises there and is a silent string literal on workerd). Run `pnpm run test:workerd` before pushing anything touching SQL, storage, or a Durable Object.
+- **`pnpm run test` does not run the `workerd` suites.** Nineteen packages (and one example) declare a second, `LUNORA_WORKERD_TESTS=1`-gated vitest project that only their own CI job runs, and the gate is permanent: coverage collects through `node:inspector`, which workerd does not implement, so `test:coverage` **hangs** with them on — and sandboxed environments cannot open the localhost loopback the runtime needs to boot at all. A full local sweep therefore goes green over a broken Durable Object or D1 path; `node:sqlite` does not reproduce workerd's SQLite (it builds with `SQLITE_DQS=0`, so a bare double-quoted column that resolves to nothing raises there and is a silent string literal on workerd). Run `pnpm run test:workerd` before pushing anything touching SQL, storage, or a Durable Object.
 - **Never `pnpm -r run test`.** Every package's vitest in parallel fails a different arbitrary set each run (resource contention, not real failures). Use `pnpm run test`, `test:affected`, or one `--filter`.
 - **Never text-merge `pnpm-lock.yaml`.** Discard a conflicted lockfile and regenerate (`pnpm install --lockfile-only`). CI builds `refs/pull/N/merge`, not your branch head, so a hand-resolved lockfile fails there and nowhere else.
 - **Prettier before ESLint** when fixing by hand. The reverse lets Prettier reformat lines ESLint just fixed and reintroduce the violations.
+- **Never kill by pattern.** No `pkill -f`, no `pgrep … | kill`, no `kill` of a PID found by matching a name, path or worktree string. Your own process has this worktree's path in its argv, and several other sessions' dev servers run on this machine. Kill only a PID you captured when you spawned it.
+- **The tree and the stash are shared.** Other sessions edit the same checkout and push to the same branches. Stage explicit paths — never `git add -A` / `git commit -a` — and never use bare `git stash` / `git stash pop`; the stack is shared across worktrees, so you can pop someone else's work.
+- **The shell's working directory persists between calls.** A `cd` in one call silently relocates the next, and an edit or a "passing" check can land in the wrong worktree. Use absolute paths, or prefix each call with `cd <worktree> &&`.
+- **A test must fail without the fix.** Before trusting a new test, revert the fix (or break the code under test) and watch it go red. Tests have passed for the wrong reason repeatedly: a fixture too small to trigger the planner, a `mockRestore` in `finally` that clears the very calls being asserted, a presence check where a count was needed.
+- **Dev ports are per checkout.** The playground (`:5173`) and studio (`:5174`) ports come from `shared/dev-ports.ts`: a linked git worktree gets an offset from its path. Read the ports from the startup line (`dev ports: playground :N, studio :M`); never hard-code them. `LUNORA_DEV_PORT_OFFSET=0` forces the legacy pair.
 
 ## Conventions
 
@@ -74,6 +79,19 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Build what is asked.** Simplest implementation that meets the current requirement; no config knobs, extension points, or abstractions with a single implementation until a second one exists.
 - **Reach for a maintained dependency before hand-rolling**, and pin its version in the right catalog (below). Exceptions: the zero-dep packages (`@lunora/errors`, `@lunora/fingerprint`, `@lunora/platform`), `shared/`, and anything that would not survive the Workers runtime.
 - **Never skip verification** — no `--no-verify`, no `.skip`ped tests, no silenced type errors or disabled lint rules to get something green.
+- **An `eslint-disable` is line-scoped and carries its reason.** It names the rule and gives the reason after `--`, sits on the one line it excuses, and goes once the code stops needing it. A file-level disable is not accepted; if a whole file seems to need one, the rule is wrong for that file and the change belongs in the lint config, reviewed on its own.
+- **Comments say why** — a constraint, an external quirk, or an invariant the code cannot show. Do not restate a name or signature, narrate steps, or record history. Agent docs follow the same rule: decisions and traps a maintainer would get wrong, not file catalogues or feature indexes; rewrite stale text rather than appending a second account of the new behaviour.
+- **Tests wait on a milestone, never on a clock.** Await the persisted row, the settled promise or the emitted event that marks the state. A test that needs a sleep or a polling timeout to pass is wrong; inject the clock instead.
+
+### Hit every surface
+
+The commonest defect is a change that works on the path you tested and is missing everywhere else. Before calling a change done, walk this list and say which entries applied:
+
+- **Entry points.** A behaviour reachable from a function is usually also reachable from the CLI, Studio, the MCP server and an agent tool. Put the capability in a function or service the transports call, not in handler code, so each surface stays a thin decode → call → map-errors wrapper.
+- **Generated and mirrored output.** Codegen emitters, golden fixtures and example `_generated/`, `api-snapshots/`, the `registry/*` and `templates/*` copies, and the 8 non-JS SDKs all follow a public-surface change.
+- **Platform targets.** Every new `ctx.*` surface states its mapping (see Platform parity below).
+- **Reverse states.** If you added a way in, add the way out and the way to see it: grant needs revoke, pause needs resume, approve needs reject. A one-way door is a bug.
+- **Docs.** Check whether the change makes existing guidance inaccurate before adding any.
 
 ### Module imports — no `.js` extensions
 
@@ -127,4 +145,6 @@ Branches: **`alpha`** is the default and the target for most PRs; `main` carries
 
 ## Agent worktree isolation
 
-When spawning sub-agents in this repo, default to `isolation: "worktree"` for anything that edits code, so the agent cannot stomp uncommitted changes in the main checkout. Skip it for read-only research — each worktree needs a fresh `pnpm install` and starts with a cold vis cache. Clean up with `git worktree remove <path>` (empty ones auto-clean); `.worktrees/` is gitignored.
+When spawning sub-agents that edit code, give each its own worktree so it cannot stomp uncommitted changes in another checkout. Create it yourself — `git worktree add -b <branch> <abs-path> <sha>` — rather than relying on `isolation: "worktree"`, which cuts from the _main checkout's_ HEAD, and that is often a feature branch rather than the tip you meant. Brief the agent with the absolute path. Skip worktrees for read-only research: each one needs a fresh `pnpm install` and starts with a cold vis cache.
+
+Run at most three at once, and tell them not to run `test:workerd` or `build:packages`: concurrent runs of those across worktrees have crashed node with out-of-memory. Run the workerd suites yourself, one branch at a time. Clean up with `wt remove` (raw `git worktree remove` leaves the branch behind); each stale tree costs ~3 GiB, and `.worktrees/` is gitignored.

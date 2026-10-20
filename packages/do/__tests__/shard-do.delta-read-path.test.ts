@@ -427,15 +427,15 @@ describe("delta-sync read path", () => {
             return shard;
         };
 
-        it("leaves the log untouched when neither knob is configured", async () => {
+        it("keeps the log intact inside the default window when neither knob is configured", async () => {
             expect.assertions(2);
 
             await sweepWith({}, 20);
 
-            // The pre-existing behaviour, preserved deliberately: the log's
-            // out-of-shard consumers (a warehouse connector's opaque cursor) are
-            // invisible from here, so retention is something a deployment opts
-            // into rather than something inferred.
+            // Row retention defaults to a window far larger than this log, so a
+            // shard that configures nothing still keeps everything it has written
+            // so far. What the default changes is the long run: the log is bounded
+            // (see `cdc-retention-default.test.ts`) rather than growing for ever.
             expect(minCdcSeq(harness.sql)).toBe(1);
             expect(minCdcReplayableSeq(harness.sql)).toBe(1);
         });
@@ -725,7 +725,8 @@ describe("delta-sync read path", () => {
 
             const bucket = createFakeR2Bucket();
 
-            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_PAYLOAD_RETENTION: "5" }, 20);
+            // Row retention switched off: on by default now, and a trim is what makes the archive worth uploading.
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "off", LUNORA_CDC_PAYLOAD_RETENTION: "5" }, 20);
 
             // Compaction keeps every key, so nothing is lost and there is nothing
             // to soften. Uploading anyway would also never terminate: with no

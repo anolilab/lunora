@@ -1149,7 +1149,7 @@ describe("observability-sinks", () => {
             expect(record.spanId).toBe("00f067aa0ba902b7");
         });
 
-        it("emits a single attribute when a field reuses a reserved lunora.* key (field wins)", async () => {
+        it("emits a single attribute when a field reuses a reserved lunora.* key (reserved wins)", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1172,9 +1172,9 @@ describe("observability-sinks", () => {
             const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
             const collisions = record.attributes.filter((attribute) => attribute.key === "lunora.user_id");
 
-            // Exactly one `KeyValue` for the key — the caller's override, not a duplicate.
+            // Exactly one `KeyValue` for the key — the reserved value, not the field's duplicate.
             expect(collisions).toHaveLength(1);
-            expect(collisions[0]?.value).toStrictEqual({ stringValue: "override" });
+            expect(collisions[0]?.value).toStrictEqual({ stringValue: "real" });
         });
 
         it("tolerates a trailing slash on the endpoint", () => {
@@ -1563,7 +1563,7 @@ describe("observability-sinks", () => {
             expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(25_000_000n);
         });
 
-        it("carries a ctx.trace span's attributes, letting a caller key override a reserved one", async () => {
+        it("carries a ctx.trace span's attributes, keeping the reserved value over a caller key", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1578,8 +1578,8 @@ describe("observability-sinks", () => {
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             expect(attrValue(span.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
-            expect(attrValue(span.attributes, "lunora.shard_key")).toStrictEqual({ stringValue: "override" });
-            // Overridden, not duplicated — a collector resolves duplicate keys ambiguously.
+            expect(attrValue(span.attributes, "lunora.shard_key")).toStrictEqual({ stringValue: "tenant-1" });
+            // One value, not a duplicate — a collector resolves duplicate keys ambiguously.
             expect(span.attributes.filter((entry) => entry.key === "lunora.shard_key")).toHaveLength(1);
         });
 

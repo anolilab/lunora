@@ -53,6 +53,13 @@ client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(fra
 unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `net/http`:
+
+```go
+httpClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+```
+
 `HandleFrame(raw)` is what you call with each inbound WebSocket message;
 `ResendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint. A frame
@@ -65,6 +72,86 @@ view, checkpoint and epoch untouched and reaches its error callback as
 the view's, is not spliced on: unless it is a `reset`, the view is emptied, its
 callback receives `[]`, and a cold `shape_subscribe` (no `sinceCheckpoint` or
 `sinceEpoch`) goes out at once so the server re-seeds it.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`HandleFrame` returns the frame's type). Each new socket sends `connect` first, then
+resubscribes and flushes that shard's offline queue; if the connect or the resend fails,
+the socket is dropped and the loop backs off. A flush that requeues writes (or returns
+`RetryAfterMs`) must schedule its own retry, or those writes wait for the next reconnect.
+The retry is a `time.AfterFunc` timer owned by one socket run: the run marks itself
+finished and stops the timer under a mutex, and a flush still in flight at that moment
+schedules no further retry.
+
+```go
+for attempt := 0; ; attempt++ {
+	if conn, err := dial(); err == nil { // your socket library
+		// One set per socket run: the flush callback runs on its own goroutine, so
+		// `timer` and `alive` are guarded by `mu`.
+		var mu sync.Mutex
+		var timer *time.Timer // pending flush retry
+		alive := true         // false once this socket run has ended
+		var scheduleFlush func(r lunora.FlushReport, backoff time.Duration)
+		scheduleFlush = func(r lunora.FlushReport, backoff time.Duration) {
+			if len(r.Requeued) == 0 && r.RetryAfterMs == 0 {
+				return
+			}
+			delay := backoff/2 + rand.N(backoff/2) // jittered; the server's retryAfter wins when given
+			if r.RetryAfterMs > 0 {
+				delay = time.Duration(r.RetryAfterMs) * time.Millisecond
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !alive {
+				return
+			}
+			timer = time.AfterFunc(delay, func() {
+				mu.Lock()
+				live := alive
+				mu.Unlock()
+				if live {
+					scheduleFlush(client.FlushOfflineQueue(""), min(2*backoff, 30*time.Second))
+				}
+			})
+		}
+
+		// The sender and the connect frame both write, and subscribe calls reach the
+		// sender from other goroutines, so every write takes the same lock.
+		var wmu sync.Mutex
+		write := func(f map[string]any) error {
+			wmu.Lock()
+			defer wmu.Unlock()
+			return conn.WriteJSON(f)
+		}
+		// connect goes out before the sender is attached, so a subscribe on another
+		// goroutine cannot write ahead of it.
+		if err := write(lunora.BuildConnectFrame(client.ClientID(), nil)); err == nil {
+			client.AttachSocket(write)
+			if client.ResendSubscriptions() == nil {
+				scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard
+				for {
+					_, raw, err := conn.ReadMessage()
+					if err != nil {
+						break
+					}
+					if t, _ := client.HandleFrame(raw); t == "ack" {
+						attempt = 0
+					}
+				}
+			}
+		}
+		mu.Lock()
+		alive = false
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+		client.DetachSocket()
+		conn.Close()
+	}
+	d := min(30*time.Second, time.Second<<min(attempt, 5))
+	time.Sleep(d/2 + rand.N(d/2)) // math/rand/v2
+}
+```
 
 `Stream` returns a channel for `for event := range …`; it closes when the
 returned `Unsubscribe` runs or when `client.Close()` does, and closing it never
@@ -132,6 +219,14 @@ A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.OnMutationSettled`.
+
+A write that must never sit on disk — a credential, a one-time token — sets
+`OnlineOnly: true`. It is never queued, persisted or replayed: where a normal write
+would be queued, `Submit` returns an `OfflineError` coded `OFFLINE_NOT_QUEUED`
+before anything reaches the queue or the persistence adapter. A send that gets no
+reply while the socket is down is refused the same way, with the transport error
+as its cause (`errors.Unwrap`). It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
 
 A replay failure is classified by ONE rule on the single-call and batch paths:
 a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,

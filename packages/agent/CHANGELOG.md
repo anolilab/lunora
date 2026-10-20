@@ -1,3 +1,85 @@
+## @lunora/agent [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.234...@lunora/agent@1.0.0-alpha.235) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
+## @lunora/agent [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.233...@lunora/agent@1.0.0-alpha.234) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.142
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.91
+* **@lunora/container:** upgraded to 1.0.0-alpha.88
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/agent [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.232...@lunora/agent@1.0.0-alpha.233) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.141
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/mail:** upgraded to 1.0.0-alpha.119
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.90
+* **@lunora/container:** upgraded to 1.0.0-alpha.87
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+
+## @lunora/agent [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.231...@lunora/agent@1.0.0-alpha.232) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.140
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/mail:** upgraded to 1.0.0-alpha.118
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.89
+* **@lunora/container:** upgraded to 1.0.0-alpha.86
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+
+## @lunora/agent [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.230...@lunora/agent@1.0.0-alpha.231) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.139
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/mail:** upgraded to 1.0.0-alpha.117
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+* **@lunora/container:** upgraded to 1.0.0-alpha.85
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
+## @lunora/agent [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.229...@lunora/agent@1.0.0-alpha.230) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.138
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/mail:** upgraded to 1.0.0-alpha.116
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+* **@lunora/container:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+
 ## @lunora/agent [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.228...@lunora/agent@1.0.0-alpha.229) (2026-10-19)
 
 

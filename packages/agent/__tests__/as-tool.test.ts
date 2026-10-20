@@ -94,6 +94,7 @@ const context = (env: Record<string, unknown>, run: AgentToolContext["run"], ove
         env,
         getState: async () => undefined,
         idempotencyKey: "tool:research:call_9",
+        instanceId: "wf-1",
         reportProgress: () => {},
         run,
         setState: async () => {},

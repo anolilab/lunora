@@ -21,6 +21,12 @@ const deployCommand: Command = {
     options: [
         {
             description:
+                "Deploy even though the app enables the open-shard option (any value but a literal false; any caller may target any shard). Without it, deploy refuses until shards are gated with `authorizeShard`",
+            name: "allow-open-shards",
+            type: Boolean,
+        },
+        {
+            description:
                 "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; the committed baseline is not advanced — use --update-schema-baseline to accept the new shape)",
             name: "allow-schema-drift",
             type: Boolean,
@@ -105,6 +111,7 @@ const deployCommand: Command = {
 export { deployCommand };
 
 export type DeployOptions = CreateOptions<{
+    "allow-open-shards": boolean | undefined;
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
     "dry-run": boolean | undefined;

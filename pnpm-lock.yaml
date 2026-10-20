@@ -2534,6 +2534,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -2569,7 +2572,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -2611,7 +2614,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       ai:
         specifier: catalog:ai
@@ -2657,7 +2660,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -2758,7 +2761,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/disposable-email-domains':
         specifier: catalog:email
@@ -3129,7 +3132,7 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -3168,7 +3171,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -3433,7 +3436,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
     devDependencies:
       '@cloudflare/containers':
@@ -3485,7 +3488,7 @@ importers:
         specifier: workspace:*
         version: link:../sql-store
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -3623,7 +3626,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -3726,7 +3729,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@openfeature/server-sdk':
         specifier: catalog:flags
@@ -3955,7 +3958,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
@@ -4078,12 +4081,18 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/redact':
         specifier: catalog:redact
         version: 5.0.0(compromise@14.15.1)
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
@@ -4108,6 +4117,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
 
   packages/payment:
     dependencies:
@@ -4407,7 +4419,7 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       fflate:
         specifier: catalog:privacy
@@ -4438,7 +4450,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -4542,7 +4554,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -4658,7 +4670,7 @@ importers:
   packages/replica:
     dependencies:
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@sqlite.org/sqlite-wasm':
         specifier: '*'
@@ -4771,7 +4783,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -4829,7 +4841,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
@@ -4958,7 +4970,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5022,12 +5034,18 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
@@ -5037,6 +5055,9 @@ importers:
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -5058,6 +5079,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
 
   packages/solid:
     dependencies:
@@ -5071,7 +5095,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -5129,7 +5153,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5260,7 +5284,7 @@ importers:
         specifier: workspace:*
         version: link:../react
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@tanstack/react-query':
         specifier: catalog:frontend
@@ -5390,7 +5414,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -5441,6 +5465,9 @@ importers:
       '@lunora/notify':
         specifier: workspace:*
         version: link:../notify
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
@@ -5451,7 +5478,7 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@playwright/test':
         specifier: ^1.61.1
@@ -5459,6 +5486,9 @@ importers:
       '@visulima/notification':
         specifier: catalog:notify
         version: 1.2.0(6691b4649286111316d827f0a35e0d3d)
+      ai:
+        specifier: catalog:ai
+        version: 7.0.127(zod@4.6.5)
     devDependencies:
       '@lunora/observability':
         specifier: workspace:*
@@ -5589,7 +5619,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -5650,7 +5680,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.1
+        specifier: 1.0.0-alpha.2
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -13700,9 +13730,6 @@ packages:
 
   '@types/whatwg-mimetype@3.0.2':
     resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
-
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
@@ -34931,10 +34958,6 @@ snapshots:
 
   '@types/whatwg-mimetype@3.0.2': {}
 
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 26.6.4
-
   '@types/ws@8.18.2':
     dependencies:
       '@types/node': 26.6.4
@@ -41326,7 +41349,7 @@ snapshots:
     dependencies:
       '@types/node': 26.6.4
       '@types/whatwg-mimetype': 3.0.2
-      '@types/ws': 8.18.1
+      '@types/ws': 8.18.2
       buffer-image-size: 0.6.4
       entities: 7.0.1
       whatwg-mimetype: 3.0.0

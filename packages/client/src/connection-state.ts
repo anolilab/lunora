@@ -95,19 +95,27 @@ interface ShardConnection {
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see `polling-fallback.ts`). */
     readonly polling: PollingFallback;
+
+    /**
+     * Names the connect attempt currently waiting on a `wsToken` provider. An
+     * answer that arrives after its attempt timed out (or was superseded) no longer
+     * holds this value and is dropped, instead of opening a socket on top of the
+     * retry that replaced it.
+     */
+    providerAttempt?: symbol;
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-    /**
-     * Subscriptions whose `subscribe` frame is on the wire but unanswered,
-     * keyed by subscription id, each holding the watchdog that frees its slot
-     * if the server never replies. Its size is the live concurrency the drain
-     * meters against `RESUBSCRIBE_CONCURRENCY`.
-     */
-    resubscribePending: Map<string, ReturnType<typeof setTimeout>>;
-
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
     resubscribeQueue: SubscriptionState[];
+
+    /**
+     * Subscription ids holding a pacing slot: their `subscribe` frame went out through the paced
+     * resubscribe drain and nothing bearing the id has come back. Its size is the live concurrency
+     * the drain meters against `RESUBSCRIBE_CONCURRENCY`. Each id's slot is freed by its watchdog in
+     * `unackedWatchdogs`.
+     */
+    resubscribeSlots: Set<string>;
 
     /**
      * Set when the client's bounce-shard-sockets sweep retires this
@@ -154,6 +162,15 @@ interface ShardConnection {
      * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Per subscription id, the one watchdog armed when its `subscribe` frame goes out. If the server
+     * answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS` it frees the id's pacing slot (if it holds one)
+     * and re-sends the frame once, recovering a frame the server silently dropped. Cleared by the
+     * first frame bearing the id and by every teardown of the socket.
+     */
+    unackedWatchdogs: Map<string, ReturnType<typeof setTimeout>>;
+
     wasEverConnected: boolean;
 
     /**

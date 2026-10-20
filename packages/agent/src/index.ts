@@ -30,6 +30,8 @@ export type {
     FsToolOptions,
 } from "./sandbox";
 export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
+export type { SecretRequestInput } from "./secret-request-tool";
+export { requestSecretTool, SecretUnavailableError, withSecret } from "./secret-request-tool";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentApprovalContext,
@@ -86,6 +88,7 @@ export type {
     SkillConfig,
     SkillDefinition,
 } from "./types";
+export { default as wrapUntrusted } from "./untrusted";
 export { default as VoiceSessionDO } from "./voice-do";
 export type {
     RunVoiceTurnOptions,

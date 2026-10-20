@@ -208,9 +208,18 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Too many subscriptions";
     };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
+    };
+    readonly OFFLINE_NOT_QUEUED: {
+        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
+        readonly status: 503;
+        readonly title: "Offline, write not queued";
     };
     readonly IDENTITY_MISMATCH: {
         readonly hint: readonly [
@@ -715,10 +724,6 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
     };
-    readonly LIVE_CONTROL_SUPERSEDED: {
-        readonly status: 409;
-        readonly title: "A later live control call already applied";
-    };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global table import not configured";
@@ -837,6 +842,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Stream id already in use";
     };
+    readonly STREAM_IDLE: {
+        readonly status: 504;
+        readonly title: "Stream went idle";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";
@@ -844,6 +853,10 @@ const ERROR_CATALOG: {
     readonly STREAM_TOO_LONG: {
         readonly status: 507;
         readonly title: "Durable stream exceeded its chunk ceiling";
+    };
+    readonly SUBSCRIPTION_RESULT_TOO_LARGE: {
+        readonly status: 413;
+        readonly title: "Subscription result too large";
     };
     readonly TOKEN_EXPIRED: {
         readonly hint: readonly [
@@ -978,6 +991,7 @@ interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    why?: string;
 }
 ```
 
@@ -1022,6 +1036,8 @@ class LunoraError extends Error {
     readonly status: number;
     readonly docsUrl: string | undefined;
     readonly data: unknown;
+    readonly why: string | undefined;
+    readonly internal: Record<string, unknown> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1048,6 +1064,7 @@ interface LunoraErrorLike extends Error {
     hint?: ErrorHint;
     status: number;
     type: "VisulimaError";
+    why?: string;
 }
 ```
 
@@ -1059,10 +1076,12 @@ interface LunoraErrorOptions {
     data?: unknown;
     docsUrl?: string;
     hint?: ErrorHint;
+    internal?: Record<string, unknown>;
     location?: ErrorLocation;
     name?: string;
     status?: number;
     title?: string;
+    why?: string;
 }
 ```
 

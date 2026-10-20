@@ -26,7 +26,7 @@ import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
 import contextUserId from "./context-identity";
-import { validateArgs } from "./functions";
+import { admitSensitiveArgs, validateArgs } from "./functions";
 import type { MutationCtx as MutationContext } from "./types";
 
 /**
@@ -170,6 +170,9 @@ export const defineMutator = <Args extends ValidatorMap = ValidatorMap, ServerCo
     const self: { mutator?: RegisteredMutator<Args, ServerContext, ClientTx, R> } = {};
     const handler = async (context: ServerContext, rawArgs: Record<string, unknown>): Promise<R> => {
         const parsed = validateArgs(definition.args ?? ({} as Args), rawArgs);
+
+        admitSensitiveArgs(context, definition.args ?? {}, parsed);
+
         const args = definition.owner === undefined ? parsed : applyOwnerScope<Args>(definition.owner, context, parsed);
 
         return Reflect.apply(definition.server, self.mutator, [context, args]);

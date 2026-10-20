@@ -140,6 +140,7 @@ change that adds or removes a capability.
 | Durable offline queue         | ✅²    | ✅²  | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
 | Per-shard drain               | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Online-only writes            | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Rate-limit backoff            | ✅⁵    | ✅⁵  | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
 | Re-flush on a new token       | ✅⁹    | ➖⁹  | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
 | Unset identity = token digest | ✅¹⁰   | ✅¹⁰ | ✅¹⁰ | ✅¹⁰ | ✅¹⁰  | ✅¹⁰ | ✅¹⁰   | ✅¹⁰ |
@@ -613,6 +614,10 @@ before it replays; an identity change refuses one; and a flush classifies each
 reply — success confirms the overlay, a coded verdict is terminal, a transient
 failure re-queues that write and every unreplayed one, in order.
 
+**An online-only write is never queued.** The option (`onlineOnly` in the spelling each port uses) makes a write refuse with `OFFLINE_NOT_QUEUED` at the point a normal write would be queued: before any optimistic layer is applied, and before its arguments reach the queue, the persistence adapter or disk. It is the write path for a credential or a one-time token. It does not wait for a flush or queue behind pending writes, so it may overtake a queued write to the same document, the same caveat `@lunora/client`'s `onlineOnly` carries. The queueing entry point gains the option: `submit` in every port except dart, whose `mutation` is the queueing call. The direct `mutation` of the other seven never queues, so it has nothing to refuse and takes no option.
+
+**A transport failure on an online-only write is refused the same way.** A write sent directly (the shard never connected and the client does not queue before the first connect) can fail without any response: a refused connection, a DNS failure, a timeout. While the shard has no open connection, that failure raises `OFFLINE_NOT_QUEUED` with the transport error as its cause, after any optimistic layer has been rolled back, as `@lunora/client` does. A server's coded rejection, and any failure while the shard is connected, surface as themselves.
+
 **A durable record holds the WIRE form of its args.** The native form carries the
 codec's own wrappers, and every real adapter serialises — a file, a SQLite text
 column, a preferences store — so a queued write with a `bigint`, `bytes`, `Date`
@@ -1061,32 +1066,33 @@ Every row below is either pinned by a named case or listed under
 
 **RPC and frames**
 
-| Reference behaviour                                    | Pinned by                                                                                                                                                |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| request body, with and without `shardKey`              | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                |
-| `{ result }`, `commitCursor`, `lastMutationId`         | `rpc.responseOk`, `rpc_responses`                                                                                                                        |
-| `{ error }` with `code` / `message` / `data`           | `rpc.responseError`                                                                                                                                      |
-| a non-2xx body with no envelope is `INTERNAL`          | `non_2xx_without_error_envelope_fails`                                                                                                                   |
-| `connect` / `subscribe` / `unsubscribe` frames         | `clientFrames`, `client_frame_builders`                                                                                                                  |
-| `shape_subscribe`, resume across reconnect             | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                    |
-| `ack` / `data` / `error` / `resume` / `settled`        | `serverFrames`, `server_frame_consumer`                                                                                                                  |
-| `complete` cancels without dropping the registration   | `serverFrames`'s `complete`, `complete_frame_cancels_without_dropping_the_subscription`                                                                  |
-| poke buffering, `reset`, bounded buffers               | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded` |
-| batched replay, its cap and its split                  | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                           |
-| a slot whose `error` holds no envelope is retried      | `batchReplay`'s `m5` slot, `offline_flush_unreadable_slot_is_retried`                                                                                    |
-| one replay predicate; a coded 5xx is terminal          | `offline_flush_classifies_single_and_batch_alike`                                                                                                        |
-| any `413` splits a batch; a lone refused write settles | `offline_flush_batch_splits_on_envelopeless_413`                                                                                                         |
-| a committed, undecodable result settles, never retries | `offline_flush_undecodable_result_settles_committed`                                                                                                     |
-| an empty shard key is the default shard on every path  | `offline_flush_empty_shard_key_routes_to_default`                                                                                                        |
-| a poke with an undecodable row is refused whole        | `shape_poke_with_undecodable_row_is_refused_whole`                                                                                                       |
-| a malformed frame never raises out of the handler      | `malformed_frames_are_ignored_without_raising`                                                                                                           |
-| a 2xx body that is not an object is the SDK's error    | `rpc_unreadable_success_body_raises_sdk_error`                                                                                                           |
-| `close()` ends every live stream                       | `subscription_stream_ends_on_close`                                                                                                                      |
-| an identity change evicts the previous session         | `identity_change_evicts_previous_session`                                                                                                                |
-| an unset identity stamps the token digest              | `tokenIdentity`, `offline_unset_identity_stamps_token_digest`                                                                                            |
-| the bearer token never reaches a printed value         | `auth_token_redacted_when_printed`                                                                                                                       |
-| `shape_unsubscribe` spelling                           | **unpinned** — see below                                                                                                                                 |
-| `delta` merged into a cached list, `chunk`, `whisper`  | **not implemented in any port** — see the capability matrix above                                                                                        |
+| Reference behaviour                                    | Pinned by                                                                                                                                                                                       |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| request body, with and without `shardKey`              | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                                                       |
+| `{ result }`, `commitCursor`, `lastMutationId`         | `rpc.responseOk`, `rpc_responses`                                                                                                                                                               |
+| `{ error }` with `code` / `message` / `data`           | `rpc.responseError`                                                                                                                                                                             |
+| a non-2xx body with no envelope is `INTERNAL`          | `non_2xx_without_error_envelope_fails`                                                                                                                                                          |
+| `connect` / `subscribe` / `unsubscribe` frames         | `clientFrames`, `client_frame_builders`                                                                                                                                                         |
+| `shape_subscribe`, resume across reconnect             | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                                                           |
+| `ack` / `data` / `error` / `resume` / `settled`        | `serverFrames`, `server_frame_consumer`                                                                                                                                                         |
+| `complete` cancels without dropping the registration   | `serverFrames`'s `complete`, `complete_frame_cancels_without_dropping_the_subscription`                                                                                                         |
+| poke buffering, `reset`, bounded buffers               | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded`                                        |
+| batched replay, its cap and its split                  | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                                                                  |
+| a slot whose `error` holds no envelope is retried      | `batchReplay`'s `m5` slot, `offline_flush_unreadable_slot_is_retried`                                                                                                                           |
+| one replay predicate; a coded 5xx is terminal          | `offline_flush_classifies_single_and_batch_alike`                                                                                                                                               |
+| any `413` splits a batch; a lone refused write settles | `offline_flush_batch_splits_on_envelopeless_413`                                                                                                                                                |
+| a committed, undecodable result settles, never retries | `offline_flush_undecodable_result_settles_committed`                                                                                                                                            |
+| an empty shard key is the default shard on every path  | `offline_flush_empty_shard_key_routes_to_default`                                                                                                                                               |
+| an online-only write is refused offline, never queued  | `offline_online_only_refused_when_disconnected`, `offline_online_only_sends_when_connected`, `offline_online_only_leaves_normal_writes_queued`, `offline_online_only_transport_failure_refused` |
+| a poke with an undecodable row is refused whole        | `shape_poke_with_undecodable_row_is_refused_whole`                                                                                                                                              |
+| a malformed frame never raises out of the handler      | `malformed_frames_are_ignored_without_raising`                                                                                                                                                  |
+| a 2xx body that is not an object is the SDK's error    | `rpc_unreadable_success_body_raises_sdk_error`                                                                                                                                                  |
+| `close()` ends every live stream                       | `subscription_stream_ends_on_close`                                                                                                                                                             |
+| an identity change evicts the previous session         | `identity_change_evicts_previous_session`                                                                                                                                                       |
+| an unset identity stamps the token digest              | `tokenIdentity`, `offline_unset_identity_stamps_token_digest`                                                                                                                                   |
+| the bearer token never reaches a printed value         | `auth_token_redacted_when_printed`                                                                                                                                                              |
+| `shape_unsubscribe` spelling                           | **unpinned** — see below                                                                                                                                                                        |
+| `delta` merged into a cached list, `chunk`, `whisper`  | **not implemented in any port** — see the capability matrix above                                                                                                                               |
 
 #### Deliberately unpinned, and why
 

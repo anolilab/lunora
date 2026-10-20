@@ -1,10 +1,12 @@
 import { LunoraError } from "@lunora/errors";
+import type { SecretValueHost } from "@lunora/platform";
+import { SecretValueTooLargeError } from "@lunora/platform";
 import type { DatabaseWriter, SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
-import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
+import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, asInternal, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 import type { EnsureThreadOutcome } from "./types";
@@ -13,11 +15,15 @@ import type { EnsureThreadOutcome } from "./types";
 const THREADS_BARE_TABLE = "threads";
 const MESSAGES_BARE_TABLE = "messages";
 const RUN_QUEUE_BARE_TABLE = "run_queue";
+const GRANTS_BARE_TABLE = "approval_grants";
+const REQUESTS_BARE_TABLE = "secret_requests";
 
 /** The physical (merged) table names the runtime functions read/write. */
 const THREADS_TABLE: "agent_threads" = `${AGENT_EXTENSION_KEY}_${THREADS_BARE_TABLE}`;
 const MESSAGES_TABLE: "agent_messages" = `${AGENT_EXTENSION_KEY}_${MESSAGES_BARE_TABLE}`;
 const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_BARE_TABLE}`;
+const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_BARE_TABLE}`;
+const REQUESTS_TABLE: "agent_secret_requests" = `${AGENT_EXTENSION_KEY}_${REQUESTS_BARE_TABLE}`;
 
 /**
  * How many runs may park behind the one in flight under
@@ -30,6 +36,23 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
  * the cap the start fails with the same `CONFLICT` `"reject"` already throws.
  */
 const MAX_QUEUE_DEPTH = 5;
+
+/**
+ * The token usage a thread row stores and its mutations accept. Every field is
+ * optional: a row written before the cache and reasoning breakdowns existed carries
+ * only the three totals, and it must keep reading and patching. Nothing is
+ * backfilled, so an absent breakdown reads as absent, never as zero. The same holds
+ * for `status`, which a row written before it existed does not carry.
+ */
+const USAGE_VALIDATOR = v.object({
+    cacheReadTokens: v.optional(v.number()),
+    cacheWriteTokens: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    reasoningTokens: v.optional(v.number()),
+    status: v.optional(v.union(v.literal("complete"), v.literal("partial"), v.literal("unavailable"))),
+    totalTokens: v.optional(v.number()),
+});
 
 /** What `agentHistory` returns: the uncovered messages plus the summary covering the rest. */
 interface AgentHistory {
@@ -71,15 +94,33 @@ const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
  */
 const agentExtension: SchemaExtension<
     Record<
-        keyof typeof episodeTables | keyof typeof graphTables | typeof MESSAGES_BARE_TABLE | typeof RUN_QUEUE_BARE_TABLE | typeof THREADS_BARE_TABLE,
+        | keyof typeof episodeTables
+        | keyof typeof graphTables
+        | typeof GRANTS_BARE_TABLE
+        | typeof MESSAGES_BARE_TABLE
+        | typeof REQUESTS_BARE_TABLE
+        | typeof RUN_QUEUE_BARE_TABLE
+        | typeof THREADS_BARE_TABLE,
         TableDefinition
     >,
     typeof AGENT_EXTENSION_KEY
 > = defineSchemaExtension(AGENT_EXTENSION_KEY, {
     tables: {
         [MESSAGES_BARE_TABLE]: defineTable({
+            /**
+             * On the tool-result row of an approved call: `"thread"` when the
+             * approver granted the tool for the rest of the thread (see
+             * {@link GRANTS_BARE_TABLE}), absent for a one-off approval.
+             */
+            approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
             createdAt: v.number(),
+
+            /**
+             * When a pending approval stops accepting a lasting grant. Set on the marker
+             * when the run pauses, because a timeout runs no mutation to retire it.
+             */
+            expiresAt: v.optional(v.number()),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
             seq: v.number(),
@@ -90,7 +131,7 @@ const agentExtension: SchemaExtension<
              * `"approved"`/`"rejected"` on the tool result once resolved. Optional
              * so ordinary messages (and pre-existing rows) are unaffected.
              */
-            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -201,11 +242,13 @@ const agentExtension: SchemaExtension<
             updatedAt: v.number(),
 
             /**
-             * Cumulative token usage for the latest run on this thread, patched
-             * at run end. Optional so agent-free apps and pre-existing threads
-             * (written before this column existed) are unaffected.
+             * Token usage for the latest run on this thread, patched at run end
+             * (an absolute total for that run, never a sum across runs). Optional so
+             * agent-free apps and pre-existing threads (written before this column
+             * existed) are unaffected. The cache and reasoning breakdowns are optional
+             * for the same reason: rows written before they existed read as absent.
              */
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
             .index("byKey", ["key"], { unique: true })
             .index("byAgent", ["agent"])
@@ -243,6 +286,66 @@ const agentExtension: SchemaExtension<
             // See the threads table for why the agent tables are `.public()`.
             .public(),
 
+        /**
+         * Thread-scoped approval grants: a tool named here skips its
+         * `needsApproval` gate for every later call in the thread. Written only by
+         * `agentResolveApproval` (an `approve` for the thread) and removed only by
+         * `agentRevokeApprovalGrant`; the gate reads it inside its own durable step,
+         * so a grant made after a call's gate resolved never changes that call.
+         */
+        [GRANTS_BARE_TABLE]: defineTable({
+            createdAt: v.number(),
+            threadKey: v.string(),
+            toolName: v.string(),
+        })
+            // One grant per tool per thread; unique makes a repeated approve a no-op.
+            .index("byThreadTool", ["threadKey", "toolName"], { unique: true })
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
+
+        /**
+         * One row per `requestSecretTool` pause, keyed by the request's slot, `<turn>:<tool-call id>`.
+         * Every transition (supply, decline, expiry, consumption) is a compare-and-set
+         * on `status` inside one mutation, so a supply and the timeout cannot both
+         * win. The row holds the host's ref, which the loop never sees: the model is
+         * handed the slot, and the consuming tool resolves it here. The value
+         * itself is never stored in this table.
+         */
+        [REQUESTS_BARE_TABLE]: defineTable({
+            /** The only tool whose claimant may read the value (`requestSecretTool({ consumer })`). */
+            consumerTool: v.string(),
+            createdAt: v.number(),
+            /** Absolute deadline: a supply at or after it is refused, whether or not the loop has settled. */
+            expiresAt: v.number(),
+
+            /**
+             * The run that owns the request. A tool-call id is provider-issued, so a later
+             * run can reuse one; the instance tells a replayed pause from a new run.
+             */
+            instanceId: v.string(),
+            /** The host's ref, set by the supply and cleared when a later run reuses the row. Sensitive: never listed, logged or returned. */
+            ref: v.optional(v.string().nullable()),
+
+            /**
+             * What the model says the secret is for, shown to the owner by `agentSecretRequests`. Absent on rows written
+             * before it existed, and on a row whose run gave no label to keep.
+             */
+            label: v.optional(v.string().nullable()),
+            status: v.union(v.literal("pending"), v.literal("supplied"), v.literal("declined"), v.literal("expired"), v.literal("consumed")),
+            threadKey: v.string(),
+            /** The request's slot (`<turn>:<tool-call id>`): the key its steps, wait and row are stored under. */
+            toolCallId: v.string(),
+            /** The provider's tool-call id: what a client sees on the tool call, and answers with. Not unique across turns. */
+            callId: v.optional(v.string()),
+            toolName: v.string(),
+            updatedAt: v.number(),
+        })
+            // One request per slot per thread; the unique key makes a replayed pause a no-op.
+            .index("byThreadCall", ["threadKey", "toolCallId"], { unique: true })
+            .index("byThreadCallId", ["threadKey", "callId"])
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
+
         // The owner-scoped graph-memory tables (`agent_entities`/`agent_edges`)
         // live in graph-component.ts alongside the functions that read/write
         // them; spread in here so the app still merges one `agentExtension`.
@@ -265,6 +368,214 @@ const { mutation, query } = initLunora.dataModel().create();
  * reader nothing about what the type actually is.
  */
 type QueueDatabase = DatabaseWriter;
+
+/**
+ * Record a thread-scoped approval grant for the tool of the call awaiting approval
+ * right now. The tool name comes from the stored marker row, never from the
+ * client, so an approve cannot grant a tool the paused run did not ask for. With
+ * no pending marker (already decided, timed out, or a stale instance) there is
+ * nothing to grant, and the decision is refused before the run is woken.
+ */
+const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    if (marker?.["status"] !== "awaiting_approval") {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" to grant for thread "${threadKey}"`);
+    }
+
+    // A timeout ends the wait without running any mutation, so the marker can still read
+    // "awaiting_approval" after the run has already rejected the call. The deadline is the only
+    // thing that closes that window.
+    // A marker with no deadline (one written before deadlines were recorded) cannot show its window is still open,
+    // so it grants nothing: every marker this code writes carries one.
+    const { expiresAt } = marker;
+
+    if (typeof expiresAt !== "number") {
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has no recorded deadline, so it cannot be granted for the thread`,
+        );
+    }
+
+    if (Date.now() >= expiresAt) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has timed out`);
+    }
+
+    const toolName = marker["toolName"] as string;
+    const existing = await database
+        .query(GRANTS_TABLE)
+        .withIndex("byThreadTool", (q) => q.eq("threadKey", threadKey).eq("toolName", toolName))
+        .first();
+
+    if (!existing) {
+        await database.insert(GRANTS_TABLE, { createdAt: Date.now(), threadKey, toolName });
+    }
+};
+
+/**
+ * Retire the pending approval marker in the mutation that decides it. The loop only deletes the marker after its wait
+ * resolves, so until then a second decision on the same call would still find it pending and could record a grant.
+ */
+/** Whether the call's approval marker still awaits a decision. Mutations run one at a time, so a read is decisive. */
+const approvalIsPending = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<boolean> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    return marker?.["status"] === "awaiting_approval";
+};
+
+const retireApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    if (marker?.["status"] === "awaiting_approval") {
+        await database.delete(marker["_id"] as never);
+    }
+};
+
+/**
+ * The secret store the secret mutations reach through the generated ctx. Codegen
+ * weaves `agentSecrets` onto the ctx only for a target that can hold a value,
+ * in an app that imports `requestSecretTool`; any other host refuses here, before
+ * a value is accepted, rather than crashing on an undefined field.
+ */
+const secretStoreOf = (context: unknown): SecretValueHost => {
+    const { agentSecrets } = context as { agentSecrets?: SecretValueHost };
+
+    if (agentSecrets === undefined) {
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            "@lunora/agent: no secret store is wired on this deployment. Codegen wires one only when a source in lunora/ value-imports requestSecretTool from @lunora/agent (directly, through a namespace import, or through a relative barrel that re-exports it); add that import, or this target cannot hold a human-supplied secret value",
+        );
+    }
+
+    return agentSecrets;
+};
+
+/**
+ * The owner gate for the human-facing secret mutations, deliberately stricter
+ * than `readableThread`: an ownerless thread is readable by anyone who
+ * knows its key, and it must NOT be allowed to take a credential. Requires a
+ * verified identity that equals the thread's stored owner.
+ */
+const ownedSecretThread = (thread: Record<string, unknown> | null, auth: { userId?: string | null }, action: string): Record<string, unknown> => {
+    const userId = auth.userId ?? undefined;
+
+    if (thread === null || userId === undefined || thread["owner"] !== userId) {
+        throw new LunoraError("FORBIDDEN", `@lunora/agent: only the thread's owner can ${action}`);
+    }
+
+    return thread;
+};
+
+/**
+ * The pending `awaiting_secret` marker row for `toolCallId`, keyed off the
+ * thread's own stored instance. A marker the loop has retired (timeout, a
+ * decision already taken, or a double submit) is a CONFLICT, so a late supply
+ * stores nothing.
+ */
+const pendingSecretMarker = async (database: QueueDatabase, thread: Record<string, unknown>, toolCallId: string): Promise<Record<string, unknown>> => {
+    const { instanceId, key: threadKey } = thread as { instanceId?: unknown; key: string };
+    const marker =
+        typeof instanceId === "string"
+            ? await database
+                  .query(MESSAGES_TABLE)
+                  .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:secret:${toolCallId}`))
+                  .first()
+            : undefined;
+
+    if (marker?.["status"] !== "awaiting_secret") {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+    }
+
+    return marker;
+};
+
+/** The request row for one tool call on a thread, or `undefined` (a pre-change thread has none). */
+const secretRequestOf = async (database: QueueDatabase, threadKey: string, toolCallId: string): Promise<Record<string, unknown> | undefined> => {
+    const request = await database
+        .query(REQUESTS_TABLE)
+        .withIndex("byThreadCall", (q) => q.eq("threadKey", threadKey).eq("toolCallId", toolCallId))
+        .first();
+
+    return request ?? undefined;
+};
+
+/**
+ * The one request a client's tool-call id names on a thread: pending, still before its deadline, and owned by the thread's
+ * current run. A replaced run can leave a pending row under the same call id, so those rows do not count. A paused run takes
+ * no further turn, so two matches are refused rather than guessed at.
+ */
+const pendingSecretRequestForCall = async (
+    database: QueueDatabase,
+    threadKey: string,
+    instanceId: unknown,
+    callId: string,
+    now: number,
+): Promise<Record<string, unknown>> => {
+    const matches = await database
+        .query(REQUESTS_TABLE)
+        .withIndex("byThreadCallId", (q) => q.eq("threadKey", threadKey).eq("callId", callId))
+        .collect();
+    const pending = matches.filter(
+        (request) => request["status"] === "pending" && request["instanceId"] === instanceId && now < (request["expiresAt"] as number),
+    );
+
+    if (pending.length !== 1) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending secret request for tool call "${callId}" on thread "${threadKey}"`);
+    }
+
+    return pending[0] as Record<string, unknown>;
+};
+
+/**
+ * How long a supplied value must stay takeable: until the wait it may be waking has
+ * ended, which is the request deadline plus the wait's grace. The store clamps the
+ * result to its own ceiling, so a deadline beyond that ceiling still loses the value.
+ */
+const secretValueTtlMs = (expiresAt: number, now: number): number => Math.max(AGENT_SECRET_TTL_MS, expiresAt + SECRET_WAIT_GRACE_MS - now);
+
+/**
+ * The request row, which must still be open for an answer: pending and before its
+ * deadline. Read again after the host `put` in supply, because the deadline can pass
+ * while the value is being stored. A missing row (a thread paused before this table
+ * existed) refuses the same way, so nothing is stored for it.
+ */
+const openSecretRequestOrThrow = async (database: QueueDatabase, threadKey: string, toolCallId: string, now: number): Promise<Record<string, unknown>> => {
+    const request = await secretRequestOf(database, threadKey, toolCallId);
+
+    if (request?.["status"] !== "pending" || now >= (request["expiresAt"] as number)) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no open secret request for tool call "${toolCallId}" on thread "${threadKey}"`);
+    }
+
+    return request;
+};
+
+/**
+ * The thread's agent `sendEvent` handle plus its running instance: the path that
+ * wakes a paused secret wait.
+ */
+const secretWaitHandle = (
+    context: unknown,
+    thread: Record<string, unknown>,
+): { instanceId: string; sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void> } => {
+    const { instanceId } = thread;
+    const { agents } = context as { agents?: Record<string, { sendEvent?: (id: string, event: { payload: unknown; type: string }) => Promise<void> }> };
+    const handle = agents?.[thread["agent"] as string];
+
+    if (typeof instanceId !== "string" || typeof handle?.sendEvent !== "function") {
+        throw new LunoraError("INTERNAL", `@lunora/agent: no ctx.agents["${String(thread["agent"])}"] producer to deliver the secret — run codegen/dev`);
+    }
+
+    return { instanceId, sendEvent: handle.sendEvent };
+};
 
 /**
  * Park a run behind the one currently in flight (`onConcurrentRun: "queue"`).
@@ -425,8 +736,12 @@ export interface AgentComponent {
     extension: SchemaExtension;
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
+        agentApprovalGranted: AgentRegisteredFunction;
+        agentApprovalGrants: AgentRegisteredFunction;
         agentCompleteRun: AgentRegisteredFunction;
+        agentDeclineSecret: AgentRegisteredFunction;
         agentDeleteMessage: AgentRegisteredFunction;
+        agentDiscardSecret: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
         agentEpisodeRecall: AgentRegisteredFunction;
         agentEpisodeUpsert: AgentRegisteredFunction;
@@ -434,11 +749,17 @@ export interface AgentComponent {
         agentGraphUpsert: AgentRegisteredFunction;
         agentHistory: AgentRegisteredFunction;
         agentMessages: AgentRegisteredFunction;
+        agentOpenSecretRequest: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
+        agentRevokeApprovalGrant: AgentRegisteredFunction;
         agentRun: AgentRegisteredFunction;
+        agentSecretRequests: AgentRegisteredFunction;
         agentSetState: AgentRegisteredFunction;
+        agentSettleSecretRequest: AgentRegisteredFunction;
         agentState: AgentRegisteredFunction;
+        agentSupplySecret: AgentRegisteredFunction;
+        agentTakeSecret: AgentRegisteredFunction;
         agentThread: AgentRegisteredFunction;
     };
 }
@@ -564,10 +885,12 @@ export const agentComponent = (): AgentComponent => {
 
     const agentAppendMessage = mutation
         .input({
+            approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
+            expiresAt: v.optional(v.number()),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
-            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -605,6 +928,8 @@ export const agentComponent = (): AgentComponent => {
                 role: args.role,
                 seq,
                 threadKey: args.threadKey,
+                ...(args.approvalScope === undefined ? {} : { approvalScope: args.approvalScope }),
+                ...(args.expiresAt === undefined ? {} : { expiresAt: args.expiresAt }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.stepName === undefined ? {} : { stepName: args.stepName }),
                 ...(args.toolCallId === undefined ? {} : { toolCallId: args.toolCallId }),
@@ -672,7 +997,7 @@ export const agentComponent = (): AgentComponent => {
             summaryRebuiltSeq: v.optional(v.number()),
             summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
         .mutation(async ({ args, ctx: context }): Promise<void> => {
             const { instanceId, key } = args;
@@ -784,7 +1109,7 @@ export const agentComponent = (): AgentComponent => {
             instanceId: v.string(),
             key: v.string(),
             status: v.union(v.literal("idle"), v.literal("error"), v.literal("cancelled")),
-            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+            usage: v.optional(USAGE_VALIDATOR),
         })
         .mutation(async ({ args, ctx: context }): Promise<{ dequeued?: string }> => {
             const now = Date.now();
@@ -1031,10 +1356,17 @@ export const agentComponent = (): AgentComponent => {
      * (`agent-approval:<id>`) — the SAME format `agent-loop.ts`'s
      * `awaitApproval` matches on — so a decision meant for one pending tool
      * call cannot resolve a different one on the same instance.
+     *
+     * `"approve_for_thread"` is an approve that also records a grant for the
+     * tool (see `grantApprovalForThread`), so later calls to it in this thread
+     * skip the gate. The grant is written here, before the event is sent, so it
+     * is committed with the decision and the run never sees a decision whose
+     * grant was lost. Only the thread's verified owner may record a grant; on an
+     * ownerless thread `"approve"` and `"reject"` still work for any caller.
      */
     const agentResolveApproval = mutation
         .input({
-            decision: v.union(v.literal("approve"), v.literal("reject")),
+            decision: v.union(v.literal("approve"), v.literal("approve_for_thread"), v.literal("reject")),
             instanceId: v.string(),
             note: v.optional(v.string()),
             threadKey: v.string(),
@@ -1070,13 +1402,439 @@ export const agentComponent = (): AgentComponent => {
                 );
             }
 
+            // Only the first decision on a call counts. A call with no pending marker was already decided, so this
+            // one is refused before a grant is written or an event is sent, a reject included.
+            if (!(await approvalIsPending(context.db, args.threadKey, args.instanceId, args.toolCallId))) {
+                throw new LunoraError(
+                    "CONFLICT",
+                    `@lunora/agent: no pending approval for tool call "${args.toolCallId}" on thread "${args.threadKey}" to decide`,
+                );
+            }
+
+            if (args.decision === "approve_for_thread") {
+                // A lasting grant outlives this call, so it takes a verified owner: an ownerless
+                // thread is readable by anyone who knows its key, which is fine for a one-off
+                // approve or reject but not for skipping the gate on every later call.
+                ownedSecretThread(thread, context.auth, "grant a lasting approval for a tool");
+                await grantApprovalForThread(context.db, args.threadKey, args.instanceId, args.toolCallId);
+            }
+
+            await retireApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
+
             await handle.sendEvent(args.instanceId, {
-                payload: { decision: args.decision, toolCallId: args.toolCallId, ...(args.note === undefined ? {} : { note: args.note }) },
+                payload: {
+                    decision: args.decision === "reject" ? "reject" : "approve",
+                    toolCallId: args.toolCallId,
+                    ...(args.decision === "approve_for_thread" ? { scope: "thread" } : {}),
+                    ...(args.note === undefined ? {} : { note: args.note }),
+                },
                 // Scoped per tool call — see the doc comment above.
                 type: `agent-approval:${args.toolCallId}`,
             });
 
             return { resolved: true };
+        });
+
+    /**
+     * Store a human-supplied secret and wake the paused `requestSecretTool` call.
+     * The request row moves to `supplied` with the host's ref, and the wake-up
+     * carries no payload, so neither the ref nor the value reaches the workflow
+     * journal or an event. The loop reads the outcome from the row. PUBLIC and
+     * OWNER-GATED, fail closed (see {@link ownedSecretThread}). The plaintext
+     * transits this mutation's arguments, so the `secret` arg is marked
+     * `v.sensitive`: the request log masks it, a rejected value is not echoed, and
+     * the client never queues it offline.
+     *
+     * The host `put` writes through the raw storage handle, not the mutation's own
+     * transaction, so the store write can overlap a change to the row. The supply is
+     * one compare-and-set on the row it was checked against: the request must still
+     * be pending, before its deadline, and owned by the same run. Any failure before
+     * that commit discards the value, so a refused supply leaves nothing readable.
+     *
+     * The wake-up is sent after the commit, and its failure does not undo the supply.
+     * Rolling back on a failed wake would be wrong: the wake may have been delivered
+     * and only its acknowledgement lost, the run would already have resumed, and it
+     * would expire a request whose value the owner just stored. The committed
+     * `supplied` row is the authority; the wait settles at its deadline and honours it.
+     */
+    const agentSupplySecret = mutation
+        .input({ secret: v.sensitive(v.string()), threadKey: v.string(), toolCallId: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
+            const thread = ownedSecretThread(
+                await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first(),
+                context.auth,
+                "supply or decline a secret on it",
+            );
+            const store = secretStoreOf(context);
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
+            const slot = pending["toolCallId"] as string;
+            const marker = await pendingSecretMarker(context.db, thread, slot);
+            const handle = secretWaitHandle(context, thread);
+            // The owner is the instance the request was selected for, not whatever the row says on a later read.
+            const ownerInstanceId = thread["instanceId"] as string;
+            const assertStillOwned = (request: Record<string, unknown>): void => {
+                if (request["instanceId"] !== ownerInstanceId) {
+                    throw new LunoraError(
+                        "CONFLICT",
+                        `@lunora/agent: tool call "${args.toolCallId}" on thread "${args.threadKey}" was reopened by a newer run while its secret was being stored`,
+                    );
+                }
+            };
+            const checked = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
+
+            assertStillOwned(checked);
+
+            let ref: string;
+
+            try {
+                ref = await store.put(args.secret, { scope: args.threadKey, ttlMs: secretValueTtlMs(checked["expiresAt"] as number, Date.now()) });
+            } catch (error: unknown) {
+                if (error instanceof SecretValueTooLargeError) {
+                    throw new LunoraError("PAYLOAD_TOO_LARGE", error.message);
+                }
+
+                throw error;
+            }
+
+            try {
+                const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
+
+                assertStillOwned(request);
+
+                await context.db.patch(request["_id"] as never, { ref, status: "supplied", updatedAt: Date.now() });
+                // Retire the marker in this same mutation, so the UI stops offering the form.
+                await context.db.delete(marker["_id"] as never);
+            } catch (error: unknown) {
+                // The row did not move to `supplied`, so nothing will consume the value. A discard that fails must not
+                // replace the error that says why the supply was refused: the stored value then waits for its TTL.
+                await store.discard(ref).catch(() => undefined);
+
+                throw error;
+            }
+
+            try {
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${slot}` });
+            } catch {
+                // Deliberately not rethrown: the supply is committed, and the wait settles at its
+                // deadline and honours it. The cost is that a lost wake resumes the run late.
+            }
+
+            return { resolved: true };
+        });
+
+    /**
+     * Refuse a human-facing secret request: the request row moves to `declined` and
+     * the paused call resumes with a deterministic "declined" result instead of
+     * waiting out its timeout. Gated like {@link agentSupplySecret}, so a decline and
+     * a supply cannot both win. PUBLIC and OWNER-GATED.
+     */
+    const agentDeclineSecret = mutation
+        .input({ threadKey: v.string(), toolCallId: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
+            const thread = ownedSecretThread(
+                await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first(),
+                context.auth,
+                "supply or decline a secret on it",
+            );
+            const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
+            const slot = pending["toolCallId"] as string;
+            const marker = await pendingSecretMarker(context.db, thread, slot);
+            const handle = secretWaitHandle(context, thread);
+            const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
+
+            await context.db.patch(request["_id"] as never, { status: "declined", updatedAt: Date.now() });
+            await context.db.delete(marker["_id"] as never);
+
+            try {
+                await handle.sendEvent(handle.instanceId, { payload: {}, type: `agent-secret:${slot}` });
+            } catch {
+                // Deliberately not rethrown, as in supply: the decline is committed, and the wait
+                // settles at its deadline and reads it. Failing here would roll the decline back.
+            }
+
+            return { resolved: true };
+        });
+
+    /**
+     * Record a pending secret request when a run pauses on one. INTERNAL and idempotent
+     * for the run that owns the row: a replayed pause finds its own row and changes
+     * nothing, so a retry never reopens a request that was already answered. A row left
+     * by an earlier run that reused this tool-call id is retired: that run has finished,
+     * so its value is discarded and the row starts over as pending for this run.
+     */
+    const agentOpenSecretRequest = asInternal(
+        mutation
+            .input({
+                consumerTool: v.string(),
+                expiresAt: v.number(),
+                instanceId: v.string(),
+                callId: v.optional(v.string()),
+                label: v.optional(v.string()),
+                threadKey: v.string(),
+                toolCallId: v.string(),
+                toolName: v.string(),
+            })
+            .mutation(async ({ args, ctx: context }): Promise<void> => {
+                const existing = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+                const now = Date.now();
+
+                if (existing === undefined) {
+                    await context.db.insert(REQUESTS_TABLE, {
+                        consumerTool: args.consumerTool,
+                        createdAt: now,
+                        expiresAt: args.expiresAt,
+                        instanceId: args.instanceId,
+                        // eslint-disable-next-line unicorn/no-null -- `null` is the stored form of "no label"; the column is nullable
+                        label: args.label ?? null,
+                        status: "pending",
+                        callId: args.callId ?? args.toolCallId,
+                        threadKey: args.threadKey,
+                        toolCallId: args.toolCallId,
+                        toolName: args.toolName,
+                        updatedAt: now,
+                    });
+
+                    return;
+                }
+
+                if (existing["instanceId"] === args.instanceId) {
+                    return;
+                }
+
+                if (typeof existing["ref"] === "string") {
+                    // The secret store is absent only on a target that cannot hold a value, where there is nothing to discard.
+                    const { agentSecrets } = context as { agentSecrets?: SecretValueHost };
+
+                    await agentSecrets?.discard(existing["ref"]);
+                }
+
+                await context.db.patch(existing["_id"] as never, {
+                    consumerTool: args.consumerTool,
+                    createdAt: now,
+                    expiresAt: args.expiresAt,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
+                    label: args.label ?? null,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
+                    ref: null,
+                    callId: args.callId ?? args.toolCallId,
+                    instanceId: args.instanceId,
+                    status: "pending",
+                    toolName: args.toolName,
+                    updatedAt: now,
+                });
+            }),
+    );
+
+    /**
+     * Settle a paused secret request once its wait has ended, by a wake-up or by the
+     * timeout, and report the outcome. INTERNAL and idempotent. A pending row moves to
+     * `expired` here, so a supply that arrives later is refused; a supply that already
+     * landed is honoured even though the wait timed out. Returns the status only, never
+     * the ref. A missing row (a thread paused before this table existed) reads as
+     * `expired`, so the run fails closed instead of crashing. A row that a later run
+     * reopened under the same tool-call id belongs to that run, so the settling run's
+     * wait reads as `expired` and the row is left as it is.
+     */
+    const agentSettleSecretRequest = asInternal(
+        mutation
+            .input({ instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() })
+            .mutation(async ({ args, ctx: context }): Promise<{ status: "declined" | "expired" | "supplied" }> => {
+                const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+                if (request?.["instanceId"] !== args.instanceId) {
+                    return { status: "expired" };
+                }
+
+                const { status } = request;
+
+                if (status === "pending") {
+                    await context.db.patch(request["_id"] as never, { status: "expired", updatedAt: Date.now() });
+
+                    return { status: "expired" };
+                }
+
+                if (status === "supplied" || status === "consumed") {
+                    return { status: "supplied" };
+                }
+
+                return { status: status === "declined" ? "declined" : "expired" };
+            }),
+    );
+
+    /**
+     * Read a supplied secret for the consuming tool's claimant. INTERNAL: only a tool
+     * step dispatches it. Every check runs before the host is touched, so a refused
+     * take binds nothing: the request is supplied (or already consumed), the claimant
+     * is exactly the step of the consuming tool the request declared
+     * (`tool:<consumer>:<consumerCallId>`), and the request belongs to `threadKey`, which
+     * the host re-checks as its scope. The host binds the claimant on the first take.
+     */
+    const agentTakeSecret = asInternal(
+        mutation
+            .input({ claimant: v.string(), consumerCallId: v.string(), instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() })
+            .mutation(async ({ args, ctx: context }): Promise<string | undefined> => {
+                const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+                if (request?.["instanceId"] !== args.instanceId || (request["status"] !== "supplied" && request["status"] !== "consumed")) {
+                    return undefined;
+                }
+
+                if (typeof request["ref"] !== "string" || args.claimant !== `tool:${request["consumerTool"] as string}:${args.consumerCallId}`) {
+                    return undefined;
+                }
+
+                return secretStoreOf(context).take(request["ref"], { claimant: args.claimant, scope: args.threadKey });
+            }),
+    );
+
+    /**
+     * Discard a secret value and mark its request `consumed`. INTERNAL and idempotent.
+     * The consuming tool dispatches it only after a take succeeded, so a refused call
+     * cannot discard a value that another tool can still use. It discards only for the
+     * instance that owns the request: a delayed discard from an older run must not
+     * discard the value a newer run was supplied under the same tool-call id.
+     */
+    const agentDiscardSecret = asInternal(
+        mutation.input({ instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() }).mutation(async ({ args, ctx: context }): Promise<void> => {
+            const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
+
+            // A row a later run reopened holds that run's value, which this run must not discard.
+            if (request?.["instanceId"] !== args.instanceId) {
+                return;
+            }
+
+            if (typeof request["ref"] === "string") {
+                await secretStoreOf(context).discard(request["ref"]);
+            }
+
+            if (request["status"] === "supplied") {
+                await context.db.patch(request["_id"] as never, { status: "consumed", updatedAt: Date.now() });
+            }
+        }),
+    );
+
+    /**
+     * A thread's secret requests, so a client can show what is pending, supplied,
+     * declined or expired. PUBLIC and OWNER-GATED: an anonymous or ownerless caller is
+     * refused, as for supply. Each entry is built field by field, so neither the ref
+     * nor a value can appear in it.
+     */
+    const agentSecretRequests = query
+        .input({ threadKey: v.string() })
+        .query(
+            async ({
+                args,
+                ctx: context,
+            }): Promise<{ createdAt: number; expiresAt: number; label?: string; status: string; toolCallId: string; toolName: string }[]> => {
+                const thread = await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first();
+
+                ownedSecretThread(thread, context.auth, "list its secret requests");
+
+                const requests = await context.db
+                    .query(REQUESTS_TABLE)
+                    .withIndex("byThreadCall", (q) => q.eq("threadKey", args.threadKey))
+                    .collect();
+
+                const now = Date.now();
+
+                return requests.map((request) => {
+                    return {
+                        createdAt: request["createdAt"] as number,
+                        expiresAt: request["expiresAt"] as number,
+                        // Absent (not `null`) when there is no label, so a row from before the column reads the same as one with none.
+                        ...(typeof request["label"] === "string" ? { label: request["label"] } : {}),
+                        // A pending row past its deadline is one the wait has not settled yet. Supply already refuses it, so the list
+                        // reports the status settlement is about to write, and reads the same before and after it runs.
+                        status: request["status"] === "pending" && now >= (request["expiresAt"] as number) ? "expired" : (request["status"] as string),
+                        // A row written before `callId` existed keeps its call id in `toolCallId`.
+                        toolCallId: (request["callId"] ?? request["toolCallId"]) as string,
+                        toolName: request["toolName"] as string,
+                    };
+                });
+            },
+        );
+
+    /**
+     * Whether a thread-scoped approval grant exists for `toolName` on this thread.
+     * INTERNAL: the loop reads it from inside a tool's approval-gate step, so the
+     * gate's replay-stable decision is memoized with the read itself. Not owner-
+     * gated, because the workflow dispatching it carries no caller identity.
+     */
+    const agentApprovalGranted = asInternal(
+        query.input({ key: v.string(), toolName: v.string() }).query(async ({ args, ctx: context }): Promise<boolean> => {
+            const grant = await context.db
+                .query(GRANTS_TABLE)
+                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key).eq("toolName", args.toolName))
+                .first();
+
+            return grant !== null;
+        }),
+    );
+
+    /**
+     * The thread's approval grants — the tools approved for the rest of the thread.
+     * PUBLIC and owner-gated like the other reads: an unknown or forbidden thread
+     * lists nothing, so key-guessing leaks nothing.
+     */
+    const agentApprovalGrants = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<{ createdAt: number; toolName: string }[]> => {
+        const thread = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byKey", (q) => q.eq("key", args.key))
+            .first();
+
+        if (readableThread(thread, context.auth) === undefined) {
+            return [];
+        }
+
+        const grants = await context.db
+            .query(GRANTS_TABLE)
+            .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key))
+            .collect();
+
+        return grants.map((grant) => {
+            return { createdAt: grant["createdAt"] as number, toolName: grant["toolName"] as string };
+        });
+    });
+
+    /**
+     * Revoke a thread-scoped approval grant, so the tool's gate applies again to
+     * every later call in the thread. PUBLIC and owner-gated. A call whose gate
+     * already resolved keeps its decision (the gate is memoized in its step), so a
+     * revoke never reaches back into a run that is in flight.
+     */
+    const agentRevokeApprovalGrant = mutation
+        .input({ threadKey: v.string(), toolName: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ revoked: boolean }> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                .first();
+
+            if (readableThread(thread, context.auth) === undefined) {
+                throw new LunoraError("FORBIDDEN", `@lunora/agent: not allowed to revoke approvals on thread "${args.threadKey}"`);
+            }
+
+            const grant = await context.db
+                .query(GRANTS_TABLE)
+                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.threadKey).eq("toolName", args.toolName))
+                .first();
+
+            if (!grant) {
+                return { revoked: false };
+            }
+
+            await context.db.delete(grant["_id"] as never);
+
+            return { revoked: true };
         });
 
     /**
@@ -1214,6 +1972,8 @@ export const agentComponent = (): AgentComponent => {
     return {
         extension: agentExtension,
         functions: {
+            agentApprovalGranted,
+            agentApprovalGrants,
             agentAppendMessage: asInternal(agentAppendMessage),
             agentCompleteRun: asInternal(agentCompleteRun),
             agentEnsureThread: asInternal(agentEnsureThread),
@@ -1226,10 +1986,18 @@ export const agentComponent = (): AgentComponent => {
             agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
+            agentRevokeApprovalGrant,
             agentRun,
             agentSetState: asInternal(agentSetState),
             agentState,
+            agentSupplySecret,
+            agentTakeSecret,
             agentThread,
+            agentDeclineSecret,
+            agentDiscardSecret,
+            agentOpenSecretRequest,
+            agentSecretRequests,
+            agentSettleSecretRequest,
         },
     };
 };

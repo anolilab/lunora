@@ -268,20 +268,41 @@ const readConfirmation = (input: Record<string, unknown>): WriteConfirmation => 
     return { actionDigest, confirmed: input.confirmed === true, idempotencyKey };
 };
 
+/** What a `v.sensitive` argument is shown as in a proposal. Display only: the digest binds the real value. */
+const SENSITIVE_DISPLAY = "«sensitive»";
+
+/**
+ * The proposal as a human is shown it: the same action, with each sensitive
+ * argument's value replaced by {@link SENSITIVE_DISPLAY}. Only the display is
+ * masked. The digest is computed over the real proposal, so a confirmation
+ * cannot be replayed with a different secret, and the placeholder can never
+ * verify.
+ */
+const displayedProposal = (proposal: ProposedWrite, sensitiveArgs: ReadonlyArray<string>): ProposedWrite => {
+    if (sensitiveArgs.length === 0) {
+        return proposal;
+    }
+
+    const shown = Object.fromEntries(Object.entries(proposal.args).map(([name, value]) => [name, sensitiveArgs.includes(name) ? SENSITIVE_DISPLAY : value]));
+
+    return { ...proposal, args: shown };
+};
+
 /**
  * The `action_required` result: the proposal a human reviews, plus the digest
  * that binds it.
  *
- * Hands back the proposal itself for the same reason {@link canonicalize} signs
- * it whole — what the human is shown and what the digest binds must be the same
- * object, or a field can drift into one and not the other.
+ * The digest is minted over the real proposal (see {@link canonicalize}), and the
+ * human is shown {@link displayedProposal}: the same action with sensitive values
+ * masked. The next step says to resend the real values, because the placeholder
+ * would fail verification.
  */
-const actionRequired = (proposal: ProposedWrite, minted: { actionDigest: string; expiresAt: number }): ToolResult =>
+const actionRequired = (proposal: ProposedWrite, minted: { actionDigest: string; expiresAt: number }, sensitiveArgs: ReadonlyArray<string>): ToolResult =>
     ok({
         actionDigest: minted.actionDigest,
         expiresAt: new Date(minted.expiresAt).toISOString(),
-        nextStep: `Show proposedAction to a human. To execute, call ${proposal.tool} again with the IDENTICAL functionPath, args, shardKey and idempotencyKey, plus confirmed: true and this actionDigest, before expiresAt. Nothing has been written or called yet.`,
-        proposedAction: proposal,
+        nextStep: `Show proposedAction to a human. To execute, call ${proposal.tool} again with the IDENTICAL functionPath, args, shardKey and idempotencyKey, plus confirmed: true and this actionDigest, before expiresAt. Resend the REAL values of any argument shown as "${SENSITIVE_DISPLAY}": that placeholder is display only and will not verify. Nothing has been written or called yet.`,
+        proposedAction: displayedProposal(proposal, sensitiveArgs),
         status: "action_required",
     });
 
@@ -306,9 +327,14 @@ const actionRequired = (proposal: ProposedWrite, minted: { actionDigest: string;
  * confirmation was accepted. The refusal names the window instead, so the client
  * goes back through its own review.
  */
-const screenWriteConfirmation = async (client: LunoraClient, proposal: ProposedWrite, confirmation: WriteConfirmation): Promise<ToolResult | undefined> => {
+const screenWriteConfirmation = async (
+    client: LunoraClient,
+    proposal: ProposedWrite,
+    confirmation: WriteConfirmation,
+    sensitiveArgs: ReadonlyArray<string> = [],
+): Promise<ToolResult | undefined> => {
     if (!confirmation.confirmed || confirmation.actionDigest === undefined) {
-        return actionRequired(proposal, await computeActionDigest(client, proposal));
+        return actionRequired(proposal, await computeActionDigest(client, proposal), sensitiveArgs);
     }
 
     const verdict = await verifyActionDigest(client, proposal, confirmation.actionDigest);
@@ -319,11 +345,13 @@ const screenWriteConfirmation = async (client: LunoraClient, proposal: ProposedW
 
     if (verdict === "expired") {
         return errorResult(
+            "CONFIRMATION_EXPIRED",
             `confirmation rejected: this actionDigest has expired. A confirmation is good for ${String(CONFIRMATION_TTL_MS / 60_000)} minutes from the proposal that issued it, so an approval cannot be replayed in a later session. Nothing was written. Call ${proposal.tool} again WITHOUT confirmed to get a fresh actionDigest, have it reviewed, then resubmit those same arguments with it.`,
         );
     }
 
     return errorResult(
+        "CONFIRMATION_MISMATCH",
         `confirmation rejected: the actionDigest does not match this call. A digest is bound to the exact tool, function path, arguments, shard key and idempotency key it was issued for, so any edit to the proposal invalidates it — and a digest from another deployment never matches. Nothing was written. Call ${proposal.tool} again WITHOUT confirmed to get a fresh actionDigest for the current arguments, have it reviewed, then resubmit those same arguments with it.`,
     );
 };

@@ -46,9 +46,72 @@ client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
 unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `Net::HTTP` does not follow
+redirects on its own; keep it that way and do not add a redirect-following wrapper
+around the poster.
+
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
 `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handle_frame` returns the frame's type). Each socket open sends the `connect` frame
+first, then resubscribes and replays this shard's queued writes:
+
+```ruby
+attempt = 0
+loop do
+  retry_thread = nil
+  retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
+  socket = nil
+  begin
+    socket = connect # your socket library
+    sender = ->(frame) { socket.send(JSON.generate(frame)) }
+    sender.call(Lunora.build_connect_frame) # connect first: the server's onConnect hook fires on it
+    client.attach_socket(sender)
+    client.resend_subscriptions
+    report = client.flush_offline_queue # HTTP replay; transient failures stay queued
+    if report.retry_after_ms || report.requeued.any?
+      # requeued writes never stop the read loop: retry on a thread, stopped in ensure
+      retry_thread = Thread.new do
+        backoff = 1.0
+        wait = report.retry_after_ms ? report.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        loop do
+          break if retry_stop # the run ended during the last flush: do not sleep before exiting
+          sleep(wait)
+          break if retry_stop
+          again = client.flush_offline_queue
+          break if again.requeued.empty? && again.retry_after_ms.nil?
+          # a persistent transient failure backs off instead of replaying every second
+          backoff = [backoff * 2, 30.0].min
+          wait = again.retry_after_ms ? again.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        end
+      end
+    end
+    while (raw = socket.receive)
+      attempt = 0 if client.handle_frame(raw) == "ack"
+    end
+  rescue StandardError
+    nil
+  ensure
+    retry_stop = true
+    begin
+      retry_thread&.wakeup # end a pending sleep; an in-flight flush finishes first
+    rescue ThreadError
+      nil # the thread finished between the last check and this wakeup
+    end
+    retry_thread&.join # so a requeued write is seen by the next run's flush
+    socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
+  end
+  client.detach_socket
+  delay = [30.0, 2.0**[attempt, 5].min].min
+  sleep(delay / 2 + rand * delay / 2)
+  attempt += 1
+end
+```
+
+A requeued or rate-limited replay must not stop the read loop: the retry runs on a thread that is killed when the socket run ends, so live updates keep flowing meanwhile.
 
 `handle_frame` never raises into your read loop: a frame that is not JSON, or
 JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
@@ -114,6 +177,16 @@ A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
+
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only: true`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `Lunora::OfflineError` coded
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `cause`.
 
 The durable record holds the **wire** form of the args, so a store that
 serialises (a file, a SQLite text column) round-trips a `WireBigInt`,

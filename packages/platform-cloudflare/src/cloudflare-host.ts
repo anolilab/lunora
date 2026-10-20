@@ -17,10 +17,13 @@
 import type { DurableObjectNamespace, DurableObjectState, DurableObjectStub, WebSocket } from "@cloudflare/workers-types";
 import { LunoraError } from "@lunora/errors";
 import type {
+    SecretValueHost,
+    SecretValueStore,
     ShardAlarms,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
+    ShardKvListOptions,
     ShardKvStore,
     ShardRegionHint,
     ShardSqlExec,
@@ -28,6 +31,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "@lunora/platform";
+import { clampSecretValueTtl, encryptingSecretValueHost, findSocketTagBudgetViolation } from "@lunora/platform";
 
 /**
  * Raw cursor returned by Cloudflare's `SqlStorage.exec` — already iterable with
@@ -258,30 +262,243 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
 interface KvStorageLike {
     delete: (key: string) => Promise<boolean | number>;
     get: <T = unknown>(key: string) => Promise<T | undefined>;
-    list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
+    list?: <T = unknown>(options?: { limit?: number; prefix?: string }) => Promise<Map<string, T>>;
     put: (key: string, value: unknown) => Promise<void>;
 }
 
 /**
+ * {@link KvStorageLike} plus `transaction`, which {@link createSecretValueHost}
+ * needs for its read-check-bind in `take`. Method syntax on purpose, so the real
+ * `DurableObjectStorage` (whose transaction closure takes its own transaction
+ * type) is accepted without a cast.
+ */
+interface SecretStorageLike extends KvStorageLike {
+    list: <T = unknown>(options?: { limit?: number; prefix?: string }) => Promise<Map<string, T>>;
+    transaction: <T>(closure: (txn: KvStorageLike) => Promise<T>) => Promise<T>;
+}
+
+/**
+ * Key prefix the secret-value records live under, in the same `state.storage`
+ * as the shard's KV surface. Only a value that is secret-shaped is hidden under
+ * it: an app's own records that happen to share the prefix stay usable, and
+ * {@link createShardKvStore} refuses to let a user record take on the shape of a
+ * secret, since the secret host would read it as one.
+ */
+const SECRET_VALUE_KEY_PREFIX = "__lunora_secret_value:";
+
+/** Expired records one `put` may remove. Bounds the sweep; an expired record past this cap waits for a later put. */
+const SECRET_VALUE_SWEEP_LIMIT = 32;
+
+const isReservedKey = (key: string): boolean => key.startsWith(SECRET_VALUE_KEY_PREFIX);
+
+/** One stored secret. `expiresAt` is absolute, so a restored record still expires on time. */
+interface SecretRecord {
+    claimant?: string;
+    expiresAt: number;
+    scope: string;
+    value: string;
+}
+
+/**
+ * Whether a stored value has the shape the secret host writes. This is the only
+ * test that decides whether a reserved key is a secret: a non-secret value is an
+ * app record and stays visible, and a secret-shaped value is never accepted from
+ * the KV surface, so the secret host cannot be handed a forged record.
+ */
+const isSecretRecord = (value: unknown): value is SecretRecord => {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const record = value as Record<string, unknown>;
+
+    return (
+        typeof record.expiresAt === "number" &&
+        Number.isFinite(record.expiresAt) &&
+        typeof record.scope === "string" &&
+        typeof record.value === "string" &&
+        (record.claimant === undefined || typeof record.claimant === "string")
+    );
+};
+
+/**
  * Turn a Durable Object's `state.storage` into the provider-neutral
  * {@link ShardKvStore}. The DO's KV surface already matches the contract
- * method-for-method; this adapter only normalizes the return of `delete`
- * (workerd resolves a boolean, some doubles a number) and fails closed on a
- * `list` the underlying storage does not provide.
+ * method-for-method; this adapter normalizes the return of `delete` (workerd
+ * resolves a boolean, some doubles a number), fails closed on a `list` the
+ * underlying storage does not provide, and keeps secret records invisible: `get`
+ * and `list` skip a reserved key whose stored value is secret-shaped, and
+ * `put`/`delete` refuse to touch one.
  */
 const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
     return {
-        delete: async (key) => Boolean(await storage.delete(key)),
-        get: (key) => storage.get(key),
-        list: (options) => {
+        delete: async (key) => {
+            if (isReservedKey(key) && isSecretRecord(await storage.get(key))) {
+                throw new TypeError(`key "${key}" holds a secret value and cannot be deleted through the KV surface`);
+            }
+
+            return Boolean(await storage.delete(key));
+        },
+        get: async <T = unknown>(key: string) => {
+            const value = await storage.get<T>(key);
+
+            return isReservedKey(key) && isSecretRecord(value) ? undefined : value;
+        },
+        list: async <T = unknown>(options?: ShardKvListOptions) => {
             if (typeof storage.list !== "function") {
                 throw new TypeError("storage.list is not available on this DurableObjectStorage");
             }
 
-            return storage.list(options);
+            // Only the contracted prefix reaches storage. A limit carried in on an
+            // untyped options object would be spent on reserved records before any
+            // app key, so the page would come back short.
+            const prefix = options?.prefix;
+            const entries = await storage.list<T>(prefix === undefined ? {} : { prefix });
+
+            // storage.list has no exclude, so secret records are read and dropped
+            // here. The sweep in put does not bound them: it removes only expired
+            // records, so live secret records can be numerous.
+            for (const [key, value] of entries) {
+                if (isReservedKey(key) && isSecretRecord(value)) {
+                    entries.delete(key);
+                }
+            }
+
+            return entries;
         },
-        put: (key, value) => storage.put(key, value),
+        put: async (key, value) => {
+            if (isReservedKey(key) && (isSecretRecord(value) || isSecretRecord(await storage.get(key)))) {
+                throw new TypeError(`key "${key}" is reserved for secret values and cannot be written through the KV surface`);
+            }
+
+            await storage.put(key, value);
+        },
     };
+};
+
+/**
+ * Turn a Durable Object's `state.storage` into a {@link SecretValueHost}.
+ *
+ * Records live under {@link SECRET_VALUE_KEY_PREFIX} in the shard's own
+ * key-value storage. Keys sort by expiry (a zero-padded `expiresAt` leads the
+ * ref), so the sweep in `put` reads the earliest-expiring records first and stops
+ * at the first live one in a page.
+ *
+ * `take` runs its read, claimant bind and write inside `storage.transaction`, so
+ * two takes cannot both observe the ref unbound. `options.now` exists for the
+ * conformance suite's clock and defaults to `Date.now`.
+ */
+const createSecretValueStore = (storage: SecretStorageLike, options: { now?: () => number } = {}): SecretValueStore => {
+    const now = options.now ?? Date.now;
+    const keyOf = (ref: string): string => `${SECRET_VALUE_KEY_PREFIX}${ref}`;
+
+    return {
+        discard: async (ref) => {
+            const key = keyOf(ref);
+
+            // Erasing a ref must not remove an app record that sits at the same key.
+            if (!isSecretRecord(await storage.get(key))) {
+                return false;
+            }
+
+            return Boolean(await storage.delete(key));
+        },
+        put: async (seal, put) => {
+            const at = now();
+            const expiresAt = at + clampSecretValueTtl(put.ttlMs);
+            const ref = `${String(expiresAt).padStart(15, "0")}.${crypto.randomUUID()}`;
+            const key = keyOf(ref);
+            const sealed = await seal(ref);
+
+            // A random ref makes this unreachable in practice. Failing closed keeps an app record from being
+            // overwritten if it ever happens.
+            if ((await storage.get(key)) !== undefined) {
+                throw new Error(`secret value ref "${ref}" is already in use`);
+            }
+
+            await storage.put(key, { expiresAt, scope: put.scope, value: sealed } satisfies SecretRecord);
+
+            const earliest = await storage.list({ limit: SECRET_VALUE_SWEEP_LIMIT, prefix: SECRET_VALUE_KEY_PREFIX });
+            const expired = [...earliest].filter(([, record]) => isSecretRecord(record) && record.expiresAt <= at).map(([stored]) => stored);
+
+            await Promise.all(expired.map(async (stored) => storage.delete(stored)));
+
+            return ref;
+        },
+        take: (ref, take, open) =>
+            storage.transaction(async (txn) => {
+                const key = keyOf(ref);
+                const record = await txn.get(key);
+
+                // An app record that sits at a secret ref is not a secret, so it is
+                // neither returned nor bound.
+                if (!isSecretRecord(record)) {
+                    return undefined;
+                }
+
+                if (record.expiresAt <= now()) {
+                    await txn.delete(key);
+
+                    return undefined;
+                }
+
+                if (record.scope !== take.scope) {
+                    return undefined;
+                }
+
+                if (record.claimant !== undefined && record.claimant !== take.claimant) {
+                    return undefined;
+                }
+
+                // Bind only what opens: a record that fails to authenticate must not
+                // spend the ref for the claimant that presented it.
+                const value = await open(record.value);
+
+                if (value === undefined) {
+                    return undefined;
+                }
+
+                // `open` is asynchronous: the record may have run out while it decrypted. An expired value is
+                // neither returned nor bound, and is removed as the check above would have removed it.
+                if (record.expiresAt <= now()) {
+                    await txn.delete(key);
+
+                    return undefined;
+                }
+
+                if (record.claimant === undefined) {
+                    await txn.put(key, { ...record, claimant: take.claimant } satisfies SecretRecord);
+                }
+
+                return value;
+            }),
+    };
+};
+
+/**
+ * The key bindings a secret value is sealed under. They are Worker secrets read
+ * from `env`, never storage and never `vars` (deployed config). The previous key
+ * is only for rotation: `take` still opens values sealed under it.
+ */
+interface SecretValueKeyBindings {
+    LUNORA_SECRET_VALUE_KEY?: unknown;
+    LUNORA_SECRET_VALUE_KEY_PREVIOUS?: unknown;
+}
+
+/**
+ * Turn a Durable Object's `state.storage` and Worker `env` into a
+ * {@link SecretValueHost}: the reserved-namespace store wrapped in AES-256-GCM.
+ * With no key bound, every `put` and `take` refuses with `SecretValueKeyError`;
+ * nothing falls back to storing plaintext.
+ */
+const createSecretValueHost = (storage: SecretStorageLike, env: unknown, options: { now?: () => number } = {}): SecretValueHost => {
+    const bindings = (env ?? {}) as SecretValueKeyBindings;
+    const stringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+
+    return encryptingSecretValueHost(createSecretValueStore(storage, options), {
+        key: stringOrUndefined(bindings.LUNORA_SECRET_VALUE_KEY),
+        previousKey: stringOrUndefined(bindings.LUNORA_SECRET_VALUE_KEY_PREVIOUS),
+    });
 };
 
 /**
@@ -372,57 +589,6 @@ const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
 };
 
 /**
- * Cloudflare's `acceptWebSocket` tag budget: at most 10 tags per socket, each
- * at most 256 characters, for the socket's whole lifetime (tags are frozen at
- * accept — there is no per-call vs. per-lifetime distinction because there is
- * only ever one accept call per socket). Verified against
- * https://developers.cloudflare.com/durable-objects/api/state/ (2026-08-01);
- * update these two constants and the comment's date if that page's numbers
- * ever change.
- */
-const MAX_ACCEPT_TAGS = 10;
-const MAX_TAG_LENGTH = 256;
-
-/**
- * `accept` always prepends one identity tag ({@link ID_TAG_PREFIX}) before
- * calling `state.acceptWebSocket`, which is what turns Cloudflare's
- * {@link MAX_ACCEPT_TAGS}-tag provider cap into a caller-visible budget one
- * smaller — the reservation the guard below enforces.
- */
-const RESERVED_ID_TAG_COUNT = 1;
-
-/**
- * Reject an over-budget `tags` argument before it ever reaches
- * `state.acceptWebSocket` — the provider throws about the combined list
- * (including the host's own reserved id tag), which blames the caller for a
- * count or tag it never supplied. The adapter knows whose fault it is and
- * says so.
- */
-const assertWithinTagBudget = (tags: ReadonlyArray<string> | undefined): void => {
-    if (!tags || tags.length === 0) {
-        return;
-    }
-
-    const usableBudget = MAX_ACCEPT_TAGS - RESERVED_ID_TAG_COUNT;
-
-    if (tags.length > usableBudget) {
-        throw new LunoraError(
-            "SOCKET_TAG_BUDGET_EXCEEDED",
-            `${String(tags.length)} tags supplied; Cloudflare allows ${String(MAX_ACCEPT_TAGS)} per socket and 1 is reserved for the host's identity tag — pass at most ${String(usableBudget)}.`,
-        );
-    }
-
-    const overLength = tags.find((tag) => tag.length > MAX_TAG_LENGTH);
-
-    if (overLength !== undefined) {
-        throw new LunoraError(
-            "SOCKET_TAG_BUDGET_EXCEEDED",
-            `Tag ${JSON.stringify(overLength)} is ${String(overLength.length)} characters; Cloudflare allows at most ${String(MAX_TAG_LENGTH)} characters per tag.`,
-        );
-    }
-};
-
-/**
  * Build the socket host for a DO.
  *
  * Note what is deliberately absent: `setTag` / `removeTag`. Cloudflare freezes
@@ -503,7 +669,11 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             return new Response(null, { status: 101, webSocket: client as NonNullable<ResponseInit["webSocket"]> });
         },
         accept: (socket, attachment, tags) => {
-            assertWithinTagBudget(tags);
+            const violation = findSocketTagBudgetViolation(tags);
+
+            if (violation !== undefined) {
+                throw new LunoraError("SOCKET_TAG_BUDGET_EXCEEDED", violation);
+            }
 
             const ws = socket as WebSocket;
             const id = crypto.randomUUID();
@@ -618,5 +788,5 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
     return directory;
 };
 
-export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
+export { createSecretValueHost, createSecretValueStore, createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
 export type { SqlStorageCursor };

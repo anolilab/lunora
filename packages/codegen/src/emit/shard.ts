@@ -55,7 +55,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey } from "./shared";
+import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey, sensitiveArgNamesOf as sensitiveArgumentNamesOf } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -77,6 +77,16 @@ interface EmitShardOptions {
     hasNotify?: boolean;
     /** The project declares at least one `defineRoom` — wires the `LUNORA_ROOMS` topic→path resolution in the `roomHandlerPath` override. */
     hasRooms?: boolean;
+
+    /**
+     * The target can hold a human-supplied secret value AND the app imports
+     * `requestSecretTool`. Wires `agentSecrets` onto the ctx alongside `agents`; with
+     * no agents, or on a target that rates `secretValues` unsupported, nothing is wired.
+     */
+    hasSecretValues?: boolean;
+
+    /** A function declares a `v.sensitive` argument — wires the `sensitiveArgNames` override so the request log masks it. */
+    hasSensitiveArgs?: boolean;
 
     /** The project declares at least one `defineWebSocket` route — wires the `LUNORA_SOCKETS` path→registration resolution in the `socketRoute` override. */
     hasSockets?: boolean;
@@ -148,6 +158,8 @@ const emitShard = ({
     hasFlags = false,
     hasNotify = false,
     hasRooms = false,
+    hasSecretValues = false,
+    hasSensitiveArgs = false,
     hasSockets = false,
     lazyFunctions = false,
     hasVectors = true,
@@ -170,6 +182,10 @@ const emitShard = ({
     const base = baseSpecifiers(useUmbrella);
     const hasMutators = mutators.length > 0;
     const hasShapes = shapes.length > 0;
+    // A shape's `args` is lifted from its declaration, so this is known at build time. It turns on the
+    // sensitive-args wiring below (admit hook, name lookup) even for an app whose functions are all unmarked.
+    const hasSensitiveShapes = shapes.some((shape) => sensitiveArgumentNamesOf(shape.args).length > 0);
+    const sensitiveArgs = hasSensitiveArgs || hasSensitiveShapes;
     // The schema-version ledger (plan 200). The snapshot the drift gate diffs is
     // embedded verbatim so the DO can append it to `__lunora_schema_history` on
     // cold start, keyed by its content hash — reverting a schema re-links to the
@@ -211,7 +227,12 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         importLines: workflowImportLines,
         specs: workflowSpecs,
     } = emitWorkflowFragments(workflows);
-    const { build: agentsBuild, contextField: agentsContextField, importLines: agentImportLines, specs: agentSpecs } = emitAgentFragments(agents);
+    const {
+        build: agentsBuild,
+        contextField: agentsContextField,
+        importLines: agentImportLines,
+        specs: agentSpecs,
+    } = emitAgentFragments(agents, hasSecretValues && agents.length > 0);
     const {
         build: paymentsBuild,
         configField: paymentsConfigField,
@@ -347,12 +368,17 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         doTypeImports.push("WhereInput");
     }
 
+    if (hasSensitiveShapes) {
+        doTypeImports.push("SensitiveScope");
+    }
+
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
     const relationFanout = emitRelationFanout(hasGlobalTables);
 
     const { customMutatorOverride, shapeGuardImport, shapeReadPolicyAssertion, shapeReadPolicyImport, shapeResolveOverride } = emitShapeFragments({
         hasMutators,
+        hasSensitiveShapes,
         hasShapes,
         rlsData,
     });
@@ -449,6 +475,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
         ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
+        ...(sensitiveArgs ? [`import { sensitiveArgumentNames } from "${base.values}";`] : []),
         ``,
         `import schema from "../schema.js";`,
         ...liveStreamImports,
@@ -683,11 +710,58 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // `ensureMigrated()` runs first because the clear is a `DELETE FROM` and the
     // table has to exist: on a cold start this is the earliest code to touch SQL,
     // ahead of the dispatch that would normally have migrated.
+    //
+    // While a UNIQUE index is blocked by duplicates every user dispatch is refused
+    // (`ensureServable`), and an init hook is one — it would fail, and the base memoizes
+    // `ensureShardInit` once per instance, so it would never be retried when the de-dup
+    // unblocks the index and a cleared `.memory()` table would stay empty until eviction.
+    // So the clear still runs, the hooks are deferred, and the `ensureShardInit` override
+    // (awaited at every runtime entry point, like the base) runs them once the migration
+    // finds nothing blocked, before that entry's own dispatch proceeds.
     const shardInitOverride = `
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema as unknown as SchemaLike);\n" : ""}
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 `;
 
@@ -783,6 +857,30 @@ ${sourceBootstrap}${ttlBootstrap}        }
 `
         : "";
     const renderedPrepareFunctionOverride = prepareFunctionOverride === "" ? "\n\n" : `${prepareFunctionOverride}\n`;
+    // Only emitted when some function declares a `v.sensitive` argument, so projects
+    // without one keep their output byte-identical. The base class masks nothing.
+    /* eslint-disable no-secrets/no-secrets -- emitted generated-code text referencing the function and shape registries, not credentials */
+    // A shape resolves its marked names through its own `__shape__:` path, so the shape registry is read only when one exists.
+    const shapeNamesLookup = hasSensitiveShapes
+        ? `\n            const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`
+        : "";
+    const shapeArgsFallback = hasSensitiveShapes ? "shape?.args ?? " : "";
+    const sensitiveArgsOverride = sensitiveArgs
+        ? `
+        protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
+            const registered = LUNORA_FUNCTIONS[functionPath];${shapeNamesLookup}
+            const fromValidators = sensitiveArgumentNames(registered?.args ?? ${shapeArgsFallback}{});
+
+            if (registered?.sensitiveArgs === undefined) {
+                return fromValidators;
+            }
+
+            return new Set([...registered.sensitiveArgs, ...fromValidators]);
+        }
+
+`
+        : "";
+    /* eslint-enable no-secrets/no-secrets */
     const dispatchRun = dispatchRunSource(lazyFunctions);
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
@@ -924,6 +1022,9 @@ const LUNORA_STORAGE_RULES = ${renderLazyJsonData(storageRulesData, "StorageRule
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioFeaturesResult")};
+
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
 ${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
@@ -952,7 +1053,9 @@ ${dispatchRun}
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {${constructorOverride}
-        private migrated = false;${renderedPrepareFunctionOverride}${shardDispatchMethods}
+        private blockedUniqueIndexes: readonly string[] = [];
+        private migrated = false;
+        private migrationRetryAt = 0;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
 ${relationFanout.override}
 ${subscriptionMethods}
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
@@ -986,7 +1089,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -1058,13 +1161,40 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
 
 ${ADMIN_WRITE_METHODS}
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through \`ensureServable\`, which refuses until the
+         * index exists. \`migrated\` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per \`BLOCKED_MIGRATION_RETRY_MS\`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
-            this.migrated = true;
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true${snapshotArgument} });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 ${
     hasShardSearchIndexes
@@ -1080,7 +1210,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };

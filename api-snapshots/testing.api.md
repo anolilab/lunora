@@ -13,9 +13,16 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 interface AgentHarness {
+    awaitWait: (instanceId: string, name: string) => Promise<void>;
+    decline: (threadKey: string, toolCallId: string) => void;
+    deliver: (instanceId: string, name: string, payload: unknown) => void;
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
+    expire: (instanceId: string, name: string) => void;
+    journalEntries: () => unknown[];
     messages: (threadKey: string) => AgentMessageRow[];
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
+    readonly secrets: SecretValueHost;
+    supply: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
     thread: (threadKey: string) => HarnessThread | undefined;
 }
 ```
@@ -27,7 +34,8 @@ interface AgentHarnessOptions {
     env?: Record<string, unknown>;
     exportName?: string;
     functions?: Record<string, HarnessFunction>;
-    script: AgentGenerateResult[];
+    script?: AgentGenerateResult[];
+    secrets?: SecretValueHost;
 }
 ```
 
@@ -36,6 +44,8 @@ interface AgentHarnessOptions {
 ```ts
 interface AgentRunOverrides {
     instanceId?: string;
+    model?: LanguageModel;
+    onTokenDelta?: (delta: AgentTokenDelta) => void;
     script?: AgentGenerateResult[];
 }
 ```
@@ -152,6 +162,14 @@ interface FakeSchedulerControls {
 }
 ```
 
+### `FakeSecretValues` (interface)
+
+```ts
+interface FakeSecretValues extends SecretValueHost {
+    advanceClock: (ms: number) => void;
+}
+```
+
 ### `FakeTopicControls` (interface)
 
 ```ts
@@ -259,6 +277,28 @@ interface RecordEvaluationInput {
 }
 ```
 
+### `RecordedStreamPart` (type)
+
+```ts
+type RecordedStreamPart = ModelStreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
+```
+
+### `RecordedTurn` (interface)
+
+```ts
+interface RecordedTurn {
+    error?: {
+        after: number;
+        cause: unknown;
+    };
+    parts: ReadonlyArray<RecordedStreamPart>;
+    pause?: {
+        after: number;
+        gate: StreamGate;
+    };
+}
+```
+
 ### `RetrievalScorerOptions` (interface)
 
 ```ts
@@ -327,6 +367,16 @@ interface SentQueueMessage {
     contentType?: QueueContentType;
     delaySeconds?: number;
     queue: string;
+}
+```
+
+### `StreamGate` (interface)
+
+```ts
+interface StreamGate {
+    readonly reached: Promise<void>;
+    release: () => void;
+    wait: () => Promise<void>;
 }
 ```
 
@@ -410,6 +460,18 @@ const containsScorer: (needle: string, options?: {
 const createArtifactsFake: (options?: {
     namespace?: string;
 }) => ArtifactsFake;
+```
+
+### `createFakeSecretValues` (const)
+
+```ts
+const createFakeSecretValues: () => FakeSecretValues;
+```
+
+### `createStreamGate` (const)
+
+```ts
+const createStreamGate: () => StreamGate;
 ```
 
 ### `evaluate` (const)
@@ -504,6 +566,12 @@ const recallAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
 
 ```ts
 const recordEvaluation: (input: RecordEvaluationInput) => Record<string, EvaluationAttributeValue>;
+```
+
+### `recordedModel` (const)
+
+```ts
+const recordedModel: (turns: ReadonlyArray<RecordedTurn>) => MockLanguageModelV4;
 ```
 
 ### `regexScorer` (const)
@@ -647,6 +715,12 @@ type InlineMutationFunction<R> = (context: MutationCtx) => Promise<R> | R;
 
 ```ts
 type InlineQueryFunction<R> = (context: QueryCtx) => Promise<R> | R;
+```
+
+### `ModelStreamResult` (type)
+
+```ts
+type ModelStreamResult = Awaited<ReturnType<InstanceType<typeof MockLanguageModelV4>["doStream"]>>;
 ```
 
 ### `RecordedWideEvent` (interface)

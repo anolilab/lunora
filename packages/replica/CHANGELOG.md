@@ -1,3 +1,50 @@
+## @lunora/replica [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.201...@lunora/replica@1.0.0-alpha.202) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+
+## @lunora/replica [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.200...@lunora/replica@1.0.0-alpha.201) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+
+## @lunora/replica [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.199...@lunora/replica@1.0.0-alpha.200) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+
+## @lunora/replica [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.198...@lunora/replica@1.0.0-alpha.199) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+
+## @lunora/replica [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.197...@lunora/replica@1.0.0-alpha.198) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+
+## @lunora/replica [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.196...@lunora/replica@1.0.0-alpha.197) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+
 ## @lunora/replica [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.195...@lunora/replica@1.0.0-alpha.196) (2026-10-19)
 
 

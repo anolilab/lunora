@@ -14,3 +14,5 @@ export type {
     AiWebSearchProvider,
     LunoraAi,
 } from "./types";
+export type { UsageCounts, UsageStatus } from "./usage";
+export { breakdownCount, tokenCount, USAGE_ATTRIBUTE, usageStatus } from "./usage";

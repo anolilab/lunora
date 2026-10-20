@@ -1,3 +1,93 @@
+## @lunora/runtime [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.226...@lunora/runtime@1.0.0-alpha.227) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.129
+* **@lunora/observability:** upgraded to 1.0.0-alpha.160
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/do:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
+## @lunora/runtime [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.225...@lunora/runtime@1.0.0-alpha.226) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.159
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.91
+
+## @lunora/runtime [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.224...@lunora/runtime@1.0.0-alpha.225) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.128
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/observability:** upgraded to 1.0.0-alpha.158
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.90
+
+## @lunora/runtime [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.223...@lunora/runtime@1.0.0-alpha.224) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.127
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/observability:** upgraded to 1.0.0-alpha.157
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.233
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.89
+
+## @lunora/runtime [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.222...@lunora/runtime@1.0.0-alpha.223) (2026-10-20)
+
+### Features
+
+* **runtime:** add enrichSink and filterSink ([#1261](https://github.com/anolilab/lunora/issues/1261)) ([019e599](https://github.com/anolilab/lunora/commit/019e5999b4c3fdb299956bc9976d1fdcae11a7d9))
+
+## @lunora/runtime [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.221...@lunora/runtime@1.0.0-alpha.222) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.156
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+
+## @lunora/runtime [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.220...@lunora/runtime@1.0.0-alpha.221) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/observability:** upgraded to 1.0.0-alpha.155
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+
 ## @lunora/runtime [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.219...@lunora/runtime@1.0.0-alpha.220) (2026-10-19)
 
 ### Features

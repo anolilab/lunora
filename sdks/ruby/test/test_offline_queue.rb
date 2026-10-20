@@ -916,3 +916,146 @@ class TestFlushIntegration < Minitest::Test
     assert_equal queue_case("batchReplay")["maxEntries"], Lunora::MAX_BATCH_ENTRIES
   end
 end
+
+# An online-only write is never queued, persisted or replayed. The secret stands
+# in for a credential: nothing that reaches the persistence adapter may hold it.
+class TestOnlineOnlyWrites < Minitest::Test
+  SECRET = "sentinel-secret-7731"
+
+  def disconnected(store)
+    posts = []
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, _headers, body|
+        posts << body
+        [200, { "commitCursor" => 3, "result" => { "ok" => true } }]
+      },
+      offline_queue: Lunora::OfflineQueue.new(persistence: store, queue_before_first_connect: true)
+    )
+
+    [client, posts]
+  end
+
+  def test_an_online_only_write_is_refused_when_disconnected_and_never_persisted
+    ConformanceManifest.covers("offline_online_only_refused_when_disconnected")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+
+    # A subscription on the write's own path and args, primed with a server value,
+    # so an overlay the write applied would be displayed.
+    seen = []
+    client.attach_socket(->(_frame) {})
+    client.subscribe("auth:setPassword", { "token" => SECRET }, ->(value) { seen << value })
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+    client.detach_socket
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_equal 0, client.pending_mutation_count
+    assert_empty store.appended
+    refute_includes JSON.generate(store.records), SECRET
+    assert_empty posts
+    refute_includes seen, %w[a c], "a refused write's overlay is never displayed"
+  end
+
+  def test_an_online_only_write_whose_callback_drops_the_socket_is_refused_not_sent
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+    client.attach_socket(->(_frame) {})
+
+    # The subscriber sees the overlay, and the connection goes down inside its notification.
+    drop_on_overlay = lambda do |value|
+      client.detach_socket if value.is_a?(Array) && value.include?("c")
+    end
+    client.subscribe("auth:setPassword", { "token" => SECRET }, drop_on_overlay)
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_empty posts
+  end
+
+  def test_an_online_only_write_is_sent_when_connected
+    ConformanceManifest.covers("offline_online_only_sends_when_connected")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+    client.attach_socket(->(_frame) {})
+
+    outcome = client.submit("auth:setPassword", { "token" => SECRET }, online_only: true)
+
+    assert_equal :committed, outcome.status
+    assert_equal 1, posts.length
+    assert_includes posts.first, SECRET
+    assert_empty store.appended
+  end
+
+  def test_an_online_only_transport_failure_is_refused_with_its_cause
+    ConformanceManifest.covers("offline_online_only_transport_failure_refused")
+    store = MemoryStore.new
+    refusal = Errno::ECONNREFUSED.new("connection refused")
+    posts = []
+    replies = []
+    # Never connected and not queueing before the first connect, so the write takes the direct path.
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, _headers, body|
+        posts << body
+        replies.empty? ? raise(refusal) : replies.shift
+      },
+      offline_queue: Lunora::OfflineQueue.new(persistence: store)
+    )
+
+    seen = []
+    client.subscribe("auth:setPassword", { "token" => SECRET }, ->(value) { seen << value })
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+
+    error = assert_raises(Lunora::OfflineError) do
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
+    end
+
+    assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
+    assert_same refusal, error.cause
+    assert_equal 1, posts.length
+    assert_equal 0, client.pending_mutation_count
+    assert_empty store.appended
+    refute_includes JSON.generate(store.records), SECRET
+    assert_includes seen, %w[a c], "the overlay was shown while the write was in flight"
+    assert_equal %w[a], seen.last, "and rolled back once the write was refused"
+
+    # A coded server rejection is the server's verdict and surfaces as itself.
+    replies << [400, { "error" => { "code" => "CONFLICT", "message" => "nope" } }]
+    rejected = assert_raises(Lunora::ApiError) { client.submit("auth:setPassword", { "token" => SECRET }, online_only: true) }
+    assert_equal "CONFLICT", rejected.code
+
+    # Once the socket is up, the same failure is the server's to report, not a refusal.
+    client.attach_socket(->(_frame) {})
+    raised = assert_raises(Errno::ECONNREFUSED) { client.submit("auth:setPassword", { "token" => SECRET }, online_only: true) }
+    assert_same refusal, raised
+
+    # An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+    disconnected = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, body) { posts << body })
+    sent = posts.length
+
+    assert_raises(Lunora::WireFormatError) { disconnected.submit("auth:setPassword", { "token" => Object.new }, online_only: true) }
+    assert_equal sent, posts.length, "and nothing was sent"
+  end
+
+  def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one
+    ConformanceManifest.covers("offline_online_only_leaves_normal_writes_queued")
+    store = MemoryStore.new
+    client, posts = disconnected(store)
+
+    outcome = client.submit("messages:send", { "text" => "hi" })
+
+    assert_equal :queued, outcome.status
+    assert_equal 1, client.pending_mutation_count
+    assert_equal 1, store.appended.length
+    assert_empty posts
+  end
+end

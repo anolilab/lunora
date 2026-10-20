@@ -41,4 +41,50 @@ describe(createAgentGenerate, () => {
 
         expect(request["experimental_repairToolCall"]).toBeUndefined();
     });
+
+    it("projects the cache and reasoning breakdowns off the token details, dropping a zero one", async () => {
+        expect.assertions(1);
+
+        // A cache-write detail the provider filled in as 0 must not appear as a counted bucket.
+        vi.mocked(generateText).mockResolvedValueOnce({
+            output: undefined,
+            text: "ok",
+            toolCalls: [],
+            usage: {
+                inputTokenDetails: { cacheReadTokens: 4, cacheWriteTokens: 0, noCacheTokens: 6 },
+                inputTokens: 10,
+                outputTokenDetails: { reasoningTokens: 2, textTokens: 3 },
+                outputTokens: 5,
+                totalTokens: 15,
+            },
+        } as never);
+
+        const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
+
+        expect(result.usage).toStrictEqual({ cacheReadTokens: 4, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, status: "complete", totalTokens: 15 });
+    });
+
+    it("reports a turn whose provider sent no usage as unavailable, not as an absent usage", async () => {
+        expect.assertions(1);
+
+        // The mock's default result carries no usage.
+        const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
+
+        expect(result.usage).toStrictEqual({ status: "unavailable" });
+    });
+
+    it("reports a turn that reported only its prompt as partial", async () => {
+        expect.assertions(1);
+
+        vi.mocked(generateText).mockResolvedValueOnce({
+            output: undefined,
+            text: "ok",
+            toolCalls: [],
+            usage: { inputTokens: 10, outputTokenDetails: {}, totalTokens: undefined },
+        } as never);
+
+        const result = await createAgentGenerate(defineAgent({ model: fakeModel }), {})({ messages: [] });
+
+        expect(result.usage).toStrictEqual({ inputTokens: 10, status: "partial" });
+    });
 });

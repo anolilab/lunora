@@ -1,6 +1,6 @@
 {
     "name": "@lunora/shard-engine",
-    "version": "1.0.0-alpha.143",
+    "version": "1.0.0-alpha.149",
     "description": "Host-neutral reactive engine for Lunora: per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol. Consumes @lunora/platform host contracts and can be mounted on any platform host.",
     "keywords": [
         "cloudflare",
@@ -57,28 +57,32 @@
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsc --noEmit && tsc --noEmit -p __tests__/workerd",
         "test": "vitest run",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/platform": "1.0.0-alpha.70",
-        "@lunora/wire": "1.0.0-alpha.1",
+        "@lunora/platform": "1.0.0-alpha.73",
+        "@lunora/wire": "1.0.0-alpha.2",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.124",
+        "@lunora/bindings": "1.0.0-alpha.129",
         "@lunora/search-core": "workspace:*",
+        "@lunora/values": "1.0.0-alpha.77",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, MutationCallOptions, OnlineOnlyOption, ReturnOf } from "@lunora/client";
 import { createCallRunner } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
@@ -11,7 +11,7 @@ export interface MutationHandle<F extends FunctionReference> {
     /** The latest invocation's error, or `undefined`. */
     error: Accessor<Error | undefined>;
     /** Invoke the mutation. Resolves with the server result; rejects on failure. */
-    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
     /** `true` while any invocation from this handle is in flight (ref-counted, so overlapping calls compose). */
     pending: Accessor<boolean>;
     /** Clear `data`/`error` back to idle. */
@@ -24,7 +24,7 @@ export interface MutationHandle<F extends FunctionReference> {
  * in tests without constructing a full `LunoraClient`.
  */
 export interface MutationClient<F extends FunctionReference> {
-    mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
 }
 
 /**
@@ -45,7 +45,7 @@ export const createMutationForClient = <F extends FunctionReference>(client: Mut
     const [pending, setPending] = createSignal(false);
 
     const mutate = createCallRunner(
-        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => client.mutation(function_, args, options),
+        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => client.mutation(function_, args, options),
         {
             setError,
             setPending,

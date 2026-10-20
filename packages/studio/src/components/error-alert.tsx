@@ -35,6 +35,8 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
     // operator hunt. Untagged errors (thrown outside an admin RPC) fall back to
     // the errors-only view.
     const seq = operationSeqOf(error);
+    // The cause explanation, when the error carries one, reads apart from the fix below it.
+    const why = (error as { why?: unknown } | null | undefined)?.why;
 
     const showInConsole = (): void => {
         operationConsole?.openConsole({ errorsOnly: true, seq });
@@ -43,6 +45,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
     return (
         <Alert className={className} testId={testId} variant="destructive">
             <p className="font-medium">{errorMessage(error)}</p>
+            {typeof why === "string" ? <p className="mt-1 text-xs opacity-90">{why}</p> : null}
             {hint === undefined ? null : <p className="mt-1 whitespace-pre-wrap text-xs opacity-90">{flattenHint(hint)}</p>}
             {documentationUrl === undefined ? null : (
                 <a

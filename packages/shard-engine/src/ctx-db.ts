@@ -101,7 +101,7 @@ import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
-import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators, transformOnlyDefinition } from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
@@ -117,6 +117,7 @@ import type {
     RankIndexDefinitionLike,
     ReadHook,
     RelationDefinitionLike,
+    RelationEdge,
     RestrictableQueryOptions,
     SchemaLike,
     ScoredDocument,
@@ -1636,44 +1637,6 @@ const buildReader = (
 };
 
 /**
- * Fill any field absent from `document` that declares a `.default()` literal or
- * `.$defaultFn()` factory. The factory wins when both are present; a literal is
- * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
- * defaults survive.
- *
- * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
- * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
- * be set by the client.
- */
-const applyInsertDefaults = (
-    definition: TableDefinitionLike,
-    document: Record<string, unknown>,
-    auth: ServerDefaultContextLike["auth"],
-): Record<string, unknown> => {
-    const result = { ...document };
-
-    for (const [field, column] of tableColumns(definition)) {
-        if (column.serverDefault) {
-            result[field] = column.serverDefault({ auth });
-
-            continue;
-        }
-
-        if (result[field] !== undefined) {
-            continue;
-        }
-
-        if (column.defaultFn) {
-            result[field] = column.defaultFn();
-        } else if ("defaultValue" in column) {
-            result[field] = column.defaultValue;
-        }
-    }
-
-    return result;
-};
-
-/**
  * Recompute every `.$onUpdateFn()` field the caller did not set explicitly,
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
  * unless the caller overrode them.
@@ -1990,6 +1953,50 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * already the expensive part.
      */
     const relationEdges = deriveRelationEdges(schema);
+
+    /**
+     * The scalar `v.id` foreign keys of each table whose parent can be looked up
+     * in THIS database: both tables live on the same shard. A `.shardBy()` table
+     * has one database per key, so a parent that is sharded (or a child whose
+     * shard may differ) is somewhere this lookup cannot see, and a `.global()`
+     * parent is in D1. An array of ids is not checked either — that is one lookup
+     * per element, not per key.
+     */
+    const checkedForeignKeys = new Map<string, RelationEdge[]>();
+
+    for (const edge of relationEdges) {
+        const sameShard = (table: string): boolean => (schema.tables[table]?.shardMode?.kind ?? "root") === "root";
+
+        if (!edge.array && sameShard(edge.sourceTable) && sameShard(edge.targetTable)) {
+            checkedForeignKeys.set(edge.sourceTable, [...(checkedForeignKeys.get(edge.sourceTable) ?? []), edge]);
+        }
+    }
+
+    /**
+     * Throw `VALIDATION_ERROR` when a foreign-key column in `document` names a row
+     * that does not exist — one primary-key lookup per reference, inside the
+     * write's own transaction. When `stored` (the row being rewritten) is given, a
+     * column that still holds its stored value is skipped: a delete with no
+     * `onDelete` leaves children dangling, and a rewrite that does not touch the
+     * reference — a spread `replace`, a patch carrying the old value — must not
+     * fail on it. A reference to the document's own `_id` is satisfied: the row
+     * is not written yet on insert, but it will exist by the time it is read.
+     */
+    const assertForeignKeysExist = (tableName: string, document: Record<string, unknown>, stored?: Record<string, unknown>): void => {
+        for (const edge of checkedForeignKeys.get(tableName) ?? []) {
+            const value = document[edge.column];
+
+            if (typeof value !== "string" || stored?.[edge.column] === value || (edge.targetTable === tableName && document["_id"] === value)) {
+                continue;
+            }
+
+            const parent = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(edge.targetTable)} WHERE id = ${value} LIMIT 1`).toArray();
+
+            if (parent.length === 0) {
+                throw new LunoraError("VALIDATION_ERROR", `${edge.name} references ${edge.targetTable} row "${value}", which does not exist`);
+            }
+        }
+    };
     const relationWrites = describeRelationWrites(schema, options.inTransaction);
     const deleteRereadTables = deriveDeleteRereadTables(schema);
     const softDeleteFields = deriveSoftDeleteFields(schema);
@@ -2258,11 +2265,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
         // A `.memory()` table never reaches the changelog. Its rows do not
         // survive the next eviction, so a CDC consumer replaying them would
-        // materialize state the shard itself no longer believes in — and log
-        // retention is opt-in (`LUNORA_CDC_LOG_RETENTION`; without it
-        // `CdcRetentionRunner.sweep` returns before trimming anything), so on a
-        // default deployment a heartbeat-rate presence table would grow the log
-        // without bound for the life of the shard.
+        // materialize state the shard itself no longer believes in — and the log
+        // is only bounded by row retention (`LUNORA_CDC_LOG_RETENTION`, a
+        // generous default window that `off` disables), so a heartbeat-rate
+        // presence table would fill that window with rows nobody can replay.
         //
         // What this costs, stated because two call sites got it wrong by
         // assuming otherwise:
@@ -3832,11 +3838,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
-            const withDefaults = applyInsertDefaults(definition, document, auth);
-
             // Refinements declared via `.check(predicate)` fire here on the
-            // post-default row so a defaulted value still passes its checks.
-            runRowValidators(definition, withDefaults);
+            // post-default row so a defaulted value still passes its checks. A
+            // `v.from` column the caller wrote is stored as its parsed output, which
+            // is what reads are typed as; a defaulted one is declared as that output
+            // already, and a trusted replay holds it.
+            const trusted = insertOptions?.allowExplicitId === true;
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { supplied: document, trusted });
 
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
@@ -3867,6 +3875,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
             if (hasMatchingTrigger(tableName, "before", "insert")) {
                 await fireTriggers("before", "insert", { doc: { ...documentWithMeta }, id, op: "insert", table: tableName });
+            }
+
+            // After the `before` trigger, so one that creates the referenced parent
+            // through its own db context can still save the child.
+            if (!trusted) {
+                assertForeignKeysExist(tableName, documentWithMeta);
             }
 
             // Backfill counters BEFORE the physical write so the rebuild
@@ -3945,8 +3959,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureRankBackfilledForTable(tableName);
 
             // Build every row up front: column defaults + a minted (or, for trusted
-            // import, an explicit) id. **No `.check()` validators and no before/after
-            // triggers run** — the caller vouches for the data; that is the "unsafe".
+            // import, an explicit) id. **No `.check()` validators, no foreign key existence
+            // check and no before/after triggers run** — the caller vouches for the data;
+            // that is the "unsafe". Only the transform columns are applied (below) so stored
+            // rows match every other write.
             // One `_commitSeq` per CHUNK, not per row. Each chunk below is a single
             // atomic multi-row INSERT, and a sequence identifies a commit rather
             // than a row — so rows that land together must compare equal, which is
@@ -3961,8 +3977,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 chunkSeqFields.push(commitSeqFields(tableName));
             }
 
+            // Still unvalidated, but a `v.from` column the caller wrote is stored as its parsed
+            // output like every other insert; a trusted replay already holds that output.
+            const transformColumns = batchOptions?.allowExplicitId === true ? undefined : transformOnlyDefinition(definition);
+
             const rows = documents.map((document, index) => {
-                const withDefaults = applyInsertDefaults(definition, document, auth);
+                const defaulted = applyInsertDefaults(definition, document, auth);
+                const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
@@ -4144,21 +4165,34 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Atomic field operators (`{ increment: 1 }`, …) resolve against the row just
             // read; the DO runs one mutation at a time, so no other write can land between.
             const effectivePatch = resolvePatch(tableDefinition, patch, existing);
-            const merged = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
+            const mergedRow = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
-            applyOnUpdate(tableDefinition, effectivePatch, merged, auth);
-
-            // The caller's authorization verdict, taken on the row this write actually produces.
-            assertPatchAllowed(patchOptions, existing, merged);
+            applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
-            runRowValidators(tableDefinition, merged, true);
+            //
+            // A transform column is parsed only when the patch sets it to something
+            // other than what is stored: the rest of `merged`, an update hook's value
+            // included, is stored output, which its own transform would reject or
+            // apply twice.
+            const merged = runRowValidators(tableDefinition, mergedRow, {
+                only: new Set(Object.keys(effectivePatch)),
+                previous: () => existing,
+                tolerateStoredNull: true,
+            });
+
+            // The caller's authorization verdict, taken on the row this write actually produces:
+            // `merged` carries each transform column's parsed OUTPUT, which is what lands.
+            assertPatchAllowed(patchOptions, existing, merged);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
             }
+
+            // After the `before` trigger, which may create the referenced parent.
+            assertForeignKeysExist(tableName, merged, existing);
 
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
@@ -4650,16 +4684,24 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // `clock()` is the last resort, for a row with no readable stored
             // timestamp; the `??` chain keeps it unevaluated on the normal paths.
             const creationTime = replayed ?? stored ?? clock();
-            const replaced: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
+            const replacement: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
-            applyOnUpdate(tableDefinition, document, replaced, auth);
+            applyOnUpdate(tableDefinition, document, replacement, auth);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
-            // field still has to satisfy its `.check()` predicate.
-            runRowValidators(tableDefinition, replaced);
+            // field still has to satisfy its `.check()` predicate. A `v.from` column
+            // the caller wrote is stored as its parsed output; an update hook's value
+            // is already that output, and so is a trusted replay's document.
+            const trusted = replaceOptions?.allowExplicitId === true;
+            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, supplied: document, trusted });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            }
+
+            // After the `before` trigger, which may create the referenced parent.
+            if (!trusted) {
+                assertForeignKeysExist(tableName, replaced, previous);
             }
 
             ensureBackfilledForTable(tableName);

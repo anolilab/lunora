@@ -44,6 +44,13 @@ client.attach_socket(Box::new(|frame| conn.send_json(frame)));
 let id = client.subscribe("messages:list", args, on_data, on_error);
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `reqwest`:
+
+```rust
+let http = reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::none()).build()?;
+```
+
 `handle_frame(raw)` is what you call with each inbound WebSocket message;
 `resend_subscriptions()` re-subscribes everything after a reconnect — queries
 from their resume cursor and shape views from their checkpoint and epoch. A
@@ -59,6 +66,102 @@ it delivered the refused rows — is not spliced on: the view is emptied, its
 re-seeds it (a `reset` part is exempt: it replaces the view anyway). A frame shaped like no
 server frame is ignored, and a `cursor` that is not an integer never replaces
 the tracked one.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handle_frame` returns the frame's type). Each new socket sends `connect` first, then
+resubscribes and flushes that shard's offline queue; if the connect write or the resend
+fails, the socket is dropped and the loop backs off.
+
+The loop owns the client. A reader thread forwards inbound frames to it over a channel,
+and so do the flush timers, so the client is never shared across threads. `handle_frame`
+runs subscription callbacks on the loop's thread without holding any lock another thread
+needs. A callback therefore cannot call the client directly: to subscribe from a
+callback, send the request over your own channel and let the loop act on it. A failed
+flush that requeues writes (or returns `retry_after_ms`) schedules its own timer, or
+those writes wait for the next reconnect. A failed socket write shuts the socket down,
+which ends the reader and so the run.
+
+```rust
+enum Event {
+    Frame(String),
+    Flush, // a flush timer fired
+    Closed, // the reader hit end of stream or an error
+}
+
+fn schedule_flush(tx: mpsc::Sender<Event>, retry_after_ms: Option<u64>, backoff: u64) {
+    let wait = retry_after_ms.unwrap_or(backoff / 2 + rand::random_range(0..=backoff / 2));
+    thread::spawn(move || {
+        sleep(Duration::from_millis(wait));
+        let _ = tx.send(Event::Flush); // errs once the run has ended, which is fine
+    });
+}
+
+let mut client = client; // owned by this loop; no shared lock
+let mut attempt = 0u32;
+loop {
+    let mut resend_error = None;
+    if let Ok((mut reader, writer)) = dial() { // your socket library: split read / write halves
+        let writer = Arc::new(Mutex::new(writer));
+        let failed = Arc::new(AtomicBool::new(false)); // set by a failed socket write
+        let (tx, rx) = mpsc::channel::<Event>(); // one per run, so an old timer cannot reach a new run
+        let reader_tx = tx.clone();
+        thread::spawn(move || {
+            while let Ok(raw) = reader.recv() {
+                if reader_tx.send(Event::Frame(raw)).is_err() { return; }
+            }
+            let _ = reader_tx.send(Event::Closed);
+        });
+        if writer.lock().unwrap().send_json(&build_connect_frame(Some(&client.client_id), None)).is_ok() {
+            let (w, f) = (Arc::clone(&writer), Arc::clone(&failed));
+            client.attach_socket(Box::new(move |frame: &Value| {
+                let sent = w.lock().unwrap().send_json(frame).is_ok();
+                if !sent {
+                    f.store(true, Ordering::SeqCst);
+                    w.lock().unwrap().shutdown(); // your socket library: must unblock the reader, and tolerate repeat calls
+                }
+            }));
+            if let Err(err) = client.resend_subscriptions() {
+                // A subscription whose arguments the wire cannot encode fails every resend
+                // the same way: remove it with `unsubscribe`, then restart this loop.
+                resend_error = Some(err);
+            }
+            if resend_error.is_none() && !failed.load(Ordering::SeqCst) {
+                let mut flush_backoff = 1000u64;
+                let report = client.flush_offline_queue(None);
+                if !report.requeued.is_empty() || report.retry_after_ms.is_some() {
+                    schedule_flush(tx.clone(), report.retry_after_ms.map(|ms| ms as u64), flush_backoff);
+                }
+                while let Ok(event) = rx.recv() {
+                    match event {
+                        Event::Frame(raw) => match client.handle_frame(&raw) {
+                            Ok(kind) if kind.as_deref() == Some("ack") => attempt = 0,
+                            Ok(_) => {}
+                            Err(_) => break, // ends this run; the cleanup below still runs
+                        },
+                        Event::Flush => {
+                            let next = client.flush_offline_queue(None);
+                            if !next.requeued.is_empty() || next.retry_after_ms.is_some() {
+                                flush_backoff = (flush_backoff * 2).min(30_000);
+                                schedule_flush(tx.clone(), next.retry_after_ms.map(|ms| ms as u64), flush_backoff);
+                            }
+                        }
+                        Event::Closed => break,
+                    }
+                    if failed.load(Ordering::SeqCst) { break; }
+                }
+            }
+        }
+        client.detach_socket();
+        if let Some(err) = resend_error {
+            eprintln!("lunora: stopping the reconnect loop, a subscription cannot be resent: {err:?}");
+            break;
+        }
+    }
+    let ms = (1000u64 << attempt.min(5)).min(30_000);
+    sleep(Duration::from_millis(ms / 2 + rand::random_range(0..=ms / 2)));
+    attempt += 1;
+}
+```
 
 An RPC reply the call cannot read — a body that is not JSON, or JSON that is not
 an object (`null`, `[]`, a string), at any status — fails with
@@ -112,6 +215,16 @@ _restored_ record whose args no longer decode is purged and settled
 `OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute arguments. Every
 discard — including one the capacity cap evicts out of a restored queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
+
+A write that must never sit on disk — a credential, a one-time token — sets
+`online_only = true` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` fails with
+`CODE_OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its
+arguments never reach the persistence adapter. A send that gets no reply while
+the socket is down is refused the same way, with the transport error as its
+`source()`. It does not wait for a flush or
+queue behind pending writes, so it may land before an older queued write to the
+same document.
 
 One rule classifies a failed replay, whether the write went out alone or in a
 batch: a CODED envelope is classified by its code alone, whatever the HTTP

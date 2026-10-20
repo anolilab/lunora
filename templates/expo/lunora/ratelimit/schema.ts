@@ -11,8 +11,8 @@ import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 
 export const limits = {
-    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
-    send: { kind: "token bucket", period: 60_000, rate: 30 },
+    /** Chat writes: 10 per caller per minute, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
 export type LimitName = keyof typeof limits;

@@ -45,7 +45,9 @@ describe("emitShard — untracked ctx.runQuery", () => {
         // It keeps the caller's `functionPath` for attribution, so the kind is
         // overridden rather than looked up — otherwise a sub-query spawned from a
         // mutation could compose a mutation of its own.
-        expect(emitted).toContain('identity: caller, kind: "query", scope: options.scope })');
+        // The sub-context carries the dispatch's sensitive-value scope, so a value marked
+        // sensitive is scrubbed from records the untracked query writes too.
+        expect(emitted).toContain('identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })');
         expect(emitted).toContain("const contextKind = options.kind ?? ");
     });
 
@@ -88,13 +90,14 @@ describe("emitShard — untracked ctx.runQuery", () => {
     });
 
     it("keeps actions on the caller ctx and gives mutations a transaction ctx", () => {
-        expect.assertions(4);
+        expect.assertions(6);
 
         const emitted = shard();
 
-        expect(emitted).toContain(
-            'target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);',
-        );
+        expect(emitted).toContain('return dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);');
+        expect(emitted).not.toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, queryContext()');
+        // Every composed call admits the callee's sensitive arguments into the caller's scope first.
+        expect(emitted.match(/this\.admitSensitiveArgs\(options\.sensitive, reference\.__lunoraRef, fnArgs\);/g)).toHaveLength(3);
         expect(emitted).toContain(
             'return dispatchRun("mutation", reference.__lunoraRef, fnArgs, mutationCtx, kind, async (work) => this.runMutationTransaction(mutationCtx, work));',
         );

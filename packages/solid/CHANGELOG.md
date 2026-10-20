@@ -1,3 +1,78 @@
+## @lunora/solid [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.245...@lunora/solid@1.0.0-alpha.246) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+
+## @lunora/solid [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.244...@lunora/solid@1.0.0-alpha.245) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+
+## @lunora/solid [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.243...@lunora/solid@1.0.0-alpha.244) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/solid [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.242...@lunora/solid@1.0.0-alpha.243) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
+## @lunora/solid [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.241...@lunora/solid@1.0.0-alpha.242) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.155
+
+## @lunora/solid [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.240...@lunora/solid@1.0.0-alpha.241) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/solid [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.239...@lunora/solid@1.0.0-alpha.240) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
+## @lunora/solid [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.238...@lunora/solid@1.0.0-alpha.239) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.153
+
 ## @lunora/solid [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.237...@lunora/solid@1.0.0-alpha.238) (2026-10-19)
 
 ### Features

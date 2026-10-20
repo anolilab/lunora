@@ -360,6 +360,20 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SensitiveScope` (interface)
+
+```ts
+interface SensitiveScope {
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+    clear: () => void;
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
+    name: (name: string) => string;
+    text: (text: string) => string;
+    value: <T>(value: T) => T;
+}
+```
+
 ### `SessionDO` (class)
 
 ```ts
@@ -414,13 +428,14 @@ abstract class ShardDO {
     protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
+    protected readonly secretValues: SecretValueHost;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected roomHandlerPath(_topic: string): string | undefined;
     protected socketRoute(_path: string): {
@@ -530,6 +545,12 @@ abstract class ShardDO {
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
     protected isPaidFunction(_functionPath: string): boolean;
+    protected sensitiveArgNames(_functionPath: string): ReadonlySet<string>;
+    protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope;
+    protected withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T>;
+    protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown;
+    protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void;
+    protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void;
     protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
@@ -589,14 +610,14 @@ abstract class ShardDO {
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>, scope?: SensitiveScope): ContextLogger;
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope?: SensitiveScope): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
-    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
-    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
-    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch;
-    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): ContextFetch;
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): SpanHandle;
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope?: SensitiveScope): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
     protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose?: boolean): Promise<void>;
     protected handleFetchCloudflare(request: Request): Promise<Response>;
@@ -956,6 +977,7 @@ interface ContextLogger {
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;

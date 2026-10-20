@@ -55,7 +55,9 @@ const ResendVerificationCard = (): JSX.Element => {
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>{t.verifyEmailResend}</SubmitButton>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
+                    {t.verifyEmailResend}
+                </SubmitButton>
             </form>
         </AuthCard>
     );

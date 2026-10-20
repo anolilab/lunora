@@ -352,6 +352,132 @@ describe(runVoiceTurn, () => {
 
         expect(patches.at(-1)?.args).toMatchObject({ key: "t1", status: "idle" });
     });
+
+    it("tells the client to discard the streamed text when the model turn throws", async () => {
+        expect.hasAssertions();
+
+        const store = createThreadStore();
+        const frames: VoiceServerFrame[] = [];
+        // The provider streams the start of an answer, then fails before finishing it.
+        const truncated: AgentStreamGenerate = async (_options, onDelta) => {
+            onDelta("It is ");
+
+            throw new Error("stream truncated");
+        };
+
+        await expect(
+            runVoiceTurn({
+                agent,
+                connectionId: "c1",
+                env,
+                exportName: "support",
+                paths,
+                run: store.run,
+                send: (frame) => frames.push(frame),
+                sendAudio: () => {},
+                signal: new AbortController().signal,
+                streamGenerate: truncated,
+                synthesize: async () => new Uint8Array(),
+                text: "hello",
+                threadKey: "t1",
+                transcribe: async () => "unused",
+                turn: 0,
+            }),
+        ).rejects.toThrow("stream truncated");
+
+        // The partial answer is streamed, then withdrawn before the failure surfaces.
+        expect(frames).toStrictEqual([
+            { text: "hello", type: "user_transcript" },
+            { text: "It is ", type: "assistant_delta" },
+            { type: "assistant_discarded" },
+        ]);
+        expect(frames).not.toContainEqual(expect.objectContaining({ type: "assistant_done" }));
+    });
+
+    it("does not discard the previous answer when the turn fails before it streams anything", async () => {
+        expect.hasAssertions();
+
+        const store = createThreadStore();
+        const frames: VoiceServerFrame[] = [];
+
+        // Transcription runs before any delta, so the client still shows the previous turn's answer.
+        await expect(
+            runVoiceTurn({
+                agent,
+                connectionId: "c1",
+                env,
+                exportName: "support",
+                paths,
+                pcm: new Uint8Array([1]),
+                run: store.run,
+                send: (frame) => frames.push(frame),
+                sendAudio: () => {},
+                signal: new AbortController().signal,
+                streamGenerate: scriptedStream(["unused."]),
+                synthesize: async () => new Uint8Array(),
+                transcribe: async () => {
+                    throw new Error("stt unavailable");
+                },
+                turn: 1,
+                threadKey: "t1",
+            }),
+        ).rejects.toThrow("stt unavailable");
+
+        expect(frames).not.toContainEqual({ type: "assistant_discarded" });
+        expect(store.calls.findLast((call) => call.path === paths.patchThread)?.args).toMatchObject({ status: "idle" });
+    });
+
+    it("never synthesizes or sends queued speech once the turn has failed", async () => {
+        expect.hasAssertions();
+
+        const audio: Uint8Array[] = [];
+        const synthesized: string[] = [];
+        // The first sentence is still synthesizing when the turn fails; the second is queued behind it.
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const synthesize = vi.fn<VoiceSynthesize>(async (text) => {
+            synthesized.push(text);
+            await gate;
+
+            return new Uint8Array([1]);
+        });
+        const failing: AgentStreamGenerate = async (_options, onDelta) => {
+            onDelta("First sentence. Second sentence. ");
+
+            throw new Error("provider unavailable");
+        };
+
+        await expect(
+            runVoiceTurn({
+                agent,
+                connectionId: "c1",
+                env,
+                exportName: "support",
+                paths,
+                run: createThreadStore().run,
+                send: () => {},
+                sendAudio: (bytes) => audio.push(bytes),
+                signal: new AbortController().signal,
+                streamGenerate: failing,
+                synthesize,
+                text: "hello",
+                threadKey: "t1",
+                transcribe: async () => "unused",
+                turn: 0,
+            }),
+        ).rejects.toThrow("provider unavailable");
+
+        release();
+        // The queued speech runs entirely on microtasks once the gate opens; one macrotask turn lets it finish.
+        await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+        });
+
+        expect(synthesized).toStrictEqual(["First sentence."]);
+        expect(audio).toStrictEqual([]);
+    });
 });
 
 /** A `run` seam recording every `patchThread` status, with per-path failure injection. */

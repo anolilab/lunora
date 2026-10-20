@@ -19,5 +19,6 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Cost default: sample 10% of requests into Workers Logs. Raise it while debugging.
+    "observability": { "enabled": true, "head_sampling_rate": 0.1 },
 }

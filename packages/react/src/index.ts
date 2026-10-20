@@ -95,6 +95,7 @@ export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations, useSig
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
 export type {
+    AgentApprovalGrant,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,
@@ -133,6 +134,7 @@ export { useRateLimit } from "./use-rate-limit";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
 export { useStream } from "./use-stream";
 export { default as useSubscription } from "./use-subscription";
+export { default as useSuspenseQuery } from "./use-suspense-query";
 export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./use-voice-agent";
 export { useVoiceAgent } from "./use-voice-agent";
 

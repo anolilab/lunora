@@ -42,6 +42,7 @@ export type {
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
+    SyncStatus,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
@@ -94,6 +95,7 @@ export type {
     KvValueResult,
     LunoraClientOptions,
     OfflineQueueOptions,
+    OnlineOnlyOption,
     OutboxMutation,
     OutboxSink,
     PersistedMutation,

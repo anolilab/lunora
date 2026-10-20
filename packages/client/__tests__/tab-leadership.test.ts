@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ConnectionStatus } from "../src/connection-state";
+import type { ShapeSubscriptionState } from "../src/shape-state";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
 import type { LeaderMirror, TabLeadershipHost } from "../src/tab-leadership";
 import {
@@ -18,6 +19,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
     const leader: LeaderMirror = { status: undefined, wasEverConnected: false, ...mirror };
     const host: TabLeadershipHost = {
         ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
+        activeShapes: vi.fn<() => ShapeSubscriptionState[]>(() => []),
         activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
         broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
         clientIdentifier: vi.fn<() => string>(() => "client-a"),
@@ -55,6 +57,7 @@ const liveSubscription = (overrides: Partial<SubscriptionState> = {}): Subscript
         lastValue: undefined,
         optimisticLayers: [],
         serverBase: undefined,
+        valueReceived: false,
         wireArgs: {},
         ...overrides,
     };
@@ -76,6 +79,28 @@ describe("onBecomeLeader", () => {
         expect(host.broadcastStatus).toHaveBeenCalledTimes(1);
     });
 
+    it("emits the status it now reports, even with nothing subscribed", () => {
+        expect.assertions(2);
+
+        const { host } = fakeHost();
+
+        onBecomeLeader(host);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(host.broadcastStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("forgets the values the previous leader delivered", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription({ valueReceived: true });
+        const { host } = fakeHost({ activeSubscriptions: () => [state] });
+
+        onBecomeLeader(host);
+
+        expect(state.valueReceived).toBe(false);
+    });
+
     it("opens the socket of a shard with a queued write even when no subscription uses it", () => {
         expect.assertions(2);
 
@@ -84,6 +109,31 @@ describe("onBecomeLeader", () => {
         onBecomeLeader(host);
 
         expect(host.ensureSocket).toHaveBeenCalledWith("tenant-q");
+        expect(host.queueResubscribe).not.toHaveBeenCalled();
+    });
+});
+
+describe("onBecomeLeader shapes", () => {
+    it("treats a shape as unanswered until the new socket answers it", () => {
+        expect.assertions(1);
+
+        const shape = { answered: true } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape] });
+
+        onBecomeLeader(host);
+
+        expect(shape.answered).toBe(false);
+    });
+
+    it("reopens the socket of a shape's shard even when no query uses it", () => {
+        expect.assertions(2);
+
+        const shape = { answered: true, shardKey: "tenant-s" } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape] });
+
+        onBecomeLeader(host);
+
+        expect(host.ensureSocket).toHaveBeenCalledWith("tenant-s");
         expect(host.queueResubscribe).not.toHaveBeenCalled();
     });
 });
@@ -99,6 +149,32 @@ describe("onStopBeingLeader", () => {
         expect(host.closeConnections).toHaveBeenCalledTimes(1);
         expect(leader.status).toBeUndefined();
         expect(leader.wasEverConnected).toBe(false);
+    });
+
+    it("emits the status it now reports, even with nothing subscribed, and forgets the values it had delivered", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ valueReceived: true });
+        const { host } = fakeHost({ activeSubscriptions: () => [state] });
+
+        onStopBeingLeader(host);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(state.valueReceived).toBe(false);
+    });
+
+    it("forgets the answers its own socket gave, for shapes and acked queries", () => {
+        expect.assertions(3);
+
+        const state = liveSubscription({ acked: true });
+        const shape = { answered: true } as unknown as ShapeSubscriptionState;
+        const { host } = fakeHost({ activeShapes: () => [shape], activeSubscriptions: () => [state] });
+
+        onStopBeingLeader(host);
+
+        expect(shape.answered).toBe(false);
+        expect(state.acked).toBe(false);
+        expect(state.valueReceived).toBe(false);
     });
 });
 
@@ -187,6 +263,23 @@ describe("onFollowerSubscriptionData", () => {
         expect(state.serverBase).toStrictEqual([{ id: "a" }]);
         expect(state.serverCursor).toBe(5);
         expect(seen).toStrictEqual([[{ id: "a" }]]);
+    });
+
+    it("counts the leader's first value as the answer even over a hydrated cache, and only the first", () => {
+        expect.assertions(4);
+
+        const state = liveSubscription({ serverBase: { n: 0 } });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", { n: 1 }, undefined, undefined, undefined);
+
+        expect(state.valueReceived).toBe(true);
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+
+        onFollowerSubscriptionData(host, "s1", { n: 2 }, undefined, undefined, undefined);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+        expect(state.serverBase).toStrictEqual({ n: 2 });
     });
 
     it("releases an optimistic layer the frame's cursor confirms, and shows the base value", () => {

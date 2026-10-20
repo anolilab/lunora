@@ -45,9 +45,54 @@ final messages = await client.query('messages:list', args: {'channel': 'general'
 await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'});
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `dart:io`, set
+`request.followRedirects = false` on the `HttpClientRequest`.
+
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
 carrying each subscription's resume cursor.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type). Each socket open sends the `connect` frame
+first, then resubscribes; `setConnected(true)` starts the flush of this shard's queued
+writes, which never throws:
+
+```dart
+var attempt = 0;
+while (!client.closed) {
+  try {
+    final socket = await connect(); // your socket library
+    if (client.closed) {
+      socket.close(); // closed while dialing: never attach a socket to a closed client
+      break;
+    }
+    void send(Map<String, Object?> frame) => socket.add(jsonEncode(frame));
+    send(LunoraClient.buildConnectFrame()); // connect first: the server's onConnect hook fires on it
+    client.attachSocket(send);
+    client.resendSubscriptions();
+    client.setConnected(true);
+    await for (final raw in socket) {
+      if (client.closed) {
+        socket.close(); // the app closed the client: stop reading (also close the socket there, or an idle read never ends)
+        break;
+      }
+      // Dispatch runs application callbacks. A throw there is a bug in the app,
+      // not a dead socket, so report it and keep reading.
+      try {
+        if (client.handleFrame(raw as String) == 'ack') attempt = 0;
+      } catch (error, stack) {
+        stderr.writeln('lunora: subscription callback threw: $error\n$stack');
+      }
+    }
+  } catch (_) {}
+  client.setConnected(false);
+  client.detachSocket(); // subscriptions made during backoff wait for the next resend
+  if (client.closed) break; // the app closed the client: stop, do not back off and dial again
+  final ms = min(30000, 1000 * (1 << min(attempt++, 5)));
+  await Future<void>.delayed(Duration(milliseconds: ms ~/ 2 + Random().nextInt(ms ~/ 2)));
+}
+```
 
 A shape poke is applied whole or not at all: a row the codec refuses leaves the
 view as it was and reaches the shape's `onError` coded `WIRE_DECODE_FAILED`. A
@@ -128,6 +173,16 @@ terminally on the first flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being
 retried forever, and every discard — including one the capacity cap evicts out of
 a _restored_ queue, which has no caller left to tell — reaches the queue's
 `onSettled`.
+
+A write that must never sit on disk — a credential, a one-time token — passes
+`onlineOnly: true` to `mutation`. It is never queued, persisted or replayed:
+where a normal write would be queued, the Future fails at once with a
+`LunoraApiException` coded `offlineNotQueued` (`OFFLINE_NOT_QUEUED`), before any
+optimistic layer is applied, and its arguments never reach the persistence
+adapter. It does not wait for a flush or queue behind pending writes, so it may
+land before an older queued write to the same document. A send that fails with no
+server reply while the socket is down (a refused connection, a DNS failure, a
+timeout) raises the same exception, with the transport error as its `cause`.
 
 How a replay reads the reply is one rule for a lone write and a batch alike: a
 coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx

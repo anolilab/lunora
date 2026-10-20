@@ -1,3 +1,56 @@
+## @lunora/privacy [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.18...@lunora/privacy@1.0.0-alpha.19) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/auth:** upgraded to 1.0.0-alpha.222
+
+## @lunora/privacy [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.17...@lunora/privacy@1.0.0-alpha.18) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/auth:** upgraded to 1.0.0-alpha.221
+
+## @lunora/privacy [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.16...@lunora/privacy@1.0.0-alpha.17) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/auth:** upgraded to 1.0.0-alpha.220
+
+## @lunora/privacy [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.15...@lunora/privacy@1.0.0-alpha.16) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/auth:** upgraded to 1.0.0-alpha.219
+
+## @lunora/privacy [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.14...@lunora/privacy@1.0.0-alpha.15) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/auth:** upgraded to 1.0.0-alpha.218
+
+## @lunora/privacy [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.13...@lunora/privacy@1.0.0-alpha.14) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/auth:** upgraded to 1.0.0-alpha.217
+
 ## @lunora/privacy [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.12...@lunora/privacy@1.0.0-alpha.13) (2026-10-19)
 
 

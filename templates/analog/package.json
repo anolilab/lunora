@@ -11,7 +11,7 @@
         "build": "vite build",
         "preview": "vite preview",
         "codegen": "lunora codegen",
-        "deploy": "vite build && wrangler deploy"
+        "deploy": "vite build && lunora deploy"
     },
     "dependencies": {
         "@analogjs/content": "^2.7.5",
