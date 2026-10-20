@@ -83,57 +83,60 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
             const statement = preparedStatement(database, query);
             const normalized = bindings.map((value) => normalizeBinding(value));
 
-            const rows = (
-                statement.reader
-                    ? statement.all(...normalized)
-                    : ((): unknown[] => {
-                          statement.run(...normalized);
+            // A read-only statement is left unrun until `raw()` streams it, which the SQL console does so its row cap can stop a
+            // large result early. Every other access buffers on first use: an iterator over a live better-sqlite3 statement would
+            // keep the connection busy, so engine code that writes inside a loop over a read would fail. Writers (and `RETURNING`,
+            // which must not be re-run) still execute now.
+            const lazy = statement.reader && statement.readonly;
+            let rows: Row[] | undefined;
 
-                          return [];
-                      })()
-            ) as Row[];
+            const materialize = (): Row[] => {
+                if (rows === undefined) {
+                    if (statement.reader) {
+                        rows = statement.all(...normalized) as Row[];
+                    } else {
+                        statement.run(...normalized);
+                        rows = [];
+                    }
+                }
+
+                return rows;
+            };
+
+            if (!lazy) {
+                materialize();
+            }
+
+            // The statement is shared through the cache, so positional mode lasts only as long as this read, and ends even when the caller
+            // stops early.
+            const positionalRows = function* (): Generator<unknown[]> {
+                statement.raw(true);
+
+                try {
+                    yield* statement.iterate(...normalized) as Iterable<unknown[]>;
+                } finally {
+                    statement.raw(false);
+                }
+            };
 
             return {
-                // Both optional cursor capabilities are LAZY, and both are
-                // answered only for a reader: `columns()` throws outright on a
-                // statement that returns no data, and positional rows are
-                // meaningless for one. A caller that never asks pays nothing —
-                // this is the engine's hot path, and the buffered object rows
-                // above stay exactly as they were.
-                //
-                // `raw()` re-runs the statement in better-sqlite3's positional
-                // mode rather than re-deriving arrays from the objects it
-                // already has, because the objects are precisely what loses the
-                // information (two result columns named `id` collapse to one
-                // key). The contract says a caller consumes `raw` OR `toArray`,
-                // so in practice this is still one execution; it is safe to
-                // repeat because only a reader reaches it and the whole
-                // `exec` runs inside the host's own serialized turn.
+                // Both optional cursor capabilities are answered only for a reader, since `columns()` throws on a statement that returns
+                // no data. `columnNames` runs nothing; `raw` streams, and is offered only where it can run the statement once.
                 get columnNames(): string[] | undefined {
                     return statement.reader ? statement.columns().map((column) => column.name) : undefined;
                 },
-                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                [Symbol.iterator]: () => materialize()[Symbol.iterator](),
                 one: () => {
-                    if (rows.length !== 1) {
-                        throw new Error(`expected exactly one row, got ${String(rows.length)}`);
+                    const all = materialize();
+
+                    if (all.length !== 1) {
+                        throw new Error(`expected exactly one row, got ${String(all.length)}`);
                     }
 
-                    return rows[0] as Row;
+                    return all[0] as Row;
                 },
-                ...(statement.reader
-                    ? {
-                          // The statement is shared through the cache, so positional
-                          // mode must not outlive this call.
-                          raw: (): IterableIterator<unknown[]> => {
-                              try {
-                                  return (statement.raw(true).all(...normalized) as unknown[][])[Symbol.iterator]();
-                              } finally {
-                                  statement.raw(false);
-                              }
-                          },
-                      }
-                    : {}),
-                toArray: () => [...rows],
+                ...(lazy ? { raw: positionalRows } : {}),
+                toArray: () => [...materialize()],
             };
         },
     };

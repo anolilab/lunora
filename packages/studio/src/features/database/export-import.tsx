@@ -34,47 +34,74 @@ const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
  * `v.bytes()` column as an `ArrayBuffer` (which flattens to `{}` — the export
  * "succeeds" and the bytes are gone). The wire codec is identity for pure JSON,
  * so an ordinary table's NDJSON is byte-identical to before, and
- * {@link parseNdjson} decodes symmetrically so the round trip restores types.
+ * {@link parseNdjsonLine} decodes symmetrically so the round trip restores types.
  */
 const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(encodeWire(row))).join("\n");
 
 /**
- * Parse NDJSON back into export rows, skipping blank lines. Throws on the first
- * line that is not a valid `{table, doc}` object so the operator gets a precise
- * failure instead of a partial import.
+ * Parse one NDJSON line into an export row, or `undefined` for a blank line.
+ * Throws on a line that is not a valid `{table, doc}` object so the operator
+ * gets a precise failure instead of a partial import.
  *
- * Each line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
+ * The line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
  * bytes cell is a native value again before `client.query` re-encodes it for the
  * wire. Decoding is identity for pure JSON, so hand-written NDJSON still imports.
  */
-const parseNdjson = (text: string): ExportRow[] => {
-    const rows: ExportRow[] = [];
+const parseNdjsonLine = (rawLine: string, lineNumber: number): ExportRow | undefined => {
+    const line = rawLine.trim();
 
-    const lines = text.split("\n");
-
-    for (const [index, rawLine] of lines.entries()) {
-        const line = rawLine.trim();
-
-        if (line === "") {
-            continue;
-        }
-
-        const parsed = decodeWire(JSON.parse(line));
-
-        if (typeof parsed !== "object" || parsed === null) {
-            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
-        }
-
-        const row = parsed as Record<string, unknown>;
-
-        if (typeof row.table !== "string" || typeof row.doc !== "object" || row.doc === null || Array.isArray(row.doc)) {
-            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
-        }
-
-        rows.push(row as unknown as ExportRow);
+    if (line === "") {
+        return undefined;
     }
 
-    return rows;
+    const parsed = decodeWire(JSON.parse(line));
+
+    if (typeof parsed !== "object" || parsed === null) {
+        throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: expected a { table, doc } object`);
+    }
+
+    const row = parsed as Record<string, unknown>;
+
+    if (typeof row.table !== "string" || typeof row.doc !== "object" || row.doc === null || Array.isArray(row.doc)) {
+        throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: expected a { table, doc } object`);
+    }
+
+    return row as unknown as ExportRow;
+};
+
+/** Bytes read per piece of an import file. */
+const NDJSON_PIECE_BYTES = 1024 * 1024;
+
+/**
+ * Yield a file's lines one at a time, 1-based, reading it in pieces so the whole
+ * file is never held as one string. A piece can end mid-line, and mid-character:
+ * the decoder keeps a partial character for the next piece and the carry keeps
+ * a partial line whole.
+ */
+const ndjsonLines = async function* (file: Blob): AsyncGenerator<{ line: string; lineNumber: number }> {
+    const decoder = new TextDecoder();
+    let carry = "";
+    let lineNumber = 0;
+
+    for (let offset = 0; offset < file.size; offset += NDJSON_PIECE_BYTES) {
+        // eslint-disable-next-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
+        const bytes = await file.slice(offset, offset + NDJSON_PIECE_BYTES).arrayBuffer();
+        const lines = `${carry}${decoder.decode(bytes, { stream: true })}`.split("\n");
+
+        carry = lines.pop() ?? "";
+
+        for (const line of lines) {
+            lineNumber += 1;
+
+            yield { line, lineNumber };
+        }
+    }
+
+    const last = carry + decoder.decode();
+
+    if (last !== "") {
+        yield { line: last, lineNumber: lineNumber + 1 };
+    }
 };
 
 /** Lines of an export shown inline; the full export is only ever a download. */
@@ -85,11 +112,53 @@ const IMPORT_CHUNK_ROWS = 500;
 
 const NDJSON_MIME = "application/x-ndjson";
 
-/** A finished export: the NDJSON as one Blob (never a string in the DOM), its row count and the first lines for display. */
+/** Count the rows in an NDJSON file, validating every line on the way; throws on the first malformed line. */
+const countNdjsonRows = async (file: Blob): Promise<number> => {
+    let rows = 0;
+
+    for await (const { line, lineNumber } of ndjsonLines(file)) {
+        if (parseNdjsonLine(line, lineNumber) !== undefined) {
+            rows += 1;
+        }
+    }
+
+    return rows;
+};
+
+/** Hand an NDJSON file to `onChunk` in batches of {@link IMPORT_CHUNK_ROWS} rows, in file order, reading it as it goes. */
+const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[]) => Promise<void>): Promise<void> => {
+    let chunk: ExportRow[] = [];
+
+    for await (const { line, lineNumber } of ndjsonLines(file)) {
+        const row = parseNdjsonLine(line, lineNumber);
+
+        if (row === undefined) {
+            continue;
+        }
+
+        chunk.push(row);
+
+        if (chunk.length === IMPORT_CHUNK_ROWS) {
+            await onChunk(chunk);
+
+            chunk = [];
+        }
+    }
+
+    if (chunk.length > 0) {
+        await onChunk(chunk);
+    }
+};
+
+/**
+ * A finished export: the NDJSON as one Blob (never a string in the DOM), its row count and the first lines for display. `shardKey` is the
+ * shard it was read from, captured at export time, so the download is named for that shard even if the input changes afterwards.
+ */
 interface ExportedShard {
     blob: Blob;
     count: number;
     preview: string;
+    shardKey: string;
 }
 
 /**
@@ -121,20 +190,22 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     const [exported, setExported] = useState<ExportedShard | null>(null);
 
     const exportShard = async (): Promise<void> => {
+        const exportedShardKey = shardKey;
+
         setBusy(true);
         setError(null);
         setImportResult(null);
         setExported(null);
 
         try {
-            const tables = (await client.query(LIST_TABLES, {}, callOptions(shardKey))) as ReadonlyArray<TableInfo>;
+            const tables = (await client.query(LIST_TABLES, {}, callOptions(exportedShardKey))) as ReadonlyArray<TableInfo>;
             let blob = new Blob([], { type: NDJSON_MIME });
             let count = 0;
             const preview: string[] = [];
 
             for (const { name } of tables) {
                 // eslint-disable-next-line no-await-in-loop -- one table per call, appended in order, so the whole shard is never one response
-                const { rows } = (await client.query(EXPORT_SHARD, { tables: [name] }, callOptions(shardKey))) as { rows: ExportRow[] };
+                const { rows } = (await client.query(EXPORT_SHARD, { tables: [name] }, callOptions(exportedShardKey))) as { rows: ExportRow[] };
 
                 if (rows.length === 0) {
                     continue;
@@ -150,13 +221,61 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 }
             }
 
-            recordShard(shardKey);
-            setExported({ blob, count, preview: preview.join("\n") });
+            recordShard(exportedShardKey);
+            setExported({ blob, count, preview: preview.join("\n"), shardKey: exportedShardKey });
         } catch (error_) {
             setError(errorMessage(error_));
         }
 
         setBusy(false);
+    };
+
+    /**
+     * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show and how many rows were
+     * written before it stopped. The file is read twice: the first pass validates every line and counts the rows, so a malformed line is
+     * rejected before anything is written; the second sends the rows in chunks as they stream in, so the file is never held whole.
+     */
+    const sendImport = async (file: File): Promise<{ failure: { message: string; rows: number } | undefined; total: ImportShardResult }> => {
+        const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+        let rowCount: number;
+
+        try {
+            rowCount = await countNdjsonRows(file);
+        } catch (error_) {
+            return { failure: { message: t("Invalid NDJSON: {message}", { message: errorMessage(error_) }), rows: 0 }, total };
+        }
+
+        let sent = 0;
+
+        const sendChunk = async (rows: ExportRow[]): Promise<void> => {
+            setProgress(
+                t("Importing rows {from}–{to} of {total}…", {
+                    from: sent + 1,
+                    to: sent + rows.length,
+                    total: rowCount,
+                }),
+            );
+
+            const result = (await client.query(IMPORT_SHARD, { rows, startLine: sent + 1 }, callOptions(shardKey))) as ImportShardResult;
+
+            total.conflicts += result.conflicts;
+            total.errors.push(...result.errors);
+
+            for (const [table, count] of Object.entries(result.inserted)) {
+                total.inserted[table] = (total.inserted[table] ?? 0) + count;
+            }
+
+            sent += rows.length;
+        };
+
+        try {
+            await forEachNdjsonChunk(file, sendChunk);
+
+            return { failure: undefined, total };
+        } catch (error_) {
+            // Chunks sent before the failure may already have written rows; the caller shows their counts next to the error.
+            return { failure: { message: errorMessage(error_), rows: sent }, total };
+        }
     };
 
     const importShard = async (file: File): Promise<void> => {
@@ -165,54 +284,27 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setImportResult(null);
         setExported(null);
 
-        let rows: ExportRow[];
+        const { failure, total } = await sendImport(file);
 
-        try {
-            // ponytail: the file is read and parsed whole; stream it by line if multi-GB imports matter.
-            rows = parseNdjson(await file.text());
-        } catch (error_) {
-            setError(t("Invalid NDJSON: {message}", { message: errorMessage(error_) }));
-            setBusy(false);
-
-            return;
-        }
-
-        const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
-
-        try {
-            for (let offset = 0; offset < rows.length; offset += IMPORT_CHUNK_ROWS) {
-                setProgress(
-                    t("Importing rows {from}–{to} of {total}…", {
-                        from: offset + 1,
-                        to: Math.min(offset + IMPORT_CHUNK_ROWS, rows.length),
-                        total: rows.length,
-                    }),
-                );
-
-                // eslint-disable-next-line no-await-in-loop -- chunks go in file order, so error line numbers and id conflicts match a single import
-                const result = (await client.query(
-                    IMPORT_SHARD,
-                    { rows: rows.slice(offset, offset + IMPORT_CHUNK_ROWS), startLine: offset + 1 },
-                    callOptions(shardKey),
-                )) as ImportShardResult;
-
-                total.conflicts += result.conflicts;
-                total.errors.push(...result.errors);
-
-                for (const [table, count] of Object.entries(result.inserted)) {
-                    total.inserted[table] = (total.inserted[table] ?? 0) + count;
-                }
-            }
-
+        if (failure === undefined) {
             recordShard(shardKey);
             setImportResult(total);
-        } catch (error_) {
-            setError(errorMessage(error_));
+        } else if (failure.rows > 0) {
+            setImportResult(total);
+            setError(
+                t("Import stopped after {rows} rows: {message}. The counts below cover the rows already written.", {
+                    message: failure.message,
+                    rows: failure.rows,
+                }),
+            );
+        } else {
+            setError(failure.message);
         }
 
         // The import wrote rows to this shard (possibly only some chunks), so the data
         // browser's cached reads are now stale across every page/filter variant — drop
-        // them (path-only, all args) so they re-fetch on next view.
+        // them (path-only, all args) so they re-fetch on next view. Every failure above is
+        // caught, so this runs on every path.
         invalidateAdmin(ADMIN_FUNCTIONS.readTablePage);
         invalidateAdmin(ADMIN_FUNCTIONS.listTables);
         setProgress(null);
@@ -233,7 +325,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     const download = (): void => {
         if (exported !== null) {
-            downloadFile(`${shardKey.trim() === "" ? "shard" : shardKey.trim()}.ndjson`, exported.blob, NDJSON_MIME);
+            downloadFile(`${exported.shardKey.trim() === "" ? "shard" : exported.shardKey.trim()}.ndjson`, exported.blob, NDJSON_MIME);
         }
     };
 

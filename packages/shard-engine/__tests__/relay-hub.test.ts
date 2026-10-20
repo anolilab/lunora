@@ -46,6 +46,8 @@ const ownerFor = (
     relays: Map<number, RelayDouble>,
     /** The op-log cursor the owner computes each seed at — mutable, so a test can move it between two subscribes the way an unrelated write does. */
     seed?: { cursor: number },
+    /** Shape name → table this build resolves it to. Unlisted shapes read `messages`; a test passes a different map to model a deploy that re-points one. */
+    tables: Record<string, string> = {},
 ): {
     owner: NonNullable<ReturnType<typeof createRelayLink>>;
     resolvedUnder: (undefined | SubscriptionIdentity)[];
@@ -125,7 +127,7 @@ const ownerFor = (
 
             return shapeName === SCOPED_SHAPE.name
                 ? { columns: ["id"], effectiveWhere: { org: identity?.identity?.["org"] ?? "anonymous" }, global: false, table: "orders" }
-                : { columns: ["id"], effectiveWhere: { room: "lobby" }, global: false, table: "messages" };
+                : { columns: ["id"], effectiveWhere: { room: "lobby" }, global: false, table: tables[shapeName] ?? "messages" };
         },
         rlsMetadata: () => {
             return { policies: [] };
@@ -1035,25 +1037,24 @@ describe("relay hub", () => {
             expect(pokesIn(relayAt(relays, 0))).toHaveLength(0);
         });
 
-        it("refreshes a hydrated cohort row whose stored table is stale or missing on re-seed", async () => {
+        it("re-resolves a shape a deploy re-pointed to another table after the owner rehydrates", async () => {
             expect.assertions(1);
 
             const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
 
-            await subscribe(ownerFor(database.sql, relays).owner, OPEN_SHAPE, 0);
-            await subscribe(ownerFor(database.sql, relays).owner, { args: {}, name: "lobby-presence" }, 0);
+            // The first owner seeds `lobby-presence` on `messages`.
+            const { owner } = ownerFor(database.sql, relays);
 
-            // One row written before the column existed, one a deploy has since re-pointed.
-            database.sql.exec("UPDATE __lunora_relay_shapes SET table_name = NULL WHERE name = ?", OPEN_SHAPE.name);
-            database.sql.exec("UPDATE __lunora_relay_shapes SET table_name = 'old_table' WHERE name = ?", "lobby-presence");
+            await subscribe(owner, OPEN_SHAPE, 0);
+            await subscribe(owner, { args: {}, name: "lobby-presence" }, 0, "c-bob");
 
-            const { owner: evicted } = ownerFor(database.sql, relays);
+            // The deploy re-points it to `presence`. A fresh owner rehydrates the registry from SQL, and a write to the new table must still reach
+            // the subscriber: the stored registry no longer carries the table, so the flush resolves it under the new code.
+            const { owner: deployed } = ownerFor(database.sql, relays, undefined, { "lobby-presence": "presence" });
 
-            await subscribe(evicted, OPEN_SHAPE, 0, "c-bob");
-            await subscribe(evicted, { args: {}, name: "lobby-presence" }, 0, "c-bob");
-            await evicted.onFlush(new Set(["messages"]), 20);
+            await deployed.onFlush(new Set(["presence"]), 20);
 
-            expect(new Set(pokesIn(relayAt(relays, 0)).map((poke) => poke["name"]))).toStrictEqual(new Set(["lobby-messages", "lobby-presence"]));
+            expect(new Set(pokesIn(relayAt(relays, 0)).map((poke) => poke["name"]))).toStrictEqual(new Set(["lobby-presence"]));
         });
     });
 

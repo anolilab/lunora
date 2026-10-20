@@ -8,6 +8,9 @@ const MAX_BACKOFF_MS = 60_000;
 /** Error codes no retry will fix: polling stops on them until `enabled` toggles. */
 const TERMINAL_CODES: ReadonlySet<string> = new Set(["FORBIDDEN", "UNAUTHORIZED"]);
 
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+    (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
+
 /** Default polling cadence for auto-refresh, in milliseconds. */
 export const DEFAULT_AUTO_REFRESH_MS = 5000;
 
@@ -24,7 +27,8 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
  * {@link MAX_BACKOFF_MS} and resets to `intervalMs` on the next success; an
  * `UNAUTHORIZED` / `FORBIDDEN` rejection stops polling until `enabled` toggles,
  * since re-asking cannot fix a missing credential. A sync `onTick` counts as a
- * success.
+ * success, so `onTick` must return the promise of the request it starts: one that
+ * returns void is timed as if it had already finished.
  *
  * Ticks are skipped while the tab is hidden (`document.hidden`) so a backgrounded
  * studio doesn't keep hammering the worker. `onTick` is held in a ref so a
@@ -43,6 +47,7 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
         tickRef.current = onTick;
     });
 
+    // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup below clears `id`, the handle `schedule` reassigns on every tick; the rule cannot follow a timer set from a nested closure
     useEffect(() => {
         if (!enabled) {
             return undefined;
@@ -94,8 +99,10 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
                 return;
             }
 
-            if (result instanceof Promise) {
-                result.then(succeeded).catch(failed);
+            // A thenable from another realm (or any non-Promise thenable) must still be awaited: treating it as a
+            // success would schedule the next tick while the request is pending, and its rejection would skip backoff.
+            if (isThenable(result)) {
+                Promise.resolve(result).then(succeeded).catch(failed);
             } else {
                 succeeded();
             }

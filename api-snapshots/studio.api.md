@@ -1615,6 +1615,7 @@ const MESSAGE_IDS: readonly [
     "Idle",
     "Import",
     "Import (writes rows)?",
+    "Import stopped after {rows} rows; the counts below cover the rows already written.",
     "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",

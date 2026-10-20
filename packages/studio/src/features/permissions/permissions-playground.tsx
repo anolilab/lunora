@@ -132,7 +132,9 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     // A matrix prefill may select a non-query; keep it listed so the select shows what will run.
     const listed = includeWrites ? functions : functions.filter((descriptor) => descriptor.kind === "query" || descriptor.path === selectedPath);
     const effectivePath = selectedPath === "" ? (listed[0]?.path ?? "") : selectedPath;
-    const executesWrites = functions.some((descriptor) => descriptor.path === effectivePath && descriptor.kind !== "query");
+    // A path the list has not resolved (the list is still loading, or failed) is treated as a write: a probe runs the function for real.
+    const selectedDescriptor = functions.find((descriptor) => descriptor.path === effectivePath);
+    const executesWrites = effectivePath !== "" && selectedDescriptor?.kind !== "query";
 
     const run = async (): Promise<void> => {
         if (effectivePath === "") {

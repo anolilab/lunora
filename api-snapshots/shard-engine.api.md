@@ -2996,7 +2996,6 @@ interface SqlConsoleResult {
     columns: string[];
     rowCount: number;
     rows: Record<string, unknown>[];
-    timedOut?: boolean;
     truncated: boolean;
 }
 ```

@@ -111,6 +111,34 @@ describe("useAutoRefresh", () => {
         expect(onTick).toHaveBeenCalledTimes(5);
     });
 
+    it("waits for a thenable that is not a Promise before scheduling the next tick", async () => {
+        expect.assertions(2);
+
+        let settle: () => void = () => undefined;
+        // A thenable on purpose: the hook must await one that is not a native Promise.
+        const pending = {
+            // eslint-disable-next-line unicorn/no-thenable -- the protocol method is the thing under test
+            then(resolve: (value: unknown) => void): void {
+                settle = () => {
+                    resolve(undefined);
+                };
+            },
+        };
+        const onTick = vi.fn<() => unknown>(() => pending);
+
+        render(<Harness enabled intervalMs={1000} onTick={onTick} />);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(5000);
+
+        expect(onTick).toHaveBeenCalledTimes(1);
+
+        settle();
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
+    });
+
     it("stops polling on UNAUTHORIZED until enabled toggles", async () => {
         expect.assertions(2);
 

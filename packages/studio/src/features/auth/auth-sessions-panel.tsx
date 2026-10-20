@@ -36,9 +36,7 @@ const AuthSessionsPanel = (): ReactElement => {
 
     // No subscription channel, so poll to catch new sessions / revokes without a
     // reload button (paused while the tab is hidden).
-    useAutoRefresh(() => {
-        sessionsQuery.refetch();
-    }, true);
+    useAutoRefresh(() => sessionsQuery.poll(), true);
 
     /** Revoke a session, then refetch so the list reflects the removal. */
     const onRevoke = (sessionId: string): void => {

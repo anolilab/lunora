@@ -123,7 +123,11 @@ interface CohortShapeEntry {
     cursor: number;
     key: string;
     name: string;
-    /** The table the shape resolved to at seed; lets a flush skip it before re-resolving. Absent on a row hydrated from before it was stored. */
+
+    /**
+     * The table the shape resolved to, so a flush can skip it on the changed-table set before re-resolving. Kept in memory only: it is
+     * unset after an owner wake, and a re-point ships with a deploy, which gives the new code an empty cache rather than a stale one.
+     */
     table?: string;
 }
 
@@ -265,14 +269,20 @@ const FRAMES_NAMING_A_RELAY = new Set<OwnerRelayFrame["type"]>(["relay_attach", 
  * as a sibling DO name on every forward.
  */
 const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | undefined => {
-    let message: OwnerRelayFrame;
+    let parsed: unknown;
 
     try {
-        message = JSON.parse(raw) as OwnerRelayFrame;
+        parsed = JSON.parse(raw);
     } catch {
         return undefined;
     }
 
+    // `JSON.parse("null")` is a valid parse, and destructuring it below would throw rather than answer 400.
+    if (typeof parsed !== "object" || parsed === null) {
+        return undefined;
+    }
+
+    const message = parsed as OwnerRelayFrame;
     const { relayIndex } = message as { relayIndex?: unknown };
     const valid =
         relayIndex === undefined
@@ -990,13 +1000,19 @@ class OwnerRelay extends RelayLink {
             return undefined;
         }
 
-        if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
+        if (resolved === undefined || resolved.global === true) {
             return undefined;
         }
 
-        // Alias so the cursor advance mutates a local binding, not the
-        // parameter (no-param-reassign) — same pattern as `createGeoBuilder`.
+        // Alias so the cursor advance and the remembered table mutate a local
+        // binding, not the parameter (no-param-reassign) — same pattern as `createGeoBuilder`.
         const staged = entry;
+        staged.table = resolved.table;
+
+        if (!changed.has(resolved.table)) {
+            return undefined;
+        }
+
         const fromCursor = staged.cursor;
         const rowsPatch = this.host.buildShapeDiff(resolved, fromCursor, frameCursor);
 
@@ -1223,11 +1239,6 @@ class OwnerRelay extends RelayLink {
                 // socket-less relay-mode owner is always one idle moment away
                 // from. See `ctx-db-relay-shapes.ts`.
                 writeRelayShape(this.host.sql(), entry);
-            } else if (entry.table !== resolved.table) {
-                // A row hydrated from before the table was stored, or one a deploy re-pointed: refresh it, or the
-                // flush short-circuit in `buildShapePoke` would skip this cohort on the table it now reads.
-                entry.table = resolved.table;
-                writeRelayShape(this.host.sql(), entry);
             }
 
             cohortCursor = entry.cursor;
@@ -1389,7 +1400,7 @@ class OwnerRelay extends RelayLink {
 
         for (const row of readRelayShapes(this.host.sql())) {
             if (row.relayIndex === undefined || row.connectionId === undefined) {
-                hydrated.cohort.set(row.key, { args: row.args, cursor: row.cursor, key: row.key, name: row.name, table: row.table });
+                hydrated.cohort.set(row.key, { args: row.args, cursor: row.cursor, key: row.key, name: row.name });
             } else {
                 hydrated.proxies.set(row.key, {
                     args: row.args,
@@ -1399,7 +1410,6 @@ class OwnerRelay extends RelayLink {
                     key: row.key,
                     name: row.name,
                     relayIndex: row.relayIndex,
-                    table: row.table,
                 });
             }
         }

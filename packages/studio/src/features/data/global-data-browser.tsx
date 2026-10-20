@@ -130,12 +130,14 @@ export const GlobalDataBrowser = ({
     // always sees the latest selection/filters; it re-runs the two TanStack reads
     // and the open facets.
     useAutoRefresh(() => {
-        tablesQuery.refetch();
+        const polls = [tablesQuery.poll()];
 
         if (selectedTable !== null) {
-            pageQuery.refetch();
+            polls.push(pageQuery.poll());
             refetchFacets(selectedTable, filtersRef.current);
         }
+
+        return Promise.all(polls);
     }, true);
 
     // The table last applied to the selection (cross-tier jump, deep link, or

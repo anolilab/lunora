@@ -336,9 +336,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // `useAutoRefresh` pauses while the tab is hidden.
     const onFirstPage = (objects?.length ?? 0) <= pageSize;
 
-    useAutoRefresh(() => {
-        fireAndForget(list(prefix, undefined, false));
-    }, onFirstPage);
+    useAutoRefresh(() => list(prefix, undefined, false), onFirstPage);
 
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = deriveEntries(objects ?? [], prefix);

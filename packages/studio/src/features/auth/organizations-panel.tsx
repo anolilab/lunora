@@ -49,9 +49,7 @@ const OrganizationsPanel = (): ReactElement => {
     const orgs = orgsQuery.data?.rows ?? null;
 
     // Poll the org list while the plugin is enabled (paused while the tab is hidden).
-    useAutoRefresh(() => {
-        orgsQuery.refetch();
-    }, orgEnabled);
+    useAutoRefresh(() => orgsQuery.poll(), orgEnabled);
 
     const closeDialog = (): void => {
         setDialog(null);

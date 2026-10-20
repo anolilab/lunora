@@ -156,6 +156,59 @@ describe("exportImportPanel", () => {
         ]);
     });
 
+    it("rejects a file with a malformed line anywhere before writing any chunk", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        lines[1000] = "{not json}";
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("Invalid NDJSON");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+    });
+
+    it("keeps the counts of the chunks already written when a later chunk fails", async () => {
+        expect.assertions(3);
+
+        let imports = 0;
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    imports += 1;
+
+                    if (imports === 2) {
+                        throw new Error("connection reset");
+                    }
+
+                    return { conflicts: 0, errors: [], inserted: { messages: 500 } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(error.textContent).toContain("Import stopped after 500 rows: connection reset");
+        expect(importResult.textContent).toContain("Inserted 500");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(2);
+    });
+
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
         expect.assertions(3);
 

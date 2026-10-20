@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
-import { assertReadonly, lintReadonlySql, MAX_SQL_MS, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
+import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */
 const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; lastQuery: string } => {
@@ -246,27 +246,6 @@ describe("runReadonlySql bounds", () => {
 
         expect(result.rowCount).toBe(MAX_SQL_ROWS);
         expect(result.truncated).toBe(false);
-    });
-
-    it("stops early, flagged as timed out, once reading passes the time budget", () => {
-        expect.assertions(4);
-
-        let now = 0;
-
-        vi.spyOn(Date, "now").mockImplementation(() => now);
-
-        // Each row takes a second, so the budget is spent after MAX_SQL_MS / 1000 rows.
-        const result = runReadonlySql(
-            countingExec(5000, () => {
-                now += 1000;
-            }).exec,
-            "SELECT i FROM t",
-        );
-
-        expect(result.rowCount).toBeLessThan(10);
-        expect(result.rowCount).toBe(MAX_SQL_MS / 1000);
-        expect(result.truncated).toBe(true);
-        expect(result.timedOut).toBe(true);
     });
 });
 

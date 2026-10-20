@@ -7,14 +7,12 @@ import type { SqlCursor, SqlExec } from "./ctx-db";
  * Result of a `__lunora_admin__:runSql` read-only query: the column names, the
  * rows, and `rowCount` — the rows returned, at most {@link MAX_SQL_ROWS}, NOT the
  * total the query would produce (the rest is never read). `truncated` says
- * whether more rows existed; `timedOut` is set when reading stopped at the
- * {@link MAX_SQL_MS} budget instead.
+ * whether more rows existed.
  */
 interface SqlConsoleResult {
     columns: string[];
     rowCount: number;
     rows: Record<string, unknown>[];
-    timedOut?: boolean;
     truncated: boolean;
 }
 
@@ -22,34 +20,27 @@ interface SqlConsoleResult {
 const MAX_SQL_ROWS = 1000;
 
 /**
- * Wall-clock budget for reading a console result, checked between rows. It
- * cannot interrupt a single step SQLite spends before yielding a row (a sort
- * over a large table), only stop a long scan from being drained.
+ * Read at most {@link MAX_SQL_ROWS} items from `source`, never materialising the
+ * rest. `truncated` is set only when a further item was actually seen, so a
+ * result of exactly the cap is not reported as cut short.
+ *
+ * There is deliberately no wall-clock budget here. On workerd `Date.now()` only
+ * advances at I/O, and a DO SQLite cursor is drained without any, so a deadline
+ * checked between rows never fires there. The row cap is the bound that holds on
+ * every host.
  */
-const MAX_SQL_MS = 5000;
-
-/**
- * Read at most {@link MAX_SQL_ROWS} items from `source` within {@link MAX_SQL_MS},
- * never materialising the rest. `truncated` is set only when a further item was
- * actually seen, so a result of exactly the cap is not reported as cut short.
- */
-const takeCapped = <T>(source: Iterable<T>): { items: T[]; timedOut: boolean; truncated: boolean } => {
-    const deadline = Date.now() + MAX_SQL_MS;
+const takeCapped = <T>(source: Iterable<T>): { items: T[]; truncated: boolean } => {
     const items: T[] = [];
 
     for (const item of source) {
         if (items.length === MAX_SQL_ROWS) {
-            return { items, timedOut: false, truncated: true };
-        }
-
-        if (Date.now() > deadline) {
-            return { items, timedOut: true, truncated: true };
+            return { items, truncated: true };
         }
 
         items.push(item);
     }
 
-    return { items, timedOut: false, truncated: false };
+    return { items, truncated: false };
 };
 
 /**
@@ -106,8 +97,7 @@ const assertReadonly = (query: string): void => {
  *
  * Rows are capped at {@link MAX_SQL_ROWS} and read off the cursor one at a time,
  * so a `SELECT *` over a huge table never builds the full result; `rowCount` is
- * the rows returned and `truncated` flags when more existed (or the read hit the
- * {@link MAX_SQL_MS} budget, which also sets `timedOut`).
+ * the rows returned and `truncated` flags when more existed.
  *
  * **Values are returned verbatim — deliberately not wire-decoded.** This surface
  * shows the DATABASE; the studio's data browser shows the MODEL and decodes
@@ -138,22 +128,21 @@ const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     const { columnNames, raw } = cursor;
 
     if (columnNames === undefined || raw === undefined) {
-        const { items: rows, timedOut, truncated } = takeCapped(cursor);
+        const { items: rows, truncated } = takeCapped(cursor);
 
         return {
             columns: rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [],
             rowCount: rows.length,
             rows,
-            ...(timedOut ? { timedOut } : {}),
             truncated,
         };
     }
 
     const columns = dedupeColumnNames(columnNames);
-    const { items, timedOut, truncated } = takeCapped(raw.call(cursor));
+    const { items, truncated } = takeCapped(raw.call(cursor));
     const rows = items.map((values) => Object.fromEntries(columns.map((column, index) => [column, values[index]])));
 
-    return { columns, rowCount: rows.length, rows, ...(timedOut ? { timedOut } : {}), truncated };
+    return { columns, rowCount: rows.length, rows, truncated };
 };
 
 /**
@@ -300,5 +289,5 @@ const lintReadonlySql = (sql: SqlExec, query: string): SqlLintResult => {
     return { diagnostics, plan };
 };
 
-export { assertReadonly, lintReadonlySql, MAX_SQL_MS, MAX_SQL_ROWS, runReadonlySql };
+export { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql };
 export type { SqlConsoleResult, SqlDiagnostic, SqlLintResult };

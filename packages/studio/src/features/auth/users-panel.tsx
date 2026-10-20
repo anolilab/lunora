@@ -83,9 +83,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
     // No subscription channel, so poll — honest "live" that catches new sign-ups /
     // bans without a reload button (paused while the tab is hidden).
-    useAutoRefresh(() => {
-        usersQuery.refetch();
-    }, true);
+    useAutoRefresh(() => usersQuery.poll(), true);
 
     // Derive the inspected user from the latest list so the drawer reflects
     // mutations after a refetch; a deleted user simply drops the drawer.

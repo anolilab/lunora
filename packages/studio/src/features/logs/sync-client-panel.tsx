@@ -60,11 +60,11 @@ const SyncClientPanel = ({ read }: SyncClientPanelProps): ReactElement => {
     // `useCallback`: React Compiler memoizes it.
     const sample = (): Promise<ClientDebugSnapshot> => Promise.resolve(read ? read() : client.debug());
 
-    const { data: snapshot, refetch } = useClientQuery<ClientDebugSnapshot>(["lunora-studio", "sync-client-debug", read ? "injected" : "live"], sample);
+    const { data: snapshot, poll } = useClientQuery<ClientDebugSnapshot>(["lunora-studio", "sync-client-debug", read ? "injected" : "live"], sample);
 
     // The snapshot has no push channel — it's in-memory client state — so polling is
     // the honest "live" here, exactly as for the HTTP-only panels.
-    useAutoRefresh(refetch, true, POLL_INTERVAL_MS);
+    useAutoRefresh(poll, true, POLL_INTERVAL_MS);
 
     if (!snapshot) {
         return (

@@ -197,6 +197,27 @@ describe("permissionsPlayground", () => {
         expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
     });
 
+    it("asks for confirmation before running a prefilled path the function list does not resolve", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: runAsServer(() => null) });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={FUNCTIONS} prefill={{ functionPath: "deleteDocument", nonce: 1 }} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+
+        // The prefill applies in a microtask; flush it, then the path matches no listed function, so the run control asks first.
+        await act(async () => undefined);
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        expect(screen.getByTestId("pp-run-confirm").textContent).toBe("This will execute `deleteDocument` as user `user_1`.");
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+
     it("lists only queries by default, and needs a confirm step before running a mutation as the user", async () => {
         expect.assertions(5);
 

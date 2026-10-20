@@ -1456,14 +1456,12 @@ export interface SecurityAuditResult {
 /**
  * Payload of a `__lunora_admin__:runSql` call, mirroring `@lunora/do`'s
  * `SqlConsoleResult`: a read-only query's `columns`, its `rows`, and `rowCount` —
- * the rows returned, at most `MAX_SQL_ROWS`; `truncated` says whether more existed,
- * and `timedOut` that reading stopped at the server's time budget.
+ * the rows returned, at most `MAX_SQL_ROWS`; `truncated` says whether more existed.
  */
 export interface SqlConsoleResult {
     columns: string[];
     rowCount: number;
     rows: Record<string, unknown>[];
-    timedOut?: boolean;
     truncated: boolean;
 }
 

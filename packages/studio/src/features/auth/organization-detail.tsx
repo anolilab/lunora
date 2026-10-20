@@ -80,24 +80,29 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
 
     const error = membersQuery.error ?? invitationsQuery.error ?? teamsQuery.error ?? rolesQuery.error ?? teamMembersQuery.error;
 
-    const refetchAll = (): void => {
-        membersQuery.refetch();
-        invitationsQuery.refetch();
+    const pollAll = (): Promise<void> => {
+        const polls: Promise<void>[] = [membersQuery.poll(), invitationsQuery.poll()];
 
         if (teamsEnabled) {
-            teamsQuery.refetch();
+            polls.push(teamsQuery.poll());
         }
 
         if (rolesEnabled) {
-            rolesQuery.refetch();
+            polls.push(rolesQuery.poll());
         }
 
         if (selectedTeam !== null) {
-            teamMembersQuery.refetch();
+            polls.push(teamMembersQuery.poll());
         }
+
+        return Promise.all(polls).then(() => undefined);
     };
 
-    useAutoRefresh(refetchAll, true);
+    const refetchAll = (): void => {
+        fireAndForget(pollAll());
+    };
+
+    useAutoRefresh(pollAll, true);
 
     const closeDialog = (): void => {
         setDialog(null);

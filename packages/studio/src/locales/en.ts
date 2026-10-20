@@ -255,6 +255,7 @@ const MESSAGE_IDS = [
     "Idle",
     "Import",
     "Import (writes rows)?",
+    "Import stopped after {rows} rows: {message}. The counts below cover the rows already written.",
     "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
