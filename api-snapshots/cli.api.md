@@ -110,6 +110,7 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    celldToolchain?: () => Promise<CelldToolchainProbe>;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -1185,6 +1186,7 @@ interface ListRemoteSecretsInputs {
     cwd: string;
     env?: string;
     runner?: SecretListRunner;
+    target?: string;
     temporary?: boolean;
 }
 ```

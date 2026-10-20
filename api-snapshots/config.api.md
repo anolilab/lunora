@@ -192,6 +192,7 @@ interface CelldDevSession {
 interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     port: number;
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -203,6 +204,26 @@ interface CelldDevSessionOptions {
 interface CelldLineOrigin {
     stream: "stderr" | "stdout";
     tag: string;
+}
+```
+
+### `CelldToolchainProbe` (interface)
+
+```ts
+interface CelldToolchainProbe {
+    errors: string[];
+    warnings: string[];
+}
+```
+
+### `CelldToolchainProbeOptions` (interface)
+
+```ts
+interface CelldToolchainProbeOptions {
+    dryRun?: boolean;
+    env?: Readonly<Record<string, string | undefined>>;
+    purpose: "deploy" | "dev";
+    run?: CelldCommandRunner;
 }
 ```
 
@@ -1374,6 +1395,12 @@ const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<strin
 const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
 ```
 
+### `ensureGitignoreEntries` (const)
+
+```ts
+const ensureGitignoreEntries: (directory: string, patterns: ReadonlyArray<string>) => string[];
+```
+
 ### `escapeRegExp` (const)
 
 ```ts
@@ -1570,6 +1597,12 @@ const planDevVariablesScaffold: (input: {
 
 ```ts
 const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
+### `probeCelldToolchain` (const)
+
+```ts
+const probeCelldToolchain: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
 ```
 
 ### `projectUsesUmbrella` (const)
@@ -3322,6 +3355,21 @@ interface BindingEntry {
     id?: unknown;
     remote?: boolean;
 }
+```
+
+### `CelldCommandResult` (interface)
+
+```ts
+interface CelldCommandResult {
+    code: number;
+    stdout: string;
+}
+```
+
+### `CelldCommandRunner` (type)
+
+```ts
+type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
 ### `DockerLogStream` (interface)
