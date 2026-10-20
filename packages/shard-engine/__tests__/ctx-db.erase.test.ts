@@ -163,11 +163,11 @@ describe("ctx-db.deleteAll", () => {
 
         const statements: string[] = [];
         const spied: typeof sql = {
-            exec: ((query: string, ...bindings: unknown[]) => {
+            exec: (query: string, ...bindings: unknown[]) => {
                 statements.push(query);
 
                 return sql.exec(query, ...bindings);
-            }),
+            },
         };
 
         const writer = createShardContextDatabase({
