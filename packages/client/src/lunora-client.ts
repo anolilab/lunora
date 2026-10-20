@@ -2337,7 +2337,7 @@ class LunoraClient {
      *
      * The socket carries the browser's session cookie, and that cookie is the
      * only credential that establishes a user. A route declared `auth: true` on
-     * the server refuses a socket with no verified session. The `wsToken`
+     * the server refuses a socket with no verified session. The `wsTicket`
      * (`?token=`, see {@link setWsTicket}) authorises the admin surfaces only; it
      * does not sign a user in to a route, so a private route needs the session
      * cookie. Reconnects with the
