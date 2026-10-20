@@ -414,3 +414,18 @@ describe("v.sensitive — keeps the wrapped validator's own methods", () => {
         expect(rejection(() => stripped.parse({ token: 5 })).message).not.toContain("5");
     });
 });
+
+describe("v.sensitive — a refinement chained after the marker", () => {
+    it("withholds caller text from a failed refinement's message and received", () => {
+        expect.assertions(2);
+
+        // The caller controls the parsed object's `constructor.name`, which a refinement's failure would echo.
+        const payload = v
+            .sensitive(v.object({ constructor: v.object({ name: v.string() }), token: v.string() }))
+            .check((value) => value.token.startsWith("s_"), "expected an s_ key");
+        const error = rejection(() => payload.parse({ constructor: { name: "attacker-text" }, token: "abc" }));
+
+        expect(error.received).toBe("object");
+        expect(error.message).toBe("Expected expected an s_ key at <root>, received object");
+    });
+});

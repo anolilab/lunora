@@ -613,7 +613,9 @@ const createValidator = <T>(
             const parsed = parser(value, context);
 
             if (!predicate(parsed)) {
-                fail(context, message ?? "value matching refinement", parsed, { redactValue: true });
+                // A marker's parse restores `context.redact` before this refinement runs, so a
+                // refinement chained after `sensitive` must re-assert it to keep its failure withheld.
+                fail(containerContext(context, meta?.sensitive === true), message ?? "value matching refinement", parsed, { redactValue: true });
             }
 
             return parsed;
