@@ -170,10 +170,10 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
     return { message: messageText, ...(code === undefined ? {} : { code }), ...(typeof why === "string" ? { why } : {}) };
 };
 
-/** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
 /** The `Symbol.for` key `@lunora/mcp` reads to tell a server verdict from a caller's own error. */
 const SERVER_VERDICT = Symbol.for("lunora.serverVerdict");
 
+/** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
 const reconstructError = (errorBody: {
     code?: string;
     data?: unknown;
