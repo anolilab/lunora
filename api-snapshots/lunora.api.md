@@ -2039,6 +2039,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SyncStatus` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `SyncWatermark` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -3985,6 +3989,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `SOCKET_TAG_BUDGET` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduleOptions` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -4142,6 +4150,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `encryptingSecretValueHost` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `findSocketTagBudgetViolation` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 

@@ -563,6 +563,15 @@ const SECRET_VALUE_MAX_BYTES: number;
 const SECRET_VALUE_MAX_TTL_MS: number;
 ```
 
+### `SOCKET_TAG_BUDGET` (const)
+
+```ts
+const SOCKET_TAG_BUDGET: {
+    readonly maxTagLength: 256;
+    readonly usableTags: 9;
+};
+```
+
 ### `ScheduleOptions` (interface)
 
 ```ts
@@ -946,6 +955,12 @@ const clampSecretValueTtl: (ttlMs: number) => number;
 
 ```ts
 const encryptingSecretValueHost: (raw: SecretValueStore, options: SecretValueKeyOptions) => SecretValueHost;
+```
+
+### `findSocketTagBudgetViolation` (const)
+
+```ts
+const findSocketTagBudgetViolation: (tags?: ReadonlyArray<string>) => string | undefined;
 ```
 
 ### `resolveShard` (const)
