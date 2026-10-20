@@ -256,10 +256,35 @@ describe("lunora deploy", () => {
             // always adds `observability`), so the deploy must hand celld the
             // projection — and run the `celld` binary itself, never through
             // `pnpm exec` / `npx --`, which would resolve an npm package instead.
+            // celld has no secret store, so every required secret (the core admin token and
+            // the push/mail keys this app declares) has to be carried as a plain `vars` entry.
+            const CELLD_VARS = Object.fromEntries(
+                ["LUNORA_ADMIN_TOKEN", "FCM_PROJECT_ID", "FCM_ACCESS_TOKEN", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"].map((key) => [
+                    key,
+                    "set",
+                ]),
+            );
+            const CELLD_WRANGLER = JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: CELLD_VARS });
+
+            it("aborts a celld deploy before spawning when a required secret is not in the vars", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN/u) });
+                expect(result.error).toMatch(/one bootstrap credential in vars/u);
+                expect(calls).toHaveLength(0);
+            });
+
             it("ships a celld-target app with `celld deploy` on the projected config", async () => {
                 expect.assertions(5);
 
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger, warns } = silentLogger();

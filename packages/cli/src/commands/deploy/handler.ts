@@ -996,7 +996,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     // Non-interactive (CI): a missing required secret aborts rather than shipping
     // a worker that will crash. Best-effort detection — skips dry-run/preview and
     // stays quiet when the worker can't be queried yet (first deploy / not authed).
-    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver);
+    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver, validation.wranglerPath);
 
     if (secretAbort !== undefined) {
         options.logger.error(secretAbort);

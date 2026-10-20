@@ -19,6 +19,7 @@ import {
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
 } from "@lunora/config";
+import { readWranglerJsonc } from "@lunora/config/cloudflare";
 import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
@@ -70,7 +71,8 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
         hasSecretStore
             ? `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
                   `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`
-            : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; put the values the deployed worker needs in wrangler \`vars\`.`,
+            : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; ` +
+                  `keep real secrets in a secret manager, one bootstrap credential in vars.`,
     );
 };
 
@@ -325,6 +327,44 @@ interface MissingSecretsOutcome {
 }
 
 /**
+ * The secrets check for a target with no secret store: its only channel is the
+ * wrangler config's `vars`, which the deploy ships as plain strings. A required
+ * key the config does not carry is therefore missing from the deployed worker.
+ * Non-interactive it aborts; interactive it warns, because nothing here can mint
+ * a value into a store the target does not have.
+ */
+const checkVariablesForSecrets = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    interactive: boolean,
+    driver: DeployDriver,
+    wranglerPath: string | undefined,
+): Promise<MissingSecretsOutcome> => {
+    const config = wranglerPath === undefined ? undefined : readWranglerJsonc<{ vars?: Record<string, unknown> }>(wranglerPath).parsed;
+    const projected = new Set(Object.keys(config?.vars ?? {}));
+    const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const missing = required.filter((key) => !projected.has(key));
+
+    if (missing.length === 0) {
+        return {};
+    }
+
+    const list = missing.join(", ");
+
+    if (!interactive) {
+        return {
+            error:
+                `missing required secret(s) in the wrangler vars: ${list}. ${driver.name} has no secret store, so each one must be a \`vars\` entry in the wrangler config — ` +
+                `keep real secrets in a secret manager, one bootstrap credential in vars. Add them, then re-deploy.`,
+        };
+    }
+
+    options.logger.warn(`required secret(s) not in the wrangler vars: ${list}. ${driver.name} has no secret store; add them to \`vars\` before deploying.`);
+
+    return {};
+};
+
+/**
  * Before a live deploy, detect required secrets that are NOT yet set on the
  * target worker and resolve them. INTERACTIVE: offer to generate + push the
  * mintable secrets (`AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …) in place and flag
@@ -339,9 +379,21 @@ interface MissingSecretsOutcome {
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
-const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
+const offerMissingSecrets = async (
+    cwd: string,
+    options: DeployCommandOptions,
+    interactive: boolean,
+    driver: DeployDriver,
+    wranglerPath?: string,
+): Promise<MissingSecretsOutcome> => {
     if (options.dryRun === true || options.preview === true) {
         return {};
+    }
+
+    // A host with no secret store (celld) takes its secrets as `vars`, so the check
+    // is against the config's `vars`, not a remote list.
+    if (driver.toolchain?.secretList === undefined) {
+        return checkVariablesForSecrets(cwd, options, interactive, driver, wranglerPath);
     }
 
     const { logger } = options;
@@ -350,7 +402,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     let remote: ListRemoteSecretsResult;
 
     try {
-        remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, temporary: options.temporary });
+        remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, target: driver.id, temporary: options.temporary });
     } catch {
         return {};
     }
