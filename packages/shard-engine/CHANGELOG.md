@@ -1,3 +1,16 @@
+## @lunora/shard-engine [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.149...@lunora/shard-engine@1.0.0-alpha.150) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/shard-engine [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.148...@lunora/shard-engine@1.0.0-alpha.149) (2026-10-20)
 
 
