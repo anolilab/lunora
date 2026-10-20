@@ -21,7 +21,7 @@ const deployCommand: Command = {
     options: [
         {
             description:
-                "Deploy even though the app sets `allowUnauthenticatedShardAccess: true` (any caller may target any shard). Without it, deploy refuses until shards are gated with `authorizeShard`",
+                "Deploy even though the app enables the open-shard option (any value but a literal false; any caller may target any shard). Without it, deploy refuses until shards are gated with `authorizeShard`",
             name: "allow-open-shards",
             type: Boolean,
         },

@@ -3,7 +3,8 @@
  * Docker and container sources, the D1 placeholder, localhost origins in vars,
  * and the `--migrate` preflight — plus deploy's open-shard-access gate.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { sep } from "node:path";
 
 import type { AdvisorOpenShardAccess } from "@lunora/advisor";
 import { openShardAccess, runAdvisor } from "@lunora/advisor";
@@ -363,8 +364,11 @@ const OPEN_SHARD_SCAN_ROOT_FILES = [
     ...PROJECT_CONFIG_FILENAMES,
 ];
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
-// Test and fixture code never ships, so a flag set in it must not block a deploy: `isTestPath` covers test files and the `__tests__`/`__mocks__`/`__fixtures__` folders, the rest are plain folder names.
-const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules|tests?|fixtures|mocks)(?:[/\\]|$)/u;
+/** Test files in every source extension; `isTestPath` covers the `.ts`/`.tsx` ones and the test folders. */
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
+/** Codegen output and installed packages never carry app options. Test folders and files go through `isTestPath`. */
+const SKIPPED_DIRECTORY_NAMES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
+const OPEN_SHARD_OPTION = "allowUnauthenticatedShardAccess";
 
 /**
  * The Wrangler `main` entrypoint of the environment being deployed, which can sit outside `src/`
@@ -411,28 +415,78 @@ const isLiteralFalse = (node: Node | undefined): boolean => {
         : false;
 };
 
+/** A path's stats, following links. A broken or self-referential link has none: `statSync` throws, and the entry is skipped. */
+const statEntry = (path: string): ReturnType<typeof statSync> | undefined => {
+    try {
+        return statSync(path);
+    } catch {
+        return undefined;
+    }
+};
+
 /**
- * Every open-shard property in the app that is not the literal `false`.
+ * The source files under `directory` that can carry app options, walked the way
+ * codegen walks them: symlinks followed, one visit per real directory, and test
+ * and generated folders pruned before descent. Paths are `/`-separated relative
+ * to `root`, so `isTestPath` sees the same shape on Windows.
+ */
+const appSourceFiles = (root: string, directory: string, visited = new Set<string>()): string[] => {
+    let realDirectory: string;
+
+    try {
+        realDirectory = realpathSync(directory);
+    } catch {
+        return [];
+    }
+
+    if (visited.has(realDirectory)) {
+        return [];
+    }
+
+    visited.add(realDirectory);
+
+    return readdirSync(directory).flatMap((entry) => {
+        const full = join(directory, entry);
+        const info = statEntry(full);
+
+        if (info === undefined) {
+            return [];
+        }
+
+        const relativePath = relative(root, full).split(sep).join("/");
+
+        if (info.isDirectory()) {
+            return SKIPPED_DIRECTORY_NAMES.has(entry) || isTestPath(`${relativePath}/`) ? [] : appSourceFiles(root, full, visited);
+        }
+
+        return info.isFile() && SOURCE_FILE.test(entry) && !TEST_FILE.test(entry) && !isTestPath(relativePath) ? [full] : [];
+    });
+};
+
+/** The key a member is written under: a string literal's value, a literal computed key's value, otherwise its source text. */
+const memberKeyName = (nameNode: Node): string => {
+    const keyNode = Node.isComputedPropertyName(nameNode) ? nameNode.getExpression() : nameNode;
+
+    return Node.isStringLiteral(keyNode) || Node.isNoSubstitutionTemplateLiteral(keyNode) ? keyNode.getLiteralValue() : nameNode.getText();
+};
+
+/**
+ * Every open-shard member in the app that is not a literal `false`.
  *
  * Read with the TypeScript parser, not a text match, so the "before deploying"
  * comments the templates keep beside the flag never count. Files that do not
  * mention the name are skipped before parsing. Fails closed: a value the scan
- * cannot read (a variable, a shorthand, an env read) is reported, because the
- * runtime evaluates it. Ceiling: an entry outside the Lunora source directory
- * (`schemaDir`), `src/`, the root Vite config, `lunora.config.*` and the Wrangler
- * `main` entrypoint is not seen. Test and fixture code is skipped on purpose: it never ships.
+ * cannot read (a variable, a shorthand, a getter) is reported, because the runtime
+ * evaluates it. Ceiling, not covered: a computed key built from a variable, an
+ * `Object.assign` or a spread from a variable, and any file outside `schemaDir`,
+ * `src/`, the root Vite config, `lunora.config.*` and the Wrangler `main` of the
+ * environment being deployed.
  */
 const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShardAccess[] => {
-    const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])];
+    const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])].filter((directory) => existsSync(join(cwd, directory)));
     const files = [
         ...new Set([
-            ...directories.flatMap((directory) =>
-                existsSync(join(cwd, directory))
-                    ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
-                          .filter((file) => SOURCE_FILE.test(file) && !isTestPath(file) && !SKIPPED_DIRECTORY.test(file))
-                          .map((file) => join(cwd, directory, file))
-                    : [],
-            ),
+            ...directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory))),
             ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
             ...wranglerMainEntry(cwd, environment),
         ]),
@@ -442,29 +496,32 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
     return files.flatMap((file) => {
         const text = readFileSync(file, "utf8");
 
-        if (!text.includes("allowUnauthenticatedShardAccess")) {
+        if (!text.includes(OPEN_SHARD_OPTION)) {
             return [];
         }
 
         const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
 
-        return [...source.getDescendantsOfKind(SyntaxKind.PropertyAssignment), ...source.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment)]
-            .filter((property) => {
-                const nameNode = property.getNameNode();
-                // `getName()` keeps a string-literal key's quotes, so a quoted key would slip past it.
-                const name = Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
+        return [
+            ...source.getDescendantsOfKind(SyntaxKind.PropertyAssignment),
+            ...source.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment),
+            ...source.getDescendantsOfKind(SyntaxKind.GetAccessor),
+            ...source.getDescendantsOfKind(SyntaxKind.MethodDeclaration),
+        ]
+            .filter((member) => {
+                // Only a literal `false` is safe. A shorthand, getter or method has no literal to read, so it is reported too.
+                const isSafe = Node.isPropertyAssignment(member) && isLiteralFalse(member.getInitializer());
 
-                // Only a literal `false` is safe; a shorthand `{ allowUnauthenticatedShardAccess }` has no literal to read, so it is reported too.
-                return name === "allowUnauthenticatedShardAccess" && !(Node.isPropertyAssignment(property) && isLiteralFalse(property.getInitializer()));
+                return memberKeyName(member.getNameNode()) === OPEN_SHARD_OPTION && !isSafe;
             })
-            .map((property) => {
-                return { file: relative(cwd, file), line: property.getStartLineNumber() };
+            .map((member) => {
+                return { file: relative(cwd, file), line: member.getStartLineNumber() };
             });
     });
 };
 
 /**
- * Refuse a deploy that ships `allowUnauthenticatedShardAccess: true` — the
+ * Refuse a deploy that ships the open-shard option set to anything but a literal `false` — the
  * `open_shard_access` advisor lint — unless `--allow-open-shards` says the open
  * posture is deliberate. Every template carries the flag for its local demo, and
  * the runtime only logs a warning about it, so without this a first deploy goes
@@ -493,7 +550,7 @@ const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCom
         return undefined;
     }
 
-    const message = `deploy blocked (open_shard_access): ${sites} set \`allowUnauthenticatedShardAccess: true\`, so any caller may target any shard. ${openShardAccess.remediation}`;
+    const message = `deploy blocked (open_shard_access): ${sites} enable the open-shard option (any value but a literal false), so any caller may target any shard. ${openShardAccess.remediation}`;
 
     logger.error(message);
 

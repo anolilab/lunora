@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,9 +156,9 @@ describe("open-shard-access gate", () => {
             `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
             "utf8",
         );
-        mkdirSync(join(workdir, "lunora", "fixtures"), { recursive: true });
+        mkdirSync(join(workdir, "lunora", "__fixtures__"), { recursive: true });
         writeFileSync(
-            join(workdir, "lunora", "fixtures", "app.ts"),
+            join(workdir, "lunora", "__fixtures__", "app.ts"),
             `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
             "utf8",
         );
@@ -174,6 +174,67 @@ describe("open-shard-access gate", () => {
 
         expect(result.code).toBe(0);
         expect(calls.length).toBeGreaterThan(0);
+    });
+
+    it.each([
+        ["a plain feature folder under src", join("src", "mocks", "app.ts")],
+        ["a plain tests folder under lunora", join("lunora", "tests", "app.ts")],
+    ])("still gates a flag in %s, which can ship", async (_label, file) => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, file, ".."), { recursive: true });
+        writeFileSync(join(workdir, file), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
+    it.each(["allowUnauthenticatedShardAccess: true", '["allowUnauthenticatedShardAccess"]: true', "get allowUnauthenticatedShardAccess() { return true }"])(
+        "refuses the open-shard option written as %s",
+        async (member) => {
+            expect.assertions(1);
+
+            writeAppConfig(member);
+
+            const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+        },
+    );
+
+    it("follows a symlinked source folder, which codegen does too", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "outside"), { recursive: true });
+        writeFileSync(join(workdir, "outside", "app.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+        symlinkSync(join(workdir, "outside"), join(workdir, "lunora", "linked"));
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
+    it("survives a self-referential link and still gates the flag beside it", async () => {
+        expect.assertions(1);
+
+        symlinkSync("loop", join(workdir, "lunora", "loop"));
+        writeAppConfig("allowUnauthenticatedShardAccess: true");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
+    it.each(["src/app.test.js", "src/app.spec.mjs", "src/app.test.jsx"])("does not gate a flag in the test file %s", async (file) => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, file), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(0);
     });
 
     it("refuses the flag in a root Wrangler entrypoint outside src/", async () => {
