@@ -72,6 +72,10 @@ view, checkpoint and epoch untouched and reaches its error callback as
 the view's, is not spliced on: unless it is a `reset`, the view is emptied, its
 callback receives `[]`, and a cold `shape_subscribe` (no `sinceCheckpoint` or
 `sinceEpoch`) goes out at once so the server re-seeds it.
+Send `BuildConnectFrame(clientID, context, token)` as the first frame on every open,
+before `ResendSubscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
+whose first frame is not that `connect` with a matching `token` (close code 4003). The
+session credential never goes in the socket URL; `WSURL` carries only an admin ticket.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`HandleFrame` returns the frame's type). Each new socket sends `connect` first, then

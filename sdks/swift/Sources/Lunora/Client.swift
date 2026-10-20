@@ -708,10 +708,15 @@ public final class LunoraClient {
 
     // MARK: - Frame builders
 
-    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil) -> [String: Any] {
+    /// The one-shot frame sent first on every socket open. `token` is the session
+    /// credential: it rides here, never in the socket URL, and is omitted when nil
+    /// or empty.
+    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil) -> [String: Any] {
         var frame: [String: Any] = ["id": "connect", "type": "connect"]
         if let clientID { frame["clientId"] = clientID }
         if let context { frame["context"] = context }
+        // Empty is absent, matching `wsURL` and `buildRPCBody`.
+        if let token, !token.isEmpty { frame["token"] = token }
         return frame
     }
 
@@ -1292,8 +1297,10 @@ public final class LunoraClient {
     // MARK: - URLs
 
     /// The socket URL: the origin with its scheme swapped, plus the shard and
-    /// credential query parameters when present.
-    public func wsURL(shardKey: String? = nil, token: String? = nil) -> String {
+    /// admin-ticket query parameters when present. `wsTicket` is the ephemeral
+    /// admin sub-token; the session credential never rides the URL —
+    /// ``buildConnectFrame(clientID:context:token:)`` carries it.
+    public func wsURL(shardKey: String? = nil, wsTicket: String? = nil) -> String {
         var endpoint = join(lunoraWSPath)
         if endpoint.hasPrefix("https://") {
             endpoint = "wss://" + endpoint.dropFirst("https://".count)
@@ -1304,7 +1311,7 @@ public final class LunoraClient {
         var params: [String] = []
         // Empty is absent, matching `buildRPCBody` — see its comment.
         if let key = LunoraClient.namedShard(shardKey) { params.append("shard=\(percentEncode(key))") }
-        if let token { params.append("token=\(percentEncode(token))") }
+        if let wsTicket { params.append("token=\(percentEncode(wsTicket))") }
         if params.isEmpty { return endpoint }
 
         return endpoint + (endpoint.contains("?") ? "&" : "?") + params.joined(separator: "&")

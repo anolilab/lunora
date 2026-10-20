@@ -112,6 +112,7 @@ export interface SubscriptionEnvelope {
      * onto the prefix the client already holds. Absent from older clients.
      */
     generation?: number;
+
     id: string;
     query?: SubscriptionQuery;
 
@@ -139,6 +140,13 @@ export interface SubscriptionEnvelope {
 
     /** CDC epoch the {@link SubscriptionEnvelope.sinceCheckpoint} belongs to. */
     sinceEpoch?: string;
+
+    /**
+     * Session credential carried by the `connect` envelope, checked against
+     * `LUNORA_WS_BEARER` when the socket upgraded without one (protocol §6).
+     * Never sent in the URL.
+     */
+    token?: string;
 
     /**
      * Topic of a `whisper`/`whisper_subscribe`/`whisper_unsubscribe` envelope —
@@ -223,6 +231,14 @@ export interface SocketAttachment {
      * refused — the gate fails closed.
      */
     adminBinding?: string;
+
+    /**
+     * `false` on a socket that upgraded without proving the session credential
+     * while `LUNORA_WS_BEARER` is set. Such a socket may send only `connect`,
+     * which must carry the matching `token`. Absent on every other socket, so the
+     * flag costs attachment bytes only when it matters.
+     */
+    authenticated?: boolean;
 
     /**
      * Stable per-client id from the `connect` envelope (the same id the client

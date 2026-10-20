@@ -62,7 +62,7 @@ interface ShardConnection {
     /**
      * The `LunoraClient.identityQuestions` id this connection's CURRENT
      * socket was upgraded under, when the cookie was its only credential (no
-     * bearer token held, no `?token=`). `undefined` otherwise: the `identity`
+     * session credential or ticket held). `undefined` otherwise: the `identity`
      * frame such a socket gets answers for the token, not for the cookie session
      * this client's identity tracks, and is ignored.
      */
@@ -97,15 +97,15 @@ interface ShardConnection {
     readonly polling: PollingFallback;
 
     /**
-     * Names the connect attempt currently waiting on a `wsToken` provider. An
+     * Names the connect attempt currently waiting on a credential provider. An
      * answer that arrives after its attempt timed out (or was superseded) no longer
      * holds this value and is dropped, instead of opening a socket on top of the
      * retry that replaced it.
      */
     providerAttempt?: symbol;
+
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
     resubscribeQueue: SubscriptionState[];
 
@@ -142,6 +142,12 @@ interface ShardConnection {
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
      */
     roomsRejoined?: boolean;
+
+    /**
+     * The session credential this socket opened under, sent in its `connect` frame
+     * (protocol §6) and never in the upgrade URL. Absent when the client holds none.
+     */
+    sessionToken?: string;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;

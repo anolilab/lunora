@@ -493,6 +493,7 @@ class LunoraClient {
     identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
+    setWsTicket(ticket: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
         shardKey?: string;
     }): void;
@@ -940,6 +941,7 @@ interface LunoraClientOptions {
     rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
+    wsTicket?: string | WsTokenProvider;
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }

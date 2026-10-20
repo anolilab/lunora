@@ -66,6 +66,10 @@ it delivered the refused rows — is not spliced on: the view is emptied, its
 re-seeds it (a `reset` part is exempt: it replaces the view anyway). A frame shaped like no
 server frame is ignored, and a `cursor` that is not an integer never replaces
 the tracked one.
+Send `build_connect_frame(client_id, context, token)` as the first frame on every open,
+before `resend_subscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
+whose first frame is not that `connect` with a matching `token` (close code 4003). The
+session credential never goes in the socket URL; `ws_url` carries only an admin ticket.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handle_frame` returns the frame's type). Each new socket sends `connect` first, then

@@ -130,6 +130,18 @@ class Client(
         }
 
     /**
+     * Supplies the session credential, read on every socket open and sent as
+     * `connect.token`. It never enters the socket URL. Null sends none.
+     */
+    var wsToken: (() -> String?)? = null
+
+    /**
+     * Supplies the ephemeral admin ticket, read on every [wsUrl] call and sent as
+     * the `?token=` query parameter. Null sends none.
+     */
+    var wsTicket: (() -> String?)? = null
+
+    /**
      * The bearer token every RPC carries; the next call picks up a new one.
      *
      * With [identity] unset the token's digest IS the identity, so a different
@@ -362,13 +374,14 @@ class Client(
             throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
         }
 
-        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null): Map<String, Any?> {
+        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null, token: String? = null): Map<String, Any?> {
             val frame = LinkedHashMap<String, Any?>()
 
             frame["id"] = "connect"
             frame["type"] = "connect"
             clientId?.let { frame["clientId"] = it }
             context?.let { frame["context"] = it }
+            token?.let { frame["token"] = it }
 
             return frame
         }
@@ -481,8 +494,13 @@ class Client(
      * gates on: a write made before the FIRST connect fails fast by default, so a
      * misconfigured endpoint surfaces on the first write instead of silently
      * filling a queue that will never flush.
+     *
+     * It sends the `connect` frame first, carrying [wsToken] resolved now, so every
+     * open and every reconnect presents the session credential before any
+     * subscription. The app must not send `connect` itself.
      */
     fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
+        sender(buildConnectFrame(token = wsToken?.invoke()))
         synchronized(lock) {
             send = sender
             wasEverConnected = true
@@ -1159,10 +1177,11 @@ class Client(
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and
-     * credential query parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and the
+     * admin ticket as `?token=` when present. The session credential is never in
+     * the URL; it travels in the `connect` frame.
      */
-    fun wsUrl(shardKey: String? = null, token: String? = null): String {
+    fun wsUrl(shardKey: String? = null): String {
         var endpoint = join(WS_PATH)
 
         endpoint = when {
@@ -1176,7 +1195,7 @@ class Client(
             // runtime would open a socket against a shard named "" rather than the
             // default one this client resolves an empty key to.
             namedShard(shardKey)?.let { add("shard=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
-            token?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
+            wsTicket?.invoke()?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
         }
 
         if (params.isEmpty()) return endpoint

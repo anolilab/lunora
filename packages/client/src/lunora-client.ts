@@ -560,6 +560,19 @@ interface WhisperWaiter {
  * the POST is sent, not when it was queued, and covers the body read too: a stalled response
  * must not hold the chain behind it.
  */
+/** The two WebSocket credentials a shard socket opens under: the session (`connect` frame) and the URL ticket. */
+interface ShardSocketCredentials {
+    session: string | undefined;
+    ticket: string | undefined;
+}
+
+/** A WebSocket credential as configured: a static value, a provider, or unset. */
+type WsCredentialSource = string | undefined | WsTokenProvider;
+
+/** Resolve a static credential or a {@link WsTokenProvider}; a provider is called fresh on every connect. */
+const resolveWsCredential = async (credential: WsCredentialSource): Promise<string | undefined> =>
+    typeof credential === "function" ? await credential() : credential;
+
 const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<number> => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -641,9 +654,12 @@ class LunoraClient {
     /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
     private readonly clientQueryStore: ClientQueryStore;
 
-    private wsToken: string | undefined | WsTokenProvider;
-    /** Bumped on every `setWsToken` change: a provider request started under an older value is superseded. */
-    private wsTokenGeneration = 0;
+    /** The session credential, sent in the `connect` frame and never in the URL (protocol §6). */
+    private wsToken: WsCredentialSource;
+    /** The short-lived ticket appended to the upgrade URL as `?token=` (protocol §6). */
+    private wsTicket: WsCredentialSource;
+    /** Bumped on every `setWsToken` / `setWsTicket` change: a provider request started under an older value is superseded. */
+    private wsCredentialGeneration = 0;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -1148,6 +1164,7 @@ class LunoraClient {
         this.url = options.url;
         this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
         this.wsToken = options.wsToken;
+        this.wsTicket = options.wsTicket;
         const authBase = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
 
         this.authBasePath = authBase.endsWith("/") ? authBase.slice(0, -1) : authBase;
@@ -1296,8 +1313,8 @@ class LunoraClient {
      * {@link replayIdentityVerdict} — so a refresh can't replay them and an
      * account switch can't replay the previous user's writes as the new one.
      *
-     * Does NOT update the WebSocket auth — the WS token is fixed at upgrade
-     * time and lives in the URL. To refresh live WS auth, call
+     * Does NOT update the WebSocket auth — a socket keeps the session credential
+     * it connected with for its life. To refresh live WS auth, call
      * {@link setWsToken} explicitly, which closes existing shard sockets to
      * force a reconnect with the new credential.
      */
@@ -1828,13 +1845,12 @@ class LunoraClient {
     }
 
     /**
-     * Replace the token appended to WS upgrade URLs as `?token=…` and close
-     * every open shard socket so the reconnect picks up the new value. Call
-     * this whenever the user's WS credential changes (rotating the admin token
-     * in the studio, switching workspaces, etc.). Accepts a static string or a
-     * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
-     * for short-lived credentials like the minted ephemeral admin sub-token.
-     * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
+     * Replace the session credential sent in the `connect` frame, and close
+     * every open shard socket so the reconnect presents the new value. The
+     * credential never rides the WebSocket URL. Call this when the user's session
+     * changes (sign-in, sign-out, switching workspaces). Accepts a static string
+     * or a {@link WsTokenProvider} resolved fresh at every (re)connect. Bearer
+     * tokens for HTTP RPC are independent — see {@link setAuthToken}.
      */
     public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
@@ -1842,15 +1858,24 @@ class LunoraClient {
         }
 
         this.wsToken = token;
-        this.wsTokenGeneration += 1;
+        this.applyWsCredentialChange();
+    }
 
-        // A send held under the previous credential must not reach the identity that replaced it.
-        this.resetRoomSends();
+    /**
+     * Replace the short-lived ticket appended to WS upgrade URLs as `?token=…`,
+     * and close every open shard socket so the reconnect picks up the new value.
+     * Only an ephemeral admin sub-token belongs here (minted by
+     * `POST /_lunora/admin/ws-token`): a URL is logged by every proxy on the way,
+     * so a session credential never goes here — see {@link setWsToken}. Accepts a
+     * static string or a {@link WsTokenProvider} resolved fresh at every (re)connect.
+     */
+    public setWsTicket(ticket: string | undefined | WsTokenProvider): void {
+        if (this.wsTicket === ticket) {
+            return;
+        }
 
-        // Close every open/connecting socket so the reconnect uses the new
-        // token. Don't tear down the connection record itself — pending
-        // subscriptions/streams need to ride the next socket.
-        this.bounceShardSockets();
+        this.wsTicket = ticket;
+        this.applyWsCredentialChange();
     }
 
     /**
@@ -2313,7 +2338,7 @@ class LunoraClient {
      * The socket carries the browser's session cookie, and that cookie is the
      * only credential that establishes a user. A route declared `auth: true` on
      * the server refuses a socket with no verified session. The `wsToken`
-     * (`?token=`, see {@link setWsToken}) authorises the admin surfaces only; it
+     * (`?token=`, see {@link setWsTicket}) authorises the admin surfaces only; it
      * does not sign a user in to a route, so a private route needs the session
      * cookie. Reconnects with the
      * client's configured backoff. `onMessage` receives what the route's server
@@ -3138,10 +3163,10 @@ class LunoraClient {
      * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
      * WebSocket. `onJobs` fires with the full list on connect and on every
      * change (schedule / cancel / alarm-fire). Reconnects with the client's
-     * configured backoff. Requires `wsToken` to be set to an admin credential
-     * (the browser can't send an `Authorization` header on a WS) — the master
-     * token, or preferably a {@link WsTokenProvider} minting the ephemeral
-     * sub-token so the master credential stays out of the URL. Returns an
+     * configured backoff. Requires `wsTicket` to be set to an admin credential
+     * (the browser can't send an `Authorization` header on a WS) — a
+     * {@link WsTokenProvider} minting the ephemeral sub-token, so the master
+     * credential stays out of the URL. Returns an
      * unsubscribe function that closes the socket and stops reconnecting.
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
@@ -5564,8 +5589,8 @@ class LunoraClient {
         // Stamp the identity the delivering SOCKET is authenticated as, not the
         // one the client currently advertises — see `ShardConnection.identity`.
         // After a `setAuthToken` user switch the previous user's socket is still
-        // open (nothing closes it: the WS credential lives in the upgrade URL and
-        // only `setWsToken` bounces it), so its frames would otherwise be
+        // open (nothing closes it: the socket keeps the credentials it connected with,
+        // and only `setWsToken` / `setWsTicket` bounce it), so its frames would otherwise be
         // persisted under the NEW user's stamp and hydrate into their session on
         // the next reload. A follower tab holds no connection of its own; its
         // values arrive over the identity-checked cross-tab channel, so the live
@@ -6181,8 +6206,8 @@ class LunoraClient {
      * admin socket and {@link connectWebSocket}'s `defineWebSocket` route — and
      * they must share it rather than each hand-roll it: the connect-timeout +
      * heartbeat/watchdog/identity-guard live in `openManagedSocket`, the backoff
-     * policy in `createReconnect`, and reading `wsToken` at connect time is what
-     * lets a post-connect `setWsToken()` rotation be picked up on the next
+     * policy in `createReconnect`, and reading `wsTicket` at connect time is what
+     * lets a post-connect `setWsTicket()` rotation be picked up on the next
      * reconnect attempt instead of looping with a stale token. Registered on
      * {@link adminSocketTeardowns} so `close()` stops it too.
      *
@@ -6240,7 +6265,7 @@ class LunoraClient {
 
         /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
         const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
-            const generation = this.wsTokenGeneration;
+            const generation = this.wsCredentialGeneration;
             let token: string | undefined;
 
             try {
@@ -6253,7 +6278,7 @@ class LunoraClient {
 
             // The credential was replaced while this one was minted: it is superseded, so the
             // channel must not open on it. Mint again under the current credential.
-            if (generation !== this.wsTokenGeneration) {
+            if (generation !== this.wsCredentialGeneration) {
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- re-enters `connect`, declared just below with `openWith` in scope
                 connect();
 
@@ -6263,9 +6288,9 @@ class LunoraClient {
             openWith(token);
         };
 
-        // Read `this.wsToken` at connect time (not once at open time) so a
-        // post-open `setWsToken()` rotation is picked up on the next reconnect
-        // attempt. A provider-shaped token is resolved fresh per attempt; a
+        // Read `this.wsTicket` at connect time (not once at open time) so a
+        // post-open `setWsTicket()` rotation is picked up on the next reconnect
+        // attempt. A provider-shaped ticket is resolved fresh per attempt; a
         // provider failure re-arms the reconnect timer so a broken mint
         // endpoint degrades to backoff retries.
         const connect = (): void => {
@@ -6273,17 +6298,17 @@ class LunoraClient {
                 return;
             }
 
-            const { wsToken } = this;
+            const { wsTicket } = this;
 
-            if (typeof wsToken === "function") {
+            if (typeof wsTicket === "function") {
                 // `connectWithProvider` never rejects (its awaits are try/caught),
                 // so the fire-and-forget catch is belt-and-braces.
-                connectWithProvider(wsToken).catch(() => undefined);
+                connectWithProvider(wsTicket).catch(() => undefined);
 
                 return;
             }
 
-            openWith(wsToken);
+            openWith(wsTicket);
         };
 
         connect();
@@ -6747,6 +6772,8 @@ class LunoraClient {
             id: "connect",
             type: "connect",
             ...(context === undefined ? {} : { context }),
+            // The session credential travels here, never in the upgrade URL (protocol §6).
+            ...(conn.sessionToken === undefined ? {} : { token: conn.sessionToken }),
         });
     }
 
@@ -6790,34 +6817,56 @@ class LunoraClient {
         conn.wsState = "connecting";
         this.emitConnectionStatus();
 
-        // A provider-shaped `wsToken` is resolved fresh per connect attempt (so a
-        // short-lived credential is re-minted on every reconnect, including the
-        // one after a 4001 token-expired drop); a static string keeps the fully
-        // synchronous connect path callers and tests rely on.
-        if (typeof this.wsToken === "function") {
-            // `openSocketWithProvidedToken` never rejects (its awaits are
-            // try/caught), so the fire-and-forget catch is belt-and-braces.
-            this.openSocketWithProvidedToken(conn, shardKey, this.wsToken).catch(() => undefined);
+        // A provider-shaped credential is resolved fresh per connect attempt (so a
+        // short-lived one is re-minted on every reconnect, including the one after
+        // a 4001 token-expired drop); static strings keep the fully synchronous
+        // connect path callers and tests rely on.
+        this.startShardSocket(conn, shardKey).catch(() => undefined);
+    }
+
+    /** Supersede any in-flight credential mint, drop held sends, and bounce the shard sockets onto the new credentials. */
+    private applyWsCredentialChange(): void {
+        this.wsCredentialGeneration += 1;
+
+        // A send held under the previous credential must not reach the identity that replaced it.
+        this.resetRoomSends();
+
+        // Close every open/connecting socket so the reconnect uses the new
+        // credentials. Don't tear down the connection record itself — pending
+        // subscriptions/streams need to ride the next socket.
+        this.bounceShardSockets();
+    }
+
+    /**
+     * Open the shard socket now when both credentials are static, or after
+     * resolving whichever is a {@link WsTokenProvider}. An async function runs
+     * synchronously up to its first `await`, so the static path stays synchronous.
+     */
+    private async startShardSocket(conn: ShardConnection, shardKey: string | undefined): Promise<void> {
+        const { wsToken, wsTicket } = this;
+
+        if (typeof wsToken === "function" || typeof wsTicket === "function") {
+            await this.openSocketWithProvidedCredentials(conn, shardKey);
 
             return;
         }
 
-        this.openSocket(conn, shardKey, this.wsToken);
+        this.openSocket(conn, shardKey, { session: wsToken, ticket: wsTicket });
     }
 
     /**
-     * Resolve the {@link WsTokenProvider} and open the shard socket with the
-     * minted token. The connection is already in the `connecting` state, so the
-     * async gap is race-guarded: a client `close()`, a `setWsToken` bounce, or a
+     * Resolve each {@link WsTokenProvider} and open the shard socket with the
+     * minted credentials. The connection is already in the `connecting` state, so the
+     * async gap is race-guarded: a client `close()`, a `setWsToken` / `setWsTicket` bounce, or a
      * competing connect that landed first all abandon this attempt. A provider
      * failure fails the attempt through {@link handleDisconnect}, which arms the
      * normal reconnect backoff — a broken mint endpoint degrades to retries, not
      * a silent tokenless socket the admin gate would reject.
      */
-    private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
-        const generation = this.wsTokenGeneration;
+    private async openSocketWithProvidedCredentials(conn: ShardConnection, shardKey: string | undefined): Promise<void> {
+        const generation = this.wsCredentialGeneration;
         const attempt = Symbol("ws-token-attempt");
-        let token: string | undefined;
+        let credentials: ShardSocketCredentials;
 
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.providerAttempt = attempt;
@@ -6827,11 +6876,13 @@ class LunoraClient {
         // same budget as the socket handshake and fail the attempt the way a
         // provider rejection does, so the reconnect backoff re-mints.
         try {
-            token = await withinRpcDeadline(
+            credentials = await withinRpcDeadline(
                 this.connectTimeoutMs,
                 undefined,
-                async () => provider(),
-                () => new Error("LunoraClient: wsToken provider timed out"),
+                async () => {
+                    return { session: await resolveWsCredential(this.wsToken), ticket: await resolveWsCredential(this.wsTicket) };
+                },
+                () => new Error("LunoraClient: ws credential provider timed out"),
             );
         } catch {
             if (conn.providerAttempt === attempt) {
@@ -6854,46 +6905,46 @@ class LunoraClient {
             return;
         }
 
-        // The credential was replaced while this one was being minted: it is superseded, so the
-        // socket must not open on it. Mint again under the current credential.
-        if (generation !== this.wsTokenGeneration) {
-            if (typeof this.wsToken === "function") {
-                await this.openSocketWithProvidedToken(conn, shardKey, this.wsToken);
-            } else {
-                this.openSocket(conn, shardKey, this.wsToken);
-            }
+        // A credential was replaced while these were being minted: they are superseded, so the
+        // socket must not open on them. Mint again under the current credentials.
+        if (generation !== this.wsCredentialGeneration) {
+            await this.startShardSocket(conn, shardKey);
 
             return;
         }
 
-        this.openSocket(conn, shardKey, token);
+        this.openSocket(conn, shardKey, credentials);
     }
 
     /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
-    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
+    private openSocket(conn: ShardConnection, shardKey: string | undefined, credentials: ShardSocketCredentials): void {
         if (this.WebSocketImpl === undefined) {
             return;
         }
 
         // Pin the identity this socket is being upgraded under — see
         // `ShardConnection.identity`. Captured here (not at frame time) because
-        // the credential in the upgrade URL is what the server authenticates,
-        // and it can't change for the life of the socket.
+        // the credentials are what the server authenticates, and they can't change
+        // for the life of the socket.
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         conn.identity = this.identityFingerprint();
 
-        if (token === undefined && this.authToken === null) {
+        if (credentials.session === undefined && credentials.ticket === undefined && this.authToken === null) {
             this.identityQuestions += 1;
             conn.identityQuestion = this.identityQuestions;
         } else {
             conn.identityQuestion = undefined;
         }
 
+        // Kept for the `connect` envelope, which is re-sent on every open and on a
+        // context change: the value must be the one this socket was opened under.
+        conn.sessionToken = credentials.session;
+
         // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
         conn.retired = false;
         /* eslint-enable no-param-reassign */
 
-        openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.managedSocketOptions, {
+        openManagedSocket(conn, this.wsUrlFor(shardKey, credentials.ticket), this.managedSocketOptions, {
             onClose: (event) => {
                 // Close code 4001 is the server's `token_expired` signal: notify
                 // listeners so the app can refresh its credential before the
@@ -6955,15 +7006,16 @@ class LunoraClient {
                 // `handleServerMessage` when a non-`error` frame proves the
                 // socket is live (see there).
                 //
+                // Announce the connection (and its app context) before anything else on
+                // this socket: the server refuses any frame that precedes `connect` on a
+                // socket that has not proved its credential, and `emitConnectionStatus`
+                // below lets listeners send frames of their own.
+                this.sendConnectEnvelope(conn);
+
                 // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
                 // also be told the previous socket's answers still stand.
                 this.markShardPendingAck(shardKey, true);
                 this.emitConnectionStatus();
-
-                // Announce the connection (and its app context) before resubscribing,
-                // so the server's `onConnect` hooks run with context in place and the
-                // context is recorded for replay to `onDisconnect` at close.
-                this.sendConnectEnvelope(conn);
 
                 // Resubscribe everyone bound to this shard, a bounded few frames
                 // at a time (see `queueResubscribe`) — every one of them runs its

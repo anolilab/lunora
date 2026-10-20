@@ -41,7 +41,8 @@ async def main():
     client = LunoraClient(
         url="https://my-app.example.com",
         auth_token="…",  # bearer for HTTP RPC (optional)
-        ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
+        ws_token=lambda: session_token(),  # session credential, sent in `connect`; never in the URL
+        ws_ticket=lambda: mint_ticket(),  # admin ticket for `?token=` (POST /_lunora/admin/ws-token)
         timeout=30,  # seconds; the default transport's `urlopen` timeout, raise for slow actions
         # client_id is minted per instance when omitted. Pin a stable per-device
         # one only when the offline queue is durable — a replayed write is

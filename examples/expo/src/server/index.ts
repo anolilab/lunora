@@ -77,23 +77,10 @@ export default {
         worker ??= createWorker({
             openApiSpec,
             resolveIdentity: async (identityRequest) => {
-                // HTTP RPC carries `Authorization: Bearer <token>`; the WS
-                // upgrade can't set headers, so the client sends the same token
-                // as `?token=`. Fold it into the header the `bearer` plugin reads
-                // — but ONLY on the upgrade. Accepting a query-string credential
-                // on ordinary HTTP requests too would make every URL a bearer
-                // token: session tokens would land in access logs, `Referer`
-                // headers and shared links, and the request would be
-                // authenticated by a value a cross-origin link can set.
-                const headers = new Headers(identityRequest.headers);
-                const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
-                const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
-
-                if (wsToken !== null && !headers.has("authorization")) {
-                    headers.set("authorization", `Bearer ${wsToken}`);
-                }
-
-                const session = await auth.api.getSession({ headers });
+                // HTTP RPC and the WS upgrade both carry `Authorization: Bearer <token>`
+                // (the client's `getAuthHeaders` puts it on the socket). The session never
+                // rides the URL, so nothing here reads a query-string credential.
+                const session = await auth.api.getSession({ headers: identityRequest.headers });
 
                 return session?.user.id ? { userId: session.user.id } : null;
             },

@@ -39,6 +39,7 @@ Object messages = client.query("messages:list", Map.of("channel", "general"), nu
 client.mutation("messages:send", Map.of("channel", "general", "text", "hi"), null, null);
 
 // Live subscription: attach your socket, then feed it frames.
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
 client.attachSocket(frame -> socket.send(Json.write(frame)));
 Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, null);
 ```

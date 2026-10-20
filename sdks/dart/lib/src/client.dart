@@ -195,7 +195,7 @@ class LunoraClient {
   String? identityFingerprint() => transport.identityFingerprint();
 
   /// The socket URL — see [LunoraTransport.wsUrl].
-  String wsUrl({String? shardKey, String? token}) => transport.wsUrl(shardKey: shardKey, token: token);
+  String wsUrl({String? shardKey, String? ticket}) => transport.wsUrl(shardKey: shardKey, ticket: ticket);
 
   LunoraFrameSender? _send;
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
@@ -491,7 +491,7 @@ class LunoraClient {
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
-  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context}) {
+  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context, String? token}) {
     final frame = <String, Object?>{'id': 'connect', 'type': 'connect'};
 
     if (clientId != null) {
@@ -499,6 +499,10 @@ class LunoraClient {
     }
     if (context != null) {
       frame['context'] = context;
+    }
+    // The session credential (protocol/README.md 5.1, 6): it never rides the URL.
+    if (token != null) {
+      frame['token'] = token;
     }
 
     return frame;

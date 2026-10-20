@@ -2936,6 +2936,7 @@ interface ShardSocketLike {
 interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
+    authenticated?: boolean;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
@@ -3140,6 +3141,7 @@ interface SubscriptionEnvelope {
     sinceCheckpoint?: number;
     sinceChunk?: number;
     sinceEpoch?: string;
+    token?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
 }

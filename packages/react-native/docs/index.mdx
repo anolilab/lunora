@@ -82,7 +82,7 @@ creates, or reuses, the TanStack `QueryClient` they need).
 ## `@lunora/react-native/auth`
 
 The better-auth Expo bridge. Auth is a **bearer** token: the session rides the
-`Authorization` header (HTTP RPC) and the `?token=` query param (the socket).
+`Authorization` header: the HTTP RPC, and the socket's upgrade through `getAuthHeaders`.
 
 React Native **does** have a cookie jar — `fetch` is backed by the platform HTTP
 stack (`NSURLSession` / `OkHttp`) and its shared cookie store — so a `Set-Cookie`
@@ -95,8 +95,9 @@ every request so the jar never rides along; a caller supplying its own `fetch`
 should wrap it in `withoutAmbientCookies`.
 
 - **`expoBearerToken(authClient)`**: reads the better-auth Expo session token
-  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and
-  `client.setWsToken` (socket); returns `null` when signed out.
+  (from `getCookie()`) for use with `client.setAuthToken` (HTTP),
+  `setSessionBearer` (the socket's upgrade) and `client.setWsToken` (the socket's
+  `connect` frame); returns `null` when signed out.
 - **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`**: re-exported
   from `@better-auth/expo/client`.
 
@@ -126,6 +127,7 @@ useEffect(() => {
     void (async () => {
         const token = await expoBearerToken(authClient);
         if (cancelled) return;
+        setSessionBearer(token);
         client.setAuthToken(token);
         client.setWsToken(token ?? undefined);
     })();
@@ -136,6 +138,6 @@ useEffect(() => {
 }, [session]);
 ```
 
-On the server, add better-auth's `expo()` **and** `bearer()` plugins, and fold
-the socket's `?token=` into an `Authorization` header in `resolveIdentity` (see
-[`@lunora/auth`](/docs/packages/auth)).
+On the server, add better-auth's `expo()` **and** `bearer()` plugins. The socket
+upgrade carries the same `Authorization` header, so `resolveIdentity` reads the
+headers as it does for HTTP (see [`@lunora/auth`](/docs/packages/auth)).

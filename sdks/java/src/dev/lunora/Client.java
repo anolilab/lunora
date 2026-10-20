@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * A Lunora deployment client.
@@ -144,6 +145,15 @@ public final class Client {
      * #authToken(String)}.
      */
     private volatile String authToken;
+
+    /**
+     * The session credential, sent as {@code connect.token} on every socket open. A provider so the
+     * value is read fresh on each reconnect; it never enters the socket URL.
+     */
+    private volatile Supplier<String> wsTokenProvider;
+
+    /** The ephemeral admin ticket, sent as {@code ?token=} on the socket URL by {@link #wsUrl}. */
+    private volatile Supplier<String> wsTicketProvider;
 
     /**
      * Guards every field below, and the {@code cursor}/{@code epoch}/row state hanging off {@link
@@ -348,6 +358,22 @@ public final class Client {
     }
 
     /**
+     * Sets the provider for the session credential, read on every socket open and sent as {@code
+     * connect.token}. Pass {@code null} to stop sending one.
+     */
+    public void wsToken(Supplier<String> provider) {
+        this.wsTokenProvider = provider;
+    }
+
+    /**
+     * Sets the provider for the ephemeral admin ticket, read on every {@link #wsUrl} call and sent
+     * as {@code ?token=}. Pass {@code null} to stop sending one.
+     */
+    public void wsTicket(Supplier<String> provider) {
+        this.wsTicketProvider = provider;
+    }
+
+    /**
      * Sets the bearer token. With {@link #identity()} unset the token's digest IS the identity, so
      * a different token (or clearing it) evicts the previous session exactly as changing a set
      * identity does. With an identity set the digest is not consulted, and a token refresh is not a
@@ -440,11 +466,17 @@ public final class Client {
     /**
      * Registers the sender used for subscription frames. Call once the socket is open.
      *
+     * <p>It sends the {@code connect} frame first, carrying the session credential from {@link
+     * #wsToken(Supplier)} resolved now, so every open and every reconnect presents it before any
+     * subscription. The app must not send {@code connect} itself.
+     *
      * <p>It also latches "has connected at least once", which is what the write queue gates on: a
      * write made before the FIRST connect fails fast by default, so a misconfigured endpoint
      * surfaces on the first write instead of silently filling a queue that will never flush.
      */
     public void attachSocket(FrameSender sender) {
+        sender.send(buildConnectFrame(null, null, resolve(wsTokenProvider)));
+
         synchronized (lock) {
             this.sender = sender;
             this.wasEverConnected = true;
@@ -781,8 +813,9 @@ public final class Client {
         return cursor instanceof Number number ? number.longValue() : null;
     }
 
+    /** The {@code connect} frame. {@code token} is the session credential; null omits it. */
     public static Map<String, Object> buildConnectFrame(
-            String clientId, Map<String, Object> context) {
+            String clientId, Map<String, Object> context, String token) {
         Map<String, Object> frame = new LinkedHashMap<>();
 
         frame.put("id", "connect");
@@ -796,7 +829,15 @@ public final class Client {
             frame.put("context", context);
         }
 
+        if (token != null) {
+            frame.put("token", token);
+        }
+
         return frame;
+    }
+
+    private static String resolve(Supplier<String> provider) {
+        return provider == null ? null : provider.get();
     }
 
     public static Map<String, Object> buildSubscribeFrame(
@@ -1572,15 +1613,16 @@ public final class Client {
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and credential query
-     * parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and the admin ticket as
+     * {@code ?token=} when present. The session credential is never in the URL; it travels in the
+     * {@code connect} frame.
      *
      * <p>{@code shard=} is omitted for an empty key as well as an absent one, for the same reason
      * {@link #buildRpcBody} omits it: {@code ""} is the default shard here and a distinct named
      * shard to the runtime, and a socket opened against the wrong one would deliver frames for a
      * shard the writes never reach.
      */
-    public String wsUrl(String shardKey, String token) {
+    public String wsUrl(String shardKey) {
         String endpoint = join(WS_PATH);
 
         if (endpoint.startsWith("https://")) {
@@ -1595,8 +1637,10 @@ public final class Client {
             params.add("shard=" + URLEncoder.encode(shardKey, StandardCharsets.UTF_8));
         }
 
-        if (token != null) {
-            params.add("token=" + URLEncoder.encode(token, StandardCharsets.UTF_8));
+        String ticket = resolve(wsTicketProvider);
+
+        if (ticket != null) {
+            params.add("token=" + URLEncoder.encode(ticket, StandardCharsets.UTF_8));
         }
 
         if (params.isEmpty()) {

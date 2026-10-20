@@ -548,6 +548,28 @@ const MAX_WS_FRAME_UNITS = 1024 * 1024;
 /** Abort can arrive from unsubscribe or socket close while a stream awaits its next chunk. */
 const isStreamCancelled = (controller: AbortController): boolean => controller.signal.aborted;
 
+/** `authenticated: false` only on a pending socket, so the attachment budget is spent only when the flag matters. */
+const pendingAttachment = (authenticated: boolean): { authenticated?: false } => (authenticated ? {} : { authenticated: false });
+
+/**
+ * Close a socket that failed the credential gate: an `UNAUTHENTICATED` error
+ * frame, then `4003`. Nothing is registered for an unauthenticated socket, so
+ * there is no teardown to run.
+ */
+const refuseUnauthenticatedSocket = (ws: ShardSocketLike): void => {
+    try {
+        ws.send(
+            JSON.stringify({
+                error: { code: "UNAUTHENTICATED", message: "session token required in the connect frame" },
+                type: "error",
+            }),
+        );
+        ws.close?.(4003, "unauthenticated");
+    } catch {
+        /* socket already gone */
+    }
+};
+
 const reportStreamError = (ws: ShardSocketLike, id: string, error: unknown, logMessage: string): void => {
     // Keep developer-facing non-internal errors; redact unexpected errors.
     const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "internal error" });
@@ -7892,6 +7914,15 @@ abstract class ShardDO {
             return;
         }
 
+        // An unauthenticated socket (see `isUpgradeAuthenticated`) may send only
+        // `connect`, which is checked in its branch. Refusing every other frame here
+        // means nothing is dispatched on a socket that has not proved its credential.
+        if (inboundAttachment.authenticated === false && envelope.type !== "connect") {
+            refuseUnauthenticatedSocket(ws);
+
+            return;
+        }
+
         // `live` is server-to-client only (see `deliverLiveLocal`). Refuse a client-sent one so a
         // peer cannot forge a live publish to other members of a topic.
         const clientFrameType: string = envelope.type;
@@ -7926,6 +7957,20 @@ abstract class ShardDO {
             // survives hibernation and can be replayed at close) and fire the
             // `onConnect` lifecycle hooks under the socket's verified identity.
             const attachment = this.readAttachment(ws);
+
+            // Verified before `identity` is sent, so a refused socket learns nothing
+            // about who it is. Only an unauthenticated socket reaches this check.
+            if (attachment.authenticated === false) {
+                const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
+
+                if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
+                    refuseUnauthenticatedSocket(ws);
+
+                    return;
+                }
+
+                attachment.authenticated = true;
+            }
 
             // Tell the client which user this socket was authenticated as, and
             // "nobody" as an explicit `null`. A cookie-session client holds no
@@ -15943,26 +15988,19 @@ abstract class ShardDO {
      * variable more strictly took every WebSocket upgrade down with a bare
      * 403 on a configuration the CORS side documents as supported, and a
      * browser sends its real `Origin`, never `*`, so nothing else matched.
-     * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
-     * must present a matching token. We accept either an
-     * `Authorization: Bearer <token>` header (preferred) or a
-     * `?token=<token>` query parameter (the only escape hatch for
-     * browsers, which can't customise headers on the WebSocket
-     * constructor). The match runs in constant time to avoid leaking
-     * the token via response-timing differences.
+     * 2. Bearer token via `env.LUNORA_WS_BEARER`. The upgrade is not refused for
+     * lacking it: a socket with no header bearer and no admin ticket is accepted
+     * UNAUTHENTICATED and must present `connect.token` as its first frame (see
+     * {@link isUpgradeAuthenticated} and the `connect` branch). The session
+     * credential never rides the URL, so a raw `LUNORA_WS_BEARER` or
+     * `LUNORA_ADMIN_TOKEN` in `?token=` is refused outright, valid or not — the
+     * query string is where it leaks. `?token=` carries only an ephemeral admin
+     * sub-token (`POST /_lunora/admin/ws-token`).
      *
-     * The `?token=` path is a real risk surface: the token ends up in
-     * server logs, browser history, and `Referer` headers on any
-     * subresource the upgrade page loads after the handshake. Use a
-     * short-lived rotating token in production rather than a long-lived
-     * secret — for the ADMIN credential specifically, the worker mints one
-     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
-     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
-     *
-     * Async because the admin fallback ({@link isAdminSocket}) verifies the
-     * ephemeral sub-token with WebCrypto HMAC.
+     * Async because the admin ticket check ({@link isAdminSocket}) verifies the
+     * sub-token with WebCrypto HMAC.
      */
-    private async isUpgradeAllowed(request: Request): Promise<boolean> {
+    private async isUpgradeAllowed(request: Request, isRouteSocket: boolean): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -15985,50 +16023,38 @@ abstract class ShardDO {
             }
         }
 
-        const expectedBearer = env.LUNORA_WS_BEARER;
+        // Neither raw credential may ride the query string, even with no bearer gate
+        // configured: the URL is the leak this gate exists to close.
+        const queryToken = new URL(request.url).searchParams.get("token");
+        const rawCredentials = [env.LUNORA_ADMIN_TOKEN, env.LUNORA_WS_BEARER];
+        const rawInQuery = queryToken !== null && rawCredentials.some((raw) => raw !== undefined && raw.length > 0 && constantTimeEqual(queryToken, raw));
 
-        if (expectedBearer && expectedBearer.length > 0) {
-            const supplied = this.suppliedWsToken(request);
-            const adminToken = env.LUNORA_ADMIN_TOKEN;
-
-            // The master token in `?token=` is refused even when it matches the bearer:
-            // the query string is where it leaks (see `isAdminSocket`).
-            const masterInQuery =
-                supplied !== undefined &&
-                adminToken !== undefined &&
-                adminToken.length > 0 &&
-                extractBearerToken(request.headers.get("authorization")) === undefined &&
-                constantTimeEqual(supplied, adminToken);
-
-            // The admin credential is accepted as an alternate so a studio can open
-            // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
-            // minted ephemeral sub-token (header or `?token=`), or the master token
-            // in the `Authorization` header only. The socket is flagged admin
-            // separately (see `isAdminSocket`); matching the bearer alone never
-            // grants it.
-            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
-                return false;
-            }
-        }
-
-        return true;
+        // A route socket has no `connect` frame to present the session credential in,
+        // so the upgrade itself must authenticate it.
+        return !rawInQuery && (!isRouteSocket || (await this.isUpgradeAuthenticated(request)));
     }
 
     /**
-     * Token presented on a WS upgrade: the `Authorization: Bearer` header when
-     * present, else the `?token=` query parameter (the only channel a browser
-     * `WebSocket` constructor can use). Returns `undefined` when neither is set.
-     * @returns the bearer token string, or `undefined` when no token was supplied
+     * Whether the upgrade itself proves the session credential. A header bearer
+     * matching `LUNORA_WS_BEARER`, or an admin credential, does; the socket is then
+     * authenticated without a `connect.token`. Anything else is accepted
+     * unauthenticated and held until its `connect` frame (see the `connect` branch).
+     * With no bearer gate configured, every socket is authenticated.
      */
-    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the upgrade-auth helpers; reads only the request
-    private suppliedWsToken(request: Request): string | undefined {
-        const fromHeader = extractBearerToken(request.headers.get("authorization"));
+    private async isUpgradeAuthenticated(request: Request): Promise<boolean> {
+        const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
 
-        if (fromHeader !== undefined) {
-            return fromHeader;
+        if (expectedBearer === undefined || expectedBearer.length === 0) {
+            return true;
         }
 
-        return new URL(request.url).searchParams.get("token") ?? undefined;
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
+
+        if (headerBearer !== undefined && constantTimeEqual(headerBearer, expectedBearer)) {
+            return true;
+        }
+
+        return this.isAdminSocket(request);
     }
 
     /**
@@ -16218,10 +16244,6 @@ abstract class ShardDO {
             return new Response("replica does not serve subscriptions", { status: 421 });
         }
 
-        if (!(await this.isUpgradeAllowed(request))) {
-            return new Response("Forbidden", { status: 403 });
-        }
-
         // A `defineWebSocket` route is an upgrade at a declared custom path; the
         // ordinary subscription socket upgrades at the reserved `/_lunora/ws`
         // path and resolves to no route. The route carries the registered
@@ -16229,6 +16251,10 @@ abstract class ShardDO {
         // through, and whether a verified session is required.
         const url = new URL(request.url);
         const route = this.socketRoute(url.pathname);
+
+        if (!(await this.isUpgradeAllowed(request, route !== undefined))) {
+            return new Response("Forbidden", { status: 403 });
+        }
 
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
@@ -16259,6 +16285,10 @@ abstract class ShardDO {
         // sub-token HMAC verify must not sit between `acceptWebSocket` and the
         // attachment stamp, or an early frame could race an unstamped socket.
         const admin = await this.isAdminSocket(request);
+
+        // A socket the upgrade cannot authenticate waits for `connect.token`. A
+        // route socket is refused by `isUpgradeAllowed` instead: it has no `connect` frame.
+        const authenticated = await this.isUpgradeAuthenticated(request);
 
         // The pair and the 101 come from the socket host: Cloudflare's `WebSocketPair` and response, or a host without them.
         const { client, server } = this.socketHost.newPair();
@@ -16297,6 +16327,7 @@ abstract class ShardDO {
             admin,
             connectionId,
             subs: {},
+            ...pendingAttachment(authenticated),
             ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
@@ -16877,7 +16908,8 @@ abstract class ShardDO {
                 this.routeCloseSent.add(ws);
                 await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close");
             }
-        } else if (attachment.connectionId !== undefined) {
+        } else if (attachment.connectionId !== undefined && attachment.authenticated !== false) {
+            // A socket refused at the credential gate never ran `onConnect`, so there is nothing to disconnect from.
             await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
         }
     }

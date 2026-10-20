@@ -69,6 +69,11 @@ differs from the shape's — re-seeds instead: the view is emptied, its checkpoi
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint.
+Send `buildConnectFrame(clientID:context:token:)` as the first frame on every open,
+before `resendSubscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
+whose first frame is not that `connect` with a matching `token` (close code 4003). The
+session credential never goes in the socket URL; `wsURL(shardKey:wsTicket:)` carries only
+an admin ticket.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type). The sender cannot throw, so a failed write

@@ -190,6 +190,25 @@ end
 class TestWsFrames < Minitest::Test
   include FixtureLoader
 
+  # protocol/README.md 5.1 and 6: the session credential rides the first
+  # +connect+ frame, and the socket URL carries only the admin ticket as ?token=.
+  def test_session_credential_is_in_connect_and_only_the_ticket_is_in_the_url
+    session = "sess-SECRET-1"
+    client = Lunora::Client.new("https://app.example")
+
+    frame = Lunora.build_connect_frame("client-test", token: session)
+    assert_equal session, frame["token"]
+    assert_equal "connect", frame["type"]
+
+    assert_equal [%w[token tkt-1]], URI.decode_www_form(URI.parse(client.send(:ws_url, nil, "tkt-1")).query)
+    assert_equal [%w[shard room-1], %w[token tkt-1]],
+                 URI.decode_www_form(URI.parse(client.send(:ws_url, "room-1", "tkt-1")).query)
+    refute_includes client.send(:ws_url, nil, "tkt-1"), session
+
+    refute Lunora.build_connect_frame("client-test").key?("token"), "no session credential, no token key"
+    assert_equal "wss://app.example/_lunora/ws", client.send(:ws_url)
+  end
+
   def test_client_frames
     ConformanceManifest.covers("client_frame_builders")
 

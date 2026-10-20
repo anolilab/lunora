@@ -144,7 +144,7 @@ describe("connectWebSocket", () => {
         const first = lastSocket();
 
         // Bounced before its handshake completes: its connect timeout is still armed.
-        client.setWsToken("rotated");
+        client.setWsTicket("rotated");
 
         let elapsed = 0;
 
@@ -267,7 +267,7 @@ describe("connectWebSocket", () => {
         const bounced = lastSocket();
 
         bounced.fire("open");
-        client.setWsToken("rotated");
+        client.setWsTicket("rotated");
         bounced.fire("message", { data: JSON.stringify({ data: encodeWire({ text: "late" }), type: "message" }) });
 
         expect(onMessage).not.toHaveBeenCalled();
@@ -294,7 +294,7 @@ describe("connectWebSocket", () => {
         const client = new LunoraClient({
             url: "https://app.example",
             WebSocket: WebSocketImpl,
-            wsToken: () =>
+            wsTicket: () =>
                 new Promise<string>((resolve) => {
                     resolveStale = resolve;
                 }),
@@ -302,7 +302,7 @@ describe("connectWebSocket", () => {
 
         client.connectWebSocket("/chat", { onMessage: () => undefined });
         // Rotate while the first provider is still pending.
-        client.setWsToken("fresh");
+        client.setWsTicket("fresh");
         resolveStale("stale");
         await vi.advanceTimersByTimeAsync(0);
 

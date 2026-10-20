@@ -224,10 +224,13 @@ module Lunora
     cursor.is_a?(Integer) ? cursor : nil
   end
 
-  def build_connect_frame(client_id = nil, context = nil)
+  # +token+ is the session credential (protocol/README.md 5.1, 6). It is sent
+  # here, in the first frame, and never in the socket URL.
+  def build_connect_frame(client_id = nil, context = nil, token: nil)
     frame = { "id" => "connect", "type" => "connect" }
     frame["clientId"] = client_id unless client_id.nil?
     frame["context"] = context unless context.nil?
+    frame["token"] = token unless token.nil?
     frame
   end
 
@@ -1099,17 +1102,18 @@ module Lunora
       @http_post.call(join_url(RPC_PATH), headers, JSON.generate(Lunora.build_rpc_body(function_path, args, shard_key)))
     end
 
-    # The socket URL: the origin with its scheme swapped, plus the shard and
-    # credential query parameters when present.
+    # The socket URL: the origin with its scheme swapped, plus the shard and,
+    # when given, the admin +ticket+ as +?token=+. The session credential is
+    # never a URL parameter: it goes in +build_connect_frame+'s +token:+.
     #
     # An empty shard key is omitted, for the reason +build_rpc_body+ gives: to
     # the runtime it names its own shard, to this client it is the default one.
-    def ws_url(shard_key = nil, token = nil)
+    def ws_url(shard_key = nil, ticket = nil)
       endpoint = join_url(WS_PATH).sub(%r{\Ahttps://}, "wss://").sub(%r{\Ahttp://}, "ws://")
       params = []
       shard_key = Lunora.normalize_shard_key(shard_key)
       params << "shard=#{URI.encode_www_form_component(shard_key)}" unless shard_key.nil?
-      params << "token=#{URI.encode_www_form_component(token)}" unless token.nil?
+      params << "token=#{URI.encode_www_form_component(ticket)}" unless ticket.nil?
       return endpoint if params.empty?
 
       "#{endpoint}#{endpoint.include?("?") ? "&" : "?"}#{params.join("&")}"

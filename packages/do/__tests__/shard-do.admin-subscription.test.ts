@@ -330,14 +330,32 @@ describe("shardDO admin-socket upgrade flagging", () => {
         return captured;
     };
 
-    it("stamps admin:false for the raw master token in ?token= (enforcement is the default)", async () => {
+    it("refuses (403) the raw master token in ?token=, so the URL never carries it", async () => {
         expect.assertions(1);
 
         const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
-        // The upgrade still mints a per-connection id for lifecycle dispatch; the
-        // socket just isn't admin — only a minted sub-token (or the header) is.
-        expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
+        // No attachment is stamped: the gate rejects before the pair is built.
+        expect(attachment).toBeUndefined();
+    });
+
+    it("refuses (403) the raw session bearer in ?token=, so the URL never carries it", async () => {
+        expect.assertions(1);
+
+        const attachment = await upgradeAndCaptureAttachment(
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_WS_BEARER: "user-bearer" },
+            "https://shard.internal/?token=user-bearer",
+        );
+
+        expect(attachment).toBeUndefined();
+    });
+
+    it("admits an unauthenticated upgrade when LUNORA_WS_BEARER gates the socket, to await connect.token", async () => {
+        expect.assertions(1);
+
+        const attachment = await upgradeAndCaptureAttachment({ LUNORA_WS_BEARER: "user-bearer" }, "https://shard.internal/");
+
+        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), subs: {} });
     });
 
     it("stamps admin:false when no token is presented", async () => {
@@ -408,18 +426,19 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
     });
 
-    it("rejects the upgrade (403) when LUNORA_WS_BEARER is set and the ephemeral token is expired", async () => {
+    it("admits an expired ephemeral token as no credential when LUNORA_WS_BEARER gates the socket", async () => {
         expect.assertions(1);
 
         const minted = await mintWsAdminToken(ADMIN_TOKEN, { now: Date.now() - 120_000, ttlMs: 60_000 });
 
-        // No attachment is ever stamped: the gate rejects before the pair is built.
+        // The lapsed ticket grants nothing, but the socket is still held open
+        // unauthenticated until a connect frame presents the session token.
         const attachment = await upgradeAndCaptureAttachment(
             { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_WS_BEARER: "user-bearer" },
             `https://shard.internal/?token=${encodeURIComponent(minted.token)}`,
         );
 
-        expect(attachment).toBeUndefined();
+        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), subs: {} });
     });
 
     it("refuses the raw master token in ?token= when it also equals LUNORA_WS_BEARER", async () => {
@@ -438,12 +457,12 @@ describe("shardDO admin-socket upgrade flagging", () => {
     describe("ephemeral WS token enforcement (master token never admitted via ?token=)", () => {
         const ADMIN_ENV = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
 
-        it("stamps admin:false for the raw master token in ?token=", async () => {
+        it("refuses the raw master token in ?token=, admin or not", async () => {
             expect.assertions(1);
 
             const attachment = await upgradeAndCaptureAttachment(ADMIN_ENV, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
-            expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
+            expect(attachment).toBeUndefined();
         });
 
         it("still stamps admin:true for a minted ephemeral token in ?token=", async () => {

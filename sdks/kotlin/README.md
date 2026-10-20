@@ -38,6 +38,7 @@ val messages = client.query("messages:list", args)
 client.mutation("messages:send", args)
 
 // Live subscription: attach your socket, then feed it frames.
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
 client.attachSocket { frame -> socket.send(Json.write(frame)) }
 val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```

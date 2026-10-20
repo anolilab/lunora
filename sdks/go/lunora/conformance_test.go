@@ -385,8 +385,8 @@ func TestClientFrameBuilders(t *testing.T) {
 		}
 	}
 
-	assertFrame(t, BuildConnectFrame("client-test", nil), "connect")
-	assertFrame(t, BuildConnectFrame("client-test", map[string]any{"roomId": "general"}), "connect-with-context")
+	assertFrame(t, BuildConnectFrame("client-test", nil, ""), "connect")
+	assertFrame(t, BuildConnectFrame("client-test", map[string]any{"roomId": "general"}, ""), "connect-with-context")
 
 	cold, err := BuildSubscribeFrame("sub_1", "messages:list", map[string]any{"channel": "general"}, "", nil, nil)
 	if err != nil {

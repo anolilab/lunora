@@ -775,7 +775,9 @@ func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey s
 }
 
 // BuildConnectFrame is the one-shot frame sent first on every socket open.
-func BuildConnectFrame(clientID string, context map[string]any) map[string]any {
+// token is the session credential; it rides here and never in the socket URL,
+// and is omitted when empty.
+func BuildConnectFrame(clientID string, context map[string]any, token string) map[string]any {
 	frame := map[string]any{"id": "connect", "type": "connect"}
 	if clientID != "" {
 		frame["clientId"] = clientID
@@ -783,6 +785,10 @@ func BuildConnectFrame(clientID string, context map[string]any) map[string]any {
 
 	if context != nil {
 		frame["context"] = context
+	}
+
+	if token != "" {
+		frame["token"] = token
 	}
 
 	return frame
@@ -1598,8 +1604,10 @@ func runDeferred(deferred []func()) {
 }
 
 // WSURL derives the socket URL: the origin with the scheme swapped, plus the
-// shard and credential query parameters when present.
-func (c *Client) WSURL(shardKey string, token string) string {
+// shard and admin-ticket query parameters when present. wsTicket is the
+// ephemeral admin sub-token (POST /_lunora/admin/ws-token); the session
+// credential never rides the URL — BuildConnectFrame carries it.
+func (c *Client) WSURL(shardKey string, wsTicket string) string {
 	endpoint := joinURL(c.BaseURL, WSPath)
 
 	switch {
@@ -1614,8 +1622,8 @@ func (c *Client) WSURL(shardKey string, token string) string {
 		params = append(params, "shard="+url.QueryEscape(shardKey))
 	}
 
-	if token != "" {
-		params = append(params, "token="+url.QueryEscape(token))
+	if wsTicket != "" {
+		params = append(params, "token="+url.QueryEscape(wsTicket))
 	}
 
 	if len(params) == 0 {
