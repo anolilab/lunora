@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.72...@lunora/platform@1.0.0-alpha.73) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
 ## @lunora/platform [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.71...@lunora/platform@1.0.0-alpha.72) (2026-10-20)
 
 ### Features
