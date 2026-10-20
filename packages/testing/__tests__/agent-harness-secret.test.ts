@@ -181,6 +181,7 @@ describe("agentHarness — journal order", () => {
         expect(harness.journalEntries().map((entry) => `${(entry as { kind: string }).kind}:${(entry as { name: string }).name}`)).toStrictEqual([
             "step:llm:turn:0",
             "step:secret:request:0:call_1",
+            "step:secret:await:0:call_1",
             "wait:secret:0:call_1",
             "step:secret:settle:0:call_1",
             "step:llm:turn:1",
