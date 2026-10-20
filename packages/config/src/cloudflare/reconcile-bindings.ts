@@ -387,16 +387,21 @@ const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string
     };
 };
 
+/** The targets that serve a `KV` namespace binding; the others have no KV for `ctx.kv` to bind. */
+const KV_TARGETS: ReadonlySet<string> = new Set(["celld", "cloudflare"]);
+
 /**
- * Add an id-less `KV` namespace binding when the project binds none. Wrangler
- * creates the namespace on the first deploy and writes its id back, so nothing
- * here mints it. A project that already binds a namespace (under any name) is
- * left alone: `createKv()` is handed whichever binding the app chose. Not run
- * for a jurisdiction-pinned schema: a namespace wrangler creates is unrestricted
- * and cannot be moved, so that app creates it itself. Pure.
+ * Add a `KV` namespace binding when the project binds none. On Cloudflare it is
+ * id-less: wrangler creates the namespace on the first deploy and writes its id
+ * back, so nothing here mints it. celld has no namespace to create, and takes any
+ * id it is given, so its binding carries one derived from the Worker's name. A
+ * project that already binds a namespace (under any name) is left alone:
+ * `createKv()` is handed whichever binding the app chose. Not run for a
+ * jurisdiction-pinned schema: a namespace wrangler creates is unrestricted and
+ * cannot be moved, so that app creates it itself. Pure.
  */
 const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
-    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+    if ((target !== undefined && !KV_TARGETS.has(target)) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
         return { added: [], text };
     }
 
@@ -406,7 +411,11 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
         return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
     }
 
-    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
+    const entry = createsCloudflareResources(target)
+        ? { binding: "KV" }
+        : { binding: "KV", id: `${typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora"}-kv` };
+
+    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [entry]) };
 };
 
 /**
@@ -1012,10 +1021,11 @@ const reconcileWranglerBindings = (
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
-    // kv is written without a remote id (wrangler creates the namespace on
-    // deploy), hyperdrive with a placeholder id that deploy replaces once it has
-    // a connection string, and artifacts with the Worker's name as its namespace;
-    // all only for a Cloudflare target. Pipelines stays a hint: it carries an
+    // kv is written without a remote id on Cloudflare (wrangler creates the
+    // namespace on deploy) and with a name-derived id on celld, hyperdrive with a
+    // placeholder id that deploy replaces once it has a connection string, and
+    // artifacts with the Worker's name as its namespace; hyperdrive and artifacts
+    // only for a Cloudflare target. Pipelines stays a hint: it carries an
     // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },

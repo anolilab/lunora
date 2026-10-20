@@ -919,14 +919,24 @@ describe("reconcileWranglerBindings", () => {
         expect(reconcileWranglerBindings(root, baseInferred({ usesKv: true })).added).toStrictEqual([]);
     });
 
-    it.each(["node", "celld"])("writes no KV or Hyperdrive binding for the %s target, and says what to add instead", (target) => {
+    it("writes no KV or Hyperdrive binding for the node target, and says what to add instead", () => {
         expect.assertions(3);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target });
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "node" });
 
         expect(readConfig().kv_namespaces).toBeUndefined();
         expect(readConfig().hyperdrive).toBeUndefined();
         expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
+    });
+
+    it("writes a celld KV binding with a name-derived id, and no Hyperdrive binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "celld" });
+
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV", id: "lunora-app-kv" }]);
+        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(result.added).toContain("KV (Workers KV, created on deploy)");
     });
 
     it.each([
