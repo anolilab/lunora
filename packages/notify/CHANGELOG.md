@@ -1,3 +1,10 @@
+## @lunora/notify [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.91...@lunora/notify@1.0.0-alpha.92) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
 ## @lunora/notify [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.90...@lunora/notify@1.0.0-alpha.91) (2026-10-20)
 
 
