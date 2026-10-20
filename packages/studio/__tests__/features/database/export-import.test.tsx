@@ -156,6 +156,40 @@ describe("exportImportPanel", () => {
         ]);
     });
 
+    it("cuts a chunk early when its rows would exceed the byte ceiling, so wide rows stay under the body limit", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        // Each row is ~300 KB, so three would pass the ~900 KB ceiling: the chunks are two rows each.
+        const wide = "x".repeat(300_000);
+        const lines = Array.from({ length: 4 }, (_, index) => JSON.stringify({ doc: { __id__: `w${index.toString()}`, body: wide }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("Inserted 4");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+    });
+
+    it("refuses a single row too wide for any request before writing a chunk", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        const wide = JSON.stringify({ doc: { __id__: "huge", body: "x".repeat(950_000) }, table: "messages" });
+
+        render(renderPanel(mock));
+
+        importText(`${JSON.stringify({ doc: { __id__: "m1" }, table: "messages" })}\n${wide}`);
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("a single row is over the 900000-byte import limit");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+    });
+
     it("rejects a file with a malformed line anywhere before writing any chunk", async () => {
         expect.assertions(2);
 

@@ -74,6 +74,45 @@ describe("shard host SQL cursor", () => {
         }
     });
 
+    it("refuses a deferred read consumed while another task holds the transaction", async () => {
+        expect.assertions(2);
+
+        const { dispose, host } = createNodeShardHost();
+
+        try {
+            host.sql.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+
+            const cursor = host.sql.exec<{ id: number }>("SELECT id FROM t");
+
+            let open: () => void = () => undefined;
+            const opened = new Promise<void>((resolve) => {
+                open = resolve;
+            });
+            let release: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            const transaction = host.transaction(async () => {
+                host.sql.exec("INSERT INTO t (id) VALUES (1)");
+                open();
+                await held;
+            });
+
+            await opened;
+
+            // Consumed from outside the transaction: the read must not see the uncommitted row.
+            expect(() => cursor.toArray()).toThrow("shard busy");
+
+            release();
+            await transaction;
+
+            expect(host.sql.exec("SELECT COUNT(*) AS n FROM t").one()).toStrictEqual({ n: 1 });
+        } finally {
+            dispose();
+        }
+    });
+
     it("still runs a writer immediately, and a RETURNING statement too", () => {
         expect.assertions(2);
 

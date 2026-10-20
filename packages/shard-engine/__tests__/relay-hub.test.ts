@@ -24,10 +24,28 @@ const OPEN_SHAPE = { args: {}, name: "lobby-messages" };
 /** Reads a claim, so the gate refuses the cohort and the owner registers a per-socket proxy instead. */
 const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 
+/** An answer body the owner may cancel: `cancelled` flips and `settled` resolves at that moment, so a test awaits the cancel itself. */
+const trackedBody = (): { cancel: () => void; cancelled: boolean; settled: Promise<void> } => {
+    let markSettled: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+        markSettled = resolve;
+    });
+    const body = {
+        cancel: (): void => {
+            body.cancelled = true;
+            markSettled();
+        },
+        cancelled: false,
+        settled,
+    };
+
+    return body;
+};
+
 /** A relay whose control-channel POSTs are recorded, and optionally made to fail the way an unreachable sibling DO does. */
 interface RelayDouble {
     /** When set, every answer carries a body stream, and this records whether the owner cancelled it. */
-    body?: { cancelled: boolean };
+    body?: ReturnType<typeof trackedBody>;
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
     /** The status this relay answers a forwarded whisper, live frame or shape poke with; `410` when it holds no sockets. Defaults to `204`. */
@@ -48,6 +66,8 @@ const ownerFor = (
     seed?: { cursor: number },
     /** Shape name → table this build resolves it to. Unlisted shapes read `messages`; a test passes a different map to model a deploy that re-points one. */
     tables: Record<string, string> = {},
+    /** The host's env, read on each call, so a test can lower `LUNORA_MAX_RELAYS` between two frames the way a deploy does. */
+    env: Record<string, string> = {},
 ): {
     owner: NonNullable<ReturnType<typeof createRelayLink>>;
     resolvedUnder: (undefined | SubscriptionIdentity)[];
@@ -92,7 +112,7 @@ const ownerFor = (
                         ? undefined
                         : new ReadableStream({
                               cancel: () => {
-                                  body.cancelled = true;
+                                  body.cancel();
                               },
                           });
 
@@ -111,7 +131,7 @@ const ownerFor = (
         deliverWhisperLocal: () => 0,
         doName: () => OWNER_KEY,
         env: () => {
-            return { SHARD: { get: (id: string) => stubFor(id), getByName: (name: string) => stubFor(name), idFromName: (id: string) => id } };
+            return { ...env, SHARD: { get: (id: string) => stubFor(id), getByName: (name: string) => stubFor(name), idFromName: (id: string) => id } };
         },
         getWebSockets: () => [],
         maskMetadata: () => {
@@ -1089,7 +1109,7 @@ describe("relay hub", () => {
             expect(relaysRows()).toStrictEqual([0]);
         });
 
-        it.each([1.5, -1, Number.NaN, 8])("rejects a frame carrying relayIndex %s and leaves the relay set untouched", async (relayIndex) => {
+        it.each([1.5, -1, Number.NaN])("rejects a frame carrying relayIndex %s and leaves the relay set untouched", async (relayIndex) => {
             expect.assertions(6);
 
             const { owner } = ownerFor(database.sql, new Map());
@@ -1112,6 +1132,42 @@ describe("relay hub", () => {
             }
 
             expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it("rejects an attach or shape subscribe at or past LUNORA_MAX_RELAYS", async () => {
+            expect.assertions(2);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            // The table is created by the first attach, so one relay is attached to make the set readable.
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const attach = await deliver(owner, JSON.stringify({ relayIndex: 8, type: "relay_attach" }));
+            const subscribeAtCap = await deliver(
+                owner,
+                JSON.stringify({ ...OPEN_SHAPE, connectionId: "c1", relayIndex: 8, subId: "s1", type: "relay_shape_subscribe" }),
+            );
+
+            expect([attach.status, subscribeAtCap.status]).toStrictEqual([400, 400]);
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it("still detaches and unsubscribes a relay that a lowered LUNORA_MAX_RELAYS no longer covers", async () => {
+            expect.assertions(2);
+
+            const env: Record<string, string> = {};
+            const { owner } = ownerFor(database.sql, new Map(), undefined, {}, env);
+
+            await deliver(owner, JSON.stringify({ relayIndex: 5, type: "relay_attach" }));
+
+            // A deploy lowers the cap below the relay's index; its sockets must still be able to tear down.
+            env["LUNORA_MAX_RELAYS"] = "2";
+
+            const unsubscribe = await deliver(owner, JSON.stringify({ connectionId: "c1", relayIndex: 5, type: "relay_shape_unsubscribe" }));
+            const detach = await deliver(owner, JSON.stringify({ relayIndex: 5, type: "relay_detach" }));
+
+            expect([unsubscribe.status, detach.status]).toStrictEqual([204, 204]);
+            expect(relaysRows()).toStrictEqual([]);
         });
     });
 
@@ -1207,9 +1263,9 @@ describe("relay hub", () => {
             expect.assertions(4);
 
             const relays = new Map<number, RelayDouble>([
-                [0, { body: { cancelled: false }, down: false, liveStatus: 404, posts: [] }],
-                [1, { body: { cancelled: false }, down: false, liveStatus: 200, posts: [] }],
-                [2, { body: { cancelled: false }, down: false, liveStatus: 404, posts: [] }],
+                [0, { body: trackedBody(), down: false, liveStatus: 404, posts: [] }],
+                [1, { body: trackedBody(), down: false, liveStatus: 200, posts: [] }],
+                [2, { body: trackedBody(), down: false, liveStatus: 404, posts: [] }],
             ]);
             const owner = ownerOf(relays);
 
@@ -1219,10 +1275,8 @@ describe("relay hub", () => {
 
             const winner = await owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
 
-            // The loser bodies are released off the winner's path; let those callbacks run.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
+            // The loser bodies are released off the winner's path, so wait for each cancel rather than for a tick.
+            await Promise.all([relayAt(relays, 0).body?.settled, relayAt(relays, 2).body?.settled]);
 
             expect([relayAt(relays, 0).body?.cancelled, relayAt(relays, 2).body?.cancelled]).toStrictEqual([true, true]);
             expect(winner?.status).toBe(200);

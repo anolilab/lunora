@@ -1,14 +1,35 @@
+import { LunoraProvider } from "@lunora/react";
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAutoRefresh } from "../../src/hooks/use-auto-refresh";
+import type { MockClientHooks } from "../mock-client";
+import { createMockClient } from "../mock-client";
 
-const Harness = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => unknown }): ReactElement => {
+const sharedClient = createMockClient({ query: (): unknown => undefined });
+
+const Probe = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => unknown }): ReactElement => {
     useAutoRefresh(onTick, enabled, intervalMs);
 
     return <div />;
 };
+
+const Harness = ({
+    client = sharedClient,
+    enabled,
+    intervalMs,
+    onTick,
+}: {
+    client?: MockClientHooks;
+    enabled: boolean;
+    intervalMs?: number;
+    onTick: () => unknown;
+}): ReactElement => (
+    <LunoraProvider client={client.asClient}>
+        <Probe enabled={enabled} intervalMs={intervalMs} onTick={onTick} />
+    </LunoraProvider>
+);
 
 describe("useAutoRefresh", () => {
     beforeEach(() => {
@@ -152,6 +173,35 @@ describe("useAutoRefresh", () => {
 
         rerender(<Harness enabled={false} intervalMs={1000} onTick={onTick} />);
         rerender(<Harness enabled intervalMs={1000} onTick={onTick} />);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onTick).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops polling on ADMIN_FORBIDDEN, the code the admin RPC gate returns", async () => {
+        expect.assertions(1);
+
+        const onTick = vi.fn<() => Promise<void>>(() => Promise.reject(Object.assign(new Error("admin off"), { code: "ADMIN_FORBIDDEN" })));
+
+        render(<Harness enabled intervalMs={1000} onTick={onTick} />);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(onTick).toHaveBeenCalledTimes(1);
+    });
+
+    it("resumes polling after a terminal error once the client is replaced with new credentials", async () => {
+        expect.assertions(2);
+
+        const onTick = vi.fn<() => Promise<void>>(() => Promise.reject(Object.assign(new Error("no session"), { code: "UNAUTHORIZED" })));
+
+        const { rerender } = render(<Harness enabled intervalMs={1000} onTick={onTick} />);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(onTick).toHaveBeenCalledTimes(1);
+
+        rerender(<Harness client={createMockClient({ query: (): unknown => undefined })} enabled intervalMs={1000} onTick={onTick} />);
         await vi.advanceTimersByTimeAsync(1000);
 
         expect(onTick).toHaveBeenCalledTimes(2);

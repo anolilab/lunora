@@ -1,3 +1,4 @@
+import { useLunora } from "@lunora/react";
 import { useEffect, useRef } from "react";
 
 import { errorCode } from "../lib/internal";
@@ -5,8 +6,8 @@ import { errorCode } from "../lib/internal";
 /** The longest a failing poll backs off to, in milliseconds. */
 const MAX_BACKOFF_MS = 60_000;
 
-/** Error codes no retry will fix: polling stops on them until `enabled` toggles. */
-const TERMINAL_CODES: ReadonlySet<string> = new Set(["FORBIDDEN", "UNAUTHORIZED"]);
+/** Error codes no retry will fix: polling stops on them until `enabled` toggles or the client changes. */
+const TERMINAL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
 
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
     (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
@@ -32,10 +33,13 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
  *
  * Ticks are skipped while the tab is hidden (`document.hidden`) so a backgrounded
  * studio doesn't keep hammering the worker. `onTick` is held in a ref so a
- * fresh closure each render doesn't reset the timer; only `enabled`/`intervalMs`
- * do. The timer is cleared on disable and unmount.
+ * fresh closure each render doesn't reset the timer. The timer restarts when
+ * `enabled`/`intervalMs` change or the Lunora client is replaced (new credentials),
+ * so a panel stopped by a terminal error resumes once its client changes. The
+ * timer is cleared on disable and unmount.
  */
 export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
+    const client = useLunora();
     const tickRef = useRef(onTick);
 
     // Keep the latest `onTick` in a ref via an effect rather than a render-phase
@@ -114,5 +118,6 @@ export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, interval
             stopped = true;
             clearTimeout(id);
         };
-    }, [enabled, intervalMs]);
+        // `client` is not read in the effect: a replaced client (new credentials) must restart a timer that a terminal error stopped.
+    }, [client, enabled, intervalMs]);
 };

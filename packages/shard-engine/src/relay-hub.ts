@@ -263,10 +263,15 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 const FRAMES_NAMING_A_RELAY = new Set<OwnerRelayFrame["type"]>(["relay_attach", "relay_detach", "relay_room_event", "relay_shape_unsubscribe"]);
 
 /**
+ * The frames that add relay state, so only they are bounded by `LUNORA_MAX_RELAYS`. A relay admitted under a larger cap that a
+ * deploy has since lowered must still be able to detach, unsubscribe and report room events, or its rows and sockets are stranded.
+ */
+const FRAMES_GROWING_RELAY_STATE = new Set<OwnerRelayFrame["type"]>(["relay_attach", "relay_shape_subscribe"]);
+
+/**
  * Parse a control frame, or `undefined` when it is not JSON, or names (or omits a required) relay slot this shard cannot have.
- * Every frame carrying `relayIndex` (attach/detach, shape subscribe/unsubscribe, room event) is checked here,
- * once: an out-of-range or non-integer index would otherwise be persisted to `__lunora_relays` and addressed
- * as a sibling DO name on every forward.
+ * Every frame carrying `relayIndex` is checked here, once: a non-integer index would otherwise be persisted to `__lunora_relays`,
+ * and an index past the cap would let an attach or subscribe grow state beyond it.
  */
 const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | undefined => {
     let parsed: unknown;
@@ -287,7 +292,9 @@ const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | un
     const valid =
         relayIndex === undefined
             ? !FRAMES_NAMING_A_RELAY.has(message.type)
-            : Number.isSafeInteger(relayIndex) && (relayIndex as number) >= 0 && (relayIndex as number) < maxRelays;
+            : Number.isSafeInteger(relayIndex) &&
+              (relayIndex as number) >= 0 &&
+              (!FRAMES_GROWING_RELAY_STATE.has(message.type) || (relayIndex as number) < maxRelays);
 
     if (!valid) {
         return undefined;

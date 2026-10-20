@@ -84,8 +84,8 @@ const ndjsonLines = async function* (file: Blob): AsyncGenerator<{ line: string;
     let lineNumber = 0;
 
     for (let offset = 0; offset < file.size; offset += NDJSON_PIECE_BYTES) {
-        // eslint-disable-next-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
-        const bytes = await file.slice(offset, offset + NDJSON_PIECE_BYTES).arrayBuffer();
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- a piece can only be decoded after the one before it, so the reads are serial by design
+        const bytes = await file.slice(offset, offset + NDJSON_PIECE_BYTES).arrayBuffer(); // eslint-disable-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
         const lines = `${carry}${decoder.decode(bytes, { stream: true })}`.split("\n");
 
         carry = lines.pop() ?? "";
@@ -107,17 +107,32 @@ const ndjsonLines = async function* (file: Blob): AsyncGenerator<{ line: string;
 /** Lines of an export shown inline; the full export is only ever a download. */
 const PREVIEW_LINES = 50;
 
-/** Rows sent per `importShard` call, so a large file is never one oversized request. */
+/** Rows sent per `importShard` call at most. The byte cap below is what keeps wide rows under the body limit. */
 const IMPORT_CHUNK_ROWS = 500;
+
+/**
+ * Encoded bytes sent per `importShard` call at most, below the runtime's 1 MiB body cap with room for the request envelope. The CLI
+ * importer uses the same ceiling: `--batch-size` counts rows, which says nothing about how wide they are.
+ */
+const IMPORT_CHUNK_BYTES = 900_000;
+
+const lineBytes = (line: string): number => new TextEncoder().encode(line).byteLength;
 
 const NDJSON_MIME = "application/x-ndjson";
 
-/** Count the rows in an NDJSON file, validating every line on the way; throws on the first malformed line. */
+/**
+ * Count the rows in an NDJSON file, validating every line on the way; throws on the first malformed line, and on a row too wide to send
+ * alone, so nothing is written for a file that cannot be imported whole.
+ */
 const countNdjsonRows = async (file: Blob): Promise<number> => {
     let rows = 0;
 
     for await (const { line, lineNumber } of ndjsonLines(file)) {
         if (parseNdjsonLine(line, lineNumber) !== undefined) {
+            if (lineBytes(line) > IMPORT_CHUNK_BYTES) {
+                throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: a single row is over the ${IMPORT_CHUNK_BYTES.toString()}-byte import limit`);
+            }
+
             rows += 1;
         }
     }
@@ -125,9 +140,13 @@ const countNdjsonRows = async (file: Blob): Promise<number> => {
     return rows;
 };
 
-/** Hand an NDJSON file to `onChunk` in batches of {@link IMPORT_CHUNK_ROWS} rows, in file order, reading it as it goes. */
+/**
+ * Hand an NDJSON file to `onChunk` in batches of at most {@link IMPORT_CHUNK_ROWS} rows and {@link IMPORT_CHUNK_BYTES} bytes, in file order,
+ * reading it as it goes.
+ */
 const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[]) => Promise<void>): Promise<void> => {
     let chunk: ExportRow[] = [];
+    let chunkBytes = 0;
 
     for await (const { line, lineNumber } of ndjsonLines(file)) {
         const row = parseNdjsonLine(line, lineNumber);
@@ -136,13 +155,17 @@ const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[]) => Pr
             continue;
         }
 
-        chunk.push(row);
+        const bytes = lineBytes(line);
 
-        if (chunk.length === IMPORT_CHUNK_ROWS) {
+        if (chunk.length > 0 && (chunk.length === IMPORT_CHUNK_ROWS || chunkBytes + bytes > IMPORT_CHUNK_BYTES)) {
             await onChunk(chunk);
 
             chunk = [];
+            chunkBytes = 0;
         }
+
+        chunk.push(row);
+        chunkBytes += bytes;
     }
 
     if (chunk.length > 0) {
@@ -226,8 +249,6 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         } catch (error_) {
             setError(errorMessage(error_));
         }
-
-        setBusy(false);
     };
 
     /**
@@ -303,23 +324,30 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
         // The import wrote rows to this shard (possibly only some chunks), so the data
         // browser's cached reads are now stale across every page/filter variant — drop
-        // them (path-only, all args) so they re-fetch on next view. Every failure above is
-        // caught, so this runs on every path.
+        // them (path-only, all args) so they re-fetch on next view.
         invalidateAdmin(ADMIN_FUNCTIONS.readTablePage);
         invalidateAdmin(ADMIN_FUNCTIONS.listTables);
-        setProgress(null);
-        setBusy(false);
     };
 
     const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);
 
+    // The busy flag clears on every settle, rejection included, so a failed run never leaves the panel stuck.
     const runExport = (): void => {
-        fireAndForget(exportShard());
+        fireAndForget(
+            exportShard().finally(() => {
+                setBusy(false);
+            }),
+        );
     };
 
     const runImport = (): void => {
         if (importFile !== null) {
-            fireAndForget(importShard(importFile));
+            fireAndForget(
+                importShard(importFile).finally(() => {
+                    setProgress(null);
+                    setBusy(false);
+                }),
+            );
         }
     };
 

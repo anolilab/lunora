@@ -92,6 +92,9 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
 
             const materialize = (): Row[] => {
                 if (rows === undefined) {
+                    // A deferred read runs when the caller consumes it, which can be after another task opened a transaction.
+                    assertOwnTurn("run SQL");
+
                     if (statement.reader) {
                         rows = statement.all(...normalized) as Row[];
                     } else {
@@ -110,6 +113,8 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
             // The statement is shared through the cache, so positional mode lasts only as long as this read, and ends even when the caller
             // stops early.
             const positionalRows = function* (): Generator<unknown[]> {
+                // Runs on the first `next()`, so the check applies to the consumer's turn, not the `exec` call.
+                assertOwnTurn("run SQL");
                 statement.raw(true);
 
                 try {
