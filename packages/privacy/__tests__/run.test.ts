@@ -110,6 +110,25 @@ describe("runExport", () => {
         expect(files.files.size).toBe(0);
     });
 
+    it("records the error's code on the failed event, never its message", async () => {
+        const store = memoryRequests();
+        const details: string[] = [];
+        const recording = {
+            ...store,
+            addEvent: async (requestId: string, at: Date, kind: string, detail?: string) => {
+                details.push(detail ?? "");
+                await store.addEvent(requestId, at, kind, detail);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}, { failCollect: true }).port, store: recording });
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        expect(details.join("|")).toContain("INTERNAL");
+        expect(details.join("|")).not.toContain("disk full");
+    });
+
     it("does not start a request a cancel reached between the start read and the claim", async () => {
         const store = memoryRequests();
         let reads: number | undefined;

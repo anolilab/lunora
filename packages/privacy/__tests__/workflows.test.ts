@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { eu } from "../src/eu";
 import type { DataPort } from "../src/ports";
-import { durableStep, memoryData, NOW, setup, throughJson } from "./harness";
+import { durableStep, memoryData, setup, SUBJECT, throughJson } from "./harness";
 
 const failingCollect = (): DataPort => {
     return {
@@ -119,7 +119,9 @@ describe("step results survive a JSON round trip", () => {
             expect(result).toStrictEqual(throughJson(result));
         }
 
-        expect(results[0]).toMatchObject({ erasureGraceUntil: opened.erasureGraceUntil?.toISOString(), receivedAt: NOW.toISOString() });
+        // The load step carries the request's id, status and grace end, and never the subject.
+        expect(results[0]).toStrictEqual({ erasureGraceUntil: opened.erasureGraceUntil?.toISOString(), id: opened.id, status: "grace", type: "erasure" });
+        expect(JSON.stringify(results)).not.toContain(SUBJECT.subjectId);
     });
 
     it("runs the export handler to ready", async () => {

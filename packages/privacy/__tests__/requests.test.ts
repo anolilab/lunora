@@ -1,8 +1,6 @@
-import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import type { RequestRecord } from "../src/requests";
-import { cancelRequest, extendRequest, fromStepRecord, openRequest, toStepRecord } from "../src/requests";
+import { cancelRequest, extendRequest, openRequest } from "../src/requests";
 import { codeOf, memoryRequests } from "./harness";
 
 const now = new Date("2026-04-10T09:00:00.000Z");
@@ -119,40 +117,5 @@ describe(extendRequest, () => {
         await openRequest(store, { id: "r12", now, subjectId: "u1", type: "export" });
 
         await expect(codeOf(extendRequest(store, { id: "r12", now: new Date("2026-05-11T00:00:00.000Z"), reason: "late" }))).resolves.toBe("UNPROCESSABLE");
-    });
-});
-
-const NAMES_ID = /"id"/u;
-const NAMES_DUEAT = /"dueAt"/u;
-const NAMES_STATUS = /"status"/u;
-const NAMES_TYPE = /"type"/u;
-
-describe("the workflow step form of a request", () => {
-    const record: RequestRecord = {
-        dueAt: new Date("2026-11-11T10:00:00.000Z"),
-        erasureGraceUntil: new Date("2026-10-25T10:00:00.000Z"),
-        id: "r1",
-        receivedAt: new Date("2026-10-11T10:00:00.000Z"),
-        status: "grace",
-        subjectId: "u1",
-        type: "erasure",
-    };
-
-    it("round-trips through JSON with every date a Date again", () => {
-        // A durable host stores the step result as JSON text, so the dates arrive as strings.
-        const text = JSON.stringify(toStepRecord(record));
-        const stored: unknown = JSON.parse(text);
-
-        expect(fromStepRecord(stored)).toStrictEqual(record);
-    });
-
-    it("refuses a step result with a missing, mistyped or unknown field", () => {
-        const step = toStepRecord(record);
-
-        expect(() => fromStepRecord(undefined)).toThrow(LunoraError);
-        expect(() => fromStepRecord({ ...step, id: 7 })).toThrow(NAMES_ID);
-        expect(() => fromStepRecord({ ...step, dueAt: "not a date" })).toThrow(NAMES_DUEAT);
-        expect(() => fromStepRecord({ ...step, status: "archived" })).toThrow(NAMES_STATUS);
-        expect(() => fromStepRecord({ ...step, type: undefined })).toThrow(NAMES_TYPE);
     });
 });

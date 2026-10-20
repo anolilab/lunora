@@ -21,7 +21,7 @@ import type { RequestStatus } from "./lifecycle";
 import { canTransition, transition } from "./lifecycle";
 import type { PrivacyPorts, StorePort } from "./ports";
 import type { RequestRecord } from "./requests";
-import { fromStepRecord, requireRequest, toStepRecord } from "./requests";
+import { requireRequest } from "./requests";
 import type { TombstonePort } from "./tombstones";
 import { tombstoneKeyOf } from "./tombstones";
 
@@ -193,8 +193,11 @@ const verifySubjectErased = async (
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
 const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
-/** The text a failed run records: the error message, or the value thrown when it is not an `Error`. */
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/**
+ * The detail a failed run records. Only the error's code: a message can carry a subject's values (an id, a
+ * column value), and the event log is read by people who should not see them.
+ */
+const failureDetail = (error: unknown): string => `${error instanceof LunoraError ? error.code : "INTERNAL"}: the run stopped before it finished`;
 
 /**
  * Record a status change and its event. Every phase writes one event, named after the status it
@@ -216,9 +219,28 @@ const setStatus = async (
     await ports.store.addEvent(requestId, ports.now(), status, change.detail);
 };
 
+/**
+ * What the run reads before its first step. The subject is not here: every step reads the request again and takes
+ * the subject from that read, so the step log never holds a raw subject id.
+ */
+type LoadedRequest = Pick<RequestRecord, "erasureGraceUntil" | "id" | "status" | "type">;
+
 /** The request as the run starts, through a step, so a replay sees the record the first run saw. */
-const loadStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<RequestRecord> =>
-    fromStepRecord(await steps.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
+const loadStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<LoadedRequest> => {
+    const loaded = await steps.do("load", async () => {
+        const record = await requireRequest(scope.ports.store, requestId);
+
+        return {
+            id: record.id,
+            status: record.status,
+            type: record.type,
+            ...(record.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: record.erasureGraceUntil.toISOString() }),
+        };
+    });
+    const { erasureGraceUntil, ...rest } = loaded;
+
+    return erasureGraceUntil === undefined ? rest : { ...rest, erasureGraceUntil: new Date(erasureGraceUntil) };
+};
 
 /**
  * Move the request into `processing`, from the status it holds now, so a cancel that landed during
@@ -254,18 +276,24 @@ interface Checked<T> {
 }
 
 /** Run one named step only while the request is still `processing`. A request that left it stops the run. */
-const whileProcessing = async <T>(scope: RunScope, steps: StepRunner, requestId: string, name: string, run: () => Promise<T>): Promise<Checked<T>> =>
+const whileProcessing = async <T>(
+    scope: RunScope,
+    steps: StepRunner,
+    requestId: string,
+    name: string,
+    run: (request: RequestRecord) => Promise<T>,
+): Promise<Checked<T>> =>
     steps.do(name, async () => {
-        const { status } = await requireRequest(scope.ports.store, requestId);
+        const request = await requireRequest(scope.ports.store, requestId);
 
-        if (status !== "processing") {
-            return { status };
+        if (request.status !== "processing") {
+            return { status: request.status };
         }
 
-        const value: T | undefined = await run();
+        const value: T | undefined = await run(request);
 
         // A step result is stored as JSON, so an absent value is left out rather than kept as `undefined`.
-        return value === undefined ? { status } : { status, value };
+        return value === undefined ? { status: request.status } : { status: request.status, value };
     });
 
 /** Mark the run failed and keep why on the event. A request already terminal, or failed, is left as it is. */
@@ -287,8 +315,10 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
  */
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
-    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
-    const record = await loadStep(scope, steps, requestId);
+    const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
+        whileProcessing(scope, steps, requestId, name, run);
+
+    await loadStep(scope, steps, requestId);
 
     try {
         const started = await startStep(scope, steps, requestId);
@@ -300,14 +330,14 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
         for (const dataset of scope.datasets) {
             // Each dataset is one step: its rows go to storage, so the step returns nothing large.
             // eslint-disable-next-line no-await-in-loop -- steps run in order by design
-            const collected = await step(`collect:${dataset.id}`, async () => collectPart(scope.ports, dataset, record));
+            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request));
 
             if (collected.status !== "processing") {
                 return { status: collected.status };
             }
         }
 
-        const assembled = await step("assemble", async () => assembleExport(scope.ports, scope.datasets, record, scope.subjectKey(record.subjectId)));
+        const assembled = await step("assemble", async (request) => assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId)));
         const archiveKey = assembled.value;
 
         if (archiveKey === undefined) {
@@ -323,7 +353,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
 
         return ready.status === "processing" ? { archiveKey, status: "ready" } : { status: ready.status };
     } catch (error) {
-        return { status: await failStep(scope, steps, requestId, messageOf(error)) };
+        return { status: await failStep(scope, steps, requestId, failureDetail(error)) };
     }
 };
 
@@ -375,7 +405,8 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
  * rule still keeps; otherwise it is `failed` and names the leftover tables.
  */
 const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ErasureOutcome> => {
-    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
+    const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
+        whileProcessing(scope, steps, requestId, name, run);
     const record = await loadStep(scope, steps, requestId);
 
     if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
@@ -399,8 +430,8 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         // (unbound behind the workflow's port, or failing) stops the erasure with nothing deleted, and
         // before the request completes, so a completed erasure always has one. A retried step writes it
         // again, which the port's upsert absorbs.
-        const key = tombstoneKeyOf(record.subjectId, tombstones.secret);
-        const tombstoned = await step("tombstone", async () => tombstones.port.add(key, scope.ports.now()));
+        const keyOf = (request: RequestRecord): string => tombstoneKeyOf(request.subjectId, tombstones.secret);
+        const tombstoned = await step("tombstone", async (request) => tombstones.port.add(keyOf(request), scope.ports.now()));
 
         if (tombstoned.status !== "processing") {
             return { leftover: [], status: tombstoned.status };
@@ -409,20 +440,20 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         for (const dataset of erasureOrder(scope.datasets)) {
             // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
             // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-            const erased = await step(`erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
+            const erased = await step(`erase:${dataset.id}`, async (request) => eraseDataset(scope, dataset, request.subjectId));
 
             if (erased.status !== "processing") {
                 return { leftover: [], status: erased.status };
             }
         }
 
-        const filesErased = await step("erase:files", async () => eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId));
+        const filesErased = await step("erase:files", async (request) => eraseSubjectFiles(scope.ports, scope.datasets, request.subjectId));
 
         if (filesErased.status !== "processing") {
             return { leftover: [], status: filesErased.status };
         }
 
-        const verified = await step("verify", async () => verifySubjectErased(scope, scope.datasets, record.subjectId));
+        const verified = await step("verify", async (request) => verifySubjectErased(scope, scope.datasets, request.subjectId));
         const verdict = verified.value;
 
         if (verdict === undefined) {
@@ -433,11 +464,11 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
             return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
         }
 
-        const completed = await step("complete", async () => completeErasure(scope.ports, requestId, record.subjectId, key));
+        const completed = await step("complete", async (request) => completeErasure(scope.ports, requestId, request.subjectId, keyOf(request)));
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
-        return { leftover: [], status: await failStep(scope, steps, requestId, messageOf(error)) };
+        return { leftover: [], status: await failStep(scope, steps, requestId, failureDetail(error)) };
     }
 };
 
