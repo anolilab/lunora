@@ -1,6 +1,6 @@
 {
     "name": "@lunora/rspack",
-    "version": "1.0.0-alpha.77",
+    "version": "1.0.0-alpha.80",
     "description": "The Lunora Rspack plugin: codegen, binding provisioning, and wrangler validation for Rspack projects",
     "keywords": [
         "cloudflare",
@@ -62,8 +62,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/codegen": "1.0.0-alpha.331",
-        "@lunora/config": "1.0.0-alpha.381"
+        "@lunora/codegen": "1.0.0-alpha.334",
+        "@lunora/config": "1.0.0-alpha.384"
     },
     "devDependencies": {
         "@rsbuild/core": "catalog:build",

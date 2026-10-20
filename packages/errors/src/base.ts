@@ -18,10 +18,11 @@
  * here keeps `@lunora/errors` genuinely zero-dependency and bundle-safe on every
  * runtime, while staying fully renderer-compatible.
  *
- * All fields are own-enumerable, so they ride the existing wire codec
+ * All client-facing fields are own-enumerable, so they ride the existing wire codec
  * (`packages/wire/src/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
  * payload, and the runtime/DO mappers copy them into the top-level error envelope
- * for the client, CLI, and Studio to render.
+ * for the client, CLI, and Studio to render. The one exception is `internal`
+ * (operator-only context), which is non-enumerable so it never reaches a client.
  */
 import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
 import { getCatalogEntry } from "./catalog";
@@ -48,8 +49,17 @@ export interface LunoraErrorOptions {
     data?: unknown;
     /** Link to deeper docs for this error. */
     docsUrl?: string;
+
     /** Actionable fix (Markdown). Defaults to the catalog entry's hint. */
     hint?: ErrorHint;
+
+    /**
+     * Operator-only context (a JSON-safe record). It reaches observability sinks and
+     * NEVER a client: it is kept non-enumerable, so it is absent from `JSON.stringify`,
+     * `Object.keys`, and the wire codec's own-property walk, and no client-facing
+     * envelope copies it.
+     */
+    internal?: Record<string, unknown>;
     /** Source location, when known (e.g. a codegen/schema diagnostic). */
     location?: ErrorLocation;
     /** Override the error `name` (e.g. a subclass like `"ConflictError"`). */
@@ -58,6 +68,8 @@ export interface LunoraErrorOptions {
     status?: number;
     /** Override the short title. Defaults to the catalog entry's title. */
     title?: string;
+    /** Short human explanation of the cause, a sibling of `hint` (the fix). Client-visible like `hint`. */
+    why?: string;
 }
 
 /**
@@ -109,6 +121,15 @@ export class LunoraError extends Error {
     /** Optional structured payload propagated verbatim to the client. */
     public readonly data: unknown;
 
+    /** Short human explanation of the cause (client-visible, like `hint`). */
+    public readonly why: string | undefined;
+
+    /**
+     * Operator-only context. Defined as a non-enumerable own property in the
+     * constructor (see there), so it is never serialized to a client.
+     */
+    declare public readonly internal: Record<string, unknown> | undefined;
+
     public constructor(code: LunoraErrorCodeInput, message?: string, options: LunoraErrorOptions = {}) {
         const entry: ErrorCatalogEntry | undefined = getCatalogEntry(code);
 
@@ -129,8 +150,16 @@ export class LunoraError extends Error {
         this.status = options.status ?? entry?.status ?? 500;
         this.docsUrl = options.docsUrl ?? entry?.docsUrl;
         this.data = options.data;
+        this.why = options.why;
 
         // Non-enumerable so it never rides the wire codec or shows up in equality checks.
         Object.defineProperty(this, LUNORA_ERROR_BRAND, { value: true });
+
+        // Non-enumerable for the same reason, and for `internal` specifically: the wire
+        // codec and JSON both walk own ENUMERABLE props, so an enumerable `internal`
+        // would reach the client the moment this error is embedded in a payload.
+        if (options.internal !== undefined) {
+            Object.defineProperty(this, "internal", { value: options.internal });
+        }
     }
 }

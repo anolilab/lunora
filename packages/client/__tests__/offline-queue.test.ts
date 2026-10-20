@@ -113,6 +113,34 @@ describe("offlineQueue", () => {
         expect(error.message).toBe("CLIENT_CLOSED");
         expect(error.code).toBe("CLIENT_CLOSED");
     });
+
+    it("clear() rejects a write a replay has drained, once, without promising it will replay", async () => {
+        expect.assertions(5);
+
+        const persistence = createInMemoryPersistence();
+        const queue = new OfflineQueue({}, { persistence });
+        const rejected = vi.fn<(error: unknown) => void>();
+
+        queue.enqueue({ args: {}, functionPath: "a", id: "w1", reject: rejected, resolve: () => undefined });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // The replay owns the write now: out of `size`, still waiting on the server.
+        queue.drain();
+        queue.clear();
+
+        expect(rejected).toHaveBeenCalledTimes(1);
+
+        const error = rejected.mock.calls[0]?.[0] as Error & { code?: string; persisted?: boolean };
+
+        expect(error.code).toBe("CLIENT_CLOSED");
+        // An in-flight replay may still settle it and remove the record, so the caller is not told it will replay.
+        expect(error.persisted).toBe(false);
+        expect(queue.replaying).toBe(0);
+        // Closing does not remove the record itself.
+        await expect(persistence.load()).resolves.toHaveLength(1);
+    });
 });
 
 describe("offlineQueue — persistence", () => {
@@ -189,6 +217,11 @@ describe("offlineQueue — persistence", () => {
 
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
+
+        // The removal follows the dropped entry's own append, so it lands a few turns later.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
 
         const persisted = await persistence.load();
 
@@ -635,9 +668,10 @@ describe("offlineQueue — persistence error reporting", () => {
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
-        // Allow both the append and remove promise rejections to settle
-        await Promise.resolve();
-        await Promise.resolve();
+        // Allow the append to land and the remove that follows it to be rejected
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
 
         const removeCalls = handler.mock.calls.filter((call) => call[0]?.operation === "remove");
 

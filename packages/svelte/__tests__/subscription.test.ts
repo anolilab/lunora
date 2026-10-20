@@ -18,7 +18,7 @@ const createFakeClient = () => {
             function_: unknown,
             args: unknown,
             callback: (value: unknown) => void,
-            options?: { onError?: (error: { code?: string; message: string }) => void },
+            options?: { onError?: (error: { code?: string; message: string; why?: string }) => void },
         ) => () => void
     >((_fn, _args, callback, options) => {
         lastCallback = callback;
@@ -33,6 +33,7 @@ const createFakeClient = () => {
         client,
         emit: (value: unknown) => lastCallback?.(value),
         emitError: (message: string, code?: string) => lastOnError?.(code === undefined ? { message } : { code, message }),
+        emitErrorObject: (error: { code?: string; message: string; why?: string }) => lastOnError?.(error),
         subscribeSpy,
         unsubscribeSpy,
     };
@@ -103,6 +104,22 @@ describe("subscription store", () => {
         expect(subscribeSpy).not.toHaveBeenCalled();
 
         stop();
+    });
+
+    it("keeps the SubscriptionError why explanation on the error store", () => {
+        const { client, emitErrorObject } = createFakeClient();
+        const { data, error } = subscription(client, fnRef, args, {});
+
+        // Subscribe both stores so the data store's start callback wires onError.
+        const stopData = data.subscribe(() => {});
+        const stopError = error.subscribe(() => {});
+
+        emitErrorObject({ code: "CONFLICT", message: "stale", why: "row moved" });
+
+        expect((get(error) as { why?: string } | undefined)?.why).toBe("row moved");
+
+        stopError();
+        stopData();
     });
 
     it("routes a subscription error into the error store and the onError callback", () => {

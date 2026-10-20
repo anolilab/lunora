@@ -1,3 +1,47 @@
+## @lunora/codegen [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.333...@lunora/codegen@1.0.0-alpha.334) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.241
+* **@lunora/agent:** upgraded to 1.0.0-alpha.231
+* **@lunora/container:** upgraded to 1.0.0-alpha.85
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/queue:** upgraded to 1.0.0-alpha.118
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.140
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/payment:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
+## @lunora/codegen [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.332...@lunora/codegen@1.0.0-alpha.333) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.240
+* **@lunora/agent:** upgraded to 1.0.0-alpha.230
+* **@lunora/container:** upgraded to 1.0.0-alpha.84
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/queue:** upgraded to 1.0.0-alpha.117
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+* **@lunora/payment:** upgraded to 1.0.0-alpha.224
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+
+## @lunora/codegen [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.331...@lunora/codegen@1.0.0-alpha.332) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
 ## @lunora/codegen [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.330...@lunora/codegen@1.0.0-alpha.331) (2026-10-19)
 
 

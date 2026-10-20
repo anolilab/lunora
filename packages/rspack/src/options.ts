@@ -30,6 +30,7 @@ const resolveOptions = (options: LunoraRspackOptions | undefined): ResolvedLunor
 
     return {
         apiSpec: input.apiSpec ?? "openapi",
+        explicitTarget: input.target,
         lazyFunctions: resolveLazyFunctions(input.lazyFunctions),
         projectRoot,
         schemaDir: input.schemaDir ?? "lunora",

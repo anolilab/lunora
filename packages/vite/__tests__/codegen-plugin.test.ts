@@ -1010,6 +1010,24 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
+        it("watches a lunora.config above a nested schema directory, which codegen reads too", () => {
+            expect.assertions(1);
+
+            // The schema directory is `web/lunora`, so the config codegen reads may sit in `web/`,
+            // not the root. Only the root candidates are named by the project root, so this one
+            // is watched only through the schema directory's own walk.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
+
+            expect(added).toContain(join(workdir, "web", "lunora.config.ts"));
+        });
+
         it("external wrangler binding edit restarts the dev server in place", async () => {
             expect.assertions(2);
 
@@ -1217,6 +1235,78 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // The NEXT schema-dir save proves the drop actually happened: it
             // rebuilds a fresh Project rather than reusing the old one.
             changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("a lunora.config.ts save drops the cached Project without regenerating — the next save seeds a fresh one", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The config save does not regenerate: a binding-relevant save restarts the server
+            // instead, and a pass here would race that restart.
+            changeListener!(join(workdir, "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The next schema save builds the fresh Project, seeded from the saved config.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("a web/lunora.config.ts save above a nested schema directory drops the cached Project too", async () => {
+            expect.assertions(3);
+
+            // Schema under `web/lunora`, with its config one level up in `web/`. A missing
+            // `schema.ts` makes codegen skip, and a skipped pass drops the cache by itself,
+            // which would hide the save this test is about.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "web", "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
+            writeFileSync(join(workdir, "web", "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as
+                ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The nested config save invalidates the cache, without regenerating.
+            changeListener!(join(workdir, "web", "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // So the next schema save builds a fresh Project.
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 
             expect(createCalls).toHaveBeenCalledTimes(before + 2);

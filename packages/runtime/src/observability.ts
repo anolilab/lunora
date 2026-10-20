@@ -13,11 +13,51 @@
  */
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
+import { redactCredentials } from "@lunora/observability";
+
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
+
+/**
+ * The operator context a sink receives: a plain copy with credentials masked, nested
+ * `Error`s included. `undefined` when it cannot be encoded, so a throwing getter drops only
+ * this context and the event still reaches the sink.
+ */
+const operatorContextFor = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? undefined : (redactCredentials(plain) as Record<string, unknown>);
+};
+
+/**
+ * The RPC event a sink receives, with its operator context masked. Reading `internal` can
+ * throw (an accessor), and then only that context is dropped: the sink still gets the event.
+ */
+const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
+    if (event.error === undefined) {
+        return event;
+    }
+
+    let internal: Record<string, unknown> | undefined;
+
+    try {
+        internal = event.error.internal;
+    } catch {
+        // Copy the descriptors, not the values: a spread would read the throwing accessor again.
+        const descriptors = Object.getOwnPropertyDescriptors(event.error);
+
+        delete descriptors.internal;
+
+        return { ...event, error: Object.create(Object.getPrototypeOf(event.error) as object | null, descriptors) as ObservabilityEvent["error"] };
+    }
+
+    return internal === undefined ? event : { ...event, error: { ...event.error, internal: operatorContextFor(internal) } };
+};
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -25,6 +65,14 @@ import type { SpanEvent } from "../../../shared/span-event";
  * per-shard failure count.
  */
 export interface ObservabilityEvent {
+    /**
+     * Extra attributes for this dispatch, e.g. derived by an `enrichSink` enricher.
+     * `otlpSink` exports them as span attributes. A reserved attribute of the same name
+     * wins: a key here never replaces a built-in field such as `http.route` or
+     * `lunora.shard_key`, and the colliding key is dropped.
+     */
+    attributes?: LogFields;
+
     /** Wall-clock duration of the dispatch, in milliseconds. */
     durationMs: number;
 
@@ -37,6 +85,13 @@ export interface ObservabilityEvent {
      */
     error?: {
         code: string;
+
+        /**
+         * Operator-only context from the thrown `LunoraError`'s `internal`. Sinks only:
+         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactCredentials`
+         * before a sink sees it: credential-named fields only, so ids and URLs survive.
+         */
+        internal?: Record<string, unknown>;
         message: string;
         name?: string;
         stack?: string;
@@ -292,6 +347,7 @@ export interface ObservabilitySink {
  * `decision` and an absent `sampling` keep everything, so all are
  * backward-compatible.
  */
+
 export const emitRpcEvent = (
     sink: ObservabilitySink | undefined,
     event: ObservabilityEvent,
@@ -312,7 +368,9 @@ export const emitRpcEvent = (
     }
 
     try {
-        sink.onRpc(event, context);
+        // The one place `error.internal` is redacted on its way to a sink: every RPC event
+        // (single-shard, batch, fan-out, worker-side) passes through here.
+        sink.onRpc(rpcEventForSink(event), context);
     } catch {
         // Swallow — a buggy sink must not break user-facing dispatch. We
         // deliberately do not console.error here either: in a Workers runtime

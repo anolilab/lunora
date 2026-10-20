@@ -398,7 +398,9 @@ describe("offline lifecycle (e2e)", () => {
 
         await vi.advanceTimersByTimeAsync(0);
         latestSocket().open();
-        await vi.runAllTimersAsync();
+        // Stops short of the backoff retry the failure schedules (>= 500ms): this
+        // session is torn down before that retry fires.
+        await vi.advanceTimersByTimeAsync(100);
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);

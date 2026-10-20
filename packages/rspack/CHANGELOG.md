@@ -1,3 +1,37 @@
+## @lunora/rspack [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.79...@lunora/rspack@1.0.0-alpha.80) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.384
+* **@lunora/studio:** upgraded to 1.0.0-alpha.324
+
+## @lunora/rspack [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.78...@lunora/rspack@1.0.0-alpha.79) (2026-10-19)
+
+### Bug Fixes
+
+* **rspack:** re-read target when the dev worker starts ([#1279](https://github.com/anolilab/lunora/issues/1279)) ([66e0ee1](https://github.com/anolilab/lunora/commit/66e0ee114e4d444c8291001219c56e5b51de61c5))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.334
+* **@lunora/config:** upgraded to 1.0.0-alpha.383
+* **@lunora/studio:** upgraded to 1.0.0-alpha.323
+
+## @lunora/rspack [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.77...@lunora/rspack@1.0.0-alpha.78) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.333
+* **@lunora/config:** upgraded to 1.0.0-alpha.382
+* **@lunora/studio:** upgraded to 1.0.0-alpha.322
+
 ## @lunora/rspack [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.76...@lunora/rspack@1.0.0-alpha.77) (2026-10-19)
 
 

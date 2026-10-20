@@ -29,17 +29,24 @@
  * cannot be followed, and the owner refuses the control channel outright rather
  * than handing back a synthetic timeline a follower would agree with forever.
  *
+ * A **compacted log** the replica has fallen behind cannot be reconciled by
+ * replay, so the replica takes a fresh snapshot instead: every snapshot row is
+ * upserted and every local row the snapshot lacks is deleted, in one
+ * transaction, so rows changed or removed in the gap cannot survive it.
+ * A snapshot too large for one transaction's write ceilings is refused up front
+ * (reads go to the owner) rather than started and failed halfway.
+ *
  * A **forked timeline** (the owner was reset or rolled back, so its CDC epoch
- * changed) or a **compacted log** the replica has fallen behind cannot be
- * reconciled by replay, so the replica reports `unavailable` and the caller
- * sends the read to the owner.
- * ponytail: divergence is a dead end, not a self-heal — and since a Durable
- * Object is never destroyed, "for this DO's lifetime" means indefinitely, at
- * the cost of one wasted hop per read in that region. Wiring
- * `storage.deleteAll()` + a fresh bootstrap is the upgrade path if resets stop
- * being rare, operator-driven events.
+ * changed) cannot be reconciled either way, so the replica reports
+ * `unavailable` and the caller sends the read to the owner.
+ * ponytail: a fork is a dead end, not a self-heal — and since a Durable Object
+ * is never destroyed, "for this DO's lifetime" means indefinitely, at the cost
+ * of one wasted hop per read in that region. Wiring `storage.deleteAll()` + a
+ * fresh bootstrap is the upgrade path if resets stop being rare,
+ * operator-driven events.
  */
 
+import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
 import type { RegionHint } from "../../../shared/region-hint";
@@ -49,7 +56,10 @@ import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";
 import { cursorBelowRetainedFloor } from "./ctx-db-cdc";
 import { envPositiveInt } from "./env-int";
+import { estimateBytes } from "./estimate-bytes";
 import { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody } from "./sibling-channel";
+import type { TransactionLimits } from "./transaction-headroom";
+import { DEFAULT_TRANSACTION_LIMITS } from "./transaction-headroom";
 
 /** How stale a replica read may be when the caller names no cursor (per-deployment via `LUNORA_REPLICA_MAX_STALENESS_MS`). */
 const DEFAULT_MAX_STALENESS_MS = 1000;
@@ -206,10 +216,24 @@ interface ReplicaOwnerHost extends ShardSiblingHost {
  * The follower half: what a replica needs to APPLY what its owner sends.
  */
 interface ReplicaFollowerHost extends ShardSiblingHost {
-    /** Replay a changelog page through the schema-aware writer (the `applyCdc` path). */
+    /**
+     * Replay a changelog page through the schema-aware writer (the `applyCdc` path), atomically.
+     * Resolves once the page has COMMITTED: any refresh work after the commit is the host's to
+     * absorb, because a rejection here is read as "the page was not applied".
+     */
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    /** Every row this replica holds, so a re-snapshot can delete the ones its owner no longer has. */
+    exportRows: () => Promise<ExportRow[]>;
     /** Insert a bootstrap snapshot verbatim (explicit ids preserved), reporting what did not land. */
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{ errors: ReadonlyArray<unknown> }>;
+    /** Surface a failure the follow loop absorbed (a page that would not apply) so an operator can see why reads fell back to the owner. */
+    reportError?: (scope: string, error: unknown) => void;
+
+    /**
+     * The write ceilings of one transaction on this DO. The replay writer carries no headroom meter, so a
+     * re-snapshot measures itself against these before it opens its one transaction.
+     */
+    transactionLimits: () => Partial<TransactionLimits>;
 }
 
 /** A replica's durable follow position. */
@@ -369,7 +393,7 @@ const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Re
  * retry the identical doomed round trip forever instead of bootstrapping, and
  * never latch divergent, because the floor it needed to see was in the response
  * that failed to be built. Answering with the floor and an empty page routes it
- * through `hasDiverged` → `bootstrap`, which is the recovery that exists.
+ * through `divergenceOf` into a re-snapshot, which is the recovery that exists.
  */
 const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Response => {
     const floor = host.ownerFloor();
@@ -390,8 +414,8 @@ const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Res
     // cursor outright, for exactly the reason the floor is answered here: a
     // thrown response reaches the follower as a bare non-2xx it reads as "owner
     // unreachable", so it would retry the identical doomed round trip forever
-    // instead of bootstrapping. The rewound cursor routes it through
-    // `hasDiverged` into `bootstrap`, which is the recovery that exists.
+    // instead of reporting the fork. The rewound cursor routes it through
+    // `divergenceOf`, which reads it as a fork and stops following.
     if (sinceSeq > ownerCursor) {
         return replicaResponse({ changes: [], cursor: ownerCursor, epoch, ...(floor === undefined ? {} : { floor }) });
     }
@@ -446,16 +470,70 @@ const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): P
     return new Response("unknown replica frame", { status: 400 });
 };
 
+/** Whether the platform flagged a failure as transient: worth retrying (`retryable`), or caused by load (`overloaded`). */
+const isTransient = (error: unknown): boolean => {
+    const flags = error as { overloaded?: unknown; retryable?: unknown } | null | undefined;
+
+    return typeof error === "object" && (flags?.retryable === true || flags?.overloaded === true);
+};
+
+/**
+ * Why `page` can no longer be replayed onto `state`, or `undefined` when it can.
+ *
+ * `"fork"`: the owner's timeline is not the one we replayed — a new epoch, or a
+ * high-watermark below our applied position. Neither is reconcilable by replay
+ * OR by snapshot: applying the page anyway would fabricate a state neither side
+ * ever held.
+ *
+ * `"compacted"`: same timeline, but the owner's log no longer reaches back to our
+ * position. The history exists nowhere, yet the owner's current rows are a
+ * complete, trustworthy state to converge on, so a fresh snapshot recovers it.
+ */
+const divergenceOf = (state: ReplicaState, page: ReplicaPullResult): "compacted" | "fork" | undefined => {
+    // An absent `floor` means the owner's log holds nothing right now: a
+    // shard that has never written (fine — we are at 0 as well), or one whose
+    // log was compacted away entirely, which leaves nothing to replay the gap
+    // from. What separates them is that the second one hands back an EMPTY
+    // page whose high-watermark is nevertheless ahead of us: writes happened
+    // and were compacted before we saw them. A page WITH changes and a
+    // cursor ahead is just an ordinary catch-up.
+    const compactedEmpty = page.changes.length === 0 && page.cursor > state.appliedSeq;
+    const floor = page.floor ?? (compactedEmpty ? page.cursor : 0);
+    const compactedPastUs = floor > 0 && floor > state.appliedSeq + 1;
+
+    // The owner's high-watermark BELOW our applied position is a rollback on
+    // the owner, and it is the case the epoch cannot report: a point-in-time
+    // restore reverts the owner's whole SQLite database, the `__cdc_meta` row
+    // holding that epoch included, so the epoch comes back identical while
+    // the log underneath it is a different timeline. Our own applied position
+    // is then the only surviving record of the timeline we replayed, and
+    // following on means replaying a second timeline's changes over a first
+    // one's rows. Detectable only while the owner is still behind us — once
+    // it has written back past our cursor neither side can tell, the same
+    // blind spot `ShardDO.sealForkedTimeline` documents for its subscribers.
+    const rewoundBeneathUs = page.cursor < state.appliedSeq;
+
+    if (page.epoch !== state.epoch || rewoundBeneathUs) {
+        return "fork";
+    }
+
+    return compactedPastUs ? "compacted" : undefined;
+};
+
+/** The `table`+`id` identity of a row, for matching a snapshot against what a replica holds. */
+const rowKey = (table: string, id: string): string => `${table}\u0000${id}`;
+
 /**
  * A replica's follow loop. One instance per replica DO, built once from the
  * DO name; owner-role DOs never have one.
  */
 class ShardReplica {
     /**
-     * Set once the replica proves it cannot follow this owner (forked timeline
-     * or compacted gap). Sticky for the DO's lifetime: re-checking on every read
-     * would re-pay the round trip to learn the same answer, and the condition is
-     * not one that clears itself.
+     * Set once the replica proves it cannot follow this owner (forked timeline,
+     * an oversized or lossy snapshot, or a page that can never be applied).
+     * Sticky for the DO's lifetime: re-checking on every read would re-pay the
+     * round trip to learn the same answer, and the condition is not one that
+     * clears itself.
      */
     private divergent = false;
 
@@ -561,20 +639,30 @@ class ShardReplica {
      */
     private async catchUp(from: ReplicaState, minSeq: number | undefined): Promise<ReplicaReadiness> {
         let state = from;
+        let resnapshotted = false;
 
         for (let round = 0; round < MAX_PULL_ROUNDS; round += 1) {
             // eslint-disable-next-line no-await-in-loop -- catching up is inherently sequential: each page's cursor is the next page's `sinceSeq`.
             const page = await this.pull(state.appliedSeq);
 
             if (page === undefined) {
-                // The owner is unreachable. Anything already applied is still
-                // valid, so a read with no cursor requirement can still be
-                // served from it; one that needs a newer cursor cannot.
-                return minSeq === undefined && this.isFreshEnough(state, undefined) ? "fresh" : "unavailable";
+                return this.whenOwnerUnreachable(state, minSeq);
             }
 
-            if (this.hasDiverged(state, page)) {
-                return "unavailable";
+            const divergence = divergenceOf(state, page);
+
+            if (divergence !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- the snapshot replaces the position every later pull starts from.
+                const recovered = await this.recover(state, divergence, resnapshotted);
+
+                if (typeof recovered === "string") {
+                    return recovered;
+                }
+
+                resnapshotted = true;
+                state = recovered;
+
+                continue;
             }
 
             // An empty page means the owner has nothing more, so stop rather than
@@ -584,14 +672,50 @@ class ShardReplica {
             const exhausted = page.changes.length < PULL_PAGE_SIZE;
 
             // eslint-disable-next-line no-await-in-loop -- see above: pages must be applied in commit order.
-            state = await this.applyPage(page, state, exhausted);
+            const applied = await this.applyPage(page, state, exhausted);
+
+            if (applied === undefined) {
+                return "unavailable";
+            }
+
+            state = applied;
 
             if (exhausted || this.isFreshEnough(state, minSeq)) {
-                return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
+                return this.verdict(state, minSeq);
             }
         }
 
+        return this.verdict(state, minSeq);
+    }
+
+    /** What `state` is worth to the read once paging has stopped: fresh enough, or stale. */
+    private verdict(state: ReplicaState, minSeq: number | undefined): ReplicaReadiness {
         return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
+    }
+
+    /**
+     * Act on a divergence: a fork latches {@link divergent}; a compacted gap is closed by a re-snapshot.
+     * Only one re-snapshot runs per catch-up: an owner trimming faster than a snapshot can be taken is
+     * reported as unavailable (reads go to the owner), not looped on or latched.
+     * @returns the position to keep following from, or the verdict to stop with
+     */
+    private async recover(state: ReplicaState, divergence: "compacted" | "fork", resnapshotted: boolean): Promise<ReplicaReadiness | ReplicaState> {
+        if (divergence === "fork") {
+            this.divergent = true;
+
+            return "unavailable";
+        }
+
+        return resnapshotted ? "unavailable" : ((await this.resnapshot(state)) ?? "unavailable");
+    }
+
+    /**
+     * What a read gets when the owner cannot be reached. Anything already applied
+     * is still valid, so a read with no cursor requirement can still be served
+     * from it; one that needs a newer cursor cannot.
+     */
+    private whenOwnerUnreachable(state: ReplicaState, minSeq: number | undefined): ReplicaReadiness {
+        return minSeq === undefined && this.isFreshEnough(state, undefined) ? "fresh" : "unavailable";
     }
 
     /**
@@ -604,10 +728,19 @@ class ShardReplica {
      * the page that drained the log (`exhausted`), `from`'s for a full page with
      * more behind it. Stamping now on a partial page made the staleness window
      * vouch for a replica still thousands of changes behind.
+     *
+     * A change that will not replay fails identically on every retry, so letting
+     * it reject made each read 500 and re-pull the same page for the life of the
+     * DO. It latches {@link divergent} instead, like any other timeline the
+     * replica cannot follow: the cursor stays put (the host applies a page
+     * atomically or not at all), reads go to the owner, and a restarted DO tries
+     * again. A failure the platform marks as transient does not latch; see
+     * {@link applyAtomically}.
+     * @returns the new position, or `undefined` when the page could not be applied
      */
-    private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState> {
-        if (page.changes.length > 0) {
-            await this.host.applyChanges(page.changes);
+    private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState | undefined> {
+        if (!(await this.applyAtomically("replica.applyPage", page.changes))) {
+            return undefined;
         }
 
         const state: ReplicaState = { appliedSeq: page.cursor, epoch: page.epoch, syncedAtMs: exhausted ? Date.now() : from.syncedAtMs };
@@ -618,49 +751,35 @@ class ShardReplica {
     }
 
     /**
-     * Whether `page` can no longer be replayed onto `state` — the owner's
-     * timeline forked under us, or its log was compacted past our position.
-     * Either way replay cannot reconstruct the gap, and applying the page
-     * anyway would fabricate a state neither side ever held.
+     * Replay `changes` as one atomic step and report whether they committed. Resolution means committed
+     * (see {@link ReplicaFollowerHost.applyChanges}), so a rejection leaves the replica exactly where it was.
      *
-     * Latches {@link divergent} as a side effect: the condition does not clear
-     * itself, so re-deciding it on every read would only re-pay the round trip.
+     * The failure is reported either way. It latches {@link divergent} unless the platform flagged it as
+     * transient (`retryable`, or `overloaded`): a transient failure says nothing about the changes, so the
+     * next sync pulls the same page again instead of cutting the replica off until the DO restarts.
      */
-    private hasDiverged(state: ReplicaState, page: ReplicaPullResult): boolean {
-        // An absent `floor` means the owner's log holds nothing right now: a
-        // shard that has never written (fine — we are at 0 as well), or one whose
-        // log was compacted away entirely, which leaves nothing to replay the gap
-        // from. What separates them is that the second one hands back an EMPTY
-        // page whose high-watermark is nevertheless ahead of us: writes happened
-        // and were compacted before we saw them. A page WITH changes and a
-        // cursor ahead is just an ordinary catch-up.
-        const compactedEmpty = page.changes.length === 0 && page.cursor > state.appliedSeq;
-        const floor = page.floor ?? (compactedEmpty ? page.cursor : 0);
-        const compactedPastUs = floor > 0 && floor > state.appliedSeq + 1;
-
-        // The owner's high-watermark BELOW our applied position is a rollback on
-        // the owner, and it is the case the epoch cannot report: a point-in-time
-        // restore reverts the owner's whole SQLite database, the `__cdc_meta` row
-        // holding that epoch included, so the epoch comes back identical while
-        // the log underneath it is a different timeline. Our own applied position
-        // is then the only surviving record of the timeline we replayed, and
-        // following on means replaying a second timeline's changes over a first
-        // one's rows. Detectable only while the owner is still behind us — once
-        // it has written back past our cursor neither side can tell, the same
-        // blind spot `ShardDO.sealForkedTimeline` documents for its subscribers.
-        const rewoundBeneathUs = page.cursor < state.appliedSeq;
-
-        if (page.epoch === state.epoch && !compactedPastUs && !rewoundBeneathUs) {
-            return false;
+    private async applyAtomically(scope: string, changes: ReadonlyArray<CdcChange>): Promise<boolean> {
+        if (changes.length === 0) {
+            return true;
         }
 
-        this.divergent = true;
+        try {
+            await this.host.applyChanges(changes);
 
-        return true;
+            return true;
+        } catch (error) {
+            if (!isTransient(error)) {
+                this.divergent = true;
+            }
+
+            this.host.reportError?.(scope, error);
+
+            return false;
+        }
     }
 
-    /** Take the owner's snapshot, or `undefined` when it can't be had (unreachable, or too large for one response). */
-    private async bootstrap(): Promise<ReplicaState | undefined> {
+    /** The owner's snapshot, or `undefined` when it can't be had (unreachable, or too large for one response). */
+    private async fetchSnapshot(): Promise<ReplicaBootstrapResult | undefined> {
         const response = await this.request({ type: "replica_bootstrap" });
 
         if (response === undefined) {
@@ -674,6 +793,98 @@ class ShardReplica {
             // a replica holding an arbitrary prefix of the shard.
             this.divergent = true;
 
+            return undefined;
+        }
+
+        return result;
+    }
+
+    /**
+     * Converge a replica that holds rows onto a fresh snapshot, because the owner's log no longer reaches back
+     * to its position. The snapshot is replayed through the schema-aware writer as one atomic page: every
+     * snapshot row is upserted and every local row it lacks is deleted. An append-only import would keep
+     * the stale version of each row changed in the gap, and the rows deleted in it, and then serve both as fresh.
+     * ponytail: rewrites every row, changed or not; diff against the local documents if snapshots get large.
+     * @returns the position the snapshot was taken at, or `undefined` when it could not be applied
+     */
+    private async resnapshot(from: ReplicaState): Promise<ReplicaState | undefined> {
+        const snapshot = await this.fetchSnapshot();
+
+        if (snapshot === undefined) {
+            return undefined;
+        }
+
+        const limits = { ...DEFAULT_TRANSACTION_LIMITS, ...this.host.transactionLimits() };
+        const changes: CdcChange[] = [];
+        const kept = new Set<string>();
+        let bytes = 0;
+
+        for (const { doc, table } of snapshot.rows) {
+            const id = String(doc["_id"]);
+
+            kept.add(rowKey(table, id));
+            bytes += estimateBytes(doc) ?? Number.POSITIVE_INFINITY;
+            changes.push({ doc, id, op: "insert", seq: snapshot.cursor, table, ts: 0 });
+        }
+
+        // The snapshot alone is checked first, so an over-budget one is refused before the local replica is loaded to diff against.
+        if (this.overWriteBudget(changes.length, bytes, limits)) {
+            return undefined;
+        }
+
+        for (const { doc, table } of await this.host.exportRows()) {
+            const id = String(doc["_id"]);
+
+            if (!kept.has(rowKey(table, id))) {
+                changes.push({ id, op: "delete", seq: snapshot.cursor, table, ts: 0 });
+            }
+        }
+
+        // Deletes cost a written row each, no bytes: the same charge an ordinary mutation's `recordWrite` makes.
+        if (this.overWriteBudget(changes.length, bytes, limits)) {
+            return undefined;
+        }
+
+        if (!(await this.applyAtomically("replica.resnapshot", changes))) {
+            return undefined;
+        }
+
+        // `syncedAtMs` stays `from`'s: the replica provably matches its owner only once a pull comes back drained.
+        const state: ReplicaState = { appliedSeq: snapshot.cursor, epoch: snapshot.epoch, syncedAtMs: from.syncedAtMs };
+
+        writeReplicaState(this.host.sql(), state);
+
+        return state;
+    }
+
+    /**
+     * Whether `rows` writes / `bytes` would break a transaction ceiling, reporting it when so. The caller then
+     * leaves the replica where it is and sends reads to the owner. It never latches {@link divergent}: the
+     * owner can shrink or compact, or the ceilings be raised, and a later snapshot may fit.
+     * ponytail: a replica that keeps being refused re-fetches the owner's whole snapshot on every read that is
+     * not fresh (one at a time); a refusal cooldown is the upgrade if that shows up in practice.
+     */
+    private overWriteBudget(rows: number, bytes: number, limits: TransactionLimits): boolean {
+        if (rows <= limits.maxWrittenRows && bytes <= limits.maxWrittenBytes) {
+            return false;
+        }
+
+        this.host.reportError?.(
+            "replica.resnapshot",
+            new LunoraError(
+                "TRANSACTION_LIMIT_EXCEEDED",
+                `a re-snapshot would write ${String(rows)} documents and ${String(bytes)} bytes, over the ${String(limits.maxWrittenRows)}-document / ${String(limits.maxWrittenBytes)}-byte transaction limit`,
+            ),
+        );
+
+        return true;
+    }
+
+    /** Take the owner's snapshot into an empty replica, or `undefined` when it can't be had. */
+    private async bootstrap(): Promise<ReplicaState | undefined> {
+        const result = await this.fetchSnapshot();
+
+        if (result === undefined) {
             return undefined;
         }
 

@@ -611,6 +611,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `useSuspenseQuery` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `useTusUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.

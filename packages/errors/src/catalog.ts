@@ -697,8 +697,10 @@ export const ERROR_CATALOG = {
     SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
+    STREAM_IDLE: { status: 504, title: "Stream went idle" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
+    SUBSCRIPTION_RESULT_TOO_LARGE: { status: 413, title: "Subscription result too large" },
     TOKEN_EXPIRED: {
         hint: [
             "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",

@@ -29,7 +29,9 @@ describe("delivery authorization lifecycle", () => {
         await write();
 
         expect(test.socket.attachment.subs.view).toBeDefined();
-        expect(errors(test)).toEqual([]);
+        // Told once, as a handler failure: the colliding code is the handler's own, so it is neither
+        // mistaken for the framework's persistence refusal (the subscription stays registered) nor repeated.
+        expect(errors(test)).toHaveLength(1);
 
         unguarded.queryFailure = undefined;
         unguarded.rows = ["recovered"];

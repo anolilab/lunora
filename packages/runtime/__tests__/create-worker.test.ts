@@ -1447,6 +1447,64 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
     });
 });
 
+describe("createWorker — RPC batch shard-level failures", () => {
+    // A namespace whose per-shard `/rpc-batch` reply is whatever `reply` builds.
+    const replyingNamespace = (reply: () => Response): ShardNamespaceLike => {
+        return {
+            get: () => {
+                return {
+                    fetch: async (): Promise<Response> => reply(),
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    // One call, id 0, so a reply can address its slot without reading the request back.
+    const post = async (shardDO: ShardNamespaceLike): Promise<Response> => {
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO });
+
+        return worker.fetch(
+            new Request("https://app.example/_lunora/rpc-batch", {
+                body: JSON.stringify({ calls: [{ functionPath: "messages:send", id: 0, shardKey: "a" }] }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+    };
+
+    // A shard that could not answer at all says nothing about any write, so it is reported with the
+    // code the client re-queues, never as a verdict on the one write a slot names.
+    it("reports a non-JSON shard reply as SHARD_UNAVAILABLE, not as a per-write SHARD_ERROR", async () => {
+        expect.assertions(1);
+
+        const res = await post(replyingNamespace(() => new Response("<html>bad gateway</html>", { status: 502 })));
+
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "SHARD_UNAVAILABLE" } } }] });
+    });
+
+    it("reports a result the shard left out as SHARD_UNAVAILABLE, not as a per-write SHARD_ERROR", async () => {
+        expect.assertions(1);
+
+        const res = await post(replyingNamespace(() => Response.json({ results: [] })));
+
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "SHARD_UNAVAILABLE" } } }] });
+    });
+
+    it("passes a per-write verdict through unchanged", async () => {
+        expect.assertions(1);
+
+        const res = await post(
+            replyingNamespace(() => Response.json({ results: [{ body: { error: { code: "RPC_FAILED", message: "boom" } }, id: 0, status: 500 }] })),
+        );
+
+        await expect(res.json()).resolves.toMatchObject({ results: [{ body: { error: { code: "RPC_FAILED" } } }] });
+    });
+});
+
 describe("createWorker — RPC batch body-shape guard (RUNTIME-04)", () => {
     // `handleBatchRpc` used to run its own `typeof body !== "object" || …` check
     // by hand after parsing; it now delegates to `readJsonBodyWithLimit`, which
