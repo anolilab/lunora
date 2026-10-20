@@ -254,7 +254,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
             socket.inbound.put_nowait(json.dumps({"data": 2, "id": "sub_1", "type": "data"}))
             await asyncio.wait_for(second_seen.wait(), TIMEOUT)
 
-        self.assertIn("frame handler raised", logs.output[0])
+        self.assertIn("lunora: subscription callback raised", logs.output[0])
 
         client.close()
         await asyncio.wait_for(run, TIMEOUT)
@@ -481,6 +481,16 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TypeError):
             client.subscribe_shape("roomMessages", {"when": object()}, lambda _rows: None)
         self.assertEqual(client._shapes, {})
+
+    def test_a_raising_close_hook_is_labelled_as_a_close_hook(self):
+        from lunora.client import _run_callbacks
+
+        def boom():
+            raise ValueError("hook bug")
+
+        with self.assertLogs("lunora", level="ERROR") as logs:
+            _run_callbacks([boom], "close hook")
+        self.assertIn("lunora: close hook raised", logs.output[0])
 
     async def test_reconnect_forever_raises_when_websockets_is_missing(self):
         from lunora.client import WebsocketsMissingError
