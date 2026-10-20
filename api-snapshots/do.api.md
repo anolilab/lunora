@@ -548,7 +548,6 @@ abstract class ShardDO {
     protected sensitiveArgNames(_functionPath: string): ReadonlySet<string>;
     protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope;
     protected withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T>;
-    protected sensitiveFailureMessage(functionPath: string, args: Record<string, unknown>, error: unknown): string;
     protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown;
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void;
     protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void;

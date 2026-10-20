@@ -5930,11 +5930,6 @@ abstract class ShardDO {
         }
     }
 
-    /** The message of a failed dispatch, with the sensitive values of its arguments masked before it is logged. */
-    protected sensitiveFailureMessage(functionPath: string, args: Record<string, unknown>, error: unknown): string {
-        return this.openSensitiveScope(functionPath, args).text(error instanceof Error ? error.message : String(error));
-    }
-
     /**
      * The error a shape resolve throws, with its message and stack scrubbed through the scope the
      * resolve ran under. The scope has admitted the validator's output, which a re-open from the raw
