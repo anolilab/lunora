@@ -19,6 +19,7 @@
         { "from": "core/change-email.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/change-email.ts" },
         { "from": "core/change-password.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/change-password.ts" },
         { "from": "core/config.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/config.ts" },
+        { "from": "core/cooldown.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/cooldown.ts" },
         { "from": "core/create-form-controller.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/create-form-controller.ts" },
         { "from": "core/create-resource-controller.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/create-resource-controller.ts" },
         { "from": "core/default-nav.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/default-nav.ts" },

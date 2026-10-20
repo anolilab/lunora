@@ -951,6 +951,20 @@ for tname in "${TEMPLATES[@]}"; do
         continue
     fi
 
+    # One app, one definition. A template whose dev and deploy entries each type
+    # their own `defineApp<Env>()…` chain drifts the day someone adds `.auth()`
+    # or a shard gate to one of them — dev is locked down, production is open.
+    # Export the builder once and finish it in each entry (see sveltekit's
+    # `lunora/app.ts`). Source files only: a README may quote the call.
+    define_sites="$(grep -rnE 'defineApp<' "$scaffold_dir" --include='*.ts' --include='*.tsx' --include='*.mts' --exclude-dir=node_modules --exclude-dir=_generated || true)"
+    # Count occurrences, not lines: two calls on one line are still two definitions.
+    if [[ "$(printf '%s' "$define_sites" | grep -o 'defineApp<' | grep -c . || true)" -gt 1 ]]; then
+        echo "  FAIL: $tname has more than one \`defineApp<\` call site — export one builder and import it:"
+        echo "$define_sites" | sed "s|$scaffold_dir/|    |"
+        FAIL+=("$tname(duplicate-defineApp)")
+        continue
+    fi
+
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
     inject_peer_deps "$scaffold_dir"

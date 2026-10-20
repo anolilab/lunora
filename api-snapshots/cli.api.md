@@ -108,6 +108,7 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
 ```ts
 interface DeployCommandOptions {
+    allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
     commandName?: PreDeployCommand;

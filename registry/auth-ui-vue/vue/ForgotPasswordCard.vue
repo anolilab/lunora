@@ -28,7 +28,7 @@ const { actions, state } = useController((context) => createForgotPasswordContro
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
-            <SubmitButton :pending="state.status === 'submitting'">{{ t.forgotPassword }}</SubmitButton>
+            <SubmitButton :available-at="state.resendAvailableAt" :pending="state.status === 'submitting'">{{ t.forgotPassword }}</SubmitButton>
         </form>
         <template #footer>
             <AuthLink :href="signInLink">{{ t.backToSignIn }}</AuthLink>

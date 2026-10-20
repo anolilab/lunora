@@ -34,6 +34,7 @@ import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
+import type { AdvisorOpenShardAccess } from "./open-shard-access";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -514,6 +515,13 @@ export interface LintContext {
      * callers, where the lint finds nothing.
      */
     notifyConfig?: AdvisorNotifyConfig;
+
+    /**
+     * Literal `allowUnauthenticatedShardAccess: true` sites in the app — the
+     * `open_shard_access` input. Supplied by `lunora deploy`'s project scan only;
+     * absent for codegen and runtime callers, where the lint finds nothing.
+     */
+    openShardAccess?: ReadonlyArray<AdvisorOpenShardAccess>;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set

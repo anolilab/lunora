@@ -540,6 +540,15 @@ interface AdvisorNotifyConfig {
 }
 ```
 
+### `AdvisorOpenShardAccess` (interface)
+
+```ts
+interface AdvisorOpenShardAccess {
+    file: string;
+    line: number;
+}
+```
+
 ### `AdvisorOwnerFieldWrite` (interface)
 
 ```ts
@@ -1133,6 +1142,7 @@ interface LintContext {
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
     notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
     notifyConfig?: AdvisorNotifyConfig;
+    openShardAccess?: ReadonlyArray<AdvisorOpenShardAccess>;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
@@ -1746,6 +1756,12 @@ const notifyMissingPushConfig: Lint;
 
 ```ts
 const notifySendOutsideAction: Lint;
+```
+
+### `openShardAccess` (const)
+
+```ts
+const openShardAccess: Lint;
 ```
 
 ### `outputProjectionMissingOnPublicRead` (const)

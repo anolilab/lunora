@@ -52,7 +52,7 @@ import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PreDeployCommand } from "./checks";
-import { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
+import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
@@ -495,6 +495,29 @@ type PreDeployPipelineResult =
           validation: DeployCommandResult["validation"];
       };
 
+/** Why this run deploys no services, or `undefined` when it deploys them. */
+const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
+    if (options.skipServices === true) {
+        return "--skip-services";
+    }
+
+    if (options.preview === true) {
+        return "--preview uploads the app version only";
+    }
+
+    // A temporary account is the app's alone: services deployed with the real
+    // login would land elsewhere, and the bindings could never resolve.
+    if (options.temporary === true) {
+        return "--temporary deploys the app to a throwaway account";
+    }
+
+    return undefined;
+};
+
+/** The Wrangler entrypoints of the services this run publishes, for the open-shard gate to read; none when it publishes no services. */
+const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
+    serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
+
 /**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
@@ -561,6 +584,14 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         options.logger.error(message);
 
         return { error: message, target, validation: empty };
+    }
+
+    // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
+    // provisioning writes anything. A service is published only when this run deploys services.
+    const gateError = runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
+
+    if (gateError !== undefined) {
+        return { code: gateError.code, error: gateError.error, target, validation: empty };
     }
 
     let codegen: CodegenResult | undefined;
@@ -645,25 +676,6 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     }
 
     return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
-};
-
-/** Why this run deploys no services, or `undefined` when it deploys them. */
-const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
-    if (options.skipServices === true) {
-        return "--skip-services";
-    }
-
-    if (options.preview === true) {
-        return "--preview uploads the app version only";
-    }
-
-    // A temporary account is the app's alone: services deployed with the real
-    // login would land elsewhere, and the bindings could never resolve.
-    if (options.temporary === true) {
-        return "--temporary deploys the app to a throwaway account";
-    }
-
-    return undefined;
 };
 
 /**
@@ -1101,6 +1113,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
+        allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),

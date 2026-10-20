@@ -1,15 +1,22 @@
 /**
  * The read-only pre-deploy checks `lunora deploy` and `lunora prepare` share:
  * Docker and container sources, the D1 placeholder, localhost origins in vars,
- * and the `--migrate` preflight.
+ * and the `--migrate` preflight. The open-shard-access gate is separate: it runs
+ * first, before codegen or provisioning writes anything (`runOpenShardGate`).
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 
+import type { AdvisorOpenShardAccess } from "@lunora/advisor";
+import { openShardAccess, runAdvisor } from "@lunora/advisor";
+import { isTestPath, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
-import { COMPOSED_WORKER_ENTRY, discoverContainerInfo } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
-import { join } from "@visulima/path";
+import { dirname, join, relative } from "@visulima/path";
+import type { BinaryExpression, CallExpression, ElementAccessExpression, ImportEqualsDeclaration } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
@@ -348,9 +355,477 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
  */
 type PreDeployCommand = "build" | "deploy" | "prepare";
 
+/** Root files an app configures itself in: the Vite config (the class-A opt-in) and `lunora.config.*` (its `app` hook). */
+const OPEN_SHARD_SCAN_ROOT_FILES = [
+    "vite.config.ts",
+    "vite.config.mts",
+    "vite.config.cts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.cjs",
+    ...PROJECT_CONFIG_FILENAMES,
+];
+const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
+/** Test files in every source extension; `isTestPath` covers the `.ts`/`.tsx` ones and the test folders. */
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
+const OPEN_SHARD_OPTION = "allowUnauthenticatedShardAccess";
+const PATH_SEPARATOR = /[\\/]/u;
+/** Build output and installed code: a bundle that inlines the runtime is not app source, so its options are not read. */
+const NON_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "build", "dist", "node_modules"]);
+
+/**
+ * Whether a resolved module is app source: a source extension, not a test file, and
+ * no segment that is build output, installed code, or a dot-folder such as
+ * `.svelte-kit` or `.open-next`. A bundle the config imports carries the runtime
+ * inlined, so reading it would report options the app does not set.
+ */
+const isAppSourceModule = (cwd: string, file: string): boolean => {
+    const segments = relative(cwd, file).split(PATH_SEPARATOR);
+
+    return (
+        SOURCE_FILE.test(file) &&
+        !TEST_FILE.test(file) &&
+        !isTestPath(segments.join("/")) &&
+        segments.every((segment) => segment === ".." || (!segment.startsWith(".") && !NON_SOURCE_DIRECTORIES.has(segment)))
+    );
+};
+
+/**
+ * The Wrangler `main` entrypoint of the environment being deployed, which can sit outside `src/`
+ * (the Analog template deploys a root `worker.ts`). An environment may override `main`, so the
+ * merged view is read; an undeclared `--env` falls back to the top level, which the validator reports.
+ */
+const wranglerMainEntry = (cwd: string, wranglerPath: string, environment?: string): string[] => {
+    const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
+
+    if (parsed === undefined) {
+        return [];
+    }
+
+    const { error, merged } = mergeWranglerEnvironment(parsed, environment);
+    const { main } = error === undefined ? merged : parsed;
+    // Wrangler resolves `main` against its own config file, not the project root.
+    const entry = typeof main === "string" ? join(dirname(wranglerPath), main) : undefined;
+
+    return entry !== undefined && existsSync(entry) && isAppSourceModule(cwd, entry) ? [entry] : [];
+};
+
+/** The literal `false`, under any parentheses, `as`, `satisfies`, `<T>` or `!` wrapper (`false as const` is still false). */
+const isLiteralFalse = (node: Node | undefined): boolean => {
+    if (node === undefined) {
+        return false;
+    }
+
+    if (node.getKind() === SyntaxKind.FalseKeyword) {
+        return true;
+    }
+
+    return Node.isParenthesizedExpression(node) ||
+        Node.isAsExpression(node) ||
+        Node.isSatisfiesExpression(node) ||
+        Node.isTypeAssertion(node) ||
+        Node.isNonNullExpression(node)
+        ? isLiteralFalse(node.getExpression())
+        : false;
+};
+
+/** Whether a regular file is at `path`. Used to resolve imports, where a missing candidate is normal and not a finding. */
+const isFileAt = (path: string): boolean => {
+    try {
+        return statSync(path).isFile();
+    } catch {
+        return false;
+    }
+};
+
+/** Codes that mean nothing is at the path, so skipping it cannot hide a shipped option. Any other failure must block. */
+const NOTHING_AT_PATH: ReadonlySet<string> = new Set(["ELOOP", "ENOENT", "ENOTDIR"]);
+
+/** Note a path the scan could not read, unless nothing is there (a broken or self-referential link). */
+const recordUnreadable = (path: string, error: unknown, unreadable: string[]): void => {
+    const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "";
+
+    if (!NOTHING_AT_PATH.has(code)) {
+        unreadable.push(path);
+    }
+};
+
+/** A path's stats, following links. A broken or self-referential link has none: `statSync` throws, and the entry is skipped. */
+const statEntry = (path: string, unreadable: string[]): ReturnType<typeof statSync> | undefined => {
+    try {
+        return statSync(path);
+    } catch (error) {
+        recordUnreadable(path, error, unreadable);
+
+        return undefined;
+    }
+};
+
+/** A file's text, or `undefined` when it cannot be read; the failure is recorded so the deploy blocks unless the scan rules the file out. */
+const readSource = (file: string, unreadable: string[]): string | undefined => {
+    try {
+        return readFileSync(file, "utf8");
+    } catch (error) {
+        recordUnreadable(file, error, unreadable);
+
+        return undefined;
+    }
+};
+
+/**
+ * The source files under `directory` that can carry app options, walked the way
+ * codegen walks them: symlinks followed, one visit per real directory, and test
+ * and generated folders pruned before descent. Paths are `/`-separated relative
+ * to `root`, so `isTestPath` sees the same shape on Windows.
+ */
+const appSourceFiles = (root: string, directory: string, unreadable: string[], visited = new Set<string>()): string[] => {
+    let realDirectory: string;
+
+    try {
+        realDirectory = realpathSync(directory);
+    } catch (error) {
+        recordUnreadable(directory, error, unreadable);
+
+        return [];
+    }
+
+    if (visited.has(realDirectory)) {
+        return [];
+    }
+
+    visited.add(realDirectory);
+
+    let entries: string[];
+
+    try {
+        entries = readdirSync(directory);
+    } catch (error) {
+        recordUnreadable(directory, error, unreadable);
+
+        return [];
+    }
+
+    return entries.flatMap((entry) => {
+        const full = join(directory, entry);
+        const info = statEntry(full, unreadable);
+
+        if (info === undefined) {
+            return [];
+        }
+
+        const relativePath = relative(root, full).split(sep).join("/");
+
+        if (info.isDirectory()) {
+            // Build output and dot-folders (`.svelte-kit`, `.open-next`) are not walked, the same rule as the imported modules: a bundle carries the runtime inlined.
+            const skipped = NON_SOURCE_DIRECTORIES.has(entry) || entry.startsWith(".") || isTestPath(`${relativePath}/`);
+
+            return skipped ? [] : appSourceFiles(root, full, unreadable, visited);
+        }
+
+        return info.isFile() && SOURCE_FILE.test(entry) && !TEST_FILE.test(entry) && !isTestPath(relativePath) ? [full] : [];
+    });
+};
+
+/** The key a member is written under: a string literal's value, a literal computed key's value, otherwise its source text. */
+const memberKeyName = (nameNode: Node): string => {
+    const keyNode = Node.isComputedPropertyName(nameNode) ? nameNode.getExpression() : nameNode;
+
+    return Node.isStringLiteral(keyNode) || Node.isNoSubstitutionTemplateLiteral(keyNode) ? keyNode.getLiteralValue() : nameNode.getText();
+};
+
+/** Extensions a relative import can resolve to, as the bundler tries them. */
+const IMPORT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+/** The JavaScript extension a TypeScript ESM import writes for its `.ts` source. */
+const JS_EXTENSION = /\.(?:[cm]?js|jsx)$/u;
+
+/**
+ * The file a relative import names, or `undefined` for a bare specifier or a
+ * file that does not exist. Tries the name as written, then with each source
+ * extension, then as a directory's index. A `.js` specifier also maps to its
+ * `.ts` source, which is how TypeScript ESM code writes imports.
+ */
+const resolveRelativeImport = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith(".")) {
+        return undefined;
+    }
+
+    const base = resolve(dirname(fromFile), specifier);
+    const withoutJsExtension = base.replace(JS_EXTENSION, "");
+    const candidates = [
+        base,
+        ...IMPORT_EXTENSIONS.map((extension) => `${base}${extension}`),
+        ...IMPORT_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
+        ...IMPORT_EXTENSIONS.map((extension) => `${withoutJsExtension}${extension}`),
+    ];
+
+    return candidates.find((candidate) => isFileAt(candidate));
+};
+
+/** The path a plain `require("…")` call names, when its argument is a literal. */
+const requireSpecifier = (call: CallExpression): string | undefined => {
+    if (call.getExpression().getText() !== "require") {
+        return undefined;
+    }
+
+    const [argument] = call.getArguments();
+
+    return argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
+        ? argument.getLiteralValue()
+        : undefined;
+};
+
+/** The path an `import x = require("…")` names. */
+const importEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | undefined => {
+    const reference = declaration.getModuleReference();
+
+    if (!Node.isExternalModuleReference(reference)) {
+        return undefined;
+    }
+
+    const expression = reference.getExpression();
+
+    return Node.isStringLiteral(expression) ? expression.getLiteralValue() : undefined;
+};
+
+/**
+ * The local modules the app's configuration and Wrangler entrypoint import, followed
+ * through their own imports. An open-shard option kept in a module beside the
+ * config reaches the worker through it, so the module is read as well.
+ */
+const importedModules = (roots: string[], project: Project, cwd: string, unreadable: string[]): string[] => {
+    const seen = new Set(roots);
+    const queue = [...roots];
+    const found: string[] = [];
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const file = queue[index] ?? "";
+        const text = readSource(file, unreadable);
+
+        if (text === undefined) {
+            continue;
+        }
+
+        const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
+        const specifiers = [
+            ...source.getImportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()),
+            ...source.getExportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()),
+            // A CommonJS config reaches its helpers through `require()` or `import x = require()`.
+            ...source.getDescendantsOfKind(SyntaxKind.ImportEqualsDeclaration).map((declaration) => importEqualsSpecifier(declaration)),
+            ...source.getDescendantsOfKind(SyntaxKind.CallExpression).map((call) => requireSpecifier(call)),
+        ].filter((specifier): specifier is string => specifier !== undefined);
+
+        for (const specifier of specifiers) {
+            const resolved = resolveRelativeImport(file, specifier);
+
+            if (resolved !== undefined && isAppSourceModule(cwd, resolved) && !seen.has(resolved)) {
+                seen.add(resolved);
+                found.push(resolved);
+                queue.push(resolved);
+            }
+        }
+    }
+
+    return found;
+};
+
+/** The literal bracket key of an element access (`x["name"]`), or `undefined` for any other key. */
+const literalElementKey = (access: ElementAccessExpression): string | undefined => {
+    const key = access.getArgumentExpression();
+
+    return key !== undefined && (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key)) ? key.getLiteralValue() : undefined;
+};
+
+/** The key an assignment target writes, when it is a dot access or a literal bracket access. */
+const assignedKey = (target: Node): string | undefined => {
+    if (Node.isPropertyAccessExpression(target)) {
+        return target.getName();
+    }
+
+    return Node.isElementAccessExpression(target) ? literalElementKey(target) : undefined;
+};
+
+/** The assignment operators: plain `=`, the logical ones, and the compound arithmetic and bitwise ones. */
+const ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.AmpersandAmpersandEqualsToken,
+    SyntaxKind.AmpersandEqualsToken,
+    SyntaxKind.AsteriskAsteriskEqualsToken,
+    SyntaxKind.AsteriskEqualsToken,
+    SyntaxKind.BarBarEqualsToken,
+    SyntaxKind.BarEqualsToken,
+    SyntaxKind.CaretEqualsToken,
+    SyntaxKind.EqualsToken,
+    SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+    SyntaxKind.LessThanLessThanEqualsToken,
+    SyntaxKind.MinusEqualsToken,
+    SyntaxKind.PercentEqualsToken,
+    SyntaxKind.PlusEqualsToken,
+    SyntaxKind.QuestionQuestionEqualsToken,
+    SyntaxKind.SlashEqualsToken,
+]);
+
+/** Whether `expression` writes the open-shard option by dot or literal bracket key: any assignment, except a plain `=` of a literal `false`. */
+const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
+    const operator = expression.getOperatorToken().getKind();
+
+    if (!ASSIGNMENT_OPERATORS.has(operator) || assignedKey(expression.getLeft()) !== OPEN_SHARD_OPTION) {
+        return false;
+    }
+
+    // A plain `=` that writes a literal false is safe. Any other assignment (`??=`, `||=`, `+=`) can set the option, so it is reported.
+    return operator !== SyntaxKind.EqualsToken || !isLiteralFalse(expression.getRight());
+};
+
+/**
+ * Every open-shard member in the app that is not a literal `false`.
+ *
+ * Read with the TypeScript parser, not a text match, so the "before deploying"
+ * comments the templates keep beside the flag never count. Every scanned file is
+ * parsed, with no raw-text prefilter: an escaped spelling of the name would slip
+ * past one. Fails closed: a value the scan
+ * cannot read (a variable, a shorthand, a getter) is reported, because the runtime
+ * evaluates it. Ceiling, not covered: a computed key built from a variable, an
+ * `Object.assign` or a spread from a variable, and any file outside `schemaDir`,
+ * `src/`, the root Vite config, `lunora.config.*` and the Wrangler `main` of the
+ * environment being deployed, and any module those import only through a bare
+ * specifier, a path alias or a dynamic `import()`. Build and dist folders and
+ * dot-folders are not read at all: a bundle inlines the runtime, so an
+ * app-authored module kept under such a name is not seen either. Rename the
+ * folder, or pass `--allow-open-shards`, if that matters.
+ */
+const findOpenShardAccess = (
+    cwd: string,
+    environment: string | undefined,
+    servicePaths: ReadonlyArray<string>,
+): { sites: AdvisorOpenShardAccess[]; unreadable: string[] } => {
+    const unreadable: string[] = [];
+    const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])].filter((directory) => existsSync(join(cwd, directory)));
+    const appWrangler = findWranglerFile(cwd);
+    const roots = [
+        ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
+        ...(appWrangler === undefined ? [] : wranglerMainEntry(cwd, appWrangler, environment)),
+        // Each service this run publishes is an entrypoint of its own, deployed before the app.
+        // A service takes the same `--env` as the app: its environment's `main` is what that environment ships.
+        ...servicePaths.flatMap((servicePath) => wranglerMainEntry(cwd, servicePath, environment)),
+    ];
+    const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+    // Modules the walked source imports are followed too, so a builder kept outside the scanned folders is read.
+    const walked = directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory), unreadable));
+    const files = [...new Set([...walked, ...roots, ...importedModules([...roots, ...walked], project, cwd, unreadable)])];
+
+    const sites = files.flatMap((file) => {
+        const text = readSource(file, unreadable);
+
+        // Every scanned file is parsed. A raw-text prefilter would miss an escaped spelling of the option name.
+        if (text === undefined) {
+            return [];
+        }
+
+        const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
+
+        const members = [
+            ...source.getDescendantsOfKind(SyntaxKind.PropertyAssignment),
+            ...source.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment),
+            ...source.getDescendantsOfKind(SyntaxKind.GetAccessor),
+            ...source.getDescendantsOfKind(SyntaxKind.MethodDeclaration),
+        ]
+            .filter((member) => {
+                // Only a literal `false` is safe. A shorthand, getter or method has no literal to read, so it is reported too.
+                const isSafe = Node.isPropertyAssignment(member) && isLiteralFalse(member.getInitializer());
+
+                return memberKeyName(member.getNameNode()) === OPEN_SHARD_OPTION && !isSafe;
+            })
+            .map((member) => member.getStartLineNumber());
+        // An assignment to the option (`options.name = …`, `options["name"] = …`) sets it on an object the runtime reads, so it counts too.
+        const assignments = source
+            .getDescendantsOfKind(SyntaxKind.BinaryExpression)
+            .filter((expression) => isOpenShardAssignment(expression))
+            .map((expression) => expression.getStartLineNumber());
+
+        return [...members, ...assignments].map((line) => {
+            return { file: relative(cwd, file), line };
+        });
+    });
+
+    return { sites, unreadable };
+};
+
+/**
+ * Refuse a deploy that ships the open-shard option set to anything but a literal `false` — the
+ * `open_shard_access` advisor lint — unless `--allow-open-shards` says the open
+ * posture is deliberate. Every template carries the flag for its local demo, and
+ * the runtime only logs a warning about it, so without this a first deploy goes
+ * out with any caller able to read any shard.
+ *
+ * Deploy only: `build` and `prepare` produce or check an artifact, they do not
+ * publish one, and the template build matrix runs `lunora build` on every
+ * template as shipped. Returns the error message, or `undefined` when clean.
+ */
+const checkOpenShardAccess = (
+    cwd: string,
+    logger: Logger,
+    command: PreDeployCommand,
+    allowOpenShards: boolean,
+    environment: string | undefined,
+    servicePaths: ReadonlyArray<string>,
+): string | undefined => {
+    if (command !== "deploy") {
+        return undefined;
+    }
+
+    const { sites: candidates, unreadable } = findOpenShardAccess(cwd, environment, servicePaths);
+    const findings = runAdvisor({ openShardAccess: candidates, schema: { tables: [] } }, { lints: [openShardAccess] });
+
+    if (findings.length === 0 && unreadable.length === 0) {
+        return undefined;
+    }
+
+    const parts: string[] = [];
+
+    if (findings.length > 0) {
+        const sites = findings.map((finding) => `${String(finding.metadata["file"])}:${String(finding.metadata["line"])}`).join(", ");
+
+        parts.push(`${sites} enable the open-shard option (any value but a literal false), so any caller may target any shard.`);
+    }
+
+    // A file the scan could not read might hold the option, so it blocks the same way a finding does.
+    if (unreadable.length > 0) {
+        parts.push(`could not read ${unreadable.join(", ")}, so the open-shard option cannot be ruled out there.`);
+    }
+
+    if (allowOpenShards) {
+        logger.warn(`deploying past the open-shard gate (--allow-open-shards): ${parts.join(" ")}`);
+
+        return undefined;
+    }
+
+    const message = `deploy blocked (open_shard_access): ${parts.join(" ")} ${openShardAccess.remediation}`;
+
+    logger.error(message);
+
+    return message;
+};
+
+/**
+ * The open-shard gate on its own, run before codegen or provisioning writes
+ * anything: a blocked deploy must leave `wrangler.jsonc` as it found it. Returns
+ * the stop to report, or `undefined` to continue.
+ */
+const runOpenShardGate = (
+    cwd: string,
+    options: DeployCommandOptions,
+    command: PreDeployCommand,
+    servicePaths: ReadonlyArray<string>,
+): { code: ExitCode; error: string } | undefined => {
+    const error = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true, options.env, servicePaths);
+
+    return error === undefined ? undefined : { code: EXIT_CODE.USAGE, error };
+};
+
 /**
  * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
- * localhost-origin var check, and the container source + Docker preflights.
+ * localhost-origin var check, and the container source + Docker preflights. The
+ * open-shard-access gate is not here; `runOpenShardGate` runs it before any write.
  * Returns the first error message, or `undefined` when all pass.
  *
  * Separate from the container BUILD so `lunora prepare` can run the checks
@@ -384,4 +859,4 @@ const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command:
 };
 
 export type { PreDeployCommand };
-export { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight };
+export { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight };
