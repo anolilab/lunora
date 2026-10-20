@@ -75,15 +75,33 @@ interface SchemaNodeReader<TNode> {
     valueChild: (node: TNode) => TNode | undefined;
 }
 
+/** The JSON Schema type a literal's value has, for a sensitive literal whose `const` is dropped. */
+const literalType = (value: unknown): string | undefined => {
+    if (value === null) {
+        return "null";
+    }
+
+    if (typeof value === "number") {
+        return "number";
+    }
+
+    return typeof value === "string" || typeof value === "boolean" ? typeof value : undefined;
+};
+
 /**
  * A `v.sensitive` node as JSON Schema: write-only, so a response never carries
  * it. `format: "password"` marks a plain string as one; a string that already
  * names a format keeps it.
  */
 const markSensitive = (schema: JsonSchema): JsonSchema => {
-    const plainString = schema.type === "string" && schema.format === undefined;
+    // A literal's `const` is the secret itself, so a published schema keeps only the type
+    // it implies. A union's members are marked the same way.
+    const { const: literal, anyOf, ...rest } = schema;
+    const typed: JsonSchema = literal === undefined ? rest : { ...rest, type: rest["type"] ?? literalType(literal) };
+    const unionMembers = Array.isArray(anyOf) ? { anyOf: (anyOf as JsonSchema[]).map((member) => markSensitive(member)) } : {};
+    const plainString = typed["type"] === "string" && typed["format"] === undefined;
 
-    return { ...schema, writeOnly: true, ...(plainString ? { format: "password" } : {}) };
+    return { ...typed, ...unionMembers, writeOnly: true, ...(plainString ? { format: "password" } : {}) };
 };
 
 /**

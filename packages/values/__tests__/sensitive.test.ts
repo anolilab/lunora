@@ -429,3 +429,38 @@ describe("v.sensitive — a refinement chained after the marker", () => {
         expect(error.message).toBe("Expected expected an s_ key at <root>, received object");
     });
 });
+
+describe("v.sensitive — a literal's value is not published", () => {
+    it("rejects every value but the literal without echoing it, and publishes no literal value", () => {
+        expect.assertions(5);
+
+        const token = v.sensitive(v.literal("secret-token"));
+        const error = rejection(() => token.parse("other"));
+
+        expect(token.parse("secret-token")).toBe("secret-token");
+        expect(error.message).toBe("Expected literal at <root>, received string");
+        expect(error.received).toBe("string");
+        expect(toJsonSchema(token)).toStrictEqual({ format: "password", type: "string", writeOnly: true });
+        expect(argsToJsonSchema({ token }).properties).toStrictEqual({ token: { format: "password", type: "string", writeOnly: true } });
+    });
+
+    it("publishes no literal value under an optional sensitive literal argument", () => {
+        expect.assertions(1);
+
+        expect(argsToJsonSchema({ token: v.sensitive(v.optional(v.literal("secret-token"))) }).properties).toStrictEqual({
+            token: { format: "password", type: "string", writeOnly: true },
+        });
+    });
+
+    it("publishes no literal value under a sensitive union of literals either", () => {
+        expect.assertions(1);
+
+        expect(toJsonSchema(v.sensitive(v.union(v.literal("alpha"), v.literal("beta"))))).toStrictEqual({
+            anyOf: [
+                { format: "password", type: "string", writeOnly: true },
+                { format: "password", type: "string", writeOnly: true },
+            ],
+            writeOnly: true,
+        });
+    });
+});
