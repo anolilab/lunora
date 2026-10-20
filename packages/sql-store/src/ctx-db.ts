@@ -600,10 +600,13 @@ const bindList = (values: ReadonlyArray<unknown>): SQL =>
  *
  * Postgres `text` cannot store the character at all, and the driver raised a
  * raw "invalid byte sequence … 0x00" for it. Checked on the fields the caller
- * WRITES — an insert's document, a patch's delta, a replacement — never on the
+ * WRITES — an insert's row, a patch's delta, a replacement — never on the
  * merged row: SQLite and MySQL store the character, so a row holding one must
- * stay patchable and re-importable there. A NUL nested in an object or array is
- * stored as JSON's `\u0000` escape and needs no check.
+ * stay patchable and re-importable there. It runs on what will be STORED, after
+ * `runRowValidators`: a `v.from` column is stored as its parsed output, so a
+ * transform can both produce a NUL from clean input and strip one from dirty input.
+ * A NUL nested in an object or array is stored as JSON's `\u0000` escape and
+ * needs no check.
  */
 const assertStorableStrings = (engine: SqlDialect["name"], written: Record<string, unknown>): void => {
     if (engine !== "postgres") {
@@ -2695,6 +2698,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             tolerateStoredNull: true,
         });
 
+        assertStorableStrings(dialect.name, Object.fromEntries(Object.keys(effectivePatch).map((field) => [field, merged[field]])));
+
         // The caller's authorization verdict, taken on the row this attempt actually produces:
         // `merged` carries each transform column's parsed OUTPUT, which is what lands.
         assertPatchAllowed(patchOptions, existing, merged);
@@ -3575,8 +3580,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // INSERT against the fts/agg/rank tables.
             await ensureMigrated();
 
-            assertStorableStrings(dialect.name, document);
-
             // Refinements declared via `.check(predicate)` fire on the post-default
             // row so a defaulted value still passes its checks. A `v.from` column the
             // caller wrote is stored as its parsed output; a defaulted one is declared as
@@ -3585,6 +3588,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 supplied: document,
                 trusted: insertOptions?.allowExplicitId === true,
             });
+
+            assertStorableStrings(dialect.name, withDefaults);
 
             let id: string;
             // Whether the id was pinned by the caller (validated `clientId` or the
@@ -3660,7 +3665,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // sharing its guard rather than restating it is what keeps the two
             // from drifting again.
             assertNoExplicitUndefined("patch", patch);
-            assertStorableStrings(dialect.name, patch);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -3705,7 +3709,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
          */
         async patchIf(tableName, id, args) {
             assertNoExplicitUndefined("patchIf", args.patch);
-            assertStorableStrings(dialect.name, args.patch);
 
             const definition = schema.tables[tableName];
 
@@ -4260,7 +4263,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async replace(id, document, expectedTable, replaceOptions) {
             assertNoExplicitUndefined("replace", document);
-            assertStorableStrings(dialect.name, document);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -4316,6 +4318,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 supplied: document,
                 trusted: replaceOptions?.allowExplicitId === true,
             });
+
+            assertStorableStrings(dialect.name, replaced);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
