@@ -5936,6 +5936,29 @@ abstract class ShardDO {
     }
 
     /**
+     * The error a shape resolve throws, with its message and stack scrubbed through the scope the
+     * resolve ran under. The scope has admitted the validator's output, which a re-open from the raw
+     * args would miss, so the scrub must happen before the scope is cleared, at the throw site.
+     */
+    // eslint-disable-next-line class-methods-use-this -- the scope is passed in: the generated resolve closes over one per call
+    protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown {
+        if (!(error instanceof Error)) {
+            return new Error(scope.text(String(error)));
+        }
+
+        // Scrubbed on the same object, not a copy: the caller reads `code` and `status` off it to answer the socket.
+        // eslint-disable-next-line no-param-reassign -- see above
+        error.message = scope.text(error.message);
+
+        if (error.stack !== undefined) {
+            // eslint-disable-next-line no-param-reassign -- see above
+            error.stack = scope.text(error.stack);
+        }
+
+        return error;
+    }
+
+    /**
      * Admit a composed call's marked arguments into the invocation that makes the
      * call. The callee runs inside that invocation, so its own `v.sensitive` values
      * are scrubbed from its records too, not only the caller's.
