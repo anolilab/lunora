@@ -1,3 +1,22 @@
+## @lunora/testing [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.289...@lunora/testing@1.0.0-alpha.290) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.235
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.129
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/queue:** upgraded to 1.0.0-alpha.122
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.144
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/observability:** upgraded to 1.0.0-alpha.160
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/testing [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.288...@lunora/testing@1.0.0-alpha.289) (2026-10-20)
 
 
