@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.412",
+    "version": "1.0.0-alpha.413",
     "description": "The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands",
     "keywords": [
         "agent-skills",
@@ -70,11 +70,11 @@
         "@lunora/advisor": "1.0.0-alpha.245",
         "@lunora/bindings": "1.0.0-alpha.129",
         "@lunora/codegen": "1.0.0-alpha.338",
-        "@lunora/config": "1.0.0-alpha.388",
+        "@lunora/config": "1.0.0-alpha.389",
         "@lunora/container": "1.0.0-alpha.88",
         "@lunora/d1": "1.0.0-alpha.197",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/mcp": "1.0.0-alpha.251",
+        "@lunora/mcp": "1.0.0-alpha.252",
         "@lunora/runtime": "1.0.0-alpha.227",
         "@lunora/seed": "1.0.0-alpha.245",
         "@visulima/cerebro": "catalog:cli",
