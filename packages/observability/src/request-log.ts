@@ -346,9 +346,28 @@ const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
  */
 const SENSITIVE_TOKEN_MIN_LENGTH = 3;
 
+const escapeRegExp = (text: string): string => text.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
 /** Matches `secret` as a whole token: no letter or digit on either side. */
-const sensitiveTokenPattern = (secret: string): RegExp =>
-    new RegExp(String.raw`(?<![\p{L}\p{N}])${secret.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}(?![\p{L}\p{N}])`, "gu");
+const sensitiveTokenPattern = (secret: string): RegExp => new RegExp(String.raw`(?<![\p{L}\p{N}])${escapeRegExp(secret)}(?![\p{L}\p{N}])`, "gu");
+
+/** Matches `secret` as a whole token inside quotes, the way a serializer or a handler quotes a value. */
+const quotedTokenPattern = (secret: string): RegExp => new RegExp(String.raw`(?<=["'])${escapeRegExp(secret)}(?=["'])`, "gu");
+
+/**
+ * Matches `secret` as a whole token written right after one of `separators` (optionally spaced):
+ * `token=ab`, or `token: ab` when `:` is a separator.
+ */
+const assignedValuePattern = (secret: string, separators: string): RegExp =>
+    new RegExp(String.raw`(?<=[${separators}][ ]*)${escapeRegExp(secret)}(?![\p{L}\p{N}])`, "gu");
+
+/**
+ * The spellings of a boolean. Matched only where a value is written, never as prose: a `true` in
+ * an unrelated sentence or an unrelated JSON field is not the marked flag. A value is written
+ * quoted or after `=`. `:` is left out on purpose, since that is how an unrelated boolean sits in a
+ * JSON object body.
+ */
+const BOOLEAN_SPELLINGS: ReadonlySet<string> = new Set(["false", "true"]);
 
 /**
  * The text forms of the named arguments of one dispatch: the string leaves of each
@@ -436,9 +455,9 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
             if (value.length > 0) {
                 found.push(...stringSpellings(value));
             }
-        } else if (typeof value === "number" || typeof value === "bigint") {
-            // Not booleans: `true` and `false` carry no secret, and registering them as text would
-            // rewrite every unrelated `true` in the invocation's logs, spans and events.
+        } else if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+            // A boolean's spelling is matched only where a value is written (see BOOLEAN_SPELLINGS), so
+            // an unrelated `true` in the invocation's logs is left alone.
             found.push(String(value));
         } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
             found.push(...byteSpellings(value));
@@ -519,6 +538,29 @@ const sensitiveNames = (args: Record<string, unknown>, sensitive: ReadonlySet<st
 };
 
 /**
+ * Replace one registered secret in `text`. A boolean is masked only where a value is written
+ * (see {@link BOOLEAN_SPELLINGS}); the other spellings follow the length rules of
+ * {@link scrubSensitiveText}.
+ */
+const maskSecret = (text: string, secret: string): string => {
+    if (BOOLEAN_SPELLINGS.has(secret)) {
+        return text.replaceAll(quotedTokenPattern(secret), SENSITIVE_ARG_MASK).replaceAll(assignedValuePattern(secret, "="), SENSITIVE_ARG_MASK);
+    }
+
+    if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
+        return text.replaceAll(secret, SENSITIVE_ARG_MASK);
+    }
+
+    if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH) {
+        return text.includes(secret) ? text.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK) : text;
+    }
+
+    // Bare, a one- or two-character value matches ordinary prose, so only its JSON string
+    // form is masked: a logged `JSON.stringify({ token })` quotes it, and no prose does.
+    return text.replaceAll(JSON.stringify(secret), JSON.stringify(SENSITIVE_ARG_MASK));
+};
+
+/**
  * Replace each sensitive value found in free text with {@link SENSITIVE_ARG_MASK}.
  * A whole-text match is masked at any length. Inside longer text a value of
  * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more is replaced wherever it
@@ -534,19 +576,7 @@ const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): strin
     let scrubbed = text;
 
     for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
-        if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
-            scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
-        } else if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH) {
-            if (scrubbed.includes(secret)) {
-                scrubbed = scrubbed.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK);
-            }
-        } else {
-            // Bare, a one- or two-character value matches ordinary prose, so only its JSON string
-            // form is masked: a logged `JSON.stringify({ token })` quotes it, and no prose does.
-            const quoted = JSON.stringify(secret);
-
-            scrubbed = scrubbed.replaceAll(quoted, JSON.stringify(SENSITIVE_ARG_MASK));
-        }
+        scrubbed = maskSecret(scrubbed, secret);
     }
 
     return scrubbed;

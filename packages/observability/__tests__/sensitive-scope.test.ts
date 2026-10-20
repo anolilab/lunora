@@ -131,6 +131,19 @@ describe("createSensitiveScope", () => {
         expect(scope.fields({ retries: 0, rows: 42 })).toEqual({ retries: 0, rows: 42 });
     });
 
+    it("masks a marked boolean quoted or after `=`, and leaves `true` in prose or JSON alone", () => {
+        expect.assertions(6);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: true }, new Set(["value"])));
+
+        expect(scope.text("denied: token=true")).toBe(`denied: token=${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("denied 'true' by policy")).toBe(`denied '${SENSITIVE_ARG_MASK}' by policy`);
+        expect(scope.text("the flag is true here")).toBe("the flag is true here");
+        expect(scope.text('{"ok":true,"retry":false} done')).toBe('{"ok":true,"retry":false} done');
+        expect(scope.text("token=trueish")).toBe("token=trueish");
+        expect(scope.fields({ flag: true, ok: false })).toEqual({ flag: SENSITIVE_ARG_MASK, ok: false });
+    });
+
     it("returns the same reference for a bag it did not change", () => {
         expect.assertions(2);
 
@@ -607,7 +620,7 @@ describe("ctx.trace under a sensitive scope", () => {
         expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 
-    it("leaves a boolean out of the free-text secrets, so a marked flag does not rewrite every `true` in the logs", () => {
+    it("masks a marked boolean where a value is written, and leaves an unrelated `true` in the logs alone", () => {
         expect.assertions(3);
 
         const scope = createSensitiveScope(sensitiveValues({ flag: true, other: "visible", token: SECRET }, new Set(["flag", "token"])));
@@ -615,7 +628,7 @@ describe("ctx.trace under a sensitive scope", () => {
         expect(scope.text('{"ok":true,"retry":false} will construe it')).toBe('{"ok":true,"retry":false} will construe it');
         // A marked string beside it is still masked, so the scope is not simply empty.
         expect(scope.text(`charged with ${SECRET}`)).toBe(`charged with ${SENSITIVE_ARG_MASK}`);
-        expect(sensitiveValues({ flag: true }, new Set(["flag"]))).toStrictEqual([]);
+        expect(sensitiveValues({ flag: true }, new Set(["flag"]))).toStrictEqual(["true"]);
     });
 
     it("scrubs a span that is still open when the invocation settles, and releases the values once it is recorded", async () => {
