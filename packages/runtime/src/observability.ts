@@ -17,6 +17,7 @@ import { redactCredentials } from "@lunora/observability";
 
 import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
@@ -64,6 +65,14 @@ const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
  * per-shard failure count.
  */
 export interface ObservabilityEvent {
+    /**
+     * Extra attributes for this dispatch, e.g. derived by an `enrichSink` enricher.
+     * `otlpSink` exports them as span attributes. A reserved attribute of the same name
+     * wins: a key here never replaces a built-in field such as `http.route` or
+     * `lunora.shard_key`, and the colliding key is dropped.
+     */
+    attributes?: LogFields;
+
     /** Wall-clock duration of the dispatch, in milliseconds. */
     durationMs: number;
 

@@ -49,6 +49,14 @@ export const coerceFieldValue = (value: unknown): boolean | number | string =>
     typeof value === "boolean" || typeof value === "number" || typeof value === "string" ? value : stringifyFieldValue(value);
 
 /**
+ * Set an own, enumerable field. Assignment would treat a `__proto__` key as the prototype and
+ * drop the field, so the field is defined instead.
+ */
+const setField = (target: LogFields, key: string, value: unknown): void => {
+    Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
+};
+
+/**
  * Normalize a (possibly merged) fields bag into the canonical shape every log
  * surface stores and ships: a **fresh** object (so a caller mutating the logged
  * object afterwards can't alter a buffered/queued copy), every value coerced to
@@ -66,13 +74,13 @@ export const normalizeLogFields = (perCall: LogFields | undefined, bound?: LogFi
 
     if (bound !== undefined) {
         for (const [key, value] of Object.entries(bound)) {
-            merged[key] = coerceFieldValue(value);
+            setField(merged, key, coerceFieldValue(value));
         }
     }
 
     if (perCall !== undefined) {
         for (const [key, value] of Object.entries(perCall)) {
-            merged[key] = coerceFieldValue(value);
+            setField(merged, key, coerceFieldValue(value));
         }
     }
 
