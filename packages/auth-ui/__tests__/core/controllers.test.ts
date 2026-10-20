@@ -621,9 +621,14 @@ describe("captcha re-arm", () => {
     /** Mount a solved hCaptcha widget; returns its API stub and the teardown. */
     const mountSolvedWidget = async (): Promise<{ api: { reset: ReturnType<typeof vi.fn> }; view: () => void }> => {
         let solve: ((token: string) => void) | undefined;
+        let markRendered: () => void = () => {};
+        const rendered = new Promise<void>((resolve) => {
+            markRendered = resolve;
+        });
         const api = {
             render: vi.fn((_element: Element, parameters: { callback: (token: string) => void }) => {
                 solve = parameters.callback;
+                markRendered();
 
                 return "widget-1";
             }),
@@ -641,9 +646,7 @@ describe("captcha re-arm", () => {
         // A teardown function; named `view` for testing-library's naming rule.
         const view = renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" });
 
-        await vi.waitFor(() => {
-            expect(api.render).toHaveBeenCalledTimes(1);
-        });
+        await rendered;
 
         solve?.("solved-token");
 
@@ -704,10 +707,18 @@ describe("captcha re-arm", () => {
     }> => {
         const solves: ((token: string) => void)[] = [];
         const expirations: (() => void)[] = [];
+        let markRendered: () => void = () => {};
+        const rendered = new Promise<void>((resolve) => {
+            markRendered = resolve;
+        });
         const api = {
             render: vi.fn((_element: Element, parameters: { callback: (token: string) => void; "expired-callback"?: () => void }) => {
                 solves.push(parameters.callback);
                 expirations.push(parameters["expired-callback"] ?? (() => {}));
+
+                if (solves.length === 2) {
+                    markRendered();
+                }
 
                 return `widget-${String(solves.length)}`;
             }),
@@ -726,9 +737,7 @@ describe("captcha re-arm", () => {
             renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" }),
         ];
 
-        await vi.waitFor(() => {
-            expect(api.render).toHaveBeenCalledTimes(2);
-        });
+        await rendered;
 
         return { api, expirations, solves, teardowns };
     };

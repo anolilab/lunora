@@ -4789,11 +4789,7 @@ class LunoraClient {
         // below is sent with the bearer its verdict judged, not the live one.
         const replay = this.takeReplayCredential(options.replayCredential);
 
-        // Read BEFORE the first `await` below, and reused by every path out of this
-        // call. `await replaying` can sit here for the length of a queue flush, and
-        // frames landing during it advance `serverCursor` — so a baseline sampled
-        // after the wait would claim the caller had seen changes that arrived after
-        // their write was composed. See `OutboxMutation.baselineSeq`.
+        // Read BEFORE the first `await` below, and reused by every path out of this call. See `composedBaselineFor`.
         const composedBaselineSeq = this.composedBaselineFor(options.replayBaseline, options.shardKey);
 
         // Before any optimistic layer is applied and before anything can reach the
@@ -5727,11 +5723,6 @@ class LunoraClient {
      * claim the client had seen NOTHING, which makes every field look changed and
      * would have the shard discard every patch it sends.
      */
-    /** A replay pins its baseline; a fresh write is composed against the shard's cursor now. */
-    private composedBaselineFor(replayBaseline: null | number | undefined, shardKey: string | undefined): number | undefined {
-        return replayBaseline === undefined ? this.baselineCursorFor(shardKey) : (replayBaseline ?? undefined);
-    }
-
     private baselineCursorFor(shardKey: string | undefined): number | undefined {
         const key = connectionKey(shardKey);
         let highest: number | undefined;
@@ -5745,6 +5736,18 @@ class LunoraClient {
         }
 
         return highest;
+    }
+
+    /**
+     * The baseline a mutation is composed against. A replay keeps the one it was
+     * queued with. A fresh write takes the shard's cursor here, before the first
+     * `await` in `runMutation`: frames landing during a queue flush advance
+     * `serverCursor`, so a baseline sampled after the wait would claim the caller
+     * had seen changes that arrived after the write was composed. See
+     * `OutboxMutation.baselineSeq`.
+     */
+    private composedBaselineFor(replayBaseline: null | number | undefined, shardKey: string | undefined): number | undefined {
+        return replayBaseline === undefined ? this.baselineCursorFor(shardKey) : (replayBaseline ?? undefined);
     }
 
     /**
