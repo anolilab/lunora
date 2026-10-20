@@ -695,6 +695,116 @@ describe("captcha re-arm", () => {
         view();
     });
 
+    /** Mount two hCaptcha widgets (`widget-1`, `widget-2`) and expose their solve and expiry callbacks. */
+    const mountTwoWidgets = async (): Promise<{
+        api: { render: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn> };
+        expirations: (() => void)[];
+        solves: ((token: string) => void)[];
+        teardowns: (() => void)[];
+    }> => {
+        const solves: ((token: string) => void)[] = [];
+        const expirations: (() => void)[] = [];
+        const api = {
+            render: vi.fn((_element: Element, parameters: { callback: (token: string) => void; "expired-callback"?: () => void }) => {
+                solves.push(parameters.callback);
+                expirations.push(parameters["expired-callback"] ?? (() => {}));
+
+                return `widget-${String(solves.length)}`;
+            }),
+            reset: vi.fn(),
+        };
+
+        vi.stubGlobal("hcaptcha", api);
+        vi.spyOn(document.head, "appendChild").mockImplementation(<T extends Node>(node: T): T => {
+            queueMicrotask(() => node.dispatchEvent(new Event("load")));
+
+            return node;
+        });
+
+        const teardowns = [
+            renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" }),
+            renderCaptcha(document.createElement("div"), { provider: "hcaptcha", siteKey: "site" }),
+        ];
+
+        await vi.waitFor(() => {
+            expect(api.render).toHaveBeenCalledTimes(2);
+        });
+
+        return { api, expirations, solves, teardowns };
+    };
+
+    it("keeps a token solved while another form's request was still pending", async () => {
+        const { api, expirations, solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+
+        // Form A's request carries token A and stays pending.
+        let finish: () => void = () => {};
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return new Promise((resolve) => {
+                    finish = () => {
+                        resolve(ok({ status: true }));
+                    };
+                });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        const pending = controller.actions.submit();
+
+        // The user solves widget B while A is in flight, then A's own token expires.
+        solves[1]?.("token-b");
+        expirations[0]?.();
+        finish();
+        await pending;
+
+        expect(api.reset).toHaveBeenCalledWith("widget-1");
+        expect(api.reset).not.toHaveBeenCalledWith("widget-2");
+        expect(Object.values(captchaHeaders())).toStrictEqual(["token-b"]);
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
+    it("drops a token the spent widget solved again while its request was pending", async () => {
+        const { solves, teardowns } = await mountTwoWidgets();
+
+        solves[0]?.("token-a");
+
+        let finish: () => void = () => {};
+        const client = stubClient({
+            forgetPassword: vi.fn(() => {
+                captchaHeaders();
+
+                return new Promise((resolve) => {
+                    finish = () => {
+                        resolve(ok({ status: true }));
+                    };
+                });
+            }),
+        });
+        const controller = createForgotPasswordController(makeContext(client).context);
+
+        controller.actions.setField("email", "a@b.co");
+        const pending = controller.actions.submit();
+
+        // Widget A is solved again while its request is pending; the reset that follows must drop this answer too.
+        solves[0]?.("token-a2");
+        finish();
+        await pending;
+
+        expect(captchaHeaders()).toStrictEqual({});
+
+        for (const teardown of teardowns) {
+            teardown();
+        }
+    });
+
     it("still settles the form when a provider's reset throws", async () => {
         const { api, view } = await mountSolvedWidget();
 

@@ -102,11 +102,22 @@ interface CaptchaHeaderOptions {
     endpoints?: ReadonlyArray<string>;
 }
 
-/** How many tokens `captchaHeaders` has handed to a request so far. */
-let spends = 0;
+/** A widget the plugin rendered: the handle a reset needs. */
+type CaptchaWidget = { api: CaptchaGlobal; id: unknown };
+
+/** The widget whose solve produced the token in the store; `undefined` for a token set outside a widget. */
+let tokenOwner: CaptchaWidget | undefined;
+
+/**
+ * One entry per token `captchaHeaders` has handed to a request, holding the widget
+ * that produced it (`undefined` when none did). A controller reads its position
+ * before a request and resets only the widgets spent since then, so another
+ * form's spend or a fresh solve is not mistaken for its own.
+ */
+const spent: (CaptchaWidget | undefined)[] = [];
 
 /** Read before a request; pass to {@link resetCaptchaIfSpent} after it. */
-const captchaSpends = (): number => spends;
+const captchaSpends = (): number => spent.length;
 
 const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Record<string, string> => {
     // A path the plugin does not guard must not consume the token — see the
@@ -123,13 +134,15 @@ const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Reco
     }
 
     store.set({});
-    spends += 1;
+    spent.push(tokenOwner);
+    tokenOwner = undefined;
 
     return { [CAPTCHA_HEADER]: token };
 };
 
-/** Publish a solved token. Called by {@link renderCaptcha}; exported for tests. */
-const setCaptchaToken = (token: string | undefined): void => {
+/** Publish a solved token, and the widget that solved it. Called by {@link renderCaptcha}; exported for tests. */
+const setCaptchaToken = (token: string | undefined, owner?: CaptchaWidget): void => {
+    tokenOwner = token === undefined ? undefined : owner;
     store.set({ token });
 };
 
@@ -238,8 +251,33 @@ const resetCaptcha = (): void => {
  * would erase a solve another card on the page is still holding.
  */
 const resetCaptchaIfSpent = (mark: number): void => {
-    if (spends !== mark) {
+    const owners = spent.slice(mark);
+
+    if (owners.length === 0) {
+        return;
+    }
+
+    // A spend no widget produced (the app set the token itself) cannot be attributed, so reset everything as before.
+    if (owners.includes(undefined)) {
         resetCaptcha();
+
+        return;
+    }
+
+    // Reset only the widgets that spent a token, and leave the store alone: a token solved since then is not ours.
+    const spentWidgets = new Set(owners as CaptchaWidget[]);
+
+    for (const widget of spentWidgets) {
+        try {
+            widget.api.reset?.(widget.id);
+        } catch {
+            // A widget that cannot reset must not stop the others.
+        }
+    }
+
+    // A token the spent widget solved again while the request was pending now shows unsolved, so drop it with the widget.
+    if (tokenOwner !== undefined && spentWidgets.has(tokenOwner)) {
+        setCaptchaToken(undefined);
     }
 };
 
@@ -285,13 +323,17 @@ const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => 
             widgetId = api.render(element, {
                 callback: (token: string) => {
                     ownToken = token;
-                    setCaptchaToken(token);
+                    setCaptchaToken(token, widget);
                 },
                 // A token expires long before a slow user finishes a form; drop
                 // it rather than send one the provider will reject.
                 "expired-callback": () => {
+                    // Only our own token: another widget may have solved since, and its answer is still good.
+                    if (ownToken !== undefined && store.get().token === ownToken) {
+                        setCaptchaToken(undefined);
+                    }
+
                     ownToken = undefined;
-                    setCaptchaToken(undefined);
                 },
                 sitekey: options.siteKey,
             });
