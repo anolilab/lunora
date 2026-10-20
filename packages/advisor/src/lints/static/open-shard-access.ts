@@ -30,8 +30,7 @@ const openShardAccess: Lint = {
         (context.openShardAccess ?? []).map((site) =>
             emit(openShardAccess, {
                 cacheKey: `open_shard_access:${site.file}:${site.line.toString()}`,
-                // eslint-disable-next-line no-secrets/no-secrets -- quotes the WorkerOptions field name, not a credential
-                detail: `${site.file}:${site.line.toString()} sets \`allowUnauthenticatedShardAccess\` to something other than \`false\` — any caller may target any shard. Gate shards with \`authorizeShard\` before deploying.`,
+                detail: `${site.file}:${site.line.toString()} enables the open-shard option (any value but false) — any caller may target any shard. Gate shards with \`authorizeShard\` before deploying.`,
                 metadata: { file: site.file, line: site.line },
             }),
         ),
