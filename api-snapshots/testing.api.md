@@ -24,6 +24,7 @@ interface AgentHarness {
 
 ```ts
 interface AgentHarnessOptions {
+    approvals?: Record<string, HarnessApproval>;
     env?: Record<string, unknown>;
     exportName?: string;
     functions?: Record<string, HarnessFunction>;
@@ -165,6 +166,15 @@ interface FakeTopicControls {
 
 ```ts
 type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMutation<any, any> | RegisteredQuery<any, any>>;
+```
+
+### `HarnessApproval` (interface)
+
+```ts
+interface HarnessApproval {
+    decision: "approve" | "reject";
+    note?: string;
+}
 ```
 
 ### `HarnessDispatch` (interface)

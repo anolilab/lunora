@@ -77,6 +77,7 @@ type SeedCounts = Record<string, number>;
 
 ```ts
 interface SeedOptions {
+    allowOrphans?: boolean;
     counts?: SeedCounts;
     defaultCount?: number;
     existingIds?: Readonly<Record<string, ReadonlyArray<string>>>;
