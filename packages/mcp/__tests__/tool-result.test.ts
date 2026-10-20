@@ -55,6 +55,20 @@ describe("errorFromThrown", () => {
         ).toStrictEqual(errorResult("INTERNAL", "Internal error"));
     });
 
+    it("keeps the code and message of a coded rejection from the admin path", async () => {
+        expect.assertions(1);
+
+        const { LunoraClient } = await import("@lunora/client");
+        const fetch = vi.fn<typeof globalThis.fetch>(
+            async () => Response.json({ error: { code: "FORBIDDEN", message: "admin token rejected" } }, { status: 403 }),
+        );
+        const client = new LunoraClient({ fetch, url: "https://app.example" });
+
+        const failure = await client.listFunctions().catch((error: unknown) => error);
+
+        expect(errorFromThrown(failure).structuredContent).toStrictEqual({ code: "FORBIDDEN", message: "admin token rejected" });
+    });
+
     it("does not forward the message of a plain error a caller threw with a catalog code", () => {
         expect.assertions(1);
 

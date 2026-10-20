@@ -215,7 +215,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, whyProperty } from "./wire-errors";
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -6660,10 +6660,9 @@ class LunoraClient {
         const envelope = errorEnvelopeOf(body);
 
         if (envelope !== undefined) {
-            const error = new Error(envelope.message ?? "admin request failed");
-
-            Object.assign(error, { code: envelope.code }, whyProperty(envelope));
-            throw error;
+            // Built by the same path as an RPC rejection, so the server-verdict mark that tool results
+            // trust is set here too; a bare `Error` with a `code` would be read as the caller's own text.
+            throw reconstructError({ ...envelope, message: envelope.message ?? "admin request failed" });
         }
 
         // A non-2xx response with a JSON body but no READABLE `error` envelope
