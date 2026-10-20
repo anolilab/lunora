@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.245...@lunora/advisor@1.0.0-alpha.246) (2026-10-20)
+
+### Bug Fixes
+
+* **auth-ui,templates,cli:** captcha reset, resend cooldown, single app definition, open-shard deploy gate ([#1278](https://github.com/anolilab/lunora/issues/1278)) ([8718fe1](https://github.com/anolilab/lunora/commit/8718fe12223aa635a7d332210e8fb344014b19f9))
+
 ## @lunora/advisor [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.244...@lunora/advisor@1.0.0-alpha.245) (2026-10-20)
 
 
