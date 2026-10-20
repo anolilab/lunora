@@ -50,9 +50,9 @@ describe("errorFromThrown", () => {
 
         expect(errorFromThrown(rebuilt)).toStrictEqual(errorResult("NOT_FOUND", "function not found or not public: messages:list"));
         // An internal code still shows only its title, as for a LunoraError.
-        expect(errorFromThrown(Object.assign(new Error("SQLITE_TOOBIG at table messages"), { code: "INTERNAL" }))).toStrictEqual(
-            errorResult("INTERNAL", "Internal error"),
-        );
+        expect(
+            errorFromThrown(Object.assign(new Error("SQLITE_TOOBIG at table messages"), { code: "INTERNAL", [Symbol.for("lunora.serverVerdict")]: true })),
+        ).toStrictEqual(errorResult("INTERNAL", "Internal error"));
     });
 
     it("does not forward the message of a plain error a caller threw with a catalog code", () => {
@@ -60,7 +60,10 @@ describe("errorFromThrown", () => {
 
         const secret = "sk_live_correct-horse-battery-staple";
 
-        expect(errorFromThrown(Object.assign(new Error(secret), { code: "BAD_REQUEST" }))).toStrictEqual(errorResult("INTERNAL", "Internal error"));
+        expect(errorFromThrown(Object.assign(new Error(secret), { code: "BAD_REQUEST" })).structuredContent).toStrictEqual({
+            code: "INTERNAL",
+            message: "the tool call failed unexpectedly",
+        });
     });
 
     it("does not treat a code the catalog does not know as a contract", () => {
