@@ -1,3 +1,16 @@
+## @lunora/client [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.235...@lunora/client@1.0.0-alpha.236) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.236
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.227
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/client [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.234...@lunora/client@1.0.0-alpha.235) (2026-10-20)
 
 
