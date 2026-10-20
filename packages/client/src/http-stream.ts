@@ -28,6 +28,7 @@ import { decodeWire } from "@lunora/wire";
 import { createReconnect } from "./reconnect";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
+import readOrIdle from "./stream-idle";
 import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types";
 
 /** One optional space after an SSE field's colon (`data: x` vs `data:x`) — spec-stripped. */
@@ -66,6 +67,16 @@ interface HttpStreamOptions {
     fetch?: typeof fetch;
     /** Extra request headers (e.g. `authorization`). `accept: text/event-stream` is always sent. */
     headers?: Record<string, string>;
+
+    /**
+     * Treat a connection that delivers nothing — no chunk, no keepalive comment —
+     * for this many milliseconds as dead: it is cancelled, then reconnected with
+     * {@link HttpStreamOptions.reconnect} or failed with `STREAM_IDLE`. Off by
+     * default, because a route may be silent for as long as its handler works
+     * (a model thinking); set it to a few multiples of the route's keepalive
+     * interval when the route sends one.
+     */
+    idleTimeoutMs?: number;
 
     /**
      * Seed the first request's `Last-Event-ID` header, resuming a stream from a
@@ -269,7 +280,13 @@ interface SseFrameObservers {
  * interruption the caller may retry. Runs inside the async pump — all thrown
  * read errors are routed to the consumer by the caller's catch.
  */
-const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHandle, observers: SseFrameObservers): Promise<boolean> => {
+const pumpSseBody = async (
+    body: ReadableStream<Uint8Array>,
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+    attemptAbort: AbortController,
+    idleTimeoutMs = 0,
+): Promise<boolean> => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
 
@@ -332,7 +349,7 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
     try {
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-            const { done, value } = await reader.read();
+            const { done, value } = await readOrIdle(reader, idleTimeoutMs);
 
             if (done) {
                 break;
@@ -361,8 +378,10 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
         // it is reported here as `false` rather than failed.
         return drainFrames();
     } catch (error: unknown) {
-        // An observer or dispatch threw mid-body: release the connection, then surface it.
-        await releaseReader();
+        // An idle timeout or a throwing observer/dispatch: drop the connection and surface the error at
+        // once. A body whose `cancel()` never settles must not hold the error (and the reconnect) hostage.
+        attemptAbort.abort();
+        releaseReader().catch(() => undefined);
 
         throw error;
     }
@@ -599,8 +618,16 @@ const httpStream = <Ref extends HttpStreamRef>(
         // replaces this with the coded/transport error it carried.
         const interrupted = new LunoraError("HTTP_STREAM_INTERRUPTED", "httpStream: stream ended without a complete frame");
 
+        // Aborting only this attempt lets the pump drop a dead connection without reading as a consumer cancel.
+        const attemptAbort = new AbortController();
+        const forwardAbort = (): void => {
+            attemptAbort.abort();
+        };
+
+        ac.signal.addEventListener("abort", forwardAbort, { once: true });
+
         try {
-            const response = await fetchImpl(url, { headers, method: route.method, signal: ac.signal });
+            const response = await fetchImpl(url, { headers, method: route.method, signal: attemptAbort.signal });
 
             if (!response.ok) {
                 // A bad status is a real answer, not a transport drop — read its error
@@ -623,7 +650,7 @@ const httpStream = <Ref extends HttpStreamRef>(
                 return undefined;
             }
 
-            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers);
+            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs);
 
             return { completed, error: interrupted };
         } catch (error: unknown) {
@@ -646,6 +673,8 @@ const httpStream = <Ref extends HttpStreamRef>(
             }
 
             return { completed: false, error: toTransportError(error) };
+        } finally {
+            ac.signal.removeEventListener("abort", forwardAbort);
         }
     };
 

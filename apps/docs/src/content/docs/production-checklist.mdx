@@ -25,6 +25,19 @@ containers, log drains) live in [Deployment](/docs/deployment).
       their ids in, and mints the local `.dev.vars` secrets. It refuses to write
       `.dev.vars` unless git ignores it. `--fix --dry-run` prints the same
       changes without making them. R2 buckets and queues are not created by it.
+- [ ] You know what keeps a Durable Object awake. From `compatibility_date`
+      `2026-10-01` (flag `durable_object_io_tasks_prevent_eviction`), a pending
+      timer, `waitUntil` or outbound call blocks idle eviction for up to 15
+      minutes per operation, and that time is billed. Lunora's own shards arm
+      timers only while a live stream is open. A `LunoraClient` or an
+      `EventsSync` poll created **inside** a Durable Object keeps heartbeat and
+      poll timers armed while idle, so that Durable Object never evicts. Run
+      such clients in a Worker, or opt out with
+      `durable_object_io_tasks_do_not_prevent_eviction`.
+- [ ] A single-page app calls `client.close()` when it tears the client down.
+      Unsubscribing every query releases a shard's socket after a short idle
+      window, but the default shard's socket is the client's home connection and
+      stays open (with its heartbeat) until `close()` or page unload.
 
 ## Secrets
 

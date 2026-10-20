@@ -2035,6 +2035,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SyncStatus` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `SyncWatermark` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

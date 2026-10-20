@@ -5244,13 +5244,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     parsed = await response.json();
                 } catch {
                     // Malformed shard response — fail every entry to its own slot
-                    // rather than dropping them silently into "no result".
+                    // rather than dropping them silently into "no result". Coded
+                    // `SHARD_UNAVAILABLE`, not `SHARD_ERROR`: a shard that could not
+                    // answer at all says nothing about any write in the batch, and
+                    // the client re-queues that code instead of settling the write.
                     const message = `shard batch returned a non-JSON response (${String(response.status)})`;
 
-                    failSubBatch(entries, response.status, "SHARD_ERROR", message, (entry) => {
+                    failSubBatch(entries, response.status, "SHARD_UNAVAILABLE", message, (entry) => {
                         return {
                             durationMs,
-                            error: { code: "SHARD_ERROR", message, status: response.status },
+                            error: { code: "SHARD_UNAVAILABLE", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
                             ...entryTraceFields(shardSpanId),
@@ -5271,9 +5274,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 // Any entry the shard omitted (short/partial response) gets an
                 // explicit slot error rather than a silent "no result" client-side.
+                // `SHARD_UNAVAILABLE` for the same reason as the non-JSON case above.
                 for (const entry of entries) {
                     if (!seenIds.has(entry.id)) {
-                        results.push(slotError(entry, response.status, "SHARD_ERROR", `shard batch omitted result for call ${String(entry.id)}`));
+                        results.push(slotError(entry, response.status, "SHARD_UNAVAILABLE", `shard batch omitted result for call ${String(entry.id)}`));
                     }
                 }
             }),

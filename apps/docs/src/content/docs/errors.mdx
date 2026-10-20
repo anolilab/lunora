@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 187 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 188 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -820,6 +820,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 ### `STREAM_ID_IN_USE`
 
 `409` — Stream id already in use
+
+### `STREAM_IDLE`
+
+`504` — Stream went idle
 
 ### `STREAM_INTERRUPTED`
 

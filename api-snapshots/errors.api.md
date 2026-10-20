@@ -837,6 +837,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Stream id already in use";
     };
+    readonly STREAM_IDLE: {
+        readonly status: 504;
+        readonly title: "Stream went idle";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";

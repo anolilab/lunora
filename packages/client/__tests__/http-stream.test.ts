@@ -580,4 +580,43 @@ describe("httpStream", () => {
 
         expect(calls).toBe(1);
     });
+
+    it("surfaces an idle timeout at once even when the body's cancel() never settles", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            let requestSignal: AbortSignal | undefined;
+            const stuckBody = new ReadableStream<Uint8Array>({
+                // Never settles: a body whose release hangs.
+                cancel: async () =>
+                    new Promise<void>(() => {
+                        /* hangs */
+                    }),
+            });
+            const fetchImpl = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+                async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+                    requestSignal = init?.signal ?? undefined;
+
+                    return new Response(stuckBody, { headers: { "content-type": "text/event-stream" }, status: 200 });
+                },
+            ) as unknown as typeof fetch;
+
+            const iterator = httpStream(tokensRef, {}, { fetch: fetchImpl, idleTimeoutMs: 50 })[Symbol.asyncIterator]();
+            const outcome = iterator.next().then(
+                () => "resolved",
+                (error: unknown) => (error as { code?: string }).code,
+            );
+
+            await vi.advanceTimersByTimeAsync(60);
+
+            // Settled within the idle window; before the fix the awaited cancel() held it forever.
+            await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("STREAM_IDLE");
+            expect(requestSignal?.aborted).toBe(true);
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });
