@@ -4814,9 +4814,7 @@ class LunoraClient {
             options.optimistic,
         );
 
-        if (options.optimisticUpdate) {
-            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
-        }
+        this.applyOptionalOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
 
         // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
         // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
@@ -6001,6 +5999,18 @@ class LunoraClient {
         }
 
         return { confirms, rollbacks };
+    }
+
+    private applyOptionalOptimisticUpdate<F extends FunctionReference>(
+        optimisticUpdate: OptimisticUpdate<ArgsOf<F>> | undefined,
+        args: ArgsOf<F>,
+        shardKey: string | undefined,
+        optimisticRollbacks: (() => void)[],
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+    ): void {
+        if (optimisticUpdate) {
+            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms);
+        }
     }
 
     /**
