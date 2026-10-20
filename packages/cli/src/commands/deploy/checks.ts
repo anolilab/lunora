@@ -12,7 +12,7 @@ import type { DiscoveryCache } from "@lunora/config";
 import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
-import { join, relative } from "@visulima/path";
+import { dirname, join, relative } from "@visulima/path";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
@@ -366,27 +366,46 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
 // Test and fixture code never ships, so a flag set in it must not block a deploy: `isTestPath` covers test files and the `__tests__`/`__mocks__`/`__fixtures__` folders, the rest are plain folder names.
 const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules|tests?|fixtures|mocks)(?:[/\\]|$)/u;
 
+/** The Wrangler `main` entrypoint, which can sit outside `src/` (the Analog template deploys a root `worker.ts`). */
+const wranglerMainEntry = (cwd: string): string[] => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath === undefined) {
+        return [];
+    }
+
+    const main = readWranglerJsonc<WranglerConfig>(wranglerPath).parsed?.main;
+    // Wrangler resolves `main` against its own config file, not the project root. Env-scoped `main` is not read.
+    const entry = typeof main === "string" ? join(dirname(wranglerPath), main) : undefined;
+
+    return entry !== undefined && existsSync(entry) ? [entry] : [];
+};
+
 /**
- * Every literal `allowUnauthenticatedShardAccess: true` property in the app.
+ * Every open-shard property in the app that is not the literal `false`.
  *
  * Read with the TypeScript parser, not a text match, so the "before deploying"
  * comments the templates keep beside the flag never count. Files that do not
- * mention the name are skipped before parsing. Ceiling: an entry outside the
- * Lunora source directory (`schemaDir`), `src/`, the root Vite config and
- * `lunora.config.*`, or a value that is not the literal `true` (a variable, an
- * env read), is not seen. Test and fixture code is skipped on purpose: it never ships.
+ * mention the name are skipped before parsing. Fails closed: a value the scan
+ * cannot read (a variable, a shorthand, an env read) is reported, because the
+ * runtime evaluates it. Ceiling: an entry outside the Lunora source directory
+ * (`schemaDir`), `src/`, the root Vite config, `lunora.config.*` and the Wrangler
+ * `main` entrypoint is not seen. Test and fixture code is skipped on purpose: it never ships.
  */
 const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])];
     const files = [
-        ...directories.flatMap((directory) =>
-            existsSync(join(cwd, directory))
-                ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
-                      .filter((file) => SOURCE_FILE.test(file) && !isTestPath(file) && !SKIPPED_DIRECTORY.test(file))
-                      .map((file) => join(cwd, directory, file))
-                : [],
-        ),
-        ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
+        ...new Set([
+            ...directories.flatMap((directory) =>
+                existsSync(join(cwd, directory))
+                    ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
+                          .filter((file) => SOURCE_FILE.test(file) && !isTestPath(file) && !SKIPPED_DIRECTORY.test(file))
+                          .map((file) => join(cwd, directory, file))
+                    : [],
+            ),
+            ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
+            ...wranglerMainEntry(cwd),
+        ]),
     ];
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
 
@@ -397,15 +416,19 @@ const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
             return [];
         }
 
-        return project
-            .createSourceFile(relative(cwd, file), text, { overwrite: true })
-            .getDescendantsOfKind(SyntaxKind.PropertyAssignment)
+        const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
+
+        return [...source.getDescendantsOfKind(SyntaxKind.PropertyAssignment), ...source.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment)]
             .filter((property) => {
                 const nameNode = property.getNameNode();
                 // `getName()` keeps a string-literal key's quotes, so a quoted key would slip past it.
                 const name = Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
 
-                return name === "allowUnauthenticatedShardAccess" && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword;
+                // Only a literal `false` is safe; a shorthand `{ allowUnauthenticatedShardAccess }` has no literal to read, so it is reported too.
+                return (
+                    name === "allowUnauthenticatedShardAccess" &&
+                    !(Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === SyntaxKind.FalseKeyword)
+                );
             })
             .map((property) => {
                 return { file: relative(cwd, file), line: property.getStartLineNumber() };

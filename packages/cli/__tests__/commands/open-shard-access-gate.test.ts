@@ -137,7 +137,7 @@ describe("open-shard-access gate", () => {
         expect(warns.some((line) => line.includes("--allow-open-shards"))).toBe(true);
     });
 
-    it("ignores the name in comments and a non-true value", async () => {
+    it("ignores the name in comments and a literal false", async () => {
         expect.assertions(1);
 
         writeAppConfig("allowUnauthenticatedShardAccess: false");
@@ -174,6 +174,36 @@ describe("open-shard-access gate", () => {
 
         expect(result.code).toBe(0);
         expect(calls.length).toBeGreaterThan(0);
+    });
+
+    it("refuses the flag in a root Wrangler entrypoint outside src/", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER.replace('"src/index.ts"', '"worker.ts"'), "utf8");
+        writeFileSync(join(workdir, "worker.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("worker.ts:2"))).toBe(true);
+    });
+
+    it("refuses the flag when its value is a variable, not a literal false", async () => {
+        expect.assertions(2);
+
+        writeAppConfig("allowUnauthenticatedShardAccess: open");
+        writeFileSync(
+            join(workdir, "src", "app-options.ts"),
+            `const open = true;\nexport const appOptions = () => ({\n    allowUnauthenticatedShardAccess: open,\n});\n`,
+            "utf8",
+        );
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("src/app-options.ts:3"))).toBe(true);
     });
 
     it("does not gate `lunora build`, which publishes nothing", async () => {
