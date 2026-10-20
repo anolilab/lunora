@@ -532,16 +532,19 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
     return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type };
 };
 
-/** Does any `v.from()` in this field's subtree have no recorded output type? */
-const lacksFromOutput = (field: FieldSnapshot): boolean =>
-    (field.kind === "from" && field.output === undefined) ||
-    [field.key, field.of, ...Object.values(field.fields ?? {}), ...(field.members ?? [])].some((child) => child !== undefined && lacksFromOutput(child));
+/** Union members in canonical order: the builder sorted them by their serialized form, which includes a `v.from()` output. */
+const byForm = (a: FieldSnapshot, b: FieldSnapshot): number => {
+    const left = JSON.stringify(a);
+    const right = JSON.stringify(b);
 
-/**
- * The field with every `v.from()` output type in its subtree dropped. Union
- * members are re-sorted, since the builder ordered them by their serialized form
- * and that form included the output.
- */
+    if (left === right) {
+        return 0;
+    }
+
+    return left < right ? -1 : 1;
+};
+
+/** The field with every `v.from()` output type in its subtree dropped, union members re-sorted. */
 const withoutFromOutput = (field: FieldSnapshot): FieldSnapshot => {
     return {
         ...field,
@@ -549,23 +552,49 @@ const withoutFromOutput = (field: FieldSnapshot): FieldSnapshot => {
         ...(field.fields ? { fields: Object.fromEntries(Object.entries(field.fields).map(([name, member]) => [name, withoutFromOutput(member)])) } : {}),
         ...(field.key ? { key: withoutFromOutput(field.key) } : {}),
         ...(field.of ? { of: withoutFromOutput(field.of) } : {}),
-        ...(field.members
-            ? {
-                  members: field.members
-                      .map((member) => withoutFromOutput(member))
-                      .toSorted((a, b) => {
-                          const left = JSON.stringify(a);
-                          const right = JSON.stringify(b);
-
-                          if (left === right) {
-                              return 0;
-                          }
-
-                          return left < right ? -1 : 1;
-                      }),
-              }
-            : {}),
+        ...(field.members ? { members: field.members.map((member) => withoutFromOutput(member)).toSorted(byForm) } : {}),
     };
+};
+
+/** What a union contributes to a comparison: its members; anything else contributes itself. */
+const unionMembers = (field: FieldSnapshot): ReadonlyArray<FieldSnapshot> => (field.kind === "union" ? (field.members ?? []) : [field]);
+
+/**
+ * Pair the members of two unions that differ at most in a recorded `v.from()` output, and normalise each pair.
+ *
+ * Union members have no stable pairing — they are sorted by their own content, output included — so they are matched
+ * here: identical members first, then members of the same shape ignoring outputs. A pair where either side records no
+ * output compares without it; a pair that both record keeps it, so `string` → `number` stays visible next to a member
+ * whose output is unresolved. Members with no counterpart are left untouched.
+ */
+const comparableMembers = (oldMembers: ReadonlyArray<FieldSnapshot>, newMembers: ReadonlyArray<FieldSnapshot>): [FieldSnapshot[], FieldSnapshot[]] => {
+    const oldOut = [...oldMembers];
+    const newOut = [...newMembers];
+    const taken = new Set<number>();
+    const paired = new Set<number>();
+    const pairUp = (matches: (old: FieldSnapshot, member: FieldSnapshot) => boolean, normalise: boolean): void => {
+        for (const [index, old] of oldOut.entries()) {
+            if (paired.has(index)) {
+                continue;
+            }
+
+            const match = newOut.findIndex((member, position) => !taken.has(position) && matches(old, member));
+
+            if (match !== -1) {
+                taken.add(match);
+                paired.add(index);
+
+                if (normalise) {
+                    [oldOut[index], newOut[match]] = comparableFromOutput(old, newOut[match] as FieldSnapshot);
+                }
+            }
+        }
+    };
+
+    pairUp((old, member) => JSON.stringify(old) === JSON.stringify(member), false);
+    pairUp((old, member) => shapeForm(withoutFromOutput(old)) === shapeForm(withoutFromOutput(member)), true);
+
+    return [oldOut, newOut];
 };
 
 /**
@@ -578,16 +607,29 @@ const withoutFromOutput = (field: FieldSnapshot): FieldSnapshot => {
  * the first run after an upgrade — a drift nothing in the schema caused. That
  * holds for a `v.from()` nested in an array/object/record just as for a column
  * that is one, so corresponding children are normalised recursively. Union
- * members have no stable pairing (they are sorted by their own content), so a
- * union drops every output in its subtree once either side lacks one.
+ * members are paired by {@link comparableMembers}; a union against a non-union
+ * (a widening) is paired the same way, the non-union standing for one member.
  */
 const comparableFromOutput = (old: FieldSnapshot, field: FieldSnapshot): [FieldSnapshot, FieldSnapshot] => {
+    if (old.kind === "union" || field.kind === "union") {
+        const [oldMembers, newMembers] = comparableMembers(unionMembers(old), unionMembers(field));
+        const rebuild = (original: FieldSnapshot, members: FieldSnapshot[]): FieldSnapshot =>
+            original.kind === "union" ? { ...original, members: members.toSorted(byForm) } : (members[0] as FieldSnapshot);
+
+        return [rebuild(old, oldMembers), rebuild(field, newMembers)];
+    }
+
     if (old.kind !== field.kind) {
         return [old, field];
     }
 
-    if (old.kind === "from" || old.kind === "union") {
-        return lacksFromOutput(old) || lacksFromOutput(field) ? [withoutFromOutput(old), withoutFromOutput(field)] : [old, field];
+    if (old.kind === "from") {
+        return old.output === undefined || field.output === undefined
+            ? [
+                  { ...old, output: undefined },
+                  { ...field, output: undefined },
+              ]
+            : [old, field];
     }
 
     const oldChildren: Partial<FieldSnapshot> = { ...(old.fields ? { fields: { ...old.fields } } : {}) };

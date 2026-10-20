@@ -713,6 +713,54 @@ describe("schema-drift", () => {
             expect(inObject[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
         });
 
+        it("flags a union member whose recorded output changed next to a member with none", () => {
+            expect.assertions(3);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+
+            const { changes } = compare(
+                { score: { kind: "union", members: [{ kind: "string" }, from("string"), from()] } },
+                { score: { kind: "union", members: [{ kind: "string" }, from("number"), from()] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(number)");
+        });
+
+        it("does not flag a union whose baseline recorded none of its member outputs", () => {
+            expect.assertions(2);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+            const wrapped = (inner: ReturnType<typeof from>) => {
+                return { kind: "object" as const, shape: { a: inner } };
+            };
+
+            const { changes: sibling } = compare(
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+            );
+            const { changes: lost } = compare(
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+            );
+
+            expect(sibling).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
+        it("reads a widening to a union as safe when the old column recorded no output type", () => {
+            expect.assertions(2);
+
+            const { changes } = compare(
+                { score: { kind: "from" } },
+                { score: { kind: "union", members: [{ kind: "from", tsType: "number" }, { kind: "string" }] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "safe", type: "widenedFieldShape" });
+        });
+
         it("does not record a `v.from()` output type that names a file path", () => {
             expect.assertions(2);
 
