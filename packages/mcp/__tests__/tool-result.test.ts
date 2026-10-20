@@ -59,8 +59,8 @@ describe("errorFromThrown", () => {
         expect.assertions(1);
 
         const { LunoraClient } = await import("@lunora/client");
-        const fetch = vi.fn<typeof globalThis.fetch>(
-            async () => Response.json({ error: { code: "FORBIDDEN", message: "admin token rejected" } }, { status: 403 }),
+        const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+            Response.json({ error: { code: "FORBIDDEN", message: "admin token rejected" } }, { status: 403 }),
         );
         const client = new LunoraClient({ fetch, url: "https://app.example" });
 
