@@ -137,6 +137,33 @@ export function Chat() {
 `useQuery` opens a live WebSocket subscription; `send` is optimistic and, thanks
 to the AsyncStorage persistence, queued and retried when offline.
 
+## HTTP streams
+
+`useHttpStream` (`httpRoute.<verb>(path).stream()` routes) runs on native, but
+**buffered**: React Native's `fetch` is the `whatwg-fetch` polyfill, which
+defines no `response.body` stream, so the client reads the whole payload through
+`response.text()` and every chunk arrives together when the response lands
+rather than as the handler yields it. Under `react-native-web` a real browser
+`fetch` is in charge, so the chunks stream incrementally there.
+
+To render a long route's chunks as they are written — tokens as a model emits
+them — pass a `fetch` that exposes `response.body`; Expo's does:
+
+```ts
+import { fetch as expoFetch } from "expo/fetch";
+
+import { createLunoraClient, withoutAmbientCookies } from "@lunora/react-native";
+
+const client = createLunoraClient({ fetch: withoutAmbientCookies(expoFetch), url: process.env.EXPO_PUBLIC_LUNORA_URL! });
+```
+
+A custom `fetch` skips the `credentials: "omit"` wrapper
+`createLunoraClient` applies to the global one (see the warning above), so wrap
+it in `withoutAmbientCookies` yourself — otherwise the native cookie jar
+reintroduces the `FORBIDDEN_ORIGIN` loop. The client's `fetch` option feeds
+`client.httpStream` and `useHttpStream`; a standalone
+`httpStream(route, args, { fetch })` call takes its own.
+
 ## Local-first (shapes, custom mutators, TanStack DB)
 
 Lunora's [local-first tier](/docs/concepts/local-first) — `defineShape`,

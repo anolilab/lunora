@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.222",
+    "version": "1.0.0-alpha.223",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -143,7 +143,7 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/config": "1.0.0-alpha.388",
+        "@lunora/config": "1.0.0-alpha.390",
         "@lunora/runtime": "1.0.0-alpha.227",
         "@lunora/server": "1.0.0-alpha.227",
         "@types/better-sqlite3": "catalog:tooling",

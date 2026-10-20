@@ -21,6 +21,21 @@ const sseResponse = (parts: string[], init: { status?: number } = {}): Response 
     return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8" }, status: init.status ?? 200 });
 };
 
+/**
+ * A `text/event-stream` Response shaped like the one React Native's `fetch`
+ * resolves with: `whatwg-fetch` (which `react-native` polyfills `fetch` from)
+ * defines no `body` on `Response`, so `text()` is the only read.
+ */
+const bodylessResponse = (parts: string[], init: { status?: number } = {}): Response => {
+    const response = new Response(parts.join(""), { headers: { "content-type": "text/event-stream; charset=utf-8" }, status: init.status ?? 200 });
+
+    // `body` sits on `Response.prototype`; an own property shadows it without
+    // disturbing the internal stream `text()` still reads.
+    Object.defineProperty(response, "body", { value: undefined });
+
+    return response;
+};
+
 /** Normalise a `fetch` input to its URL string. */
 const requestUrl = (input: RequestInfo | URL): string => {
     if (typeof input === "string") {
@@ -42,6 +57,27 @@ const fetchReturning = (
             calls.push({ init: requestInit, url: requestUrl(input) });
 
             return sseResponse(parts, init);
+        },
+    ) as unknown as typeof fetch;
+
+    return { calls, fetchImpl };
+};
+
+/**
+ * A `fetch` double resolving one body-less (React Native-shaped) SSE response,
+ * recording the request it saw.
+ */
+const fetchReturningBodyless = (
+    parts: string[],
+    init: { status?: number } = {},
+): { calls: { init: RequestInit | undefined; url: string }[]; fetchImpl: typeof fetch } => {
+    const calls: { init: RequestInit | undefined; url: string }[] = [];
+
+    const fetchImpl = vi.fn<(input: RequestInfo | URL, requestInit?: RequestInit) => Promise<Response>>(
+        async (input: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> => {
+            calls.push({ init: requestInit, url: requestUrl(input) });
+
+            return bodylessResponse(parts, init);
         },
     ) as unknown as typeof fetch;
 
@@ -229,6 +265,198 @@ describe("httpStream", () => {
         const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
 
         expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_INTERRUPTED");
+    });
+
+    it("yields chunks from a body-less response (React Native's whatwg-fetch defines no `body`) by reading text() whole", async () => {
+        expect.assertions(2);
+
+        const { fetchImpl } = fetchReturningBodyless(['data: {"text":"hel"}\n\ndata: {"text":"lo"}\n\nevent: complete\ndata: {}\n\n']);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl }));
+
+        expect(chunks).toStrictEqual([{ text: "hel" }, { text: "lo" }]);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads a body-less response that ends without a terminal frame as a transport interruption", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturningBodyless(['data: {"text":"a"}\n\n']);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_INTERRUPTED");
+    });
+
+    it("fails with HTTP_STREAM_NO_BODY when the response exposes neither a body stream nor text()", async () => {
+        expect.assertions(1);
+
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => {
+            const response = new Response(null, { status: 200 });
+
+            // Neither read exists — the shape `HTTP_STREAM_NO_BODY` still names.
+            Object.defineProperty(response, "body", { value: undefined });
+            Object.defineProperty(response, "text", { value: undefined });
+
+            return response;
+        }) as unknown as typeof fetch;
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_NO_BODY");
+    });
+
+    it("tracks event ids and reconnects from them on the buffered path", async () => {
+        expect.assertions(4);
+
+        const ids: string[] = [];
+        const { calls, fetchImpl } = fetchReturningSequence([
+            // One buffered frame carrying an id, then a bare end — the interruption.
+            () => bodylessResponse(['id: e1\ndata: {"text":"a"}\n\n']),
+            // Second response resumes and finishes cleanly.
+            () => bodylessResponse(['id: e2\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']),
+        ]);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, onEventId: (id) => ids.push(id), reconnect: true }));
+
+        expect(chunks).toStrictEqual([{ text: "a" }, { text: "b" }]);
+        expect(ids).toStrictEqual(["e1", "e2"]);
+        expect(calls).toHaveLength(2);
+        // The reconnect carries the last id the first attempt saw.
+        expect(headerOf(calls[1]?.init, "last-event-id")).toBe("e1");
+    });
+
+    it("delivers more than the default maxBuffer frames from one body-less response to a consumer that keeps up", async () => {
+        expect.assertions(2);
+
+        // 1100 data frames — over the queue's default 1024-chunk bound, which a
+        // synchronous whole-payload drain would trip (STREAM_BACKPRESSURE)
+        // before the iterating consumer could take a single chunk.
+        const frames = Array.from({ length: 1100 }, (_, index) => `data: {"text":"${index.toString()}"}\n\n`);
+        const { fetchImpl } = fetchReturningBodyless([...frames, "event: complete\ndata: {}\n\n"]);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl }));
+
+        expect(chunks).toHaveLength(1100);
+        expect(chunks[1099]).toStrictEqual({ text: "1099" });
+    });
+
+    it("delivers every buffered frame to a consumer that awaits between chunks", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturningBodyless(['data: {"text":"a"}\n\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']);
+        const out: { text: string }[] = [];
+
+        for await (const chunk of httpStream(tokensRef, {}, { fetch: fetchImpl })) {
+            out.push(chunk);
+
+            // One resolvable await per chunk: the consumer shape whose
+            // interleaving the pump must leave room for.
+            await Promise.resolve();
+        }
+
+        expect(out).toStrictEqual([{ text: "a" }, { text: "b" }]);
+    });
+
+    it("ends the stream cleanly when the external signal aborts between buffered frames, even with reconnect off", async () => {
+        expect.assertions(1);
+
+        const external = new AbortController();
+        const { fetchImpl } = fetchReturningBodyless(["data: 1\nid: 1\n\n", "data: 2\nid: 2\n\n", "data: 3\nid: 3\n\n"]);
+
+        // Abort from the id observer: it runs mid-dispatch, after frame 1 and before frame 2.
+        const stream = httpStream(
+            tokensRef,
+            {},
+            {
+                fetch: fetchImpl,
+                onEventId: (id) => {
+                    if (id === "1") {
+                        external.abort();
+                    }
+                },
+                signal: external.signal,
+            },
+        );
+
+        // Frame 1 was dispatched before the abort landed; the stream ends after it, without an error.
+        await expect(collect(stream)).resolves.toStrictEqual([1]);
+    });
+
+    it("ends a streamed SSE stream cleanly when the external signal aborts while its frames dispatch", async () => {
+        expect.assertions(1);
+
+        const external = new AbortController();
+        const { fetchImpl } = fetchReturning(["data: 1\nid: 1\n\ndata: 2\nid: 2\n\ndata: 3\nid: 3\n\n"]);
+
+        const stream = httpStream(
+            tokensRef,
+            {},
+            {
+                fetch: fetchImpl,
+                onEventId: (id) => {
+                    if (id === "1") {
+                        external.abort();
+                    }
+                },
+                signal: external.signal,
+            },
+        );
+
+        await expect(collect(stream)).resolves.toStrictEqual([1, 2, 3]);
+    });
+
+    it("leaves a stalled body-less text() read to the signal, not the idle bound", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            let requestSignal: AbortSignal | undefined;
+
+            const fetchImpl = vi.fn<(input: RequestInfo | URL, requestInit?: RequestInit) => Promise<Response>>(
+                async (_input: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> => {
+                    requestSignal = requestInit?.signal ?? undefined;
+
+                    const response = new Response(null, { status: 200 });
+
+                    Object.defineProperty(response, "body", { value: undefined });
+                    // A text() read that never settles: the stall the idle watchdog cannot see.
+                    Object.defineProperty(response, "text", {
+                        value: (): Promise<string> =>
+                            new Promise<string>(() => {
+                                /* never settles */
+                            }),
+                    });
+
+                    return response;
+                },
+            ) as unknown as typeof fetch;
+
+            const stream = httpStream(tokensRef, {}, { fetch: fetchImpl, idleTimeoutMs: 50 });
+            const outcome = stream[Symbol.asyncIterator]()
+                .next()
+                .then(
+                    () => "resolved",
+                    (error: unknown) => (error as { code?: string }).code,
+                );
+
+            // Past the bound the read still waits: `text()` exposes no per-frame
+            // progress, so an idle bound here would cap the stream's total
+            // duration rather than its silence — it does not apply.
+            await vi.advanceTimersByTimeAsync(60);
+
+            await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("pending");
+
+            // `.cancel()` (or the external signal) is the release for a read the
+            // idle watchdog cannot measure.
+            stream.cancel();
+
+            await expect(outcome).resolves.toBe("resolved");
+            expect(requestSignal?.aborted).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("fails with HTTP_STREAM_BAD_CHUNK on non-JSON chunk data", async () => {
