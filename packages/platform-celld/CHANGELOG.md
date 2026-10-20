@@ -1,3 +1,26 @@
+## @lunora/platform-celld [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.24...@lunora/platform-celld@1.0.0-alpha.25) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.102
+* **@lunora/agent:** upgraded to 1.0.0-alpha.233
+* **@lunora/ai:** upgraded to 1.0.0-alpha.141
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.128
+* **@lunora/container:** upgraded to 1.0.0-alpha.87
+* **@lunora/d1:** upgraded to 1.0.0-alpha.195
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+* **@lunora/queue:** upgraded to 1.0.0-alpha.120
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/storage:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/platform-celld [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.23...@lunora/platform-celld@1.0.0-alpha.24) (2026-10-20)
 
 
