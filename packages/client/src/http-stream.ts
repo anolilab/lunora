@@ -770,6 +770,15 @@ const httpStream = <Ref extends HttpStreamRef>(
 
                 const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort);
 
+                // An external abort or consumer cancel stops the dispatch early and
+                // returns as a bare EOF; that is the caller ending the stream, not a
+                // transport drop to fail with HTTP_STREAM_INTERRUPTED.
+                if (ac.signal.aborted) {
+                    handle.complete();
+
+                    return undefined;
+                }
+
                 return { completed, error: interrupted };
             }
 

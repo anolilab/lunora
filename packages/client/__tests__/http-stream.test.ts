@@ -358,6 +358,31 @@ describe("httpStream", () => {
         expect(out).toStrictEqual([{ text: "a" }, { text: "b" }]);
     });
 
+    it("ends the stream cleanly when the external signal aborts between buffered frames, even with reconnect off", async () => {
+        expect.assertions(1);
+
+        const external = new AbortController();
+        const { fetchImpl } = fetchReturningBodyless(["data: 1\nid: 1\n\n", "data: 2\nid: 2\n\n", "data: 3\nid: 3\n\n"]);
+
+        // Abort from the id observer: it runs mid-dispatch, after frame 1 and before frame 2.
+        const stream = httpStream(
+            tokensRef,
+            {},
+            {
+                fetch: fetchImpl,
+                onEventId: (id) => {
+                    if (id === "1") {
+                        external.abort();
+                    }
+                },
+                signal: external.signal,
+            },
+        );
+
+        // Frame 1 was dispatched before the abort landed; the stream ends after it, without an error.
+        await expect(collect(stream)).resolves.toStrictEqual([1]);
+    });
+
     it("leaves a stalled body-less text() read to the signal, not the idle bound", async () => {
         expect.assertions(3);
 
