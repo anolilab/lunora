@@ -1,3 +1,28 @@
+## @lunora/platform-node [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.164...@lunora/platform-node@1.0.0-alpha.165) (2026-10-20)
+
+### Features
+
+* **platform:** enforce socket tag budget on every host ([#1254](https://github.com/anolilab/lunora/issues/1254)) ([867cead](https://github.com/anolilab/lunora/commit/867ceadbe10778d8acbdd9389f51cbfbcd4e8216))
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.194
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/queue:** upgraded to 1.0.0-alpha.119
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.224
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.195
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.89
+* **@lunora/do:** upgraded to 1.0.0-alpha.233
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/storage:** upgraded to 1.0.0-alpha.146
+
 ## @lunora/platform-node [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.163...@lunora/platform-node@1.0.0-alpha.164) (2026-10-20)
 
 
