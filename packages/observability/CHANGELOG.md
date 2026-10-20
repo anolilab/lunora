@@ -1,3 +1,15 @@
+## @lunora/observability [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.157...@lunora/observability@1.0.0-alpha.158) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/observability [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.156...@lunora/observability@1.0.0-alpha.157) (2026-10-20)
 
 ### Tests
