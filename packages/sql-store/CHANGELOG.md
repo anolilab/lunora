@@ -1,3 +1,16 @@
+## @lunora/sql-store [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.196...@lunora/sql-store@1.0.0-alpha.197) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.235
+
 ## @lunora/sql-store [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.195...@lunora/sql-store@1.0.0-alpha.196) (2026-10-20)
 
 
