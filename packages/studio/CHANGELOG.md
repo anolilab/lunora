@@ -1,3 +1,22 @@
+## @lunora/studio [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.330...@lunora/studio@1.0.0-alpha.331) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.247
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/react:** upgraded to 1.0.0-alpha.252
+* **@lunora/mail:** upgraded to 1.0.0-alpha.120
+* **@lunora/notify:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/studio [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.329...@lunora/studio@1.0.0-alpha.330) (2026-10-20)
 
 
