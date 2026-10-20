@@ -15,6 +15,15 @@ describe("renderLunoraError", () => {
         expect(out).toContain("optimistic concurrency conflict");
     });
 
+    it("renders the cause explanation on its own line, ahead of the fix", () => {
+        expect.hasAssertions();
+
+        const out = renderLunoraError(new LunoraError("CONFLICT", "boom", { why: "row moved" }));
+
+        expect(out).toContain("Why: row moved");
+        expect(out.indexOf("Why: row moved")).toBeLessThan(out.indexOf("optimistic concurrency conflict"));
+    });
+
     it("tags the failure with a reason", () => {
         expect.hasAssertions();
 

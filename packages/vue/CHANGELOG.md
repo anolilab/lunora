@@ -1,3 +1,23 @@
+## @lunora/vue [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.271...@lunora/vue@1.0.0-alpha.272) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/vue [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.270...@lunora/vue@1.0.0-alpha.271) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/vue [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.269...@lunora/vue@1.0.0-alpha.270) (2026-10-19)
 
 

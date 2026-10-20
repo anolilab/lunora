@@ -1245,6 +1245,12 @@ const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rows
 const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ```
 
+### `redactCredentials` (const)
+
+```ts
+const redactCredentials: (value: unknown, captureRaw?: boolean) => unknown;
+```
+
 ### `resolveTraceAnchor` (const)
 
 ```ts
@@ -1276,6 +1282,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;

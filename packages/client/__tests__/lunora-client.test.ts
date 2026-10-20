@@ -1278,6 +1278,27 @@ describe("lunoraClient", () => {
             expect(data).toHaveLength(0);
         });
 
+        it("keeps the server's why explanation on a subscription error", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const errors: { why?: string }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, { onError: (error) => errors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "CONFLICT", message: "stale", why: "row moved" }, id: firstSub(socket).id, type: "error" });
+
+            expect(errors[0]).toMatchObject({ code: "CONFLICT", why: "row moved" });
+        });
+
         it("surfaces the code and nested message from a subscription error envelope", () => {
             expect.assertions(1);
 
@@ -2833,6 +2854,45 @@ describe("lunoraClient", () => {
     // --- Scheduler admin --------------------------------------------------------
 
     describe("lunoraClient — scheduler admin", () => {
+        it("keeps the server's why explanation on an admin error", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: "row moved" } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: "row moved" });
+        });
+
+        it("ignores a non-string why on an admin error envelope", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: { nested: true } } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            const error = await client.listScheduledJobs().catch((error_: unknown) => error_);
+
+            expect(error).toMatchObject({ code: "CONFLICT" });
+            expect(error).not.toHaveProperty("why");
+        });
+
         it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
             expect.assertions(4);
 

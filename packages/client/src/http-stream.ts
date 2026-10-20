@@ -50,6 +50,9 @@ const MAX_RETRY_MS = 2_147_483_647;
  */
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 
+/** How long a non-2xx response's error body may take to arrive before the status error is reported without it. */
+const ERROR_BODY_WAIT_MS = 1000;
+
 /**
  * Options accepted by {@link httpStream}.
  */
@@ -218,18 +221,23 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     }
 
     if (frame.event === "error") {
-        let payload: { code?: unknown; message?: unknown } = {};
+        let payload: { code?: unknown; message?: unknown; why?: unknown } = {};
 
         try {
-            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown };
+            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown; why?: unknown };
         } catch {
             /* fall through to the generic error below */
         }
 
         const message = typeof payload.message === "string" ? payload.message : "stream error";
         const code = typeof payload.code === "string" ? payload.code : "HTTP_STREAM_ERROR";
+        const error: LunoraError & { why?: string } = new LunoraError(code, message);
 
-        handle.fail(new LunoraError(code, message));
+        if (typeof payload.why === "string") {
+            error.why = payload.why;
+        }
+
+        handle.fail(error);
 
         return true;
     }
@@ -407,6 +415,57 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 };
 
 /**
+ * The status error for a non-2xx stream response whose body is the flat `{ code, error, why }`
+ * envelope the HTTP routes send before a stream opens. It keeps the status code and carries the
+ * server's message and `why`. `undefined` for any other body, so the caller keeps its generic status error.
+ */
+const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { code, error, why } = body as { code?: unknown; error?: unknown; why?: unknown };
+
+    if (typeof code !== "string" || typeof error !== "string") {
+        return undefined;
+    }
+
+    // The code stays `HTTP_STREAM_STATUS`, which callers branch on; the server's code rides in the message.
+    return new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${status.toString()}, ${code}): ${error}`, {
+        status,
+        why: typeof why === "string" ? why : undefined,
+    });
+};
+
+/**
+ * A non-2xx response's JSON body, read for at most `ERROR_BODY_WAIT_MS`. `undefined` when the body is
+ * absent, malformed or slow; the body is then cancelled so it cannot hold the connection. An abort
+ * while reading rethrows, so the attempt's abort handling takes over.
+ */
+const readErrorBody = async (response: Response, signal: AbortSignal): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(undefined);
+        }, ERROR_BODY_WAIT_MS);
+    });
+    const parsed = response.json().catch((error: unknown) => {
+        if (signal.aborted) {
+            throw error;
+        }
+
+        return undefined;
+    });
+
+    try {
+        return await Promise.race([parsed, slow]);
+    } finally {
+        clearTimeout(timer);
+        await response.body?.cancel().catch(() => undefined);
+    }
+};
+
+/**
  * Request headers for one attempt. A set `lastEventId` replaces any differently
  * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
  * and only the latest resume position may be sent.
@@ -571,16 +630,15 @@ const httpStream = <Ref extends HttpStreamRef>(
             const response = await fetchImpl(url, { headers, method: route.method, signal: attemptAbort.signal });
 
             if (!response.ok) {
-                // A bad status is a real answer, not a transport drop — release
-                // the body and fail WITHOUT reconnecting.
-                await response.body?.cancel().catch(() => {
-                    /* body already closed/unusable — nothing to release */
-                });
+                // A bad status is a real answer, not a transport drop — read its error
+                // envelope, if it has one, and fail WITHOUT reconnecting.
+                const body = await readErrorBody(response, ac.signal);
 
                 handle.fail(
-                    new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
-                        status: response.status,
-                    }),
+                    statusErrorOf(body, response.status) ??
+                        new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
+                            status: response.status,
+                        }),
                 );
 
                 return undefined;

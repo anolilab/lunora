@@ -45,6 +45,8 @@ export interface SubscriptionError {
      */
     code?: LunoraErrorCodeInput;
     message: string;
+    /** The client-visible explanation of the cause, when the frame carried one. */
+    why?: string;
 }
 
 export type SubscriptionErrorCallback = (error: SubscriptionError) => void;

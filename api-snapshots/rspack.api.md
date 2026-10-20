@@ -43,7 +43,7 @@ class LunoraRspackPlugin {
     #private;
     constructor(options: ResolvedLunoraRspackOptions);
     prepareDevSession(): Promise<void>;
-    generateForDev(): Promise<void>;
+    generateForDev(): Promise<string>;
     apply(compiler: CompilerLike): void;
 }
 ```

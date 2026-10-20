@@ -214,7 +214,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, whyProperty } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -6508,7 +6508,7 @@ class LunoraClient {
         if (envelope !== undefined) {
             const error = new Error(envelope.message ?? "admin request failed");
 
-            (error as Error & { code?: string }).code = envelope.code;
+            Object.assign(error, { code: envelope.code }, whyProperty(envelope));
             throw error;
         }
 

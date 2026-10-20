@@ -323,10 +323,12 @@ and `lastMutationId` (per-client watermark) are optional echoes.
 Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 ```json
-{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?> } }
+{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?>, "why": <string?> } }
 ```
 
-The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
+The client raises an error carrying `code`, `message`, `decodeWire(data)`, and `why`
+(the cause explanation, when the server sent a string). `why` is client-visible like
+`hint`; the operator-only `internal` context is never part of the envelope.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
 `INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
 envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
