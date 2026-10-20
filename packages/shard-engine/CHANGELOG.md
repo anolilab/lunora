@@ -1,3 +1,14 @@
+## @lunora/shard-engine [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.147...@lunora/shard-engine@1.0.0-alpha.148) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/shard-engine [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.146...@lunora/shard-engine@1.0.0-alpha.147) (2026-10-20)
 
 
