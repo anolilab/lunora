@@ -1355,6 +1355,16 @@ describe("approvals inbox", () => {
         await expect(pendingFor(functions, ctx, "user-a")).resolves.toStrictEqual([]);
     });
 
+    it("skips an owned paused thread that has no instance to match markers against", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-bare", owner: "user-a" });
+        await callMutation(functions.agentPatchThread, ctx, { key: "t-bare", status: "awaiting_input" });
+
+        await expect(pendingFor(functions, ctx, "user-a")).resolves.toStrictEqual([]);
+    });
+
     it("excludes a marker minted by an earlier instance of the thread", async () => {
         const { functions } = agentComponent();
         const { ctx } = fakeDatabase();
