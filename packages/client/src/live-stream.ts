@@ -403,7 +403,7 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential by nature: read a chunk, dispatch its frames, read the next
-                chunk = await readOrIdle(reader, idleTimeoutMs);
+                chunk = await readOrIdle(() => reader.read(), idleTimeoutMs);
             } catch (error) {
                 // A silent connection (or a failed read) is dead: release it so the run loop reconnects.
                 reader.cancel().catch(() => undefined);

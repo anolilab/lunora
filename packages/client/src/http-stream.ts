@@ -14,9 +14,9 @@
  *
  * A runtime whose `fetch` resolves with no `body` stream — React Native, whose
  * `whatwg-fetch` polyfill defines no `body` on `Response` — is read whole
- * through `response.text()` instead: the same frames, dispatched in one drain,
- * so every chunk of the route arrives together when the response lands rather
- * than as the handler yields it.
+ * through `response.text()` instead: the same frames, dispatched to the
+ * consumer one per task, so every chunk of the route arrives when the response
+ * lands rather than as the handler yields it.
  *
  * A frame may also carry an SSE `id:` (the server emits one for a chunk a
  * handler wrapped in `sseEvent`) and a `retry:` (an integer reconnect delay in
@@ -281,12 +281,16 @@ interface SseFrameObservers {
 
 /**
  * The frame buffer both body paths share: `append` folds decoded text in with
- * `\r\n` normalised (across read boundaries too), and `drain` dispatches every
- * complete frame to the handle. `drain` returns `true` once a terminal frame
- * (`complete` / `error` / a malformed chunk) ended the stream — the signal its
- * caller stops reading the body.
+ * `\r\n` normalised (across read boundaries too), `next` dispatches one
+ * complete frame, and `drain` dispatches every complete frame currently
+ * buffered. `next` returns `"terminal"` once a terminal frame (`complete` /
+ * `error` / a malformed chunk) ended the stream — the signal its caller stops
+ * reading the body.
  */
-const createSseFrameBuffer = (handle: UntypedHandle, observers: SseFrameObservers): { append: (text: string) => void; drain: () => boolean } => {
+const createSseFrameBuffer = (
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+): { append: (text: string) => void; drain: () => boolean; next: () => "dispatched" | "empty" | "terminal" } => {
     let buffer = "";
     // A `\r` that ended the previous chunk may be the first half of a `\r\n`
     // split across two reads, so it waits for the next chunk before normalising.
@@ -305,39 +309,54 @@ const createSseFrameBuffer = (handle: UntypedHandle, observers: SseFrameObserver
         buffer += chunk.replaceAll("\r\n", "\n");
     };
 
-    /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
-    const drain = (): boolean => {
-        let separatorIndex = buffer.indexOf("\n\n");
+    /**
+     * Dispatch the next complete frame: `"terminal"` when the frame ended the
+     * stream, `"dispatched"` when it did not, `"empty"` when no complete frame
+     * remains buffered.
+     */
+    const next = (): "dispatched" | "empty" | "terminal" => {
+        const separatorIndex = buffer.indexOf("\n\n");
 
-        while (separatorIndex !== -1) {
-            const frame = parseSseFrame(buffer.slice(0, separatorIndex));
-
-            buffer = buffer.slice(separatorIndex + 2);
-
-            // Report the frame before dispatching it: even a keepalive with no
-            // data proves the transport works, and an `id:` sets the resume point
-            // before the dispatch that may end the stream.
-            observers.onFrame?.();
-
-            if (frame.id !== undefined) {
-                observers.onId?.(frame.id);
-            }
-
-            if (frame.retry !== undefined) {
-                observers.onRetry?.(frame.retry);
-            }
-
-            if (handleSseFrame(frame, handle)) {
-                return true;
-            }
-
-            separatorIndex = buffer.indexOf("\n\n");
+        if (separatorIndex === -1) {
+            return "empty";
         }
 
-        return false;
+        const frame = parseSseFrame(buffer.slice(0, separatorIndex));
+
+        buffer = buffer.slice(separatorIndex + 2);
+
+        // Report the frame before dispatching it: even a keepalive with no
+        // data proves the transport works, and an `id:` sets the resume point
+        // before the dispatch that may end the stream.
+        observers.onFrame?.();
+
+        if (frame.id !== undefined) {
+            observers.onId?.(frame.id);
+        }
+
+        if (frame.retry !== undefined) {
+            observers.onRetry?.(frame.retry);
+        }
+
+        return handleSseFrame(frame, handle) ? "terminal" : "dispatched";
     };
 
-    return { append, drain };
+    /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
+    const drain = (): boolean => {
+        for (;;) {
+            const outcome = next();
+
+            if (outcome === "empty") {
+                return false;
+            }
+
+            if (outcome === "terminal") {
+                return true;
+            }
+        }
+    };
+
+    return { append, drain, next };
 };
 
 /**
@@ -367,7 +386,7 @@ const pumpSseBody = async (
     try {
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-            const { done, value } = await readOrIdle(reader, idleTimeoutMs);
+            const { done, value } = await readOrIdle(() => reader.read(), idleTimeoutMs);
 
             if (done) {
                 break;
@@ -406,25 +425,6 @@ const pumpSseBody = async (
 };
 
 /**
- * Pump an SSE body a runtime delivers whole rather than as a stream: React
- * Native's `fetch` (the `whatwg-fetch` polyfill `react-native` loads) resolves
- * with a `Response` that defines no `body`, so `text()` is the only read. The
- * buffered payload is appended once and drained in one pass — the same frames
- * through the same dispatch, so `id:`s, `retry:`s and terminal frames behave
- * exactly as on the streamed path; the chunks simply arrive together when the
- * response lands rather than as the handler yields them.
- */
-const pumpBufferedSseBody = async (response: Response, handle: UntypedHandle, observers: SseFrameObservers): Promise<boolean> => {
-    const frames = createSseFrameBuffer(handle, observers);
-
-    frames.append(await response.text());
-
-    // A payload that drains no terminal frame reads as a bare EOF: a transport
-    // interruption the caller fails or reconnects on, not an error raised here.
-    return frames.drain();
-};
-
-/**
  * Resolve after `ms`, or immediately when `signal` aborts first. The abort
  * listener is removed on either path so a long-lived signal does not accumulate
  * one closure per reconnect delay.
@@ -449,6 +449,67 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 
         signal.addEventListener("abort", onAbort, { once: true });
     });
+};
+
+/**
+ * Pump an SSE body a runtime delivers whole rather than as a stream: React
+ * Native's `fetch` (the `whatwg-fetch` polyfill `react-native` loads) resolves
+ * with a `Response` that defines no `body`, so `text()` is the only read. That
+ * read runs under the same idle bound as the streamed reader's, and the
+ * buffered frames dispatch one per macrotask — the scheduling window a read
+ * boundary gives the consumer on the streamed path — so a promptly iterating
+ * consumer is handed frames as it takes them. Dispatching the whole payload in
+ * one synchronous pass instead would race the consumer into the queue's
+ * `maxBuffer` bound and fail with `STREAM_BACKPRESSURE` before it took one.
+ * `id:`s, `retry:`s and terminal frames behave exactly as on the streamed
+ * path; the chunks simply arrive when the response lands rather than as the
+ * handler yields them.
+ */
+const pumpBufferedSseBody = async (
+    response: Response,
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+    attemptAbort: AbortController,
+    idleTimeoutMs = 0,
+): Promise<boolean> => {
+    const frames = createSseFrameBuffer(handle, observers);
+
+    try {
+        frames.append(await readOrIdle(() => response.text(), idleTimeoutMs));
+    } catch (error: unknown) {
+        // A stalled read (`STREAM_IDLE`) or a failed one: drop the connection
+        // and surface the error, mirroring the streamed pump's catch.
+        attemptAbort.abort();
+
+        throw error;
+    }
+
+    for (;;) {
+        // An aborted attempt (a consumer cancel, a failed handle) has no frame
+        // left worth dispatching — pushes into a closed handle are silent
+        // no-ops, but each of a 1000-frame payload would still cost a hop.
+        if (attemptAbort.signal.aborted) {
+            return false;
+        }
+
+        const outcome = frames.next();
+
+        if (outcome === "empty") {
+            // A payload that drains no terminal frame reads as a bare EOF: a
+            // transport interruption the caller fails or reconnects on, not an
+            // error raised here.
+            return false;
+        }
+
+        if (outcome === "terminal") {
+            return true;
+        }
+
+        // One frame per task: the awaiting consumer runs between pushes, so
+        // the bounded queue sees hand-to-hand delivery, not a burst.
+        // eslint-disable-next-line no-await-in-loop -- the dispatch loop is deliberately sequential: one frame, one scheduling window for the consumer.
+        await sleep(0, attemptAbort.signal);
+    }
 };
 
 /**
@@ -694,7 +755,7 @@ const httpStream = <Ref extends HttpStreamRef>(
                     return undefined;
                 }
 
-                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers);
+                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs);
 
                 return { completed, error: interrupted };
             }

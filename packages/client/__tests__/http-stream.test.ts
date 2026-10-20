@@ -326,6 +326,81 @@ describe("httpStream", () => {
         expect(headerOf(calls[1]?.init, "last-event-id")).toBe("e1");
     });
 
+    it("delivers more than the default maxBuffer frames from one body-less response to a consumer that keeps up", async () => {
+        expect.assertions(2);
+
+        // 1100 data frames — over the queue's default 1024-chunk bound, which a
+        // synchronous whole-payload drain would trip (STREAM_BACKPRESSURE)
+        // before the iterating consumer could take a single chunk.
+        const frames = Array.from({ length: 1100 }, (_, index) => `data: {"text":"${index.toString()}"}\n\n`);
+        const { fetchImpl } = fetchReturningBodyless([...frames, "event: complete\ndata: {}\n\n"]);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl }));
+
+        expect(chunks).toHaveLength(1100);
+        expect(chunks[1099]).toStrictEqual({ text: "1099" });
+    });
+
+    it("delivers every buffered frame to a consumer that awaits between chunks", async () => {
+        expect.assertions(1);
+
+        const { fetchImpl } = fetchReturningBodyless(['data: {"text":"a"}\n\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']);
+        const out: { text: string }[] = [];
+
+        for await (const chunk of httpStream(tokensRef, {}, { fetch: fetchImpl })) {
+            out.push(chunk);
+
+            // One resolvable await per chunk: the consumer shape whose
+            // interleaving the pump must leave room for.
+            await Promise.resolve();
+        }
+
+        expect(out).toStrictEqual([{ text: "a" }, { text: "b" }]);
+    });
+
+    it("fails a body-less response whose text() read stalls past the idle bound", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            let requestSignal: AbortSignal | undefined;
+
+            const fetchImpl = vi.fn<(input: RequestInfo | URL, requestInit?: RequestInit) => Promise<Response>>(
+                async (_input: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> => {
+                    requestSignal = requestInit?.signal ?? undefined;
+
+                    const response = new Response(null, { status: 200 });
+
+                    Object.defineProperty(response, "body", { value: undefined });
+                    // A text() read that never settles: the one idle state this path can hit.
+                    Object.defineProperty(response, "text", {
+                        value: (): Promise<string> =>
+                            new Promise<string>(() => {
+                                /* never settles */
+                            }),
+                    });
+
+                    return response;
+                },
+            ) as unknown as typeof fetch;
+
+            const iterator = httpStream(tokensRef, {}, { fetch: fetchImpl, idleTimeoutMs: 50 })[Symbol.asyncIterator]();
+            const outcome = iterator.next().then(
+                () => "resolved",
+                (error: unknown) => (error as { code?: string }).code,
+            );
+
+            await vi.advanceTimersByTimeAsync(60);
+
+            await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("STREAM_IDLE");
+            expect(requestSignal?.aborted).toBe(true);
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("fails with HTTP_STREAM_BAD_CHUNK on non-JSON chunk data", async () => {
         expect.assertions(1);
 
