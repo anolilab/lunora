@@ -614,13 +614,36 @@ const assignedKey = (target: Node): string | undefined => {
     return Node.isElementAccessExpression(target) ? literalElementKey(target) : undefined;
 };
 
-/** Whether `expression` assigns something other than a literal `false` to the open-shard option, by dot or literal bracket key. */
+/** The assignment operators: plain `=`, the logical ones, and the compound arithmetic and bitwise ones. */
+const ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.AmpersandAmpersandEqualsToken,
+    SyntaxKind.AmpersandEqualsToken,
+    SyntaxKind.AsteriskAsteriskEqualsToken,
+    SyntaxKind.AsteriskEqualsToken,
+    SyntaxKind.BarBarEqualsToken,
+    SyntaxKind.BarEqualsToken,
+    SyntaxKind.CaretEqualsToken,
+    SyntaxKind.EqualsToken,
+    SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+    SyntaxKind.LessThanLessThanEqualsToken,
+    SyntaxKind.MinusEqualsToken,
+    SyntaxKind.PercentEqualsToken,
+    SyntaxKind.PlusEqualsToken,
+    SyntaxKind.QuestionQuestionEqualsToken,
+    SyntaxKind.SlashEqualsToken,
+]);
+
+/** Whether `expression` writes the open-shard option by dot or literal bracket key: any assignment, except a plain `=` of a literal `false`. */
 const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
-    if (expression.getOperatorToken().getKind() !== SyntaxKind.EqualsToken) {
+    const operator = expression.getOperatorToken().getKind();
+
+    if (!ASSIGNMENT_OPERATORS.has(operator) || assignedKey(expression.getLeft()) !== OPEN_SHARD_OPTION) {
         return false;
     }
 
-    return assignedKey(expression.getLeft()) === OPEN_SHARD_OPTION && !isLiteralFalse(expression.getRight());
+    // A plain `=` that writes a literal false is safe. Any other assignment (`??=`, `||=`, `+=`) can set the option, so it is reported.
+    return operator !== SyntaxKind.EqualsToken || !isLiteralFalse(expression.getRight());
 };
 
 /**
@@ -666,7 +689,8 @@ const findOpenShardAccess = (
     const sites = files.flatMap((file) => {
         const text = readSource(file, unreadable);
 
-        if (!text?.includes(OPEN_SHARD_OPTION)) {
+        // Every scanned file is parsed. A raw-text prefilter would miss an escaped spelling of the option name.
+        if (text === undefined) {
             return [];
         }
 

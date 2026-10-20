@@ -89,6 +89,16 @@ describe("open-shard-access gate", () => {
         expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
+    it("refuses an escaped spelling of the option name, which the raw text does not contain", async () => {
+        expect.assertions(1);
+
+        writeAppConfig(String.raw`"allowUnauthenticatedShardAccess": true`);
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
     it("refuses the flag set in a root lunora.config app hook", async () => {
         expect.assertions(2);
 
@@ -281,19 +291,21 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("open-options.ts:2"))).toBe(true);
     });
 
-    it.each(["options.allowUnauthenticatedShardAccess = true;", 'options["allowUnauthenticatedShardAccess"] = someValue;'])(
-        "refuses an assignment to the open-shard option: %s",
-        async (statement) => {
-            expect.assertions(1);
+    it.each([
+        "options.allowUnauthenticatedShardAccess = true;",
+        'options["allowUnauthenticatedShardAccess"] = someValue;',
+        "options.allowUnauthenticatedShardAccess ??= true;",
+        "options.allowUnauthenticatedShardAccess ||= true;",
+    ])("refuses an assignment to the open-shard option: %s", async (statement) => {
+        expect.assertions(1);
 
-            writeAppConfig("");
-            writeFileSync(join(workdir, "src", "options-setup.ts"), `export const options = {};\n${statement}\n`, "utf8");
+        writeAppConfig("");
+        writeFileSync(join(workdir, "src", "options-setup.ts"), `export const options = {};\n${statement}\n`, "utf8");
 
-            const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
 
-            expect(result.code).toBe(EXIT_CODE.USAGE);
-        },
-    );
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
 
     it("does not read a bundle inside the Lunora directory's dist folder, which inlines the runtime", async () => {
         expect.assertions(1);
