@@ -1,6 +1,6 @@
 import type { ShardNamespaceLike } from "lunorash/runtime";
 
-import { defineApp } from "./_generated/app.js";
+import { defineApp } from "./_generated/app";
 
 interface Env extends Record<string, unknown> {
     SHARD: ShardNamespaceLike;
