@@ -550,5 +550,29 @@ describe("useQuery", () => {
             // round-trip. Unreachable while `isReady` reads `undefined`.
             expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 99 }));
         });
+
+        it("keeps a hydrated null over an open subscription's older value", () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => {
+                return { count: 1 };
+            });
+            const seeded = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                peekActiveQuerySnapshot: () => {
+                    return { present: true, value: { count: 1 } };
+                },
+                peekHydratedQueryByKey: () => null,
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={seeded}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            // The durable cache holds a real `null` result; the live `{ count: 1 }` must not replace it as fresh initialData.
+            expect(screen.getByTestId("display").textContent).toBe("null");
+        });
     });
 });

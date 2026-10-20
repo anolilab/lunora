@@ -94,10 +94,15 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     // attach runs in an effect and TanStack batches that write onto a later
     // tick, so without the seed the first render would read `undefined` where
     // every other adapter reads the held value.
-    const cachedData: ReturnOf<F> | undefined = skipped
-        ? undefined
-        : ((client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey) ??
-              client.peekActiveQuerySnapshot(function_.__lunoraRef, argsRecord, shardKey).value) as ReturnOf<F> | undefined);
+    // `??` is wrong here: a hydrated `null` is a real result, not a missing entry.
+    let cachedData: ReturnOf<F> | undefined;
+
+    if (!skipped) {
+        const hydratedValue = client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey);
+
+        cachedData = (hydratedValue === undefined ? client.peekActiveQuerySnapshot(function_.__lunoraRef, argsRecord, shardKey).value : hydratedValue) as
+            ReturnOf<F> | undefined;
+    }
 
     // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `client` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the live value under it, which is exactly the key it already belongs to.
