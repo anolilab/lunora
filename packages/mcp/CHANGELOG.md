@@ -1,3 +1,16 @@
+## @lunora/mcp [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.250...@lunora/mcp@1.0.0-alpha.251) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+* **@lunora/auth:** upgraded to 1.0.0-alpha.222
+
 ## @lunora/mcp [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.249...@lunora/mcp@1.0.0-alpha.250) (2026-10-20)
 
 
