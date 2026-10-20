@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.414...@lunora/cli@1.0.0-alpha.415) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** read body-less SSE stream responses via text() ([#1285](https://github.com/anolilab/lunora/issues/1285)) ([dc4979b](https://github.com/anolilab/lunora/commit/dc4979b52d3ea0290618955b2562b88ec81a5609))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.247
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.340
+* **@lunora/config:** upgraded to 1.0.0-alpha.391
+* **@lunora/container:** upgraded to 1.0.0-alpha.89
+* **@lunora/d1:** upgraded to 1.0.0-alpha.198
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.254
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/seed:** upgraded to 1.0.0-alpha.246
+* **@lunora/testing:** upgraded to 1.0.0-alpha.291
+
 ## @lunora/cli [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.413...@lunora/cli@1.0.0-alpha.414) (2026-10-20)
 
 ### Bug Fixes
