@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import type { AdvisorOpenShardAccess } from "@lunora/advisor";
 import { openShardAccess, runAdvisor } from "@lunora/advisor";
-import { PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
+import { isTestPath, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
 import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
@@ -363,7 +363,8 @@ const OPEN_SHARD_SCAN_ROOT_FILES = [
     ...PROJECT_CONFIG_FILENAMES,
 ];
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
-const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules)(?:[/\\]|$)/u;
+// Test and fixture code never ships, so a flag set in it must not block a deploy: `isTestPath` covers test files and the `__tests__`/`__mocks__`/`__fixtures__` folders, the rest are plain folder names.
+const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules|tests?|fixtures|mocks)(?:[/\\]|$)/u;
 
 /**
  * Every literal `allowUnauthenticatedShardAccess: true` property in the app.
@@ -373,7 +374,7 @@ const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules)(?:[/\\]|$)/u;
  * mention the name are skipped before parsing. Ceiling: an entry outside the
  * Lunora source directory (`schemaDir`), `src/`, the root Vite config and
  * `lunora.config.*`, or a value that is not the literal `true` (a variable, an
- * env read), is not seen.
+ * env read), is not seen. Test and fixture code is skipped on purpose: it never ships.
  */
 const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])];
@@ -381,7 +382,7 @@ const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
         ...directories.flatMap((directory) =>
             existsSync(join(cwd, directory))
                 ? readdirSync(join(cwd, directory), { encoding: "utf8", recursive: true })
-                      .filter((file) => SOURCE_FILE.test(file) && !SKIPPED_DIRECTORY.test(file))
+                      .filter((file) => SOURCE_FILE.test(file) && !isTestPath(file) && !SKIPPED_DIRECTORY.test(file))
                       .map((file) => join(cwd, directory, file))
                 : [],
         ),

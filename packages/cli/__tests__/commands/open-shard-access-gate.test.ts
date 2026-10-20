@@ -147,6 +147,35 @@ describe("open-shard-access gate", () => {
         expect(result.code).toBe(0);
     });
 
+    it("does not gate a flag set only in test or fixture files, which never ship", async () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "lunora", "__tests__"), { recursive: true });
+        writeFileSync(
+            join(workdir, "lunora", "__tests__", "x.test.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+        mkdirSync(join(workdir, "lunora", "fixtures"), { recursive: true });
+        writeFileSync(
+            join(workdir, "lunora", "fixtures", "app.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+        mkdirSync(join(workdir, "lunora", "__mocks__"), { recursive: true });
+        writeFileSync(
+            join(workdir, "lunora", "__mocks__", "app.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+
+        const { calls, spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner });
+
+        expect(result.code).toBe(0);
+        expect(calls.length).toBeGreaterThan(0);
+    });
+
     it("does not gate `lunora build`, which publishes nothing", async () => {
         expect.assertions(1);
 
