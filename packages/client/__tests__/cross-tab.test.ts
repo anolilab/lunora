@@ -629,10 +629,21 @@ describe("lunoraClient — a follower's online-only write that fails on the netw
         const rogue = new BroadcastChannel(clientChannel(client));
 
         try {
+            // The mirrored leader status is applied when the broadcast is handled, so the status listener is the
+            // milestone to wait on rather than a clock.
+            const mirroredConnected = new Promise<void>((resolve) => {
+                const stop = client.onConnectionStatus((status) => {
+                    if (status === "connected") {
+                        stop();
+                        resolve();
+                    }
+                });
+            });
+
             // The stand-in leader reports an open connection. That is the leader's socket, not this tab's request.
             rogue.postMessage({ identity: null, status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
 
-            await delay(30);
+            await mirroredConnected;
 
             const failure = await client.mutation(fnRef("notes:add"), { text: "offline" }, { onlineOnly: true }).catch((error: unknown) => error);
 
