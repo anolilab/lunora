@@ -506,6 +506,40 @@ describe("dispatchToLunoraFunction", () => {
         expect(kept?.content).toBe(Buffer.from(small).toString("base64"));
     });
 
+    it("counts string attachment content against the forwarded byte budget", async () => {
+        expect.assertions(4);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const small = new Uint8Array(1024).fill(7);
+        const withAttachments: InboundEmail = {
+            ...fixture,
+            attachments: [
+                { content: "a".repeat(5 * 1024 * 1024), disposition: "attachment", encoding: "utf8", filename: "large.txt", mimeType: "text/plain" },
+                { content: small, disposition: "attachment", filename: "small.bin", mimeType: "application/octet-stream" },
+            ],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachments, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding?: string; truncated?: boolean }[] } };
+        const [dropped, kept] = envelope.args.attachments;
+
+        // The oversized text part is cut like binary content, and keeps the encoding the parser reported.
+        expect(dropped?.content).toBe("");
+        expect(dropped?.truncated).toBe(true);
+        expect(dropped?.encoding).toBe("utf8");
+        expect(kept?.content).toBe(Buffer.from(small).toString("base64"));
+    });
+
     it("honours a custom shardKey and resolveArgs", async () => {
         expect.assertions(2);
 

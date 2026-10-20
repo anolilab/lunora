@@ -37,7 +37,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../../shared/base64";
-import type { InboundEmail, RawInboundEmail } from "./parse";
+import type { InboundAttachment, InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
 import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
@@ -363,6 +363,26 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
 const MAX_FORWARDED_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 /**
+ * Decoded size of one attachment's content, counted against the forwarding
+ * budget. Base64 text is measured by its decoded length (three bytes per four
+ * characters); other text by its UTF-8 length, so a large string attachment
+ * cannot skip the budget that binary ones are held to.
+ */
+const attachmentBytes = (attachment: InboundAttachment): number => {
+    const { content } = attachment;
+
+    if (typeof content !== "string") {
+        return content.byteLength;
+    }
+
+    if (attachment.encoding === "base64") {
+        return Math.floor((content.length * 3) / 4);
+    }
+
+    return new TextEncoder().encode(content).byteLength;
+};
+
+/**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.
  * Binary attachment `content` (postal-mime hands binary parts back as an
  * `ArrayBuffer`/`Uint8Array`) would be corrupted by `JSON.stringify` — an
@@ -383,16 +403,21 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
         ...email,
         attachments: email.attachments.map((attachment) => {
             const { content } = attachment;
+            const size = attachmentBytes(attachment);
+
+            if (forwarded + size > MAX_FORWARDED_ATTACHMENT_BYTES) {
+                // String content keeps the encoding the parser reported; binary
+                // content is re-encoded below, so the empty body is base64 too.
+                return typeof content === "string"
+                    ? { ...attachment, content: "", truncated: true }
+                    : { ...attachment, content: "", encoding: "base64" as const, truncated: true };
+            }
+
+            forwarded += size;
 
             if (typeof content === "string") {
                 return attachment;
             }
-
-            if (forwarded + content.byteLength > MAX_FORWARDED_ATTACHMENT_BYTES) {
-                return { ...attachment, content: "", encoding: "base64" as const, truncated: true };
-            }
-
-            forwarded += content.byteLength;
 
             const bytes = content instanceof Uint8Array ? content : new Uint8Array(content);
 
