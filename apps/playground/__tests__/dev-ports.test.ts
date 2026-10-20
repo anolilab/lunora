@@ -14,6 +14,7 @@ import {
     LEGACY_STUDIO_PORT,
     PINNED_PORT_BASES,
     resolveDevPorts,
+    servedPlaygroundPort,
     shiftedPort,
     staleDevOrigin,
 } from "../../../shared/dev-ports";
@@ -268,5 +269,26 @@ describe("staleDevOrigin", () => {
         expect(staleDevOrigin("AUTH_URL=http://localhost:5173", 7309)).toBeUndefined();
         expect(staleDevOrigin(`# ${origin("http://localhost:5173")}`, 7309)).toBeUndefined();
         expect(staleDevOrigin("LUNORA_ORIGIN_URL=", 7309)).toBeUndefined();
+    });
+});
+
+describe("servedPlaygroundPort", () => {
+    const ports: DevPorts = { offset: 2, playground: 7309, source: "derived", studio: 7310 };
+
+    it("serves the derived port when no e2e origin is pinned", () => {
+        expect.hasAssertions();
+        expect(servedPlaygroundPort(ports, {})).toBe(7309);
+        expect(servedPlaygroundPort(ports, { LUNORA_E2E_BASE_URL: "" })).toBe(7309);
+    });
+
+    it("serves the port of a pinned e2e origin, so the harness's own origin is not reported stale", () => {
+        expect.hasAssertions();
+        expect(servedPlaygroundPort(ports, { LUNORA_E2E_BASE_URL: "http://localhost:4173" })).toBe(4173);
+    });
+
+    it("falls back to the derived port for a portless or malformed pinned origin", () => {
+        expect.hasAssertions();
+        expect(servedPlaygroundPort(ports, { LUNORA_E2E_BASE_URL: "https://preview.example" })).toBe(7309);
+        expect(servedPlaygroundPort(ports, { LUNORA_E2E_BASE_URL: "not a url" })).toBe(7309);
     });
 });

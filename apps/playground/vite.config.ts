@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { lunora } from "@lunora/vite";
 import { defineConfig, loadEnv } from "vite";
 
-import { describeDevPorts, devPortsFor, staleDevOrigin } from "../../shared/dev-ports";
+import { describeDevPorts, devPortsFor, servedPlaygroundPort, staleDevOrigin } from "../../shared/dev-ports";
 
 // In the e2e harness we keep the single embedded worker (prod parity) but make
 // its Miniflare storage ephemeral (`persistState: false`) so each run starts
@@ -12,13 +12,14 @@ import { describeDevPorts, devPortsFor, staleDevOrigin } from "../../shared/dev-
 const e2e = process.env.LUNORA_E2E === "true";
 
 export default defineConfig(({ command, mode }) => {
-    const ports = devPortsFor(loadEnv(mode, process.cwd(), ""));
+    const env = loadEnv(mode, process.cwd(), "");
+    const ports = devPortsFor(env);
 
     if (command === "serve") {
         process.stdout.write(`[playground] ${describeDevPorts(ports)}\n`);
 
         const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
-        const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, ports.playground);
+        const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, servedPlaygroundPort(ports, env));
 
         // Refused, not warned: the scheduler dispatches to this variable and cannot be steered at runtime, so a
         // warning lets scheduled jobs run on another checkout's server.

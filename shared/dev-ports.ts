@@ -177,6 +177,28 @@ export const describeDevPorts = (ports: DevPorts): string =>
     `dev ports: playground :${String(ports.playground)}, studio :${String(ports.studio)} (offset ${String(ports.offset)}, ${ports.source})`;
 
 /**
+ * The port the playground serves. The e2e harness can pin its own origin through
+ * `LUNORA_E2E_BASE_URL`, and then Vite binds that URL's port rather than the derived one; a
+ * stale-origin check that compares against the derived port would refuse the harness's own
+ * `LUNORA_ORIGIN_URL`. A malformed or portless override falls back to the derived port.
+ */
+export const servedPlaygroundPort = (ports: DevPorts, env: DevEnv): number => {
+    const base = env.LUNORA_E2E_BASE_URL;
+
+    if (base === undefined || base === "") {
+        return ports.playground;
+    }
+
+    try {
+        const { port } = new URL(base);
+
+        return port === "" ? ports.playground : Number(port);
+    } catch {
+        return ports.playground;
+    }
+};
+
+/**
  * The `LUNORA_ORIGIN_URL` a `.dev.vars` file sets when it is a loopback URL on a port other than
  * `port`, else `undefined`. The scheduler dispatches its callbacks to that variable and cannot be
  * steered at runtime, so a worktree whose copy still names another checkout's port sends its
