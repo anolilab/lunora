@@ -80,10 +80,15 @@ const bytesTextOf = (value: ArrayBuffer | ArrayBufferView): string | undefined =
     }
 };
 
+/** The non-empty record keys of an object. An array's indices are positions, not keys, so an array has none. */
+const recordKeysOf = (value: object): string[] => (Array.isArray(value) ? [] : Object.keys(value).filter((key) => key.length > 0));
+
 /**
- * Every string and number under a sensitive argument's value, as the text an error
- * might quote it in. Booleans carry no secret and would mangle ordinary text, so they
- * are left out. The walk has no depth limit: a value however deep is found, and a
+ * Every string, number and record key under a sensitive argument's value, as the text an
+ * error might quote it in. A record key can be the secret (a caller-chosen account name),
+ * so it is collected with the values; array indices are not keys and are left out. Booleans
+ * are not leaves: a bare `true` is ordinary prose, so {@link booleansOf} masks them only in
+ * their field spellings. The walk has no depth limit: a value however deep is found, and a
  * `seen` set keeps a shared or cyclic reference from being walked twice.
  */
 const leavesOf = (value: unknown): string[] => {
@@ -109,6 +114,7 @@ const leavesOf = (value: unknown): string[] => {
             }
         } else if (typeof current === "object" && current !== null && !seen.has(current)) {
             seen.add(current);
+            found.push(...recordKeysOf(current));
             pending.push(...Object.values(current as Record<string, unknown>));
         }
     }
@@ -116,14 +122,67 @@ const leavesOf = (value: unknown): string[] => {
     return found;
 };
 
+/** A boolean under a sensitive argument, with the record key it sits under (none for an array element or a bare argument). */
+interface BooleanField {
+    key: string | undefined;
+    text: "false" | "true";
+}
+
+/**
+ * Every boolean under a sensitive argument's value, with its key. The walk is the same
+ * as {@link leavesOf}: no depth limit, and a `seen` set for shared or cyclic references.
+ */
+const booleansOf = (name: string, value: unknown): BooleanField[] => {
+    const found: BooleanField[] = [];
+    const seen = new Set<object>();
+    const pending: [string | undefined, unknown][] = [[name, value]];
+
+    while (pending.length > 0) {
+        const [key, current] = pending.pop() ?? [undefined, undefined];
+
+        if (typeof current === "boolean") {
+            found.push({ key, text: current ? "true" : "false" });
+        } else if (typeof current === "object" && current !== null && !seen.has(current)) {
+            seen.add(current);
+
+            if (Array.isArray(current)) {
+                pending.push(...current.map((element): [string | undefined, unknown] => [undefined, element]));
+            } else {
+                pending.push(...Object.entries(current as Record<string, unknown>));
+            }
+        }
+    }
+
+    return found;
+};
+
+const escapeForRegExp = (text: string): string => text.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+
 const maskLeaf = (text: string, leaf: string): string => {
     if (leaf.length >= SUBSTRING_MASK_MIN_LENGTH) {
         return text.replaceAll(leaf, SENSITIVE_PLACEHOLDER);
     }
 
-    const escaped = leaf.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+    return text.replaceAll(new RegExp(`(?<![A-Za-z0-9])${escapeForRegExp(leaf)}(?![A-Za-z0-9])`, "gu"), SENSITIVE_PLACEHOLDER);
+};
 
-    return text.replaceAll(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gu"), SENSITIVE_PLACEHOLDER);
+/**
+ * Masks one sensitive boolean in the spellings an error prints it in: the quoted token
+ * `"true"`, a key=value token `flag=true`, and a JSON field `"flag":true`. Any other
+ * `true` in the text is prose and stays.
+ */
+const maskBoolean = (text: string, field: BooleanField): string => {
+    const quoted = text.replaceAll(`"${field.text}"`, SENSITIVE_PLACEHOLDER);
+
+    if (field.key === undefined) {
+        return quoted;
+    }
+
+    const key = escapeForRegExp(field.key);
+    const keyValue = quoted.replaceAll(new RegExp(`(?<![A-Za-z0-9_])${key}=${field.text}(?![A-Za-z0-9_])`, "gu"), `${field.key}=${SENSITIVE_PLACEHOLDER}`);
+
+    // JSON.stringify(args, null, n) puts a space after the colon, so the field form allows one.
+    return keyValue.replaceAll(new RegExp(String.raw`"${key}":\s*${field.text}(?![A-Za-z0-9_])`, "gu"), `"${field.key}":${SENSITIVE_PLACEHOLDER}`);
 };
 
 /**
@@ -138,6 +197,9 @@ const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: R
 
     // A handler that quotes `JSON.stringify(args)` prints a value with its quotes, backslashes and
     // newlines escaped, so mask that spelling as well as the raw one.
+    // Booleans first: a boolean's field spelling carries its record key, and the leaf pass
+    // then masks that key wherever else it appears.
+    const booleans = sensitive.flatMap((name) => booleansOf(name, (parsedArgs as Record<string, unknown>)[name]));
     const leaves = sensitive
         .flatMap((name) => leavesOf((parsedArgs as Record<string, unknown>)[name]))
         .flatMap((leaf) => {
@@ -148,6 +210,10 @@ const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: R
         .toSorted((a, b) => b.length - a.length);
 
     let scrubbed = message;
+
+    for (const field of booleans) {
+        scrubbed = maskBoolean(scrubbed, field);
+    }
 
     for (const leaf of leaves) {
         scrubbed = maskLeaf(scrubbed, leaf);

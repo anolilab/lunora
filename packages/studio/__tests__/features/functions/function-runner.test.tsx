@@ -665,3 +665,116 @@ describe("functionRunner with a v.sensitive argument", () => {
         expect(screen.getByTestId("error").textContent).toContain("Re-enter the sensitive values");
     });
 });
+
+describe("functionRunner error scrubbing of sensitive record keys and booleans", () => {
+    const typeArgs = (text: string): void => {
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: text } });
+    };
+
+    it("masks a sensitive record key that a handler echoes through JSON.stringify(args)", async () => {
+        expect.assertions(1);
+
+        const ACCOUNT = "acct-customer-7731";
+        const mock = createMockClient({
+            mutation: (_reference, args) => {
+                throw new Error(`rejected ${JSON.stringify(args)}`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner
+                    functions={[
+                        {
+                            args: [
+                                { kind: "string", name: "label", optional: false },
+                                { kind: "object", name: "credentials", optional: false, sensitive: true },
+                            ],
+                            kind: "mutation",
+                            path: "vault:store",
+                        },
+                    ]}
+                />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ credentials: { [ACCOUNT]: "hunter2-the-real-secret" }, label: "primary" }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        expect(screen.getByTestId("error").textContent).toBe('rejected {"credentials":{"«sensitive»":"«sensitive»"},"label":"primary"}');
+    });
+
+    it("masks a sensitive boolean in its quoted, key=value and JSON field spellings, and leaves bare prose alone", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            mutation: (_reference, args) => {
+                throw new Error(`rejected ${JSON.stringify(args)} | the flag is true | quoted "true" | token flag=true`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner
+                    functions={[
+                        {
+                            args: [
+                                { kind: "string", name: "label", optional: false },
+                                { kind: "boolean", name: "flag", optional: false, sensitive: true },
+                            ],
+                            kind: "mutation",
+                            path: "vault:store",
+                        },
+                    ]}
+                />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ flag: true, label: "primary" }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        expect(screen.getByTestId("error").textContent).toBe(
+            'rejected {"flag":«sensitive»,"label":"primary"} | the flag is true | quoted «sensitive» | token flag=«sensitive»',
+        );
+    });
+
+    it("masks a boolean nested under a sensitive object, in a pretty-printed handler echo", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            mutation: (_reference, args) => {
+                throw new Error(`rejected ${JSON.stringify(args, null, 2)} | token enabled=true`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner
+                    functions={[
+                        {
+                            args: [
+                                { kind: "string", name: "label", optional: false },
+                                { kind: "object", name: "credentials", optional: false, sensitive: true },
+                            ],
+                            kind: "mutation",
+                            path: "vault:store",
+                        },
+                    ]}
+                />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ credentials: { enabled: true }, label: "primary" }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        expect(screen.getByTestId("error").textContent).toBe(
+            'rejected {\n  "credentials": {\n    "«sensitive»":«sensitive»\n  },\n  "label": "primary"\n} | token «sensitive»=«sensitive»',
+        );
+    });
+});
