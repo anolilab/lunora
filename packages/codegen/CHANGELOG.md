@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.336...@lunora/codegen@1.0.0-alpha.337) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.244
+* **@lunora/agent:** upgraded to 1.0.0-alpha.234
+* **@lunora/container:** upgraded to 1.0.0-alpha.88
+* **@lunora/queue:** upgraded to 1.0.0-alpha.121
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.143
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.91
+* **@lunora/do:** upgraded to 1.0.0-alpha.235
+* **@lunora/payment:** upgraded to 1.0.0-alpha.228
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/codegen [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.335...@lunora/codegen@1.0.0-alpha.336) (2026-10-20)
 
 ### Features
