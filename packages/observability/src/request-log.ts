@@ -415,6 +415,13 @@ const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
 };
 
 /**
+ * The message of an Error, which is not an enumerable property and so is never reached by walking
+ * the object's values. The name is not registered: it is a class label, and registering it would
+ * mask that label wherever it appears in the logs.
+ */
+const errorMessageSpellings = (value: object): string[] => (value instanceof Error && value.message.length > 0 ? stringSpellings(value.message) : []);
+
+/**
  * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
  * and a `seen` set keeps a shared or cyclic reference from being walked twice.
  */
@@ -437,6 +444,8 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
             found.push(...byteSpellings(value));
         } else if (typeof value === "object" && value !== null && !seen.has(value)) {
             seen.add(value);
+
+            found.push(...errorMessageSpellings(value));
 
             for (const child of Object.values(value)) {
                 pending.push(child);

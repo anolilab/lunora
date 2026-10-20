@@ -395,6 +395,17 @@ describe("sensitiveValues", () => {
 
         expect(sensitiveValues({ value: nest(10, { token: TRICKY }) }, new Set(["value"]))).toContain(TRICKY_ESCAPED);
     });
+
+    it("collects a marked Error's message, which is not an enumerable property, wherever the Error sits", () => {
+        expect.assertions(2);
+
+        // A handler logs `error.message`, which is not the `Name: message` string the scope would otherwise hold.
+        const direct = createSensitiveScope(sensitiveValues({ value: new Error(SECRET) }, new Set(["value"])));
+        const nested = createSensitiveScope(sensitiveValues({ value: { cause: new Error(SECRET) } }, new Set(["value"])));
+
+        expect(direct.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
+        expect(nested.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
+    });
 });
 
 describe("telemetry names under a sensitive scope, beyond the event and span handle", () => {
