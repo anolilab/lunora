@@ -8,7 +8,7 @@
  */
 import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
-import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
+import { cooldownActive, cooldownLabel, RESEND_COOLDOWN_MS, secondsUntil } from "./cooldown";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
 import { postAuthDestination, withRedirectTo } from "./redirect-to";
@@ -101,6 +101,9 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                 const trimmed = phoneNumber.trim();
 
                 if (cooldownActive(store.get().resendAvailableAt) && trimmed === sentTo) {
+                    // Say why nothing was sent: this flow has no shipped countdown, so a silent refusal reads as a broken button.
+                    store.update({ error: cooldownLabel(context.localization, secondsUntil(store.get().resendAvailableAt)), status: "error" });
+
                     return;
                 }
 

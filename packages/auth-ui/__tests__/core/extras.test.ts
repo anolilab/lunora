@@ -363,7 +363,7 @@ describe("redirectTo reaches every sign-in transport", () => {
     });
 
     it("sends a phone code to a corrected number inside the cooldown, but not a repeat of the same one", async () => {
-        expect.assertions(1);
+        expect.assertions(3);
 
         const { createPhoneVerifyController, resolveContext } = await import("../../src/core");
 
@@ -377,6 +377,11 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         await controller.actions.send("+15551234567");
         await controller.actions.send("+15551234567");
+
+        // The refused repeat says why: a silent no-op reads as a broken button.
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().error).toBeDefined();
+
         controller.actions.restart();
         await controller.actions.send("+15557654321");
 
