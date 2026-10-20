@@ -730,6 +730,19 @@ const httpStream = <Ref extends HttpStreamRef>(
         const interrupted = new LunoraError("HTTP_STREAM_INTERRUPTED", "httpStream: stream ended without a complete frame");
 
         // Aborting only this attempt lets the pump drop a dead connection without reading as a consumer cancel.
+        // Both pumps return a bare EOF when the caller ends the stream mid-read or
+        // mid-dispatch (an external abort or a consumer cancel). That is the caller
+        // ending the stream, not a transport drop to fail with HTTP_STREAM_INTERRUPTED.
+        const outcomeOf = (completed: boolean): { completed: boolean; error: Error } | undefined => {
+            if (ac.signal.aborted) {
+                handle.complete();
+
+                return undefined;
+            }
+
+            return { completed, error: interrupted };
+        };
+
         const attemptAbort = new AbortController();
         const forwardAbort = (): void => {
             attemptAbort.abort();
@@ -768,23 +781,10 @@ const httpStream = <Ref extends HttpStreamRef>(
                     return undefined;
                 }
 
-                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort);
-
-                // An external abort or consumer cancel stops the dispatch early and
-                // returns as a bare EOF; that is the caller ending the stream, not a
-                // transport drop to fail with HTTP_STREAM_INTERRUPTED.
-                if (ac.signal.aborted) {
-                    handle.complete();
-
-                    return undefined;
-                }
-
-                return { completed, error: interrupted };
+                return outcomeOf(await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort));
             }
 
-            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs);
-
-            return { completed, error: interrupted };
+            return outcomeOf(await pumpSseBody(response.body, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs));
         } catch (error: unknown) {
             // A consumer cancel (or external abort) rejects the in-flight read
             // with an AbortError — the iterator is already closing.

@@ -383,6 +383,29 @@ describe("httpStream", () => {
         await expect(collect(stream)).resolves.toStrictEqual([1]);
     });
 
+    it("ends a streamed SSE stream cleanly when the external signal aborts while its frames dispatch", async () => {
+        expect.assertions(1);
+
+        const external = new AbortController();
+        const { fetchImpl } = fetchReturning(["data: 1\nid: 1\n\ndata: 2\nid: 2\n\ndata: 3\nid: 3\n\n"]);
+
+        const stream = httpStream(
+            tokensRef,
+            {},
+            {
+                fetch: fetchImpl,
+                onEventId: (id) => {
+                    if (id === "1") {
+                        external.abort();
+                    }
+                },
+                signal: external.signal,
+            },
+        );
+
+        await expect(collect(stream)).resolves.toStrictEqual([1, 2, 3]);
+    });
+
     it("leaves a stalled body-less text() read to the signal, not the idle bound", async () => {
         expect.assertions(3);
 
