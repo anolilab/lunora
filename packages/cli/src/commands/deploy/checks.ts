@@ -4,7 +4,7 @@
  * and the `--migrate` preflight — plus deploy's open-shard-access gate.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { sep } from "node:path";
+import { resolve, sep } from "node:path";
 
 import type { AdvisorOpenShardAccess } from "@lunora/advisor";
 import { openShardAccess, runAdvisor } from "@lunora/advisor";
@@ -369,6 +369,26 @@ const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
 /** Codegen output and installed packages never carry app options. Test folders and files go through `isTestPath`. */
 const SKIPPED_DIRECTORY_NAMES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
 const OPEN_SHARD_OPTION = "allowUnauthenticatedShardAccess";
+const PATH_SEPARATOR = /[\\/]/u;
+/** Build output and installed code: a bundle that inlines the runtime is not app source, so its options are not read. */
+const NON_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "build", "dist", "node_modules"]);
+
+/**
+ * Whether a resolved module is app source: a source extension, not a test file, and
+ * no segment that is build output, installed code, or a dot-folder such as
+ * `.svelte-kit` or `.open-next`. A bundle the config imports carries the runtime
+ * inlined, so reading it would report options the app does not set.
+ */
+const isAppSourceModule = (cwd: string, file: string): boolean => {
+    const segments = relative(cwd, file).split(PATH_SEPARATOR);
+
+    return (
+        SOURCE_FILE.test(file) &&
+        !TEST_FILE.test(file) &&
+        !isTestPath(segments.join("/")) &&
+        segments.every((segment) => segment === ".." || (!segment.startsWith(".") && !NON_SOURCE_DIRECTORIES.has(segment)))
+    );
+};
 
 /**
  * The Wrangler `main` entrypoint of the environment being deployed, which can sit outside `src/`
@@ -393,7 +413,7 @@ const wranglerMainEntry = (cwd: string, environment?: string): string[] => {
     // Wrangler resolves `main` against its own config file, not the project root.
     const entry = typeof main === "string" ? join(dirname(wranglerPath), main) : undefined;
 
-    return entry !== undefined && existsSync(entry) ? [entry] : [];
+    return entry !== undefined && existsSync(entry) && isAppSourceModule(cwd, entry) ? [entry] : [];
 };
 
 /** The literal `false`, under any parentheses, `as`, `satisfies`, `<T>` or `!` wrapper (`false as const` is still false). */
@@ -470,6 +490,65 @@ const memberKeyName = (nameNode: Node): string => {
     return Node.isStringLiteral(keyNode) || Node.isNoSubstitutionTemplateLiteral(keyNode) ? keyNode.getLiteralValue() : nameNode.getText();
 };
 
+/** Extensions a relative import can resolve to, as the bundler tries them. */
+const IMPORT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+/** The JavaScript extension a TypeScript ESM import writes for its `.ts` source. */
+const JS_EXTENSION = /\.(?:[cm]?js|jsx)$/u;
+
+/**
+ * The file a relative import names, or `undefined` for a bare specifier or a
+ * file that does not exist. Tries the name as written, then with each source
+ * extension, then as a directory's index. A `.js` specifier also maps to its
+ * `.ts` source, which is how TypeScript ESM code writes imports.
+ */
+const resolveRelativeImport = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith(".")) {
+        return undefined;
+    }
+
+    const base = resolve(dirname(fromFile), specifier);
+    const withoutJsExtension = base.replace(JS_EXTENSION, "");
+    const candidates = [
+        base,
+        ...IMPORT_EXTENSIONS.map((extension) => `${base}${extension}`),
+        ...IMPORT_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
+        ...IMPORT_EXTENSIONS.map((extension) => `${withoutJsExtension}${extension}`),
+    ];
+
+    return candidates.find((candidate) => statEntry(candidate)?.isFile() === true);
+};
+
+/**
+ * The local modules the app's configuration and Wrangler entrypoint import, followed
+ * through their own imports. An open-shard option kept in a module beside the
+ * config reaches the worker through it, so the module is read as well.
+ */
+const importedModules = (roots: string[], project: Project, cwd: string): string[] => {
+    const seen = new Set(roots);
+    const queue = [...roots];
+    const found: string[] = [];
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const file = queue[index] ?? "";
+        const source = project.createSourceFile(relative(cwd, file), readFileSync(file, "utf8"), { overwrite: true });
+        const specifiers = [...source.getImportDeclarations(), ...source.getExportDeclarations()]
+            .map((declaration) => declaration.getModuleSpecifierValue())
+            .filter((specifier): specifier is string => specifier !== undefined);
+
+        for (const specifier of specifiers) {
+            const resolved = resolveRelativeImport(file, specifier);
+
+            if (resolved !== undefined && isAppSourceModule(cwd, resolved) && !seen.has(resolved)) {
+                seen.add(resolved);
+                found.push(resolved);
+                queue.push(resolved);
+            }
+        }
+    }
+
+    return found;
+};
+
 /**
  * Every open-shard member in the app that is not a literal `false`.
  *
@@ -480,18 +559,20 @@ const memberKeyName = (nameNode: Node): string => {
  * evaluates it. Ceiling, not covered: a computed key built from a variable, an
  * `Object.assign` or a spread from a variable, and any file outside `schemaDir`,
  * `src/`, the root Vite config, `lunora.config.*` and the Wrangler `main` of the
- * environment being deployed.
+ * environment being deployed, and any module those import only through a bare
+ * specifier, a path alias or a dynamic `import()`.
  */
 const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShardAccess[] => {
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])].filter((directory) => existsSync(join(cwd, directory)));
+    const roots = [...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)), ...wranglerMainEntry(cwd, environment)];
+    const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
     const files = [
         ...new Set([
             ...directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory))),
-            ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
-            ...wranglerMainEntry(cwd, environment),
+            ...roots,
+            ...importedModules(roots, project, cwd),
         ]),
     ];
-    const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
 
     return files.flatMap((file) => {
         const text = readFileSync(file, "utf8");

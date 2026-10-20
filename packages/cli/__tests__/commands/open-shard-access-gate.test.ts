@@ -264,6 +264,35 @@ describe("open-shard-access gate", () => {
         expect(result.code).toBe(0);
     });
 
+    it("refuses the flag in a root module the Vite config imports", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "vite.config.ts"),
+            `import { openOptions } from "./open-options";\n\nexport default { plugins: [openOptions()] };\n`,
+            "utf8",
+        );
+        writeFileSync(join(workdir, "open-options.ts"), `export const openOptions = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("open-options.ts:2"))).toBe(true);
+    });
+
+    it("does not read a build bundle the Vite config imports, which inlines the runtime", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "vite.config.ts"), `import bundle from "./dist/server.mjs";\n\nexport default { plugins: [bundle] };\n`, "utf8");
+        mkdirSync(join(workdir, "dist"), { recursive: true });
+        writeFileSync(join(workdir, "dist", "server.mjs"), `export default { options: { allowUnauthenticatedShardAccess: options.open } };\n`, "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(0);
+    });
+
     it("refuses the flag in the entrypoint of the environment being deployed", async () => {
         expect.assertions(2);
 
