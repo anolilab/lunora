@@ -339,6 +339,15 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
     });
 
+    it("names the D1 database id after the worker on celld, which takes any id, and does not warn", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "celld" });
+
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "lunora-app", database_name: "lunora-app" }]);
+        expect(result.warnings.join(" ")).not.toMatch(/placeholder database_id/u);
+    });
+
     it("adds the parameterless ai binding when @lunora/ai is inferred", () => {
         expect.assertions(2);
 

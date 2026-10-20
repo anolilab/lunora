@@ -629,7 +629,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         return { error: hyperdriveError, target, validation: empty };
     }
 
-    const checkError = runPreDeployChecks(cwd, options, command);
+    const checkError = runPreDeployChecks(cwd, options, command, target);
 
     if (checkError !== undefined) {
         return { code: checkError.code, error: checkError.error, target, validation: empty };

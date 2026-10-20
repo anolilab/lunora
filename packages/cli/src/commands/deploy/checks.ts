@@ -349,7 +349,7 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
 type PreDeployCommand = "build" | "deploy" | "prepare";
 
 /**
- * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
+ * The read-only half of the pre-deploy gates: the D1-placeholder hard-block (Cloudflare only), the
  * localhost-origin var check, and the container source + Docker preflights.
  * Returns the first error message, or `undefined` when all pass.
  *
@@ -357,8 +357,15 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
  * without it: building pushes images, which a command whose whole job is "tell me
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
-const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
-    const d1Error = checkD1Placeholder(cwd, options.logger, command, options.env);
+const runPreDeployChecks = (
+    cwd: string,
+    options: DeployCommandOptions,
+    command: PreDeployCommand,
+    target: string,
+): { code: ExitCode; error: string } | undefined => {
+    // The placeholder is Cloudflare's: `wrangler d1 create` mints the real id. celld's
+    // D1 takes any id, and reconcile writes it one.
+    const d1Error = target === "cloudflare" ? checkD1Placeholder(cwd, options.logger, command, options.env) : undefined;
 
     if (d1Error !== undefined) {
         return { code: EXIT_CODE.USAGE, error: d1Error };

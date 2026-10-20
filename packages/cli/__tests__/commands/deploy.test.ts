@@ -1476,6 +1476,35 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             expect(errors.some((line) => line.includes("placeholder database_id") || line.includes("wrangler d1 create"))).toBe(true);
         });
 
+        // celld's D1 takes any id, so reconcile names the database after the worker and
+        // the Cloudflare-only placeholder gate does not apply.
+        it("writes a usable D1 id for a celld target and does not block on the placeholder", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+            const written = JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8")) as { d1_databases: unknown[] };
+
+            expect(result.code).toBe(0);
+            expect(written.d1_databases).toStrictEqual([{ binding: "DB", database_id: "x", database_name: "x" }]);
+            expect(calls.at(-1)?.descriptor.command).toBe("celld");
+        });
+
         it("proceeds when D1 binding has a real database_id (not the placeholder)", async () => {
             expect.assertions(3);
 
