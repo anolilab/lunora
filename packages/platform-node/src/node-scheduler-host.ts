@@ -205,12 +205,19 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
-    const deleteJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ?");
+    // Settlements below are conditional on `claimed_at`, this host's claim.
+    // A handler that outlived its lease may have been reclaimed by another host,
+    // which then owns the row; this host must not delete or re-arm it.
+    const deleteJob = database.prepare<[string, number]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND claimed_at = ?");
     const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const updateAttempt = database.prepare<[number, number, string]>(
-        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ?",
+    const updateAttempt = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
     );
+    const renewClaim = database.prepare<[number, string, number]>("UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ?");
     const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ?");
+    const parkClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
     // One statement, so two processes on one file cannot both take the row: the
     // loser's WHERE no longer matches and it gets zero rows back.
     const claimJob = database.prepare<[number, string, number], JobRow>(
@@ -345,11 +352,25 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
 
+        // A handler that outlives the lease must keep its claim, or another host
+        // reclaims the row and dispatches it a second time. Renew at a third of
+        // the lease while the dispatch is pending; `claimedAt` tracks the value
+        // the row now holds, so every settlement below only touches a claim this
+        // host still owns.
+        let claimedAt = now;
+        const renewal = setInterval(() => {
+            const at = Date.now();
+
+            if (isOpen() && renewClaim.run(at, id, claimedAt).changes === 1) {
+                claimedAt = at;
+            }
+        }, CLAIM_LEASE_MS / 3);
+
         try {
             await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
 
             if (isOpen()) {
-                deleteJob.run(id);
+                deleteJob.run(id, claimedAt);
             }
         } catch {
             // Delivery failed. The catch is bare because *why* it failed is the
@@ -364,15 +385,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
 
             if (attempts >= maxAttempts) {
-                parkJob.run(attempts, id);
+                parkClaimedJob.run(attempts, id, claimedAt);
 
                 return;
             }
 
             const nextAt = Date.now() + backoffFor(attempts, retry);
 
-            updateAttempt.run(attempts, nextAt, id);
-            armJob(id, nextAt);
+            if (updateAttempt.run(attempts, nextAt, id, claimedAt).changes === 1) {
+                armJob(id, nextAt);
+            }
+        } finally {
+            clearInterval(renewal);
         }
     };
 

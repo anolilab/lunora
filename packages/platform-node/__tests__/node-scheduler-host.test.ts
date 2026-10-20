@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createNodeSchedulerHost } from "../src/node-scheduler-host";
 
@@ -42,6 +42,61 @@ describe("createNodeSchedulerHost", () => {
             firstDatabase.close();
             secondDatabase.close();
             rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("keeps the claim while a handler outlives the lease, so a second host does not dispatch it again", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-scheduler-"));
+        const path = join(directory, "scheduler.sqlite3");
+        const firstDispatches: string[] = [];
+        const secondDispatches: string[] = [];
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const firstDatabase = new Database(path);
+        const secondDatabase = new Database(path);
+        const first = createNodeSchedulerHost(firstDatabase, {
+            onDispatch: async (functionPath) => {
+                firstDispatches.push(functionPath);
+                await gate;
+            },
+        });
+
+        try {
+            await first.scheduler.schedule("jobs:slow", {}, { delayMs: 10 });
+            await vi.advanceTimersByTimeAsync(10);
+
+            const second = createNodeSchedulerHost(secondDatabase, {
+                onDispatch: (functionPath) => {
+                    secondDispatches.push(functionPath);
+                },
+            });
+
+            try {
+                // Well past the 60 s claim lease while the first handler is still running.
+                await vi.advanceTimersByTimeAsync(150_000);
+
+                expect(firstDispatches).toStrictEqual(["jobs:slow"]);
+                expect(secondDispatches).toStrictEqual([]);
+
+                release();
+                await vi.advanceTimersByTimeAsync(0);
+
+                await expect(first.scheduler.list?.()).resolves.toHaveLength(0);
+            } finally {
+                second.dispose();
+            }
+        } finally {
+            first.dispose();
+            firstDatabase.close();
+            secondDatabase.close();
+            rmSync(directory, { force: true, recursive: true });
+            vi.useRealTimers();
         }
     });
 
