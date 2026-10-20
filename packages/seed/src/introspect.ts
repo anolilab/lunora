@@ -51,10 +51,18 @@ interface FieldSpec {
     validator: Validator;
 }
 
+/** A multi-column `unique` index, named by its member columns in declaration order. */
+interface UniqueIndexSpec {
+    fields: ReadonlyArray<string>;
+    name: string;
+}
+
 /** A table reduced to its seedable columns. */
 interface TableSpec {
     fields: ReadonlyArray<FieldSpec>;
     name: string;
+    /** Table-level `unique` indexes over two or more columns (single-column ones mark the column `unique`). */
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>;
 }
 
 /** True when a column (or the column it wraps via optional) has a server-applied default. */
@@ -92,14 +100,29 @@ const describeField = (name: string, validator: Validator): FieldSpec => {
     };
 };
 
-/** Reduce a `defineSchema` result to a {@link TableSpec} per table. */
+/**
+ * Reduce a `defineSchema` result to a {@link TableSpec} per table. A single-column
+ * `unique` index makes that column `unique`, exactly as `.unique()` would.
+ */
 const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
     const { tables } = schema;
 
     return Object.entries(tables).map(([name, table]) => {
+        const unique = table.indexes.filter((index) => index.unique);
+        const singles = new Set(unique.filter((index) => index.fields.length === 1).map((index) => index.fields[0]));
+
         return {
-            fields: Object.entries(table.shape).map(([fieldName, validator]) => describeField(fieldName, validator)),
+            fields: Object.entries(table.shape).map(([fieldName, validator]) => {
+                const field = describeField(fieldName, validator);
+
+                return singles.has(fieldName) ? { ...field, unique: true } : field;
+            }),
             name,
+            uniqueIndexes: unique
+                .filter((index) => index.fields.length > 1)
+                .map((index) => {
+                    return { fields: index.fields, name: index.name };
+                }),
         };
     });
 };
@@ -201,4 +224,4 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
 };
 
 export { fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
-export type { FieldSpec, TableSpec };
+export type { FieldSpec, TableSpec, UniqueIndexSpec };

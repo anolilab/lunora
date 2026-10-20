@@ -3,7 +3,7 @@ import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";
-import type { FieldSpec, TableSpec } from "./introspect";
+import type { FieldSpec, TableSpec, UniqueIndexSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
 import { planUniqueDeal, planUniqueFkDeal } from "./unique-value";
@@ -288,11 +288,11 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
             return emptyPoolValue(field, context);
         }
 
-        if (!field.unique) {
+        const fkDeal = uniqueDeals.get(field.name);
+
+        if (!field.unique && fkDeal === undefined) {
             return copycat.oneOf(input, pool);
         }
-
-        const fkDeal = uniqueDeals.get(field.name);
 
         // A self-reference's pool is not known at plan time, so it carries no
         // deal (see `planUniqueDeals`) and `selfReferenceParent` picks the one
@@ -306,7 +306,7 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
         return undefined;
     }
 
-    const deal = field.unique ? uniqueDeals.get(field.name) : undefined;
+    const deal = uniqueDeals.get(field.name);
 
     if (deal !== undefined) {
         // Derived from the ABSOLUTE index, and `planUniqueDeals` has already
@@ -353,6 +353,96 @@ const assertSelfReferenceDealable = (
     );
 };
 
+/** Give each member of a composite index the mixed-radix digit of the row's index that is its own. */
+const assignDigits = (members: ReadonlyArray<FieldSpec>, bases: ReadonlyArray<UniqueDeal>, capacity: number, deals: Map<string, UniqueDeal>): void => {
+    let stride = 1;
+
+    for (const [position, field] of members.entries()) {
+        const base = bases[position] as UniqueDeal;
+        const step = stride;
+
+        deals.set(field.name, {
+            capacity,
+            valueAt: (valueIndex, generate) => base.valueAt(Math.floor(valueIndex / step) % base.capacity, generate),
+        });
+        stride *= base.capacity;
+    }
+};
+
+/**
+ * Deal one multi-column `unique` index so each row takes a distinct combination
+ * of its members, drawn from the cartesian product without replacement.
+ *
+ * Each member gets a deal over its own values, and the row's ABSOLUTE index is
+ * split into mixed-radix digits, one per member: member `j` takes its digit at
+ * `index / (product of earlier capacities)`. Distinct indexes below the product
+ * give distinct tuples, so two foreign keys of N and M parents seed N x M rows and
+ * no more — the through-table case. A batch past the product is refused.
+ *
+ * Skipped, leaving the columns to the generator, when a member is already unique on
+ * its own (the index is then satisfied), a self-reference (its pool is not known
+ * yet), a foreign key with no parents, a server-filled column, or is overridden.
+ * ponytail: a column shared by two composite indexes keeps the first deal; one shared digit space if that ever comes up.
+ */
+const planCompositeDeal = (
+    index: UniqueIndexSpec,
+    fields: ReadonlyMap<string, FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    now: number,
+    tableOverrides: Record<string, unknown>,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    deals: Map<string, UniqueDeal>,
+): void => {
+    const members = index.fields.flatMap((name) => fields.get(name) ?? []);
+    const undealable = (field: FieldSpec): boolean =>
+        field.unique ||
+        field.fkTable === table ||
+        deals.has(field.name) ||
+        Object.hasOwn(tableOverrides, field.name) ||
+        (field.hasServerDefault && field.fkTable === undefined) ||
+        (field.fkTable !== undefined && poolOf(field).length === 0);
+
+    if (members.length !== index.fields.length || members.some((field) => undealable(field))) {
+        return;
+    }
+
+    const bases = members.map((field) =>
+        field.fkTable === undefined ? planUniqueDeal(field, { now, table }) : planUniqueFkDeal(poolOf(field), table, field.name),
+    );
+    const capacity = bases.reduce((product, base) => product * base.capacity, 1);
+    const required = offset + count;
+
+    if (required > capacity) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `cannot seed ${String(required)} rows into "${table}": unique index "${index.name}" over (${index.fields.join(", ")}) has only ${String(capacity)} distinct combinations`,
+        );
+    }
+
+    assignDigits(members, bases, capacity, deals);
+};
+
+/** Deal every multi-column `unique` index of one table; see {@link planCompositeDeal}. */
+const planCompositeDeals = (
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>,
+    fields: ReadonlyArray<FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    now: number,
+    tableOverrides: Record<string, unknown>,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    deals: Map<string, UniqueDeal>,
+): void => {
+    const byName = new Map(fields.map((field) => [field.name, field]));
+
+    for (const index of uniqueIndexes) {
+        planCompositeDeal(index, byName, table, count, offset, now, tableOverrides, poolOf, deals);
+    }
+};
+
 /**
  * Decide how every `.unique()` column of one table deals its values, and fail
  * fast when a column cannot produce as many distinct values as the batch asks
@@ -380,6 +470,7 @@ const assertSelfReferenceDealable = (
  */
 const planUniqueDeals = (
     fields: ReadonlyArray<FieldSpec>,
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>,
     table: string,
     count: number,
     offset: number,
@@ -422,6 +513,8 @@ const planUniqueDeals = (
 
         deals.set(field.name, deal);
     }
+
+    planCompositeDeals(uniqueIndexes, fields, table, count, offset, now, tableOverrides, poolOf, deals);
 
     return deals;
 };
@@ -546,7 +639,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         const pools = new Map(
             spec.fields.filter((field) => field.fkTable !== undefined).map((field) => [field.name, fkPoolFor(field, table, idsByTable, existingIds)]),
         );
-        const uniqueDeals = planUniqueDeals(spec.fields, table, count, offset, now, tableOverrides, (field) =>
+        const uniqueDeals = planUniqueDeals(spec.fields, spec.uniqueIndexes, table, count, offset, now, tableOverrides, (field) =>
             (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(0),
         );
 
