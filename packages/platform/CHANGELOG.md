@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.71...@lunora/platform@1.0.0-alpha.72) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
 ## @lunora/platform [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.70...@lunora/platform@1.0.0-alpha.71) (2026-10-20)
 
 ### Features
