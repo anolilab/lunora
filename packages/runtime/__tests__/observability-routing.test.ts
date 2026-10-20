@@ -315,6 +315,100 @@ describe("enrichSink", () => {
         expect(received.logs[0]?.fields?.dims).toStrictEqual(received.logs[0]?.fields?.labels);
     });
 
+    it("exports a value shared under two keys under both keys on a metric, which redacts differently", () => {
+        expect.assertions(2);
+
+        const tags = ["a"];
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { dims: tags, labels: tags };
+        });
+
+        wrapped.onMetric?.(metric);
+
+        expect(received.metrics[0]?.attributes?.dims).toBe('["a"]');
+        expect(received.metrics[0]?.attributes?.labels).toBe('["a"]');
+    });
+
+    it("copies a class's own fields when its toJSON returns the object itself", () => {
+        expect.assertions(1);
+
+        class Point {
+            public x = 1;
+
+            public y = 2;
+
+            public toJSON(): this {
+                return this;
+            }
+        }
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => {
+            return { point: new Point() };
+        });
+
+        wrapped.onMetric?.(metric);
+
+        expect(received.metrics[0]?.attributes?.point).toBe(JSON.stringify({ x: 1, y: 2 }));
+    });
+
+    it("reads a shared subtree once, so a compact shared-reference graph copies in linear work", () => {
+        expect.assertions(2);
+
+        let reads = 0;
+        const leaf = {};
+
+        Object.defineProperty(leaf, "value", {
+            enumerable: true,
+            get: () => {
+                reads += 1;
+
+                return "leaf";
+            },
+        });
+
+        let node: unknown = leaf;
+
+        for (let depth = 0; depth < 10; depth += 1) {
+            node = { left: node, right: node };
+        }
+
+        const { received, sink } = recordingSink();
+        const wrapped = enrichSink(sink, () => undefined);
+        const event: LogEvent = { ...log, args: [node] };
+
+        wrapped.onLog?.(event);
+
+        // Without the copy memo the leaf is read once per path: 2^10 = 1024 times.
+        expect(reads).toBeLessThan(5);
+        expect(received.logs[0]).toBe(event);
+    });
+
+    it("still delivers the event when a thrown error's name getter throws", () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const { received, sink } = recordingSink();
+        const hostile = new Error("enricher exploded");
+
+        Object.defineProperty(hostile, "name", {
+            get: () => {
+                throw new Error("name getter");
+            },
+        });
+
+        const wrapped = enrichSink(sink, () => {
+            throw hostile;
+        });
+
+        wrapped.onLog?.(log);
+
+        expect(received.logs[0]).toBe(log);
+
+        spy.mockRestore();
+    });
+
     it("masks an Error that a class's toJSON returns, as the sink receives it", () => {
         expect.assertions(1);
 
@@ -350,12 +444,17 @@ describe("enrichSink", () => {
         expect(log.functionPath).toBe("messages:list");
     });
 
-    it("reports a throwing enricher, so a broken one is not silent", () => {
+    it("reports a throwing enricher, so a broken one is not silent", async () => {
         expect.assertions(1);
 
+        // The reporter caps logging per isolate, and the other tests in this file spend that cap.
+        // A fresh module starts it at zero.
+        vi.resetModules();
+
+        const { enrichSink: freshEnrichSink } = await import("../src/observability-routing");
         const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const { sink } = recordingSink();
-        const wrapped = enrichSink(sink, () => {
+        const wrapped = freshEnrichSink(sink, () => {
             throw new Error("enricher exploded");
         });
 
@@ -517,6 +616,64 @@ describe("enrichment reaches the OTLP wire", () => {
 
             expect(bodyOf("/v1/traces")).toContain("tenantPlan");
             expect(bodyOf("/v1/logs")).not.toContain("user@example.com");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("drops an enriched span key that names a built-in field the event does not carry", () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            // A fan-out has no shard key, and a successful dispatch has no error: the enricher fills both gaps.
+            const sink = enrichSink(otlpSink({ batch: false, endpoint: "https://collector.example" }), () => {
+                return {
+                    "cloudflare.ray_id": "forged",
+                    "error.type": "forged",
+                    "lunora.shard_key": "forged",
+                };
+            });
+
+            emitRpcEvent(sink, { durationMs: 5, fanOut: { failed: 0, shards: 2, table: "messages" }, functionPath: "messages:list", ok: true });
+
+            const call = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/v1/traces"));
+
+            expect(call).toBeDefined();
+
+            const body: unknown = call?.[1]?.body;
+
+            expect(typeof body).toBe("string");
+            expect(body).not.toContain("forged");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("drops an enriched log field that names a built-in field the log does not carry", () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const sink = enrichSink(otlpSink({ batch: false, endpoint: "https://collector.example" }), () => {
+                return { "lunora.shard_key": "forged" };
+            });
+            const unsharded: LogEvent = { args: [], functionPath: log.functionPath, level: log.level, message: log.message, ts: log.ts };
+
+            sink.onLog?.(unsharded);
+
+            const call = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/v1/logs"));
+
+            expect(call).toBeDefined();
+
+            const body: unknown = call?.[1]?.body;
+
+            expect(typeof body).toBe("string");
+            expect(body).not.toContain("forged");
         } finally {
             vi.unstubAllGlobals();
         }

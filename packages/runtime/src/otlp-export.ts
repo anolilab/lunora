@@ -30,6 +30,40 @@ const SAMPLED_TRACE_FLAG = 1;
 const UNSAMPLED_TRACE_FLAG = 0;
 
 /**
+ * Span attribute keys the RPC encoder can emit, including the ones it only emits when the event
+ * carries the field. A caller or enricher key with one of these names is dropped whether or not the
+ * event has that field, so an enricher cannot forge `error.type` on a successful span.
+ */
+const RESERVED_SPAN_KEYS: ReadonlySet<string> = new Set([
+    "cloudflare.ray_id",
+    "error.type",
+    "http.request.method",
+    "http.response.status_code",
+    "http.route",
+    "lunora.error_status",
+    "lunora.fanout.failed",
+    "lunora.fanout.shards",
+    "lunora.fanout.table",
+    "lunora.function_path",
+    "lunora.ok",
+    "lunora.shard_key",
+    "server.address",
+    "server.port",
+    "url.path",
+    "url.scheme",
+    "user_agent.original",
+]);
+
+/** Log and metric keys `encodeSignalAttributes` always or conditionally writes; a caller key with one of these names is dropped. */
+const RESERVED_SIGNAL_KEYS: ReadonlySet<string> = new Set([
+    LUNORA_ATTR.errorType,
+    LUNORA_ATTR.functionPath,
+    LUNORA_ATTR.rayId,
+    LUNORA_ATTR.shardKey,
+    LUNORA_ATTR.userId,
+]);
+
+/**
  * The operator context as one JSON attribute, with credentials masked. A value JSON cannot
  * encode (a bigint, a cycle) drops only this attribute: throwing here would discard the
  * whole buffered flush the event belongs to.
@@ -119,7 +153,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     // reserved attributes, as `SinkEnricher` documents, and a duplicate KeyValue would be
     // resolved ambiguously by a collector, so a colliding caller key is dropped.
     if (event.attributes !== undefined) {
-        const reserved = new Set(attributes.map((attribute) => attribute.key));
+        const reserved = new Set([...RESERVED_SPAN_KEYS, ...attributes.map((attribute) => attribute.key)]);
         const caller = encodeAttributes(Object.fromEntries(Object.entries(event.attributes).map(([key, value]) => [key, coerceFieldValue(value)])));
 
         attributes.push(...caller.filter((attribute) => !reserved.has(attribute.key)));
@@ -182,7 +216,9 @@ const encodeSignalAttributes = (
     // Caller values arrive pre-normalized to JSON-safe primitives;
     // `coerceFieldValue` re-applies for a sink fed a raw event.
     for (const [key, value] of Object.entries(caller ?? {})) {
-        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+        if (!RESERVED_SIGNAL_KEYS.has(key)) {
+            byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+        }
     }
 
     // Written last, so a caller key can never replace a reserved one.
