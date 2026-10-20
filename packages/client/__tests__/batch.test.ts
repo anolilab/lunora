@@ -130,10 +130,10 @@ describe("client batch transport (088)", () => {
 
         const error = (await client(fetchMock)
             .batch([{ fn: fnRef("docs:a") }])
-            .catch((error_: unknown) => error_)) as Record<symbol, unknown>;
+            .catch((error_: unknown) => error_)) as Error & Record<symbol, unknown>;
 
         expect(error[Symbol.for("lunora.serverVerdict")]).toBe(true);
-        expect(error["message"]).toBe("denied");
+        expect(error.message).toBe("denied");
     });
 
     it("rejects the whole batch (not per-slot) when the worker returns a batch-level error", async () => {

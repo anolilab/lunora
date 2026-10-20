@@ -593,6 +593,14 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
 const isWireFailure = (error: unknown, args: Record<string, unknown>): boolean => error instanceof TypeError && isEncodable(args);
 
 /**
+ * Whether a failed direct send is refused as `OFFLINE_NOT_QUEUED`: a write that would have been queued,
+ * or an online-only write whose transport failed while no socket was open. An online-only write is
+ * never queued, so a refusal before the first connect is the same refusal.
+ */
+const refusesAsNotQueued = (onlineOnly: boolean | undefined, networkDown: boolean, wireFailure: boolean, socketOpen: boolean): boolean =>
+    networkDown || (onlineOnly === true && wireFailure && !socketOpen);
+
+/**
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
@@ -4952,9 +4960,7 @@ class LunoraClient {
             // socket is refused with the typed error whether or not the shard ever
             // connected: before the first connect nothing was queued either way. The
             // transport failure rides along as its `cause`.
-            const refused = networkDown || (options.onlineOnly && wireFailure && !socketOpenNow);
-
-            if (refused) {
+            if (refusesAsNotQueued(options.onlineOnly, networkDown, wireFailure, socketOpenNow)) {
                 throw offlineNotQueuedError(function_.__lunoraRef, error);
             }
 
