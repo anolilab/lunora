@@ -15,7 +15,7 @@ import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } 
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
-import type { BinaryExpression, ElementAccessExpression } from "ts-morph";
+import type { BinaryExpression, CallExpression, ElementAccessExpression, ImportEqualsDeclaration } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { DockerProbe } from "../../util/docker";
@@ -561,6 +561,32 @@ const resolveRelativeImport = (fromFile: string, specifier: string): string | un
     return candidates.find((candidate) => isFileAt(candidate));
 };
 
+/** The path a plain `require("…")` call names, when its argument is a literal. */
+const requireSpecifier = (call: CallExpression): string | undefined => {
+    if (call.getExpression().getText() !== "require") {
+        return undefined;
+    }
+
+    const [argument] = call.getArguments();
+
+    return argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
+        ? argument.getLiteralValue()
+        : undefined;
+};
+
+/** The path an `import x = require("…")` names. */
+const importEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | undefined => {
+    const reference = declaration.getModuleReference();
+
+    if (!Node.isExternalModuleReference(reference)) {
+        return undefined;
+    }
+
+    const expression = reference.getExpression();
+
+    return Node.isStringLiteral(expression) ? expression.getLiteralValue() : undefined;
+};
+
 /**
  * The local modules the app's configuration and Wrangler entrypoint import, followed
  * through their own imports. An open-shard option kept in a module beside the
@@ -580,9 +606,13 @@ const importedModules = (roots: string[], project: Project, cwd: string, unreada
         }
 
         const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
-        const specifiers = [...source.getImportDeclarations(), ...source.getExportDeclarations()]
-            .map((declaration) => declaration.getModuleSpecifierValue())
-            .filter((specifier): specifier is string => specifier !== undefined);
+        const specifiers = [
+            ...source.getImportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()),
+            ...source.getExportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()),
+            // A CommonJS config reaches its helpers through `require()` or `import x = require()`.
+            ...source.getDescendantsOfKind(SyntaxKind.ImportEqualsDeclaration).map((declaration) => importEqualsSpecifier(declaration)),
+            ...source.getDescendantsOfKind(SyntaxKind.CallExpression).map((call) => requireSpecifier(call)),
+        ].filter((specifier): specifier is string => specifier !== undefined);
 
         for (const specifier of specifiers) {
             const resolved = resolveRelativeImport(file, specifier);
@@ -650,8 +680,9 @@ const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
  * Every open-shard member in the app that is not a literal `false`.
  *
  * Read with the TypeScript parser, not a text match, so the "before deploying"
- * comments the templates keep beside the flag never count. Files that do not
- * mention the name are skipped before parsing. Fails closed: a value the scan
+ * comments the templates keep beside the flag never count. Every scanned file is
+ * parsed, with no raw-text prefilter: an escaped spelling of the name would slip
+ * past one. Fails closed: a value the scan
  * cannot read (a variable, a shorthand, a getter) is reported, because the runtime
  * evaluates it. Ceiling, not covered: a computed key built from a variable, an
  * `Object.assign` or a spread from a variable, and any file outside `schemaDir`,
@@ -678,13 +709,9 @@ const findOpenShardAccess = (
         ...servicePaths.flatMap((servicePath) => wranglerMainEntry(cwd, servicePath, environment)),
     ];
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
-    const files = [
-        ...new Set([
-            ...directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory), unreadable)),
-            ...roots,
-            ...importedModules(roots, project, cwd, unreadable),
-        ]),
-    ];
+    // Modules the walked source imports are followed too, so a builder kept outside the scanned folders is read.
+    const walked = directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory), unreadable));
+    const files = [...new Set([...walked, ...roots, ...importedModules([...roots, ...walked], project, cwd, unreadable)])];
 
     const sites = files.flatMap((file) => {
         const text = readSource(file, unreadable);

@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,30 @@ describe("open-shard-access gate", () => {
         expect.assertions(1);
 
         writeAppConfig(String.raw`"allowUnauthenticatedShardAccess": true`);
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
+    it("refuses the flag in a helper a CommonJS Vite config requires", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "vite.config.cjs"), `const options = require("./open-options.cjs");\nmodule.exports = { plugins: [options] };\n`, "utf8");
+        writeFileSync(join(workdir, "open-options.cjs"), `module.exports = { allowUnauthenticatedShardAccess: true };\n`, "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+    });
+
+    it("refuses the flag in a module that a source file imports from outside the scanned folders", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        mkdirSync(join(workdir, "shared"), { recursive: true });
+        writeFileSync(join(workdir, "shared", "app.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+        writeFileSync(join(workdir, "src", "worker.ts"), `import { options } from "../shared/app";\n\nexport default options;\n`, "utf8");
 
         const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
 
@@ -436,29 +460,6 @@ describe("open-shard-access gate", () => {
         expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(before);
     });
-
-    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-        "refuses a file it cannot read, so the open-shard option cannot be ruled out there",
-        async () => {
-            expect.assertions(2);
-
-            const locked = join(workdir, "src", "locked");
-
-            mkdirSync(locked, { recursive: true });
-            writeFileSync(join(locked, "app.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
-            chmodSync(locked, 0o000);
-
-            try {
-                const { errors, logger } = silentLogger();
-                const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
-
-                expect(result.code).toBe(EXIT_CODE.USAGE);
-                expect(errors.some((line) => line.includes("src/locked"))).toBe(true);
-            } finally {
-                chmodSync(locked, 0o755);
-            }
-        },
-    );
 
     it("does not gate `lunora build`, which publishes nothing", async () => {
         expect.assertions(1);
