@@ -576,6 +576,8 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 type PortTransport = (call: {
     readonly method: string;
     readonly payload: string;
+}, options: {
+    readonly dedupId: string;
 }) => Promise<unknown>;
 ```
 
