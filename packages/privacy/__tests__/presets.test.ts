@@ -35,7 +35,7 @@ describe("the German preset", () => {
     it("names the four mandatory HGB and AO periods", () => {
         expect(germany().retention.map((rule) => [rule.id, rule.years])).toStrictEqual([
             ["de.books", 10],
-            ["de.voucher", 10],
+            ["de.voucher", 8],
             ["de.voucher.regulated", 10],
             ["de.correspondence", 6],
         ]);

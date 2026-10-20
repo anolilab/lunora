@@ -19,6 +19,7 @@ import type { PrivacyPorts } from "./ports";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
+import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
 import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
@@ -448,10 +449,33 @@ const checkMonths = (key: string, months: number, min: number): number => {
 };
 
 /**
+ * Refuse a `retain` on a year-end rule that names no `from` column. Without `from` the period would start
+ * at the erasure date, so the record would be kept for years past the one it describes.
+ */
+const checkRetentions = (datasets: ReadonlyArray<Dataset>, presets: ReadonlyArray<PrivacyPreset>): void => {
+    const rules = retentionRulesOf(presets);
+
+    for (const dataset of datasets) {
+        for (const { directive, table } of retainedTables(dataset)) {
+            const rule = rules.get(directive.rule);
+
+            if (rule?.start === "endOfCalendarYear" && directive.from === undefined) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `Retention for ${dataset.id}.${table} uses rule "${rule.id}", which starts at the end of the record's year. Pass retain("${rule.id}", { from: "<date column>" }).`,
+                );
+            }
+        }
+    }
+};
+
+/**
  * Bind the settings into a factory. Pure construction: nothing runs until a method is
  * called, and each call of the factory binds the ports for that invocation.
  */
 const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
+    checkRetentions(config.datasets, config.presets ?? []);
+
     // Each policy value comes from the last preset that sets it; the grace may be set by the app directly.
     const presetGraceDays = policyValue(config.presets, "erasureGraceDays");
     const deadlines: DeadlinePolicy = {
