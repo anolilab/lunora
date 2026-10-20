@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.335...@lunora/codegen@1.0.0-alpha.336) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.243
+* **@lunora/agent:** upgraded to 1.0.0-alpha.233
+* **@lunora/container:** upgraded to 1.0.0-alpha.87
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.120
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.142
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.90
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.128
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+* **@lunora/payment:** upgraded to 1.0.0-alpha.227
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/codegen [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.334...@lunora/codegen@1.0.0-alpha.335) (2026-10-20)
 
 
