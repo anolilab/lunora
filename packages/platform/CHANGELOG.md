@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.70...@lunora/platform@1.0.0-alpha.71) (2026-10-20)
+
+### Features
+
+* **platform:** enforce socket tag budget on every host ([#1254](https://github.com/anolilab/lunora/issues/1254)) ([867cead](https://github.com/anolilab/lunora/commit/867ceadbe10778d8acbdd9389f51cbfbcd4e8216))
+
 ## @lunora/platform [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.69...@lunora/platform@1.0.0-alpha.70) (2026-10-19)
 
 ### Features
