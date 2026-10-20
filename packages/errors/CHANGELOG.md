@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.67...@lunora/errors@1.0.0-alpha.68) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** read body-less SSE stream responses via text() ([#1285](https://github.com/anolilab/lunora/issues/1285)) ([dc4979b](https://github.com/anolilab/lunora/commit/dc4979b52d3ea0290618955b2562b88ec81a5609))
+
 ## @lunora/errors [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.66...@lunora/errors@1.0.0-alpha.67) (2026-10-20)
 
 ### Features
