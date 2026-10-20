@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+// eslint-disable-next-line testing-library/no-manual-cleanup -- vitest globals are disabled, so RTL's auto-cleanup is inactive and this manual cleanup is required for test isolation.
+import { cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { AdapterDriver } from "../../client/__tests__/lib/adapter-scenarios";
 import { scenarios } from "../../client/__tests__/lib/adapter-scenarios";
@@ -11,6 +13,12 @@ import { LunoraProvider, useMutation, usePresence, useQuery, useSubscription } f
 const driver: AdapterDriver = createReactDriver({ LunoraProvider, useMutation, usePresence, useQuery, useSubscription });
 
 describe("@lunora/react-native behavioural parity", () => {
+    // Vitest globals are off, so Testing Library never registers its own cleanup. Unmount every tree after each
+    // scenario, including one whose assertion failed before its `dispose` ran.
+    afterEach(() => {
+        cleanup();
+    });
+
     it.each(scenarios)("$name", async ({ run }) => {
         expect.hasAssertions();
 
