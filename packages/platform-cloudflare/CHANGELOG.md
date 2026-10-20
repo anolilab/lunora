@@ -1,3 +1,15 @@
+## @lunora/platform-cloudflare [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.100...@lunora/platform-cloudflare@1.0.0-alpha.101) (2026-10-20)
+
+### Features
+
+* **platform:** enforce socket tag budget on every host ([#1254](https://github.com/anolilab/lunora/issues/1254)) ([867cead](https://github.com/anolilab/lunora/commit/867ceadbe10778d8acbdd9389f51cbfbcd4e8216))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/platform-cloudflare [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.99...@lunora/platform-cloudflare@1.0.0-alpha.100) (2026-10-19)
 
 
