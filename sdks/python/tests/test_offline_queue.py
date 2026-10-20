@@ -1157,12 +1157,13 @@ class TestOnlineOnlyWrites(unittest.TestCase):
 
         self.assertEqual(len(posts), sent, "and nothing was sent")
 
-    def test_an_online_only_transport_type_error_is_refused_with_its_cause(self):
+    def test_an_online_only_transport_type_error_is_raised_as_is_because_its_fate_is_unknown(self):
         covers("offline_online_only_transport_failure_refused")
         store = _Store()
-        refusal = TypeError("transport rejected the request object")
+        refusal = TypeError("transport raised after the request left the process")
         posts = []
 
+        # The transport sends the request, then raises: the write may have committed on the server.
         def post(_url, _headers, body):
             posts.append(body)
             raise refusal
@@ -1170,7 +1171,7 @@ class TestOnlineOnlyWrites(unittest.TestCase):
         client = LunoraClient("https://app.example", http_post=post)
         client.offline_queue = OfflineQueue(persistence=store)
 
-        with self.assertRaises(OfflineError) as refused:
+        with self.assertRaises(TypeError) as raised:
             asyncio.run(
                 client.submit(
                     SubmitOptions(
@@ -1181,8 +1182,7 @@ class TestOnlineOnlyWrites(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
-        self.assertIs(refused.exception.__cause__, refusal)
+        self.assertIs(raised.exception, refusal)
         self.assertEqual(len(posts), 1)
         self.assertEqual(store.appended, [])
 

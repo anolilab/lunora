@@ -384,9 +384,10 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
             # A raw exception is the transport, not a verdict (the replay reads it the
             # same way), so an online-only write that never reached the server while
             # the shard has no socket is refused rather than surfacing the raw error.
-            # An argument the codec refuses never left the process: the preflight above
-            # already caught it, so a `TypeError` raised here came from the transport.
-            unreached = options.online_only and not isinstance(error, (LunoraError, WireFormatError)) and client._send is None
+            # A `TypeError` is not a refusal the transport can vouch for: a transport may send the
+            # request and then raise one, so its fate is unknown and the original exception stays.
+            # An argument the codec refuses never reaches this handler; the preflight above catches it.
+            unreached = options.online_only and not isinstance(error, (LunoraError, WireFormatError, TypeError)) and client._send is None
         run_deferred(settle)
         if unreached:
             raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued") from error
