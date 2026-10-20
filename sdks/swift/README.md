@@ -43,9 +43,14 @@ let messages = try client.query("messages:list", args: ["channel": "general"])
 _ = try client.mutation("messages:send", args: ["channel": "general", "text": "hi"])
 
 // Live subscription: attach your socket, then feed it frames.
-client.attachSocket { frame in try socket.send(Wire.stableStringify(frame)) }
+client.attachSocket { frame in try? socket.send(Wire.stableStringify(frame)) }
 let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `URLSession`, implement
+`URLSessionTaskDelegate.urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:)`
+and call `completionHandler(nil)`.
 
 The sender receives each outbound frame as a dictionary; serialize it with
 `Wire.stableStringify`, the transport's own writer, so string escaping (a lone
@@ -64,6 +69,57 @@ differs from the shape's — re-seeds instead: the view is emptied, its checkpoi
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type). The sender cannot throw, so a failed write
+closes the socket instead: that makes the blocked `receive()` throw, which ends the run
+and starts the reconnect. The sender runs on app threads and the loop may close the
+socket too, so `close()` must be safe to call twice and from any thread. A flush that requeues writes (or returns `retryAfterMs`) must
+schedule its own retry, or those writes wait for the next reconnect: the retry is a
+`Task` that is cancelled when the socket run ends.
+
+```swift
+var attempt = 0
+let shard: String? = nil // this socket's shard key; nil is the default shard
+while !Task.isCancelled {
+    if let socket = try? await connect() { // your socket library
+        var flushRetry: Task<Void, Never>?
+        // connect goes out before the sender is attached, so a subscribe on another task cannot write ahead of it.
+        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame()))) != nil {
+            // A failed write closes the socket: the receive below then throws, ending the run.
+            client.attachSocket { frame in
+                do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
+            }
+            client.resendSubscriptions()
+            let report = client.flushOfflineQueue(shardKey: shard)
+            if !report.requeued.isEmpty || report.retryAfterMs != nil {
+                flushRetry = Task {
+                    var backoff = 1.0
+                    var wait = report.retryAfterMs.map { Double($0) / 1000 }
+                    while !Task.isCancelled {
+                        let pause = wait ?? Double.random(in: backoff / 2 ... backoff)
+                        try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                        guard !Task.isCancelled else { return }
+                        let next = client.flushOfflineQueue(shardKey: shard)
+                        if next.requeued.isEmpty && next.retryAfterMs == nil { return }
+                        wait = next.retryAfterMs.map { Double($0) / 1000 }
+                        backoff = min(30, backoff * 2)
+                    }
+                }
+            }
+            while let raw = try? await socket.receive() {
+                if client.handleFrame(raw) == "ack" { attempt = 0 }
+            }
+        }
+        flushRetry?.cancel()
+        client.detachSocket()
+        socket.close() // your socket library: without this each reconnect leaks a connection
+    }
+    let delay = min(30.0, pow(2.0, Double(min(attempt, 5))))
+    try? await Task.sleep(nanoseconds: UInt64(Double.random(in: delay / 2...delay) * 1_000_000_000))
+    attempt += 1
+}
+```
 
 Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
 is `INTERNAL`, and a success whose `result` does not decode is

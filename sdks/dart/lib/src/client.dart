@@ -217,6 +217,13 @@ class LunoraClient {
     _send = sender;
   }
 
+  /// Forgets the sender, so a subscription made while the socket is down is
+  /// held for [resendSubscriptions] instead of written to the dead socket.
+  /// Unlike [close], the client stays usable and keeps its subscriptions.
+  void detachSocket() {
+    _send = null;
+  }
+
   // ─── Connectivity ─────────────────────────────────────────────────────────
 
   /// Tell the client whether its socket is up.

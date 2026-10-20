@@ -254,9 +254,10 @@ public final class Submit {
         }
 
         // The callbacks above are consumer code, and one may have dropped the socket. An
-        // online-only write that would
-        // now queue is refused here, with its overlays rolled back, rather than sent while the
-        // shard is down.
+        // online-only
+        // write that would now queue is refused here, with its overlays rolled back, rather than
+        // sent
+        // while the shard is down.
         if (options.onlineOnly) {
             boolean wouldQueue;
 

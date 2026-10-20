@@ -68,7 +68,9 @@ frame is written the moment it is produced, by a writer task running alongside
 the read loop, so a `subscribe` / `unsubscribe` / `subscribe_shape` issued from
 another coroutine — or another thread — goes out immediately whether or not the
 server has anything to say. `connect_and_run` returns when the socket closes and
-re-raises a failed write, so the caller reconnects; `resend_subscriptions` (which
+re-raises a failed write, so the caller reconnects — `await client.reconnect_forever()`
+does that for you, with exponential, jittered backoff (1 s doubling to a 60 s cap, reset
+once a run received a frame), until `close()` or cancellation; `resend_subscriptions` (which
 it calls for you) puts the subscriptions back with their resume cursors.
 
 **Keepalive is the `websockets` library's, not an application frame.** This

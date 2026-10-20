@@ -299,6 +299,29 @@ void caseShapeSubscriptionsResendAfterReconnect() {
   equals(resent[1]['sinceEpoch'], 'e1', 'and from the epoch it saw');
 }
 
+void caseDetachedSubscriptionIsHeldUntilReattach() {
+  // Not a manifest case: adding it to protocol/conformance-cases.json would make
+  // all 8 ports required to cover it.
+  final client = LunoraClient(url: 'https://app.example');
+  final dead = <Map<String, Object?>>[];
+  final live = <Map<String, Object?>>[];
+
+  client
+    ..attachSocket(dead.add)
+    ..detachSocket();
+
+  client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'});
+
+  equals(dead.length, 0, 'a subscription made while detached is not written to the dead socket');
+
+  client
+    ..attachSocket(live.add)
+    ..resendSubscriptions();
+
+  equals(live.length, 1, 'reattaching resends the held subscription once');
+  equals(live.isEmpty ? null : live.first['type'], 'subscribe', 'as a subscribe frame');
+}
+
 /// A payload the codec refuses must not end the socket read loop.
 ///
 /// It reaches THAT subscription's error callback coded `INVALID_FRAME`; letting

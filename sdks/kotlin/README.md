@@ -42,6 +42,11 @@ client.attachSocket { frame -> socket.send(Json.write(frame)) }
 val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `java.net.http.HttpClient`
+refuses them by default (`HttpClient.Redirect.NEVER`); with OkHttp, build the client
+with `OkHttpClient.Builder().followRedirects(false)`.
+
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect —
 queries and shapes alike — carrying each one's resume cursor or checkpoint.
@@ -56,6 +61,63 @@ checkpoint the view is at — or whose epoch differs from the view's — and tha
 not a `reset` re-seeds the shape instead of splicing onto it: the view is emptied,
 its checkpoint and epoch cleared, `onRows` told `[]`, the ops skipped, and a cold
 `shape_subscribe` sent at once through the attached socket.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type):
+
+```kotlin
+var attempt = 0
+val shard: String? = null // this socket's shard key; null is the default shard
+val jitter = { backoff: Long -> backoff / 2 + Random.nextLong(backoff / 2 + 1) }
+while (isActive) {
+    try {
+        coroutineScope {
+            var retry: Job? = null
+            try {
+                connect().use { socket -> // your socket library
+                    // connect goes out before the sender is attached, so a subscribe on another coroutine cannot write ahead of it
+                    socket.send(Json.write(Client.buildConnectFrame()))
+                    client.attachSocket { frame -> socket.send(Json.write(frame)) }
+                    client.resendSubscriptions()
+                    // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it
+                    val report = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
+                    if (report.requeued.isNotEmpty() || report.retryAfterMs != null) {
+                        // requeued writes never stop the read loop: retry in a child coroutine
+                        retry = launch {
+                            var backoff = 1_000L
+                            var wait = report.retryAfterMs ?: jitter(backoff)
+                            while (true) {
+                                delay(wait)
+                                val again = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
+                                if (again.requeued.isEmpty() && again.retryAfterMs == null) break
+                                // a persistent transient failure backs off instead of replaying every second
+                                backoff = minOf(30_000L, backoff * 2)
+                                wait = again.retryAfterMs ?: jitter(backoff)
+                            }
+                        }
+                    }
+                    while (true) {
+                        val raw = socket.receive() ?: break
+                        if (client.handleFrame(raw) == "ack") attempt = 0
+                    }
+                }
+            } finally {
+                retry?.cancel() // the socket run ended: stop the retry timer
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e // a CancellationException is an Exception: never swallow it
+    } catch (e: Exception) {
+        // an ordinary failure takes the retry path below
+    } finally {
+        client.detachSocket()
+    }
+    val ms = minOf(30_000L, 1_000L shl minOf(attempt++, 5))
+    delay(ms / 2 + Random.nextLong(ms / 2 + 1))
+}
+```
+
+A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a child coroutine retries the flush, and that coroutine is cancelled when the socket run ends.
 
 A reply the RPC cannot read — a body that is not a JSON object, whatever its
 status — throws `ApiException` (`INTERNAL`), never a parser or cast exception. A

@@ -6,6 +6,8 @@ implements, and ``sdks/python/README.md`` for usage.
 
 from .client import (
     LunoraClient,
+    SocketRunInProgressError,
+    WebsocketsMissingError,
     build_connect_frame,
     build_rpc_body,
     build_shape_subscribe_frame,
@@ -95,8 +97,10 @@ __all__ = [
     "OptimisticLocalStore",
     "PersistenceAdapter",
     "QueuedMutation",
+    "SocketRunInProgressError",
     "SubmitOptions",
     "SubscriptionError",
+    "WebsocketsMissingError",
     "WireBigInt",
     "WireBytes",
     "WireDate",
