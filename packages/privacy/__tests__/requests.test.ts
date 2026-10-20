@@ -79,6 +79,15 @@ describe(cancelRequest, () => {
         await expect(codeOf(cancelRequest(store, { id: "r9", now }))).resolves.toBe("UNPROCESSABLE");
     });
 
+    it("refuses a cancel whose conditional write lost to a run that started first", async () => {
+        const store = memoryRequests();
+
+        await openRequest(store, { erasure, id: "r10", now, sessionAgeMs: 1000, subjectId: "u1", type: "erasure" });
+
+        await expect(codeOf(cancelRequest({ ...store, claim: async () => false }, { id: "r10", now }))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get("r10")?.status).toBe("grace");
+    });
+
     it("reports a missing request as not found", async () => {
         await expect(codeOf(cancelRequest(memoryRequests(), { id: "missing", now }))).resolves.toBe("NOT_FOUND");
     });

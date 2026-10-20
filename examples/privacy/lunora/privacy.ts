@@ -45,7 +45,7 @@ const tombstoneSecret = process.env.PRIVACY_TOMBSTONE_SECRET;
 /** A workflow step's ports: the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`. */
 const workflowPorts = (context: PrivacyWorkflowRun) => {
     return {
-        ...remotePorts(async (call) => context.run(internal.requests.privacyPort, call)),
+        ...remotePorts(async (call, options) => context.run(internal.requests.privacyPort, call, options)),
         tombstones: tombstonesFrom(context.env),
     };
 };

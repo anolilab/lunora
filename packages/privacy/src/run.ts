@@ -230,9 +230,18 @@ const startStep = async (scope: RunScope, steps: StepRunner, requestId: string):
             return status;
         }
 
-        await setStatus(scope.ports, requestId, { from: status, to: "processing" });
+        // A claim, not an update: a cancel that landed after the read above keeps its status, and the run stops.
+        const next = transition(status, "processing");
 
-        return "processing" as const;
+        if (!(await scope.ports.store.claim(requestId, status, { status: next }))) {
+            const current = await requireRequest(scope.ports.store, requestId);
+
+            return current.status;
+        }
+
+        await scope.ports.store.addEvent(requestId, scope.ports.now(), next);
+
+        return next;
     });
 
 /** A step's answer: the status the request held when the step ran, and the step's value when it ran. */

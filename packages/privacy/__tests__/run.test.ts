@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
-import { codeOf, setup } from "./harness";
+import { codeOf, memoryRequests, setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -107,6 +107,38 @@ describe("runExport", () => {
 
         expect(outcome.status).toBe("failed");
         expect(store.events).toContain("r1:failed");
+        expect(files.files.size).toBe(0);
+    });
+
+    it("does not start a request a cancel reached between the start read and the claim", async () => {
+        const store = memoryRequests();
+        let reads: number | undefined;
+        const racing = {
+            ...store,
+            get: async (id: string) => {
+                const row = await store.get(id);
+
+                if (reads === undefined) {
+                    return row;
+                }
+
+                reads += 1;
+
+                // The run reads the load step first and the start second; a cancel lands after the start's read.
+                if (reads === 2 && row !== undefined) {
+                    store.rows.set(id, { ...row, status: "cancelled" });
+                }
+
+                return row;
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, store: racing });
+        const opened = await privacy.requestExport();
+
+        reads = 0;
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "cancelled" });
+        expect(store.rows.get(opened.id)?.status).toBe("cancelled");
         expect(files.files.size).toBe(0);
     });
 

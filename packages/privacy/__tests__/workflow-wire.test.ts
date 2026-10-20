@@ -165,6 +165,37 @@ describe("a workflow over the wire", () => {
         expect(local.tombstones.stored.size).toBe(1);
     });
 
+    it("gives every port call its own dedup id, and a retried step runs its erase again", async () => {
+        const local = allPorts();
+        const dedupIds: string[] = [];
+        const config: PrivacyConfig<"local" | "remote"> = {
+            datasets: [tasksDataset],
+            ports: (side) => {
+                if (side === "local") {
+                    return local;
+                }
+
+                return remotePorts(async ({ method, payload }, { dedupId }) => {
+                    dedupIds.push(dedupId);
+
+                    return dispatchPort(config, local, method, payload);
+                });
+            },
+            presets: [eu()],
+            tombstoneSecret: SECRET,
+        };
+        const privacyFor = definePrivacy(config);
+        const opened = await privacyFor("local", SUBJECT).requestErasure();
+        const { step } = durableStep({ failOnce: "erase:tasks" });
+
+        await privacyFor("remote").workflows.erasureHandler({ params: { requestId: opened.id }, step });
+
+        expect(local.store.rows.get(opened.id)?.status).toBe("completed");
+        expect(local.data.rows).toStrictEqual({ goals: 0, tasks: 0 });
+        expect(dedupIds.length).toBeGreaterThan(0);
+        expect(new Set(dedupIds).size).toBe(dedupIds.length);
+    });
+
     it("erases nothing when the dispatcher side has no tombstone store bound", async () => {
         const { data, files, newId, now, store } = allPorts();
         const local = { data, files, newId, now, store };

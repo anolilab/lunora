@@ -190,7 +190,11 @@ const cancelRequest = async (store: RequestStore, input: { id: string; now: Date
 
     const status = transition(record.status, "cancelled");
 
-    await store.update(record.id, { status });
+    // Conditional on the status read above: a run that started in the meantime must not be overwritten.
+    if (!(await store.claim(record.id, record.status, { status }))) {
+        throw new LunoraError("UNPROCESSABLE", `A ${record.type} request can no longer be cancelled.`);
+    }
+
     await store.addEvent(record.id, input.now, "cancelled");
 
     return { ...record, status };
