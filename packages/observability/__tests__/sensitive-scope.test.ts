@@ -439,6 +439,16 @@ describe("sensitiveValues", () => {
         expect(direct.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
         expect(nested.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
     });
+
+    it("collects the cause and the aggregated errors of a marked Error, which are not enumerable either", () => {
+        expect.assertions(2);
+
+        const wrapped = createSensitiveScope(sensitiveValues({ value: new Error("wrap", { cause: new Error(SECRET) }) }, new Set(["value"])));
+        const aggregated = createSensitiveScope(sensitiveValues({ value: new AggregateError([new Error(SECRET)], "many") }, new Set(["value"])));
+
+        expect(wrapped.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
+        expect(aggregated.text(`refused: ${SECRET}`)).toBe(`refused: ${SENSITIVE_ARG_MASK}`);
+    });
 });
 
 describe("telemetry names under a sensitive scope, beyond the event and span handle", () => {

@@ -444,6 +444,19 @@ const byteSpellings = (value: ArrayBuffer | ArrayBufferView): string[] => {
 const errorMessageSpellings = (value: object): string[] => (value instanceof Error && value.message.length > 0 ? stringSpellings(value.message) : []);
 
 /**
+ * The `cause` of an Error, and the `errors` of an AggregateError. Like the message, they are not
+ * enumerable properties, so walking the object's values never reaches them.
+ */
+const errorChildren = (value: object): unknown[] => {
+    if (!(value instanceof Error)) {
+        return [];
+    }
+
+    // `errors` is typed `any` by the lib, so it is read as the array it is documented to be.
+    return value instanceof AggregateError ? [value.cause, ...(value.errors as unknown[])] : [value.cause];
+};
+
+/**
  * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
  * and a `seen` set keeps a shared or cyclic reference from being walked twice.
  */
@@ -472,6 +485,8 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
             for (const child of Object.values(value)) {
                 pending.push(child);
             }
+
+            pending.push(...errorChildren(value));
         }
     }
 };
