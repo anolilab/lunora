@@ -1,3 +1,14 @@
+## @lunora/platform-cloudflare [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.102...@lunora/platform-cloudflare@1.0.0-alpha.103) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/platform-cloudflare [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.101...@lunora/platform-cloudflare@1.0.0-alpha.102) (2026-10-20)
 
 ### Features
