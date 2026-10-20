@@ -53,7 +53,7 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 # Deploy
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
                [--lazy-functions] [--no-smoke-load]
-lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
+lunora build [--out-dir <dir>] [--no-framework-build]   # bundle the worker to disk without deploying
              [--lazy-functions] [--no-smoke-load]
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
@@ -757,6 +757,14 @@ lunora build --out-dir dist-worker
 
 `lunora deploy --prebuilt` skips codegen + the schema-drift gate (trusting the
 prior `build` / `prepare`); wrangler still bundles the Worker.
+
+Before wrangler runs, `build` runs the project's client build when wrangler would
+otherwise read a stale or missing output: `rsbuild build` or `vite build`, picked
+from the `rsbuild.config.*` or `vite.config.*` file. It runs when `main` is
+`virtual:lunora/worker` (the Vite-generated class-A entry), when the framework is
+class A or B, or when `assets.directory` is set. Pass `--no-framework-build` to skip
+it and bundle what is already on disk. Edits the client build makes to
+`wrangler.jsonc` are rolled back, so `build` leaves the committed config alone.
 
 ### `lunora link`
 
