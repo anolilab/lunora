@@ -47,9 +47,7 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
     });
     const { data: status, error } = statusQuery;
 
-    useAutoRefresh(() => {
-        statusQuery.refetch();
-    }, true);
+    useAutoRefresh(() => statusQuery.poll(), true);
 
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-scheduler-pools">

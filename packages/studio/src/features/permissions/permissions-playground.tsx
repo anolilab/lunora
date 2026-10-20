@@ -3,6 +3,7 @@ import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -70,6 +71,8 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     const [running, setRunning] = useState<boolean>(false);
     const [outcome, setOutcome] = useState<ProbeOutcome | null>(null);
     const [argsError, setArgsError] = useState<null | string>(null);
+    // A probe runs the function for real, so a mutation or action would write as that user: offer them only on request.
+    const [includeWrites, setIncludeWrites] = useState<boolean>(false);
     // The last prefill nonce applied, so a given matrix "Probe this" click seeds
     // the form at most once even though `prefill` stays referentially set.
     const appliedNonce = useRef<number>(-1);
@@ -126,7 +129,12 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
     }, [prefill]);
 
-    const effectivePath = selectedPath === "" ? (functions[0]?.path ?? "") : selectedPath;
+    // A matrix prefill may select a non-query; keep it listed so the select shows what will run.
+    const listed = includeWrites ? functions : functions.filter((descriptor) => descriptor.kind === "query" || descriptor.path === selectedPath);
+    const effectivePath = selectedPath === "" ? (listed[0]?.path ?? "") : selectedPath;
+    // A path the list has not resolved (the list is still loading, or failed) is treated as a write: a probe runs the function for real.
+    const selectedDescriptor = functions.find((descriptor) => descriptor.path === effectivePath);
+    const executesWrites = effectivePath !== "" && selectedDescriptor?.kind !== "query";
 
     const run = async (): Promise<void> => {
         if (effectivePath === "") {
@@ -179,6 +187,17 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         setRunAsUserId(event.target.value);
     };
 
+    const onIncludeWritesChange = (event: ChangeEvent<HTMLInputElement>): void => {
+        setIncludeWrites(event.target.checked);
+
+        // Hiding writes again must not leave one selected behind the filter.
+        if (!event.target.checked && executesWrites) {
+            setSelectedPath("");
+        }
+    };
+
+    const runDisabled = !runAsIdentity || running || effectivePath === "";
+
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-permissions-playground">
             {discoverError !== null && (
@@ -206,12 +225,23 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                         onChange={onSelectChange}
                         value={effectivePath}
                     >
-                        {functions.map((descriptor) => (
+                        {listed.map((descriptor) => (
                             <option key={descriptor.path} value={descriptor.path}>
                                 {descriptor.path} ({descriptor.kind})
                             </option>
                         ))}
                     </select>
+                    <Label className="flex items-center gap-1.5 text-xs font-normal" htmlFor="pp-include-writes">
+                        <input
+                            checked={includeWrites}
+                            className="size-4 accent-primary"
+                            data-testid="pp-include-writes"
+                            id="pp-include-writes"
+                            onChange={onIncludeWritesChange}
+                            type="checkbox"
+                        />
+                        {t("Include mutations and actions")}
+                    </Label>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
@@ -242,9 +272,24 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <Button data-testid="pp-run" disabled={!runAsIdentity || running || effectivePath === ""} onClick={runOnce} type="button">
-                        {running ? t("Probing…") : t("Run probe")}
-                    </Button>
+                    {executesWrites ? (
+                        // A mutation or action really executes under the forged identity — guard it.
+                        <ConfirmButton
+                            confirmLabel={t("This will execute `{functionPath}` as user `{userId}`.", {
+                                functionPath: effectivePath,
+                                userId: runAsUserId.trim(),
+                            })}
+                            disabled={runDisabled}
+                            onConfirm={runOnce}
+                            testId="pp-run"
+                        >
+                            {running ? t("Probing…") : t("Run probe")}
+                        </ConfirmButton>
+                    ) : (
+                        <Button data-testid="pp-run" disabled={runDisabled} onClick={runOnce} type="button">
+                            {running ? t("Probing…") : t("Run probe")}
+                        </Button>
+                    )}
                     {runAsUserId.trim() !== "" && (
                         <Badge data-testid="pp-as-badge" variant="secondary">
                             {t("as {userId}", { userId: runAsUserId.trim() })}

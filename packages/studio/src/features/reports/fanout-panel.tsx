@@ -146,11 +146,11 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
         data: result,
         error,
         errorSource,
-        refetch,
+        poll,
     } = useAdminQuery<FanoutMetricsResult>(ADMIN_FUNCTIONS.getFanoutMetrics, {}, { keepPreviousData: true, shardKey: queryShardKey });
 
     // Point-in-time DO read — poll to keep the snapshot current without a manual refresh.
-    useAutoRefresh(refetch, true);
+    useAutoRefresh(poll, true);
 
     const isIdle = result !== undefined && isFanoutIdle(result);
 

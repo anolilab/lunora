@@ -182,7 +182,7 @@ const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray
  * globals are reached through `globalThis` so the module stays import-safe under
  * Node, mirroring the rest of the studio.
  */
-const downloadFile = (filename: string, content: string, mime: string): void => {
+const downloadFile = (filename: string, content: Blob | string, mime: string): void => {
     if (!("document" in globalThis)) {
         return;
     }
@@ -612,5 +612,5 @@ const GridActionsBar = ({
     );
 };
 
-export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
+export { CellDetailDialog, ColumnsMenu, downloadFile, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
 export type { GridRow };

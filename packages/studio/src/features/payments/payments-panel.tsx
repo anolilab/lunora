@@ -136,12 +136,10 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     // against a missing table would resurrect the "unknown table" error.
     useAutoRefresh(() => {
         if (!hasPaymentTables) {
-            return;
+            return undefined;
         }
 
-        subscriptionsQuery.refetch();
-        eventsQuery.refetch();
-        statesQuery.refetch();
+        return Promise.all([subscriptionsQuery.poll(), eventsQuery.poll(), statesQuery.poll()]);
     }, true);
 
     const subscriptions = subscriptionsQuery.data?.rows ?? [];

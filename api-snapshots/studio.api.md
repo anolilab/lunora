@@ -1260,7 +1260,7 @@ const toFilterClauses: (filters: ReadonlyArray<EditableFilter>) => FilterClause[
 ### `useAutoRefresh` (const)
 
 ```ts
-const useAutoRefresh: (onTick: () => void, enabled: boolean, intervalMs?: number) => void;
+const useAutoRefresh: (onTick: () => unknown, enabled: boolean, intervalMs?: number) => void;
 ```
 
 ### `useDebounced` (const)
@@ -1591,6 +1591,7 @@ const MESSAGE_IDS: readonly [
     "SVG",
     "Export / Import",
     "Exported {count} rows.",
+    "Importing rows {from}–{to} of {total}…",
     "Facets",
     "file:function",
     "Files",
@@ -1614,6 +1615,7 @@ const MESSAGE_IDS: readonly [
     "Idle",
     "Import",
     "Import (writes rows)?",
+    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only; the failed chunk may also have written rows.",
     "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
@@ -1750,6 +1752,8 @@ const MESSAGE_IDS: readonly [
     "Run as (userId)",
     "Identity (userId) to run as",
     "Run probe",
+    "Include mutations and actions",
+    "This will execute `{functionPath}` as user `{userId}`.",
     "Allowed",
     "Denied",
     "Errored",
@@ -2005,7 +2009,7 @@ const MESSAGE_IDS: readonly [
     "breaking",
     "safe",
     "{count} rows",
-    "Showing the first {max} of {count} rows.",
+    "Showing the first {max} rows.",
     "Showing the {n} most common values.",
     "No rows returned.",
     "Private",

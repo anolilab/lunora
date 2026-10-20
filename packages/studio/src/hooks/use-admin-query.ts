@@ -94,6 +94,12 @@ interface AdminQueryResult<T> {
      * when `live` is set; the one-shot data stays valid, it just stops updating.
      */
     readonly liveError: string | undefined;
+
+    /**
+     * Re-run the one-shot read for an auto-refresh tick. Resolves when the read lands and rejects when it fails, so `useAutoRefresh` backs
+     * off on a failing read and stops on an auth error. `refetch` swallows the failure, so it can't drive a poll.
+     */
+    readonly poll: () => Promise<void>;
     /** Imperatively re-run the one-shot read (e.g. a manual Refresh button). */
     readonly refetch: () => void;
 }
@@ -212,6 +218,9 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
         liveError: undefined,
         refetch: (): void => {
             fireAndForget(query.refetch());
+        },
+        poll: async (): Promise<void> => {
+            await query.refetch({ throwOnError: true });
         },
     };
 }
