@@ -153,6 +153,33 @@ describe("emitted artifacts for a sensitive function", () => {
         expect(emitShard({ schema })).not.toContain("lunora.admitSensitiveArgs");
     });
 
+    /* eslint-disable no-template-curly-in-string -- the assertions are over emitted TypeScript text, whose `${name}` is not a template here */
+    it("scopes a shape's resolve to its raw args only when a shape declares a marked argument", () => {
+        expect.assertions(6);
+
+        const schema = { tables: [], vectorIndexes: [] };
+        const marked = emitShard({
+            schema,
+            shapes: [{ args: { token: sensitiveString }, exportName: "vault", filePath: "shapes", table: "vault" }],
+        });
+        const plain = emitShard({
+            schema,
+            shapes: [{ args: { label: { kind: "string" } }, exportName: "vault", filePath: "shapes", table: "vault" }],
+        });
+
+        // The predicate's transformed value is admitted into this scope by `compileWhere`, and the
+        // error it throws is scrubbed through it before the scope clears.
+        expect(marked).toContain(
+            "private resolveShapeWithScope(name: string, args: Record<string, unknown>, identity: SubscriptionIdentity | undefined, sensitive: SensitiveScope)",
+        );
+        expect(marked).toContain("const sensitive = this.openSensitiveScope(`__shape__:${name}`, args);");
+        expect(marked).toContain("throw this.maskSensitiveError(error, sensitive);");
+        expect(marked).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity, sensitive });");
+        expect(plain).not.toContain("resolveShapeWithScope");
+        expect(plain).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity });");
+    });
+    /* eslint-enable no-template-curly-in-string */
+
     it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
         expect.assertions(8);
 

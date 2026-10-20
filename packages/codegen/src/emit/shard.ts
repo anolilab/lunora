@@ -55,7 +55,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey } from "./shared";
+import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey, sensitiveArgNamesOf as sensitiveArgumentNamesOf } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -182,6 +182,10 @@ const emitShard = ({
     const base = baseSpecifiers(useUmbrella);
     const hasMutators = mutators.length > 0;
     const hasShapes = shapes.length > 0;
+    // A shape's `args` is lifted from its declaration, so this is known at build time. It turns on the
+    // sensitive-args wiring below (admit hook, name lookup) even for an app whose functions are all unmarked.
+    const hasSensitiveShapes = shapes.some((shape) => sensitiveArgumentNamesOf(shape.args).length > 0);
+    const sensitiveArgs = hasSensitiveArgs || hasSensitiveShapes;
     // The schema-version ledger (plan 200). The snapshot the drift gate diffs is
     // embedded verbatim so the DO can append it to `__lunora_schema_history` on
     // cold start, keyed by its content hash — reverting a schema re-links to the
@@ -364,12 +368,17 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         doTypeImports.push("WhereInput");
     }
 
+    if (hasSensitiveShapes) {
+        doTypeImports.push("SensitiveScope");
+    }
+
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
     const relationFanout = emitRelationFanout(hasGlobalTables);
 
     const { customMutatorOverride, shapeGuardImport, shapeReadPolicyAssertion, shapeReadPolicyImport, shapeResolveOverride } = emitShapeFragments({
         hasMutators,
+        hasSensitiveShapes,
         hasShapes,
         rlsData,
     });
@@ -466,7 +475,7 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
         ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
-        ...(hasSensitiveArgs ? [`import { sensitiveArgumentNames } from "${base.values}";`] : []),
+        ...(sensitiveArgs ? [`import { sensitiveArgumentNames } from "${base.values}";`] : []),
         ``,
         `import schema from "../schema.js";`,
         ...liveStreamImports,
@@ -803,11 +812,17 @@ ${sourceBootstrap}${ttlBootstrap}        }
     const renderedPrepareFunctionOverride = prepareFunctionOverride === "" ? "\n\n" : `${prepareFunctionOverride}\n`;
     // Only emitted when some function declares a `v.sensitive` argument, so projects
     // without one keep their output byte-identical. The base class masks nothing.
-    const sensitiveArgsOverride = hasSensitiveArgs
+    /* eslint-disable no-secrets/no-secrets -- emitted generated-code text referencing the function and shape registries, not credentials */
+    // A shape resolves its marked names through its own `__shape__:` path, so the shape registry is read only when one exists.
+    const shapeNamesLookup = hasSensitiveShapes
+        ? `\n            const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`
+        : "";
+    const shapeArgsFallback = hasSensitiveShapes ? "shape?.args ?? " : "";
+    const sensitiveArgsOverride = sensitiveArgs
         ? `
         protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
-            const registered = LUNORA_FUNCTIONS[functionPath];
-            const fromValidators = sensitiveArgumentNames(registered?.args ?? {});
+            const registered = LUNORA_FUNCTIONS[functionPath];${shapeNamesLookup}
+            const fromValidators = sensitiveArgumentNames(registered?.args ?? ${shapeArgsFallback}{});
 
             if (registered?.sensitiveArgs === undefined) {
                 return fromValidators;
@@ -818,6 +833,7 @@ ${sourceBootstrap}${ttlBootstrap}        }
 
 `
         : "";
+    /* eslint-enable no-secrets/no-secrets */
     const dispatchRun = dispatchRunSource(lazyFunctions);
     const prepareFunctionCall = lazyFunctions
         ? '            const preparation = this.prepareFunction(functionPath, "subscription");\n            if (preparation !== undefined) await preparation;\n'
@@ -1115,7 +1131,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ hasSensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ hasSensitiveArgs: sensitiveArgs, lazyFunctions, actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };
