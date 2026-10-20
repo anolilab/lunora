@@ -78,11 +78,16 @@ const PORT_BASES: readonly number[] = [LEGACY_PLAYGROUND_PORT, LEGACY_STUDIO_POR
 
 const isUsablePair = (offset: number): boolean => PORT_BASES.every((base) => isUsablePort(base + offset));
 
+/** The offsets a checkout can be assigned: the main checkout's 0, and every derived worktree slot. */
+const ASSIGNABLE_OFFSETS: readonly number[] = [0, ...Array.from({ length: OFFSET_SLOTS }, (_, slot) => (slot + 1) * OFFSET_STRIDE)];
+
 /**
- * An offset that moves one base onto another (the main checkout's own port) is a collision
- * a checkout beside it would hit. Those offsets are exactly the differences between two bases.
+ * An explicit offset that moves one base onto a base another assignable offset uses is a collision
+ * that checkout would hit: a shift by `offset` lands on a port that `other` already owns. An offset
+ * equal to `other` is the same checkout's own ports, not a shift, so it is not refused here.
  */
-const collidesWithMainCheckout = (offset: number): boolean => PORT_BASES.some((base) => PORT_BASES.includes(base + offset));
+const collidesWithAssignedCheckout = (offset: number): boolean =>
+    ASSIGNABLE_OFFSETS.some((other) => other !== offset && PORT_BASES.some((base) => PORT_BASES.some((target) => base + offset === target + other)));
 
 /** A pinned port (the `base`) moved by the checkout's offset. */
 export const shiftedPort = (base: number, ports: DevPorts): number => base + ports.offset;
@@ -116,8 +121,8 @@ export const resolveDevPorts = ({ env, linked, root }: DevPortInputs): DevPorts 
             throw new Error(`[dev-ports] ${ENV_OFFSET}=${explicit} puts the dev ports out of range or on a browser-blocked port; pick another offset.`);
         }
 
-        if (collidesWithMainCheckout(offset)) {
-            throw new Error(`[dev-ports] ${ENV_OFFSET}=${explicit} moves a dev port onto another pinned port of the main checkout; pick another offset.`);
+        if (collidesWithAssignedCheckout(offset)) {
+            throw new Error(`[dev-ports] ${ENV_OFFSET}=${explicit} moves a dev port onto a pinned port another checkout is assigned; pick another offset.`);
         }
 
         return withOffset(offset, "env");

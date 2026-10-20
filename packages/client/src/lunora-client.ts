@@ -215,7 +215,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, whyProperty } from "./wire-errors";
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -591,6 +591,14 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
  * encode, so the codec did not reject them. Anything else is the server's answer.
  */
 const isWireFailure = (error: unknown, args: Record<string, unknown>): boolean => error instanceof TypeError && isEncodable(args);
+
+/**
+ * Whether a failed direct send is refused as `OFFLINE_NOT_QUEUED`: a write that would have been queued,
+ * or an online-only write whose transport failed while no socket was open. An online-only write is
+ * never queued, so a refusal before the first connect is the same refusal.
+ */
+const refusesAsNotQueued = (onlineOnly: boolean | undefined, networkDown: boolean, wireFailure: boolean, socketOpen: boolean): boolean =>
+    networkDown || (onlineOnly === true && wireFailure && !socketOpen);
 
 /**
  * @internal
@@ -4952,9 +4960,7 @@ class LunoraClient {
             // socket is refused with the typed error whether or not the shard ever
             // connected: before the first connect nothing was queued either way. The
             // transport failure rides along as its `cause`.
-            const refused = networkDown || (options.onlineOnly && wireFailure && !socketOpenNow);
-
-            if (refused) {
+            if (refusesAsNotQueued(options.onlineOnly, networkDown, wireFailure, socketOpenNow)) {
                 throw offlineNotQueuedError(function_.__lunoraRef, error);
             }
 
@@ -6654,10 +6660,9 @@ class LunoraClient {
         const envelope = errorEnvelopeOf(body);
 
         if (envelope !== undefined) {
-            const error = new Error(envelope.message ?? "admin request failed");
-
-            Object.assign(error, { code: envelope.code }, whyProperty(envelope));
-            throw error;
+            // Built by the same path as an RPC rejection, so the server-verdict mark that tool results
+            // trust is set here too; a bare `Error` with a `code` would be read as the caller's own text.
+            throw reconstructError({ ...envelope, message: envelope.message ?? "admin request failed" });
         }
 
         // A non-2xx response with a JSON body but no READABLE `error` envelope

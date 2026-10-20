@@ -97,6 +97,9 @@ const errorResult = (code: string, message: string): ToolResult => {
 /** The one message a thrown error that is not a typed `LunoraError` is ever shown as. */
 const UNEXPECTED_ERROR_MESSAGE = "the tool call failed unexpectedly";
 
+/** The `Symbol.for` key the client sets on an error it rebuilt from a server verdict (see `reconstructError`). */
+const SERVER_VERDICT = Symbol.for("lunora.serverVerdict");
+
 /**
  * The error result for a thrown value. The disclosure rule lives here, once, so
  * no tool family can leak raw text.
@@ -118,13 +121,13 @@ const errorFromThrown = (error: unknown): ToolResult => {
         return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
     }
 
-    // The client rebuilds a server's coded rejection as a plain `Error` carrying `code`. A code the
-    // catalog knows is the server's public verdict, so it is kept; any other `code` (a socket's
-    // `ECONNREFUSED`, say) is not a contract and falls through to the generic failure.
+    // The client rebuilds a server's coded rejection as a plain `Error` carrying `code`, and marks it
+    // with `SERVER_VERDICT`. Only that marked error's message is the server's public verdict. A plain
+    // `Error` a caller threw with a catalog-valued `code` is untrusted text and gets the fixed message.
     if (error instanceof Error) {
         const { code } = error as { code?: unknown };
 
-        if (typeof code === "string" && getCatalogEntry(code) !== undefined) {
+        if (typeof code === "string" && getCatalogEntry(code) !== undefined && (error as unknown as Record<symbol, unknown>)[SERVER_VERDICT] === true) {
             return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
         }
     }

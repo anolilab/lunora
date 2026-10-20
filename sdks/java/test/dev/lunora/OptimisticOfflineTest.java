@@ -721,7 +721,8 @@ final class OptimisticOfflineTest {
                                     200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
                         });
 
-        client.offlineQueue(new OfflineQueue().persistence(new MemoryStore()).queueBeforeFirstConnect(true));
+        client.offlineQueue(
+                new OfflineQueue().persistence(new MemoryStore()).queueBeforeFirstConnect(true));
 
         // The subscriber sees the overlay, and the connection goes down inside its notification.
         Map<String, Object> args = new LinkedHashMap<>();
@@ -753,7 +754,8 @@ final class OptimisticOfflineTest {
 
         check(
                 refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
-                "an online-only write whose callback drops the socket is refused with OFFLINE_NOT_QUEUED");
+                "an online-only write whose callback drops the socket is refused with"
+                        + " OFFLINE_NOT_QUEUED");
         check(posts[0] == 0, "a refused write never reaches the wire");
     }
 

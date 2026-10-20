@@ -170,6 +170,9 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
     return { message: messageText, ...(code === undefined ? {} : { code }), ...(typeof why === "string" ? { why } : {}) };
 };
 
+/** The `Symbol.for` key `@lunora/mcp` reads to tell a server verdict from a caller's own error. */
+const SERVER_VERDICT = Symbol.for("lunora.serverVerdict");
+
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
 const reconstructError = (errorBody: {
     code?: string;
@@ -182,6 +185,9 @@ const reconstructError = (errorBody: {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;
+    // Marks the server's own verdict. A plain `Error` with a catalog code is otherwise
+    // indistinguishable from one a caller threw, and only the server's message is safe to forward.
+    (error as unknown as Record<symbol, unknown>)[SERVER_VERDICT] = true;
 
     // Guarded: a `data` the codec refuses is dropped, and the envelope stays the
     // server's coded verdict. Thrown bare, the codec's own exception replaced the

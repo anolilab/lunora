@@ -140,13 +140,13 @@ describe("resolveDevPorts", () => {
     it("lets LUNORA_DEV_PORT_OFFSET win over the worktree hash and over CI", () => {
         expect.hasAssertions();
 
-        expect(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "42" }, linked: true, root: "/worktree" })).toStrictEqual({
-            offset: 42,
-            playground: 5215,
+        expect(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "7" }, linked: true, root: "/worktree" })).toStrictEqual({
+            offset: 7,
+            playground: 5180,
             source: "env",
-            studio: 5216,
+            studio: 5181,
         });
-        expect(resolveDevPorts({ env: { CI: "1", LUNORA_DEV_PORT_OFFSET: "42" }, linked: false, root: "/main" }).playground).toBe(5215);
+        expect(resolveDevPorts({ env: { CI: "1", LUNORA_DEV_PORT_OFFSET: "7" }, linked: false, root: "/main" }).playground).toBe(5180);
     });
 
     it("forces the legacy pair with LUNORA_DEV_PORT_OFFSET=0 even inside a linked worktree", () => {
@@ -176,6 +176,9 @@ describe("resolveDevPorts", () => {
 
         // The derived stride never collides with a pinned port, so an offset of 200 is accepted.
         expect(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "200" }, linked: false, root: "/x" }).playground).toBe(5373);
+
+        // 201 moves the playground onto 5374, the studio port a checkout assigned the derived offset 200 owns.
+        expect(() => resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "201" }, linked: false, root: "/x" })).toThrow(/pinned port/u);
     });
 
     it("rejects a malformed or browser-blocked explicit offset instead of drifting", () => {
@@ -189,9 +192,9 @@ describe("resolveDevPorts", () => {
     it("describes the pair on one line", () => {
         expect.hasAssertions();
 
-        const line = describeDevPorts(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "42" }, linked: false, root: "/x" }));
+        const line = describeDevPorts(resolveDevPorts({ env: { LUNORA_DEV_PORT_OFFSET: "7" }, linked: false, root: "/x" }));
 
-        expect(line).toBe("dev ports: playground :5215, studio :5216 (offset 42, env)");
+        expect(line).toBe("dev ports: playground :5180, studio :5181 (offset 7, env)");
     });
 });
 

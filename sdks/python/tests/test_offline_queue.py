@@ -1157,6 +1157,35 @@ class TestOnlineOnlyWrites(unittest.TestCase):
 
         self.assertEqual(len(posts), sent, "and nothing was sent")
 
+    def test_an_online_only_transport_type_error_is_raised_as_is_because_its_fate_is_unknown(self):
+        covers("offline_online_only_transport_failure_refused")
+        store = _Store()
+        refusal = TypeError("transport raised after the request left the process")
+        posts = []
+
+        # The transport sends the request, then raises: the write may have committed on the server.
+        def post(_url, _headers, body):
+            posts.append(body)
+            raise refusal
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        with self.assertRaises(TypeError) as raised:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                    )
+                )
+            )
+
+        self.assertIs(raised.exception, refusal)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(store.appended, [])
+
     def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
         covers("offline_online_only_leaves_normal_writes_queued")
         store = _Store()
