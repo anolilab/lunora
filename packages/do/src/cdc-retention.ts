@@ -216,14 +216,16 @@ class CdcRetentionRunner {
         // integer and treats anything else as unset, i.e. as the default window.
         const environment = this.host.env();
         const configuredRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
-        const keepRows = configuredRows ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
         const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
+        // The default window is for a shard that set neither knob. A payload-only
+        // operator asked for compaction, not trimming, so no rows are deleted.
+        const keepRows = configuredRows ?? (keepPayloads === undefined ? DEFAULT_CDC_LOG_RETENTION_ROWS : undefined);
 
         // Compacting a window WIDER than the one being deleted is a no-op with a
         // misleading configuration: rows leave the log before they can reach the
         // payload cutoff. Clamp rather than ignore, so the stated payload window
         // is honoured as far as the row window allows.
-        const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows);
+        const payloadWindow = keepPayloads === undefined || keepRows === undefined ? keepPayloads : Math.min(keepPayloads, keepRows);
 
         const sql = this.host.sql();
 
@@ -253,7 +255,7 @@ class CdcRetentionRunner {
             // uploading rows that are never deleted, so the log and the archive
             // both hold them, with only the R2 lifecycle rule bounding either.
             // Not smuggled in here.
-            if (bucket === undefined || configuredRows === undefined) {
+            if (bucket === undefined || configuredRows === undefined || keepRows === undefined) {
                 this.applyRetention(sql, payloadWindow, keepRows, Number.POSITIVE_INFINITY, SHARD_CDC_SWEEP_MAX_ROWS);
 
                 return;

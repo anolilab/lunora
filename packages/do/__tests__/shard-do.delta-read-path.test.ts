@@ -462,6 +462,31 @@ describe("delta-sync read path", () => {
             expect((harness.sql.exec(`SELECT COUNT(*) AS n FROM __cdc_log`).toArray()[0] as { n: number }).n).toBe(100_000);
         });
 
+        it("deletes no rows when only payload retention is configured", async () => {
+            expect.assertions(2);
+
+            const shard = new ProbeCountingShard(makeState([]), { LUNORA_CDC_PAYLOAD_RETENTION: "5" });
+
+            await shard.seed("m0", "c1");
+            harness.sql.exec(
+                `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100000)
+                 INSERT INTO __cdc_log (ts, "table", id, op, doc) SELECT 0, 'messages', 'bulk' || i, 'insert', NULL FROM n`,
+            );
+
+            // Past the default 100,000-row window, which only an unconfigured shard may trim.
+            const realNow = Date.now();
+            const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 120_000);
+
+            try {
+                await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
+            } finally {
+                clock.mockRestore();
+            }
+
+            expect(minCdcSeq(harness.sql)).toBe(1);
+            expect((harness.sql.exec(`SELECT COUNT(*) AS n FROM __cdc_log`).toArray()[0] as { n: number }).n).toBeGreaterThan(100_000);
+        });
+
         it("compacts payloads while keeping every key resumable", async () => {
             expect.assertions(3);
 
