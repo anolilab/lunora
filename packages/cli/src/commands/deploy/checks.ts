@@ -392,6 +392,25 @@ const wranglerMainEntry = (cwd: string, environment?: string): string[] => {
     return entry !== undefined && existsSync(entry) ? [entry] : [];
 };
 
+/** The literal `false`, under any parentheses, `as`, `satisfies`, `<T>` or `!` wrapper (`false as const` is still false). */
+const isLiteralFalse = (node: Node | undefined): boolean => {
+    if (node === undefined) {
+        return false;
+    }
+
+    if (node.getKind() === SyntaxKind.FalseKeyword) {
+        return true;
+    }
+
+    return Node.isParenthesizedExpression(node) ||
+        Node.isAsExpression(node) ||
+        Node.isSatisfiesExpression(node) ||
+        Node.isTypeAssertion(node) ||
+        Node.isNonNullExpression(node)
+        ? isLiteralFalse(node.getExpression())
+        : false;
+};
+
 /**
  * Every open-shard property in the app that is not the literal `false`.
  *
@@ -436,10 +455,7 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
                 const name = Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
 
                 // Only a literal `false` is safe; a shorthand `{ allowUnauthenticatedShardAccess }` has no literal to read, so it is reported too.
-                return (
-                    name === "allowUnauthenticatedShardAccess" &&
-                    !(Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === SyntaxKind.FalseKeyword)
-                );
+                return name === "allowUnauthenticatedShardAccess" && !(Node.isPropertyAssignment(property) && isLiteralFalse(property.getInitializer()));
             })
             .map((property) => {
                 return { file: relative(cwd, file), line: property.getStartLineNumber() };

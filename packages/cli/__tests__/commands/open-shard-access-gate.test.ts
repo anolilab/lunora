@@ -189,6 +189,20 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("worker.ts:2"))).toBe(true);
     });
 
+    it.each([
+        "allowUnauthenticatedShardAccess: false as const",
+        "allowUnauthenticatedShardAccess: (false)",
+        "allowUnauthenticatedShardAccess: false satisfies boolean",
+    ])("does not gate a literal false wrapped in a TypeScript assertion or parentheses: %s", async (flag) => {
+        expect.assertions(1);
+
+        writeAppConfig(flag);
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(0);
+    });
+
     it("refuses the flag in the entrypoint of the environment being deployed", async () => {
         expect.assertions(2);
 
