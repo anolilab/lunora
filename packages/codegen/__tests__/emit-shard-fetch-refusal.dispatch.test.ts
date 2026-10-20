@@ -16,6 +16,7 @@ import { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
 
 interface TestCtx {
     fetch: (input: string) => Promise<Response>;
+    runMutation: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown>;
     runQuery: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -66,6 +67,10 @@ describe("emitted shard — ctx.fetch is action-only", () => {
         });
 
         register("fetchRefusal:actionRunsQuery", "action", async (ctx) => ctx.runQuery({ __lunoraRef: "fetchRefusal:query" }, {}));
+
+        register("fetchRefusal:mutationFetch", "mutation", async (ctx) => ctx.fetch("https://example.com/mf"));
+
+        register("fetchRefusal:actionRunsMutation", "action", async (ctx) => ctx.runMutation({ __lunoraRef: "fetchRefusal:mutationFetch" }, {}));
     });
 
     afterEach(() => {
@@ -105,5 +110,11 @@ describe("emitted shard — ctx.fetch is action-only", () => {
         expect.assertions(1);
 
         await expect(createShard().handleRpc("fetchRefusal:actionRunsQuery", {})).rejects.toThrow("ctx.fetch is action-only");
+    });
+
+    it("refuses the fetch of a mutation an action composes", async () => {
+        expect.assertions(1);
+
+        await expect(createShard().handleRpc("fetchRefusal:actionRunsMutation", {})).rejects.toThrow("ctx.fetch is action-only");
     });
 });

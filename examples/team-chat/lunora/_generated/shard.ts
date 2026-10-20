@@ -1344,10 +1344,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                             const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox());
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
 
+                            // Copied from an action's ctx, which carries the real `fetch`; a mutation
+                            // refuses network I/O wherever it runs, so its `fetch` is overridden here.
                             return Object.defineProperties({}, {
                                 ...Object.getOwnPropertyDescriptors(target),
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },
                                 orm: { configurable: true, enumerable: true, value: mutationDatabase.orm, writable: true },
+                                fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
