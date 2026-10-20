@@ -73,7 +73,7 @@ export const summarizeUsage = (usage: unknown): Record<string, number> | undefin
  * Key under which a failed model turn's error carries the usage the provider billed for it. `Symbol.for`, so a
  * bundle that inlines this module twice still reads the key the other copy wrote.
  */
-export const FAILED_TURN_USAGE = Symbol.for("lunora.failedTurnUsage");
+export const FAILED_TURN_USAGE: unique symbol = Symbol.for("lunora.failedTurnUsage");
 
 /**
  * The close event for a call that failed after the provider billed it. A failed attempt has no end event, so
