@@ -189,6 +189,24 @@ describe("open-shard-access gate", () => {
         expect(errors.some((line) => line.includes("worker.ts:2"))).toBe(true);
     });
 
+    it("refuses the flag in the entrypoint of the environment being deployed", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            VALID_WRANGLER.replace('"main": "src/index.ts",', '"main": "src/index.ts",\n    "env": { "staging": { "main": "staging/worker.ts" } },'),
+            "utf8",
+        );
+        mkdirSync(join(workdir, "staging"), { recursive: true });
+        writeFileSync(join(workdir, "staging", "worker.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, env: "staging", logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("staging/worker.ts:2"))).toBe(true);
+    });
+
     it("refuses the flag when its value is a variable, not a literal false", async () => {
         expect.assertions(2);
 

@@ -366,16 +366,27 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx)$/u;
 // Test and fixture code never ships, so a flag set in it must not block a deploy: `isTestPath` covers test files and the `__tests__`/`__mocks__`/`__fixtures__` folders, the rest are plain folder names.
 const SKIPPED_DIRECTORY = /(?:^|[/\\])(?:_generated|node_modules|tests?|fixtures|mocks)(?:[/\\]|$)/u;
 
-/** The Wrangler `main` entrypoint, which can sit outside `src/` (the Analog template deploys a root `worker.ts`). */
-const wranglerMainEntry = (cwd: string): string[] => {
+/**
+ * The Wrangler `main` entrypoint of the environment being deployed, which can sit outside `src/`
+ * (the Analog template deploys a root `worker.ts`). An environment may override `main`, so the
+ * merged view is read; an undeclared `--env` falls back to the top level, which the validator reports.
+ */
+const wranglerMainEntry = (cwd: string, environment?: string): string[] => {
     const wranglerPath = findWranglerFile(cwd);
 
     if (wranglerPath === undefined) {
         return [];
     }
 
-    const main = readWranglerJsonc<WranglerConfig>(wranglerPath).parsed?.main;
-    // Wrangler resolves `main` against its own config file, not the project root. Env-scoped `main` is not read.
+    const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
+
+    if (parsed === undefined) {
+        return [];
+    }
+
+    const { error, merged } = mergeWranglerEnvironment(parsed, environment);
+    const { main } = error === undefined ? merged : parsed;
+    // Wrangler resolves `main` against its own config file, not the project root.
     const entry = typeof main === "string" ? join(dirname(wranglerPath), main) : undefined;
 
     return entry !== undefined && existsSync(entry) ? [entry] : [];
@@ -392,7 +403,7 @@ const wranglerMainEntry = (cwd: string): string[] => {
  * (`schemaDir`), `src/`, the root Vite config, `lunora.config.*` and the Wrangler
  * `main` entrypoint is not seen. Test and fixture code is skipped on purpose: it never ships.
  */
-const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
+const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShardAccess[] => {
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])];
     const files = [
         ...new Set([
@@ -404,7 +415,7 @@ const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
                     : [],
             ),
             ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
-            ...wranglerMainEntry(cwd),
+            ...wranglerMainEntry(cwd, environment),
         ]),
     ];
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
@@ -447,12 +458,12 @@ const findOpenShardAccess = (cwd: string): AdvisorOpenShardAccess[] => {
  * publish one, and the template build matrix runs `lunora build` on every
  * template as shipped. Returns the error message, or `undefined` when clean.
  */
-const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCommand, allowOpenShards: boolean): string | undefined => {
+const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCommand, allowOpenShards: boolean, environment?: string): string | undefined => {
     if (command !== "deploy") {
         return undefined;
     }
 
-    const findings = runAdvisor({ openShardAccess: findOpenShardAccess(cwd), schema: { tables: [] } }, { lints: [openShardAccess] });
+    const findings = runAdvisor({ openShardAccess: findOpenShardAccess(cwd, environment), schema: { tables: [] } }, { lints: [openShardAccess] });
 
     if (findings.length === 0) {
         return undefined;
@@ -484,7 +495,7 @@ const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCom
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
 const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
-    const openShardError = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true);
+    const openShardError = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true, options.env);
 
     if (openShardError !== undefined) {
         return { code: EXIT_CODE.USAGE, error: openShardError };
