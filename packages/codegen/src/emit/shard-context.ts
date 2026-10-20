@@ -258,6 +258,16 @@ ${notifyBuild}
             // advisor flags \`Date.now()\`. Actions may still use ambient \`Date.now()\`.
             const now = Date.now();
 
+            // \`ctx.fetch\` is action-only. A query is re-run by every live subscription and a
+            // mutation may be replayed, so a network call in either returns a different answer
+            // on each run. Refused at runtime, not only linted: the advisor sees just the call
+            // sites it can read, and a call inside a dependency is invisible to it.
+            // Synchronous on purpose: an async refusal only rejects a promise the handler may
+            // discard, and the handler would then return normally. A sync throw surfaces at the call.
+            const refuseFetch = (): never => {
+                throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
+            };
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -275,8 +285,9 @@ ${notifyBuild}
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare
-                // global when no sink is configured.
-                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive),
+                // global when no sink is configured. Not built for a query or a
+                // mutation: those refuse network I/O (see \`refuseFetch\`).
+                fetch: contextKind === "query" || contextKind === "mutation" ? refuseFetch : this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive),
                 // A GETTER, not a plain field, so the reactive cache can tell a
                 // handler that reads the caller's address from the majority that
                 // never do. \`ctx.ip\` is per-request state the memo must be keyed
@@ -334,9 +345,12 @@ ${
                             const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox());
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
 
+                            // Copied from an action's ctx, which carries the real \`fetch\`; a mutation
+                            // refuses network I/O wherever it runs, so its \`fetch\` is overridden here.
                             return Object.defineProperties({}, {
                                 ...Object.getOwnPropertyDescriptors(target),
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },${mutationOrmDescriptor}
+                                fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
@@ -382,8 +396,9 @@ ${
             // depends on the dispatch kind or the request origin is re-derived for a
             // query — no \`ctx.origin\`, storage with no origin fallback (and no
             // \`deleteAfterCommit\`), the unwrapped scheduler, no ActionCtx-only
-            // helpers, and a \`run*\` guard that refuses a mutation or action. A new
-            // kind- or origin-dependent ctx field must be overridden here too.
+            // helpers, no \`fetch\` (a query is re-run, see \`refuseFetch\`), and a \`run*\` guard
+            // that refuses a mutation or action. A new kind- or origin-dependent ctx field must
+            // be overridden here too.
             // Copied by descriptor so the \`ip\` getter is carried over, not read.
             // Built on the first composed call only; a query ctx is its own view.
             let queryView: Record<string, unknown> | undefined;
@@ -399,6 +414,7 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
 
                     queryView = Object.defineProperties({}, {
                         ...descriptors,
+                        fetch: field(refuseFetch),
                         origin: field(undefined),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
