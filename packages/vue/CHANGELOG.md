@@ -1,3 +1,16 @@
+## @lunora/vue [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.273...@lunora/vue@1.0.0-alpha.274) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
 ## @lunora/vue [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.272...@lunora/vue@1.0.0-alpha.273) (2026-10-20)
 
 
