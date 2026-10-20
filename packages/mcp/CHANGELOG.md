@@ -1,3 +1,18 @@
+## @lunora/mcp [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.248...@lunora/mcp@1.0.0-alpha.249) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/auth:** upgraded to 1.0.0-alpha.220
+* **@lunora/x402:** upgraded to 1.0.0-alpha.100
+
 ## @lunora/mcp [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.247...@lunora/mcp@1.0.0-alpha.248) (2026-10-20)
 
 
