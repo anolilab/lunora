@@ -1,3 +1,24 @@
+## @lunora/platform-node [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.165...@lunora/platform-node@1.0.0-alpha.166) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.195
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.120
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.225
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.196
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.90
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.102
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/storage:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/platform-node [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.164...@lunora/platform-node@1.0.0-alpha.165) (2026-10-20)
 
 ### Features
