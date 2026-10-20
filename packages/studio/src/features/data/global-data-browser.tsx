@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
@@ -127,15 +127,10 @@ export const GlobalDataBrowser = ({
     // pauses while the tab is hidden. The tick closure is held in a ref, so it
     // always sees the latest selection/filters; it re-runs the two TanStack reads
     // and the open facets.
-    useAutoRefresh(() => {
-        const polls: Promise<void>[] = [tablesQuery.poll()];
-
-        if (selectedTable !== null) {
-            polls.push(pageQuery.poll(), refetchFacets(selectedTable, filtersRef.current));
-        }
-
-        return settlePolls(polls);
-    }, true);
+    // One timer per read: a failing facet backs off only the facet refresh, not the table list or the page.
+    useAutoRefresh(() => tablesQuery.poll(), true);
+    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null);
+    useAutoRefresh(() => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)), selectedTable !== null);
 
     // The table last applied to the selection (cross-tier jump, deep link, or
     // back/forward). Lets the URL-reconcile effect skip values this component itself

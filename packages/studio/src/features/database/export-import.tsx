@@ -117,7 +117,8 @@ const IMPORT_CHUNK_ROWS = 500;
  */
 const IMPORT_CHUNK_BYTES = 900_000;
 
-const lineBytes = (line: string): number => new TextEncoder().encode(line).byteLength;
+/** Bytes a row adds to a request: the wire-encoded JSON the client sends, which can be larger than the NDJSON line it came from. */
+const wireBytes = (row: ExportRow): number => new TextEncoder().encode(JSON.stringify(encodeWire(row))).byteLength;
 
 const NDJSON_MIME = "application/x-ndjson";
 
@@ -129,8 +130,10 @@ const countNdjsonRows = async (file: Blob): Promise<number> => {
     let rows = 0;
 
     for await (const { line, lineNumber } of ndjsonLines(file)) {
-        if (parseNdjsonLine(line, lineNumber) !== undefined) {
-            if (lineBytes(line) > IMPORT_CHUNK_BYTES) {
+        const row = parseNdjsonLine(line, lineNumber);
+
+        if (row !== undefined) {
+            if (wireBytes(row) > IMPORT_CHUNK_BYTES) {
                 throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: a single row is over the ${IMPORT_CHUNK_BYTES.toString()}-byte import limit`);
             }
 
@@ -158,7 +161,7 @@ const forEachNdjsonChunk = async (file: Blob, onChunk: (rows: ExportRow[], start
             continue;
         }
 
-        const bytes = lineBytes(line);
+        const bytes = wireBytes(row);
 
         // The server numbers a chunk's rows from its first line, so a blank line in between must end the chunk.
         const gap = lineNumber !== previousLine + 1;

@@ -174,6 +174,23 @@ describe("exportImportPanel", () => {
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
     });
 
+    it("refuses a row whose wire encoding is too wide, even when its NDJSON line is short", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        // `1e400` is 6 bytes on the NDJSON line but a tagged 25-byte non-finite value on the wire.
+        const values = Array.from({ length: 40_000 }).fill("1e400").join(",");
+
+        render(renderPanel(mock));
+
+        importText(`{"doc":{"__id__":"wide","values":[${values}]},"table":"messages"}`);
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("a single row is over the 900000-byte import limit");
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+    });
+
     it("starts a new chunk after a blank line, so the server numbers its errors by the file's own lines", async () => {
         expect.assertions(1);
 
