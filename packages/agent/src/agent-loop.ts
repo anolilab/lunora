@@ -472,7 +472,7 @@ const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:
  * value. Same shape as {@link awaitApproval}, with the request row as the authority:
  *
  * 1. The pending request row is written inside a durable step. The step computes its deadline, and a replay keeps the stored one.
- * 2. The `"awaiting_secret"` marker (filtered out of the model prompt) is persisted, and the thread moves to `"awaiting_input"`.
+ * 2. The `"awaiting_secret"` marker (filtered out of the model prompt) and the `"awaiting_input"` thread status are written in a durable step, so a replay after settlement cannot reopen them.
  * 3. A wait on `secret:<slot>` is armed for `approvalTimeout` plus a grace (see `SECRET_WAIT_GRACE_MS`). Supply and decline wake it with no payload.
  * 4. When the wait ends, woken or timed out, a settle step reads the row's outcome. A pending row becomes `expired` there, so a late supply is refused. A supply that already landed is honoured even if the wait timed out.
  *
@@ -499,15 +499,19 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
         });
     });
 
-    await persist({
-        content: `Awaiting a secret for tool "${call.name}": ${label}`,
-        messageKey: markerKey,
-        role: "tool",
-        status: "awaiting_secret",
-        toolCallId: call.id,
-        toolName: call.name,
+    // Memoized by name, as the approval marker is: a replay after the settlement must not re-insert the
+    // marker that the settlement retired, nor reopen the thread's status.
+    await step.do(`secret:await:${slot}`, async (): Promise<void> => {
+        await persist({
+            content: `Awaiting a secret for tool "${call.name}": ${label}`,
+            messageKey: markerKey,
+            role: "tool",
+            status: "awaiting_secret",
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+        await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });
     });
-    await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });
 
     await step
         .waitForEvent(`secret:${slot}`, {

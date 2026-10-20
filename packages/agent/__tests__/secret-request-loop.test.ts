@@ -49,6 +49,9 @@ class WaitJournal implements AgentStepLike {
 
     public readonly timeoutWaits = new Set<string>();
 
+    /** Waits that fail with a host error, not a timeout: a replay that dies before the run reaches its next step. */
+    public readonly failingWaits = new Set<string>();
+
     public readonly waitOptions = new Map<string, { timeout?: number | string; type: string }>();
 
     public readonly waitedNames: string[] = [];
@@ -81,6 +84,10 @@ class WaitJournal implements AgentStepLike {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- mirrors AgentStepLike.waitForEvent's generic host signature
     public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: T; type: string }> {
         this.waitOptions.set(name, options);
+
+        if (this.failingWaits.has(name)) {
+            throw new Error("the workflow host dropped the wait");
+        }
 
         if (this.timeoutWaits.has(name)) {
             const error = new Error("Execution timed out");
@@ -545,6 +552,36 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect(used).toStrictEqual([SECRET]);
         expect(runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentTakeSecret")).toHaveLength(1);
         expect(runtime.dispatches.filter((dispatch) => dispatch.path === "agents:agentDiscardSecret")).toHaveLength(1);
+    });
+
+    it("does not recreate the awaiting marker or reopen the thread when a replay after the supply dies before the run moves on", async () => {
+        expect.assertions(5);
+
+        const used: string[] = [];
+        const agent = secretAgent(used);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "0:call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // The first run settled the request and retired the marker, and finished the thread.
+        expect(runtime.threads.get(THREAD)?.status).toBe("idle");
+
+        // The replay re-enters the wait, and the host drops it before the run reaches the next step.
+        journal.failingWaits.add("secret:0:call_1");
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }))).rejects.toThrow("the workflow host dropped the wait");
+
+        expect([...runtime.messages.values()].filter((message) => message.status === "awaiting_secret")).toStrictEqual([]);
+        expect(runtime.messages.has(`${THREAD}:${INSTANCE}:secret:0:call_1`)).toBe(false);
+        // The loop's catch finishes the run as an error; the replay must not have reopened the thread on the way.
+        expect(runtime.threads.get(THREAD)?.status).toBe("error");
     });
 
     it("fails the consuming call deterministically, with one take and no retry, once the value has expired", async () => {
