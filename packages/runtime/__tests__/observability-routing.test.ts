@@ -678,4 +678,73 @@ describe("enrichment reaches the OTLP wire", () => {
             vi.unstubAllGlobals();
         }
     });
+
+    it("keeps a metric's own error.type tag, since a metric never writes that built-in key", () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onMetric?.({ ...metric, attributes: { "error.type": "TimeoutError" } });
+
+            const call = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/v1/metrics"));
+            const body: unknown = call?.[1]?.body;
+
+            expect(typeof body).toBe("string");
+            expect(body).toContain('"key":"error.type"');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("writes event.name once on a log record, the built-in value winning over a caller field", () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onLog?.({ ...log, eventName: "checkout.done", fields: { "event.name": "caller" } });
+
+            const call = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/v1/logs"));
+            const body: unknown = call?.[1]?.body;
+
+            expect(typeof body).toBe("string");
+            expect(String(body).split('"key":"event.name"')).toHaveLength(2);
+            expect(body).toContain("checkout.done");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("exports an enriched symbol with its credential masked, as it does a string", () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const sink = enrichSink(otlpSink({ batch: false, endpoint: "https://collector.example" }), () => {
+                return {
+                    detail: Symbol("password=hunter2"),
+                };
+            });
+
+            sink.onMetric?.(metric);
+
+            const call = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/v1/metrics"));
+            const body: unknown = call?.[1]?.body;
+
+            expect(typeof body).toBe("string");
+            expect(body).toContain("Symbol(");
+            expect(body).not.toContain("hunter2");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
 });

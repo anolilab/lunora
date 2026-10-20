@@ -218,6 +218,11 @@ const newCopyState = (): CopyState => {
  * reference is copied once and reused under every key it sits under, rather than re-expanded per path.
  */
 const plainCopy = (value: unknown, state: CopyState = newCopyState()): unknown => {
+    // A symbol or function is exported as its string form, so redaction must see that string.
+    if (typeof value === "symbol" || typeof value === "function") {
+        return String(value);
+    }
+
     if (typeof value !== "object" || value === null) {
         return value;
     }
