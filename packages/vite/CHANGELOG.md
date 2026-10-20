@@ -1,3 +1,17 @@
+## @lunora/vite [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.356...@lunora/vite@1.0.0-alpha.357) (2026-10-19)
+
+### Bug Fixes
+
+* **rspack:** re-read target when the dev worker starts ([#1279](https://github.com/anolilab/lunora/issues/1279)) ([66e0ee1](https://github.com/anolilab/lunora/commit/66e0ee114e4d444c8291001219c56e5b51de61c5))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.334
+* **@lunora/config:** upgraded to 1.0.0-alpha.383
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/studio:** upgraded to 1.0.0-alpha.323
+
 ## @lunora/vite [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.355...@lunora/vite@1.0.0-alpha.356) (2026-10-19)
 
 ### Performance Improvements

@@ -1,3 +1,16 @@
+## @lunora/svelte [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.269...@lunora/svelte@1.0.0-alpha.270) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/svelte [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.268...@lunora/svelte@1.0.0-alpha.269) (2026-10-19)
 
 

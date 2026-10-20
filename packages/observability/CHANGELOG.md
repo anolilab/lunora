@@ -1,3 +1,15 @@
+## @lunora/observability [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.155...@lunora/observability@1.0.0-alpha.156) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
 ## @lunora/observability [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.154...@lunora/observability@1.0.0-alpha.155) (2026-10-19)
 
 
