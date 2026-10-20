@@ -2,8 +2,9 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags any literal `allowUnauthenticatedShardAccess: true` in the app being
- * deployed.
+ * Flags the open-shard option set to anything but a literal `false` in the app
+ * being deployed. A shorthand, getter, method or non-boolean value has no literal
+ * to read, so it is flagged too.
  *
  * Every template ships the flag so its demo works before auth exists, with a
  * "before deploying" comment beside it; the runtime only logs a warning when it
