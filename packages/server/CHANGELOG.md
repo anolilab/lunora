@@ -1,3 +1,17 @@
+## @lunora/server [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.225...@lunora/server@1.0.0-alpha.226) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.143
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/observability:** upgraded to 1.0.0-alpha.159
+
 ## @lunora/server [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.224...@lunora/server@1.0.0-alpha.225) (2026-10-20)
 
 ### Features
