@@ -30,9 +30,17 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
+import ensureGitignoreEntries from "../ensure-gitignore";
 
 /** The projected config's filename. */
 const CELLD_CONFIG_FILE = ".celld.wrangler.json";
+
+/**
+ * The celld state and projections, kept out of git. A service projection inlines
+ * its own `.dev.vars` as `vars` (see {@link planCelldServiceConfig}), so an
+ * un-ignored one would commit that file's secrets.
+ */
+const CELLD_IGNORE_PATTERNS = [".celld/", ".celld.wrangler.json", ".celld.service.*.wrangler.json"];
 
 /** Where `@cloudflare/vite-plugin` records the config of the last `vite build`. */
 const VITE_DEPLOY_REDIRECT = join(".wrangler", "deploy", "config.json");
@@ -482,6 +490,7 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
         dropped: build.reported,
         write: () => {
             writeFileSync(configPath, contents);
+            ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
 
             // Removed on a `--dry-run` too: celld refuses the file outright, so
             // keeping it would fail every dry run instead of checking the bundle a
@@ -537,6 +546,7 @@ const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedCo
         dropped,
         write: () => {
             writeFileSync(configPath, contents);
+            ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
         },
     };
 };

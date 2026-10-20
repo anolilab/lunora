@@ -3,11 +3,12 @@
  * reminder that `.dev.vars` is not pushed, and minting + pushing the ones that
  * are missing on the target.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { DeployDriver, DiscoveryCache } from "@lunora/config";
 import {
     DEV_VARS_FILE,
+    ensureGitignoreEntries,
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
@@ -227,9 +228,6 @@ const SAFE_ENV_NAME = /^[\w-]+$/u;
  */
 const DEV_VARS_IGNORE_PATTERNS = [".dev.vars", ".dev.vars.*", "!.dev.vars.example"];
 
-/** Split a `.gitignore` on either line ending, so a CRLF file's patterns still match. */
-const GITIGNORE_LINE = /\r?\n/u;
-
 /**
  * Make sure the project's `.gitignore` covers the `.dev.vars`-shaped file this
  * deploy is about to write a freshly minted PRODUCTION secret into.
@@ -240,38 +238,20 @@ const GITIGNORE_LINE = /\r?\n/u;
  * scaffolded project ships the bare pattern only, and a project not scaffolded
  * by `lunora init` ships whatever its author wrote — so the guard belongs here,
  * at the one place a secret value ever reaches the disk, rather than in each
- * template. Appends only what is missing, and is a no-op once present.
+ * template. The append itself is {@link ensureGitignoreEntries}, shared with the
+ * celld projections; it is a no-op once present.
  *
  * Best-effort: a `.gitignore` that cannot be written (read-only checkout, no
  * git at all) must not cost the user the only recoverable copy of a write-only
  * secret, so it warns and lets the write proceed.
  */
 const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
-    const gitignorePath = join(cwd, ".gitignore");
-
     try {
-        const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
-        const lines = new Set(existing.split(GITIGNORE_LINE).map((line) => line.trim()));
-        const missing = DEV_VARS_IGNORE_PATTERNS.filter((pattern) => !lines.has(pattern));
+        const missing = ensureGitignoreEntries(cwd, DEV_VARS_IGNORE_PATTERNS);
 
-        if (missing.length === 0) {
-            return;
+        if (missing.length > 0) {
+            logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
         }
-
-        // An appended pattern lands BELOW whatever the file already had, and git
-        // takes the last match — so appending `.dev.vars.*` under a `.gitignore`
-        // that already carried `!.dev.vars.example` silently re-ignored the
-        // example file the templates ship. Re-state the negations after the
-        // additions instead of reasoning about where the existing ones sit; a
-        // repeated negation line is inert, a stranded one is not.
-        const additions = missing.some((pattern) => !pattern.startsWith("!"))
-            ? [...missing.filter((pattern) => !pattern.startsWith("!")), ...DEV_VARS_IGNORE_PATTERNS.filter((pattern) => pattern.startsWith("!"))]
-            : missing;
-
-        const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-
-        writeFileSync(gitignorePath, `${existing}${prefix}\n# Lunora — never commit a minted secret\n${additions.join("\n")}\n`, "utf8");
-        logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
     } catch (error) {
         logger.warn(
             `could not update .gitignore (${error instanceof Error ? error.message : String(error)}) — add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` by hand before committing.`,
