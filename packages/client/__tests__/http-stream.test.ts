@@ -358,7 +358,7 @@ describe("httpStream", () => {
         expect(out).toStrictEqual([{ text: "a" }, { text: "b" }]);
     });
 
-    it("fails a body-less response whose text() read stalls past the idle bound", async () => {
+    it("leaves a stalled body-less text() read to the signal, not the idle bound", async () => {
         expect.assertions(3);
 
         vi.useFakeTimers();
@@ -373,7 +373,7 @@ describe("httpStream", () => {
                     const response = new Response(null, { status: 200 });
 
                     Object.defineProperty(response, "body", { value: undefined });
-                    // A text() read that never settles: the one idle state this path can hit.
+                    // A text() read that never settles: the stall the idle watchdog cannot see.
                     Object.defineProperty(response, "text", {
                         value: (): Promise<string> =>
                             new Promise<string>(() => {
@@ -385,17 +385,27 @@ describe("httpStream", () => {
                 },
             ) as unknown as typeof fetch;
 
-            const iterator = httpStream(tokensRef, {}, { fetch: fetchImpl, idleTimeoutMs: 50 })[Symbol.asyncIterator]();
-            const outcome = iterator.next().then(
-                () => "resolved",
-                (error: unknown) => (error as { code?: string }).code,
-            );
+            const stream = httpStream(tokensRef, {}, { fetch: fetchImpl, idleTimeoutMs: 50 });
+            const outcome = stream[Symbol.asyncIterator]()
+                .next()
+                .then(
+                    () => "resolved",
+                    (error: unknown) => (error as { code?: string }).code,
+                );
 
+            // Past the bound the read still waits: `text()` exposes no per-frame
+            // progress, so an idle bound here would cap the stream's total
+            // duration rather than its silence — it does not apply.
             await vi.advanceTimersByTimeAsync(60);
 
-            await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("STREAM_IDLE");
+            await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("pending");
+
+            // `.cancel()` (or the external signal) is the release for a read the
+            // idle watchdog cannot measure.
+            stream.cancel();
+
+            await expect(outcome).resolves.toBe("resolved");
             expect(requestSignal?.aborted).toBe(true);
-            expect(fetchImpl).toHaveBeenCalledTimes(1);
         } finally {
             vi.useRealTimers();
         }

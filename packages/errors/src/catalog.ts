@@ -789,7 +789,22 @@ export const ERROR_CATALOG = {
     HTTP_STREAM_CALLBACK: { status: 500, title: "HTTP stream callback threw" },
     HTTP_STREAM_INTERRUPTED: { status: 502, title: "HTTP stream interrupted" },
     HTTP_STREAM_MISSING_PARAM: { status: 400, title: "HTTP stream missing path parameter" },
-    HTTP_STREAM_NO_BODY: { status: 502, title: "HTTP stream response has no body" },
+
+    /**
+     * Fires only for a `fetch` whose Response exposes neither a `body` stream
+     * nor a `text()` read — a broken substitute, not a runtime limitation. A
+     * body-less response that can still be read as text (React Native's
+     * `whatwg-fetch`) never reaches this code: `httpStream` buffers it through
+     * `text()` instead.
+     */
+    HTTP_STREAM_NO_BODY: {
+        hint: [
+            "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
+            "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.",
+        ],
+        status: 502,
+        title: "HTTP stream response has no body",
+    },
     HTTP_STREAM_STATUS: { status: 502, title: "HTTP stream request failed" },
     HTTP_STREAM_TRANSPORT: { status: 502, title: "HTTP stream transport error" },
     STREAM_BACKPRESSURE: { status: 429, title: "Stream backpressure" },

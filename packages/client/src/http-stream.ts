@@ -81,6 +81,13 @@ interface HttpStreamOptions {
      * default, because a route may be silent for as long as its handler works
      * (a model thinking); set it to a few multiples of the route's keepalive
      * interval when the route sends one.
+     *
+     * Measured per streamed read, so it needs a `fetch` that exposes
+     * `response.body`. A runtime whose `fetch` delivers no body stream (React
+     * Native) reads the whole payload with one `text()` call that resolves only
+     * at the end — no per-frame progress exists to measure silence against, so
+     * this bound does not apply there and a stalled read waits for
+     * `.cancel()` or {@link HttpStreamOptions.signal} instead.
      */
     idleTimeoutMs?: number;
 
@@ -386,7 +393,7 @@ const pumpSseBody = async (
     try {
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-            const { done, value } = await readOrIdle(() => reader.read(), idleTimeoutMs);
+            const { done, value } = await readOrIdle(reader, idleTimeoutMs);
 
             if (done) {
                 break;
@@ -454,8 +461,7 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 /**
  * Pump an SSE body a runtime delivers whole rather than as a stream: React
  * Native's `fetch` (the `whatwg-fetch` polyfill `react-native` loads) resolves
- * with a `Response` that defines no `body`, so `text()` is the only read. That
- * read runs under the same idle bound as the streamed reader's, and the
+ * with a `Response` that defines no `body`, so `text()` is the only read. The
  * buffered frames dispatch one per macrotask — the scheduling window a read
  * boundary gives the consumer on the streamed path — so a promptly iterating
  * consumer is handed frames as it takes them. Dispatching the whole payload in
@@ -464,21 +470,28 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
  * `id:`s, `retry:`s and terminal frames behave exactly as on the streamed
  * path; the chunks simply arrive when the response lands rather than as the
  * handler yields them.
+ *
+ * The read is deliberately NOT idle-bounded: `text()` resolves only once the
+ * whole payload has arrived, so no per-frame progress exists to measure
+ * silence against — an idle bound here would cap the stream's TOTAL duration
+ * and kill an actively-streaming route no keepalive could save. A read that
+ * stalls or dies surfaces through the attempt abort (the fetch signal) and
+ * the caller's signal or `.cancel()`.
  */
 const pumpBufferedSseBody = async (
     response: Response,
     handle: UntypedHandle,
     observers: SseFrameObservers,
     attemptAbort: AbortController,
-    idleTimeoutMs = 0,
 ): Promise<boolean> => {
     const frames = createSseFrameBuffer(handle, observers);
 
     try {
-        frames.append(await readOrIdle(() => response.text(), idleTimeoutMs));
+        frames.append(await response.text());
     } catch (error: unknown) {
-        // A stalled read (`STREAM_IDLE`) or a failed one: drop the connection
-        // and surface the error, mirroring the streamed pump's catch.
+        // A failed read: drop the connection and surface the error, mirroring
+        // the streamed pump's catch. A stalled one outlives this pump (see
+        // above) until the caller cancels or aborts its signal.
         attemptAbort.abort();
 
         throw error;
@@ -755,7 +768,7 @@ const httpStream = <Ref extends HttpStreamRef>(
                     return undefined;
                 }
 
-                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs);
+                const completed = await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort);
 
                 return { completed, error: interrupted };
             }

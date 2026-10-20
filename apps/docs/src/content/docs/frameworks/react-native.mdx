@@ -152,13 +152,17 @@ them — pass a `fetch` that exposes `response.body`; Expo's does:
 ```ts
 import { fetch as expoFetch } from "expo/fetch";
 
-import { createLunoraClient } from "@lunora/react-native";
+import { createLunoraClient, withoutAmbientCookies } from "@lunora/react-native";
 
-const client = createLunoraClient({ fetch: expoFetch, url: process.env.EXPO_PUBLIC_LUNORA_URL! });
+const client = createLunoraClient({ fetch: withoutAmbientCookies(expoFetch), url: process.env.EXPO_PUBLIC_LUNORA_URL! });
 ```
 
-The client's `fetch` option feeds `client.httpStream` and `useHttpStream`; a
-standalone `httpStream(route, args, { fetch })` call takes its own.
+A custom `fetch` skips the `credentials: "omit"` wrapper
+`createLunoraClient` applies to the global one (see the warning above), so wrap
+it in `withoutAmbientCookies` yourself — otherwise the native cookie jar
+reintroduces the `FORBIDDEN_ORIGIN` loop. The client's `fetch` option feeds
+`client.httpStream` and `useHttpStream`; a standalone
+`httpStream(route, args, { fetch })` call takes its own.
 
 ## Local-first (shapes, custom mutators, TanStack DB)
 

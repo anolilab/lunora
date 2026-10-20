@@ -943,6 +943,10 @@ const ERROR_CATALOG: {
         readonly title: "HTTP stream missing path parameter";
     };
     readonly HTTP_STREAM_NO_BODY: {
+        readonly hint: readonly [
+            "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
+            "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call."
+        ];
         readonly status: 502;
         readonly title: "HTTP stream response has no body";
     };
