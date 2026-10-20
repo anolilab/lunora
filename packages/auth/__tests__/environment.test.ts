@@ -4,14 +4,19 @@ import isDevEnvironment from "../src/environment";
 
 describe(isDevEnvironment, () => {
     it("is true when every set environment var names a dev environment", () => {
-        expect.assertions(4);
+        expect.assertions(3);
 
         // What `lunora dev` writes into `.dev.vars`.
         expect(isDevEnvironment({ WORKER_ENV: "development" })).toBe(true);
         expect(isDevEnvironment({ NODE_ENV: "test" })).toBe(true);
         expect(isDevEnvironment({ CF_ENV: "Local", WORKER_ENV: "development" })).toBe(true);
-        // An empty var counts as unset.
-        expect(isDevEnvironment({ NODE_ENV: "", WORKER_ENV: "development" })).toBe(true);
+    });
+
+    it("is false when an empty var sits beside a dev one: an empty value is still set", () => {
+        expect.assertions(2);
+
+        expect(isDevEnvironment({ CF_ENV: "", NODE_ENV: "development", WORKER_ENV: "development" })).toBe(false);
+        expect(isDevEnvironment({ NODE_ENV: "", WORKER_ENV: "development" })).toBe(false);
     });
 
     it("fails closed: no environment var, or a production one, is production", () => {
