@@ -12,9 +12,11 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import { LunoraError } from "@lunora/errors";
 import { readRequestLog } from "@lunora/observability";
 import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
 import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { v } from "@lunora/values";
 import { DurableObject } from "cloudflare:workers";
 
 import { mergeDurableObjects } from "../../src/merge-durable-objects";
@@ -29,6 +31,7 @@ interface Env {
     AUTHORIZED: DurableObjectNamespace<DeliveryAuthorizationTestDO>;
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
+    LIVE_SHARD: DurableObjectNamespace<TestLiveShardDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
     MERGED: DurableObjectNamespace;
     SESSION: DurableObjectNamespace<TestSessionDO>;
@@ -48,6 +51,10 @@ class ConcreteShard extends ShardDO {
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.outer.lastRpcCall = { args, functionPath };
 
+        if (this.outer.rpcError !== undefined) {
+            throw this.outer.rpcError;
+        }
+
         return this.outer.rpcResult;
     }
 
@@ -57,6 +64,8 @@ class ConcreteShard extends ShardDO {
 }
 
 class TestShardDO extends DurableObject<Env> {
+    public rpcError: Error | undefined;
+
     public rpcResult: unknown = { ok: true };
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
@@ -66,6 +75,10 @@ class TestShardDO extends DurableObject<Env> {
     public constructor(context: DurableObjectState, env: Env) {
         super(context, env);
         this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
+    }
+
+    public setRpcError(error: Error): void {
+        this.rpcError = error;
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -91,6 +104,67 @@ class TestShardDO extends DurableObject<Env> {
 
     public broadcast(delta: MutationDelta): void {
         this.shard.broadcastDelta(delta);
+    }
+}
+
+/**
+ * A declared live stream, shaped like the `defineLiveStream` value the generated shard returns from `liveStreams()`: one topic,
+ * `feed`, whose payload validator really parses, so a publish is checked by the same code path a generated shard runs.
+ */
+const feedStream = {
+    validatePublish: (topic: string, payload: unknown): unknown => {
+        if (topic !== "feed") {
+            throw new LunoraError("BAD_REQUEST", `"${topic}" is not a declared topic`, { status: 400 });
+        }
+
+        try {
+            return v.object({ text: v.string() }).parse(payload);
+        } catch (error) {
+            // As `defineLiveStream` does: a validator's own error becomes the publish refusal.
+            throw new LunoraError("BAD_REQUEST", `publish to "${topic}" was refused: ${String(error)}`, { status: 400 });
+        }
+    },
+};
+
+/**
+ * A shard that declares live streams, the way the generated subclass does: `feed` is held from the start, and `late` is
+ * imported on the first publish to it, as a lazy generated shard imports a stream's module (`loadLiveStream`).
+ */
+class ConcreteLiveShard extends ShardDO {
+    private readonly loaded = new Map<string, typeof feedStream>();
+
+    // eslint-disable-next-line class-methods-use-this -- test double: this shard serves publishes only, never an RPC
+    public override async handleRpc(): Promise<unknown> {
+        return null;
+    }
+
+    protected override loadLiveStream(stream: string): Promise<void> | undefined {
+        if (stream !== "late" || this.loaded.has(stream)) {
+            return undefined;
+        }
+
+        const load = async (): Promise<void> => {
+            this.loaded.set(stream, feedStream);
+        };
+
+        return load();
+    }
+
+    protected override liveStreams() {
+        return { feed: feedStream, ...Object.fromEntries(this.loaded) };
+    }
+}
+
+class TestLiveShardDO extends DurableObject<Env> {
+    private readonly shard: ConcreteLiveShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteLiveShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
     }
 }
 
@@ -612,5 +686,5 @@ const handler = {
 
 export default handler;
 export { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
-export { TestCounterDO, TestEchoDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

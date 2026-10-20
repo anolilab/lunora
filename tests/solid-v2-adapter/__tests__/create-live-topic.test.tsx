@@ -1,5 +1,6 @@
+import type { LiveTopicRef } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
-import { createLiveTopic } from "@lunora/solid";
+import { createLiveTopic, LunoraProvider } from "@lunora/solid";
 import { render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,24 @@ vi.mock(import("@lunora/client"), async (importOriginal) => {
 });
 
 const subscribeMock = vi.mocked(subscribeLiveTopic);
+
+// The primitive reads its base URL from the provided client; only its URL is used here.
+const client = { url: "https://api.test" } as never;
+const URL = "https://api.test/live/posts/connect";
+
+/** A reference as `_generated/live.ts` hands one out, for the `posts` stream. */
+const ref = (topic: string): LiveTopicRef => ({ __lunoraLive: "posts", topic });
+
+/** Render `body` inside a provider carrying the stub client. */
+const renderWithClient = (body: () => void) =>
+    render(
+        () => {
+            body();
+
+            return <div />;
+        },
+        { wrapper: (props) => <LunoraProvider client={client}>{props.children}</LunoraProvider> },
+    );
 
 /**
  * `createLiveTopic` under Solid 2.0. The effect that owns the subscription goes
@@ -25,15 +44,13 @@ describe("createLiveTopic on Solid 2", () => {
     });
 
     it("subscribes on mount with the topic options", () => {
-        render(() => {
-            createLiveTopic({ topic: "post:1", url: "/live/posts/connect" });
-
-            return <div />;
+        renderWithClient(() => {
+            createLiveTopic(ref("post:1"));
         });
         flush();
 
         expect(subscribeMock).toHaveBeenCalledTimes(1);
-        expect(subscribeMock).toHaveBeenCalledWith(expect.objectContaining({ topic: "post:1", url: "/live/posts/connect" }));
+        expect(subscribeMock).toHaveBeenCalledWith(expect.objectContaining({ topic: "post:1", url: URL }));
     });
 
     it("unsubscribes on unmount", () => {
@@ -41,10 +58,8 @@ describe("createLiveTopic on Solid 2", () => {
 
         subscribeMock.mockImplementation(() => unsubscribe);
 
-        const { unmount } = render(() => {
-            createLiveTopic({ topic: "post:1", url: "/live/posts/connect" });
-
-            return <div />;
+        const { unmount } = renderWithClient(() => {
+            createLiveTopic(ref("post:1"));
         });
         flush();
 
@@ -59,10 +74,8 @@ describe("createLiveTopic on Solid 2", () => {
 
         subscribeMock.mockImplementationOnce(() => firstUnsubscribe).mockImplementation(() => vi.fn<() => void>());
 
-        render(() => {
-            createLiveTopic(() => ({ topic: topic(), url: "/live/posts/connect" }));
-
-            return <div />;
+        renderWithClient(() => {
+            createLiveTopic(() => ref(topic()));
         });
         flush();
 

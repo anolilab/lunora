@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,26 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
 
 /** The actionable message a missing wrangler must produce. */
 const WRANGLER_MISSING_RE = /wrangler` was not found on PATH/u;
+
+/** An OS-assigned free port, released before the caller binds it. */
+const freePort = async (): Promise<number> => {
+    const { createServer } = await import("node:net");
+    const server = createServer();
+
+    await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+    });
+
+    const { port } = server.address() as { port: number };
+
+    await new Promise<void>((resolve) => {
+        server.close(() => {
+            resolve();
+        });
+    });
+
+    return port;
+};
 
 /** Read the record form of `server.proxy`, failing loudly if the plugin produced an array. */
 const recordProxy = (config: RsbuildConfigLike): Record<string, unknown> => {
@@ -223,6 +243,104 @@ describe(lunoraRsbuild, () => {
         expect(recordProxy(rsbuild)["/_lunora"]).toMatchObject({ ws: true });
         expect(startedDevServer).toBe(false);
     });
+
+    it("re-reads `target` from lunora.config on each dev-server start, so an edit is picked up at the next start", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+        vi.mocked(startCelldDevSession).mockClear();
+
+        const root = fixture();
+        // Free, not a fixed number: the start checks the port before it looks for wrangler.
+        const workerPort = await freePort();
+
+        writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "cloudflare" };\n', "utf8");
+
+        let beforeStart: ((params: { server: DevServerLike }) => Promise<void> | void) | undefined;
+
+        lunoraRsbuild({ projectRoot: root, studio: false, validateWrangler: false, workerPort }).setup({
+            getRsbuildConfig: () => {
+                return {};
+            },
+            modifyRsbuildConfig: (callback) => callback({}),
+            modifyRspackConfig: (callback) => callback({}),
+            onAfterStartDevServer: () => {},
+            onBeforeStartDevServer: (callback) => {
+                beforeStart = callback;
+            },
+            onCloseDevServer: () => {},
+        });
+
+        // No wrangler on PATH: a cloudflare start fails at the lookup instead of spawning one.
+        const path = process.env.PATH;
+
+        process.env.PATH = "/nonexistent";
+
+        try {
+            await expect(beforeStart?.({ server: { middlewares: { use: () => {} } } })).rejects.toThrow(WRANGLER_MISSING_RE);
+
+            writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            await beforeStart?.({ server: { middlewares: { use: () => {} } } });
+        } finally {
+            process.env.PATH = path;
+        }
+
+        // The second start follows the edit to celld's own dev server, and never reaches wrangler.
+        expect(startCelldDevSession).toHaveBeenCalledTimes(1);
+        expect(startCelldDevSession).toHaveBeenCalledWith(expect.objectContaining({ port: workerPort, projectRoot: root }));
+    }, 45_000);
+
+    it("keeps the target the last generated output matches when the next pass fails before generating", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.mocked(startCelldDevSession).mockClear();
+
+        const root = fixture();
+        const workerPort = await freePort();
+
+        writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "cloudflare" };\n', "utf8");
+
+        let beforeStart: ((params: { server: DevServerLike }) => Promise<void> | void) | undefined;
+
+        // Validation is on here: the broken wrangler config below must make the next pass fail.
+        lunoraRsbuild({ projectRoot: root, studio: false, workerPort }).setup({
+            getRsbuildConfig: () => {
+                return {};
+            },
+            modifyRsbuildConfig: (callback) => callback({}),
+            modifyRspackConfig: (callback) => callback({}),
+            onAfterStartDevServer: () => {},
+            onBeforeStartDevServer: (callback) => {
+                beforeStart = callback;
+            },
+            onCloseDevServer: () => {},
+        });
+
+        const path = process.env.PATH;
+
+        process.env.PATH = "/nonexistent";
+
+        try {
+            // First start: a cloudflare pass that generates, then the wrangler lookup fails.
+            await expect(beforeStart?.({ server: { middlewares: { use: () => {} } } })).rejects.toThrow(WRANGLER_MISSING_RE);
+
+            // Second start: a celld target, but a wrangler config that no longer satisfies the schema,
+            // so the pass fails before it generates anything.
+            writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), '{ "name": "lunora-app", "compatibility_date": "2026-04-07" }\n', "utf8");
+
+            await expect(beforeStart?.({ server: { middlewares: { use: () => {} } } })).rejects.toThrow(WRANGLER_MISSING_RE);
+        } finally {
+            process.env.PATH = path;
+        }
+
+        // The output on disk is still cloudflare's, so the worker must not be celld's.
+        expect(startCelldDevSession).not.toHaveBeenCalled();
+    }, 45_000);
 });
 
 describe(startWorker, () => {

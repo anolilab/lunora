@@ -344,6 +344,25 @@ describe("stream", () => {
             client.close();
         });
 
+        it("keeps the server's why explanation on a stream rejection", async () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:conflict"), {});
+
+            latestSocket().open();
+            const id = latestSocket()
+                .sent.map((raw) => JSON.parse(raw) as Record<string, unknown>)
+                .find((f) => f.type === "stream")?.id as string;
+
+            latestSocket().receive({ error: { code: "CONFLICT", message: "stale", why: "row moved" }, id, type: "error" });
+
+            await expect(iterable[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: "CONFLICT", why: "row moved" });
+
+            client.close();
+        });
+
         it("keeps the incumbent stream when the server refuses a duplicate id", async () => {
             expect.assertions(3);
 

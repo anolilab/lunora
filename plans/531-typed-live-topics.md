@@ -1,7 +1,15 @@
 # Plan 531 — Typed live topics: declared topic names and payloads, generated refs, typed publish and subscribe
 
 **Baseline:** `5eba0f6a6` (2026-10-18), the live-topic hook work on top of `origin/alpha` (`eafd564ad`). That work (`subscribeLiveTopic` and the five adapter bindings) must land first; this plan builds on it.
-**Status:** TODO
+**Status:** workstreams A to D shipped (declarations, codegen refs, typed publish and subscribe, docs and skills). Only E, auto-mounting the routes, remains and waits on its open question; delete this file when E ships or is dropped.
+
+**What the implementation found that this plan got wrong or left open:**
+
+- D6 validation could not live in `defineLiveStream` or in the three publishers. A ref is client-safe data with no validator, and the HTTP, queue and action publishers live in packages that do not depend on `@lunora/server`. The check runs in `ShardDO.publishLiveEvent`, which all three reach, through a `liveStreams()` hook the generated subclass overrides with the declared streams. A shard built without codegen validates nothing.
+- Question 2 (a payload-less topic): `payload` is required; a "something changed" topic declares `v.null()`.
+- D2 needed more than the plan said: topic names and key fields are restricted to identifiers (no `:` or `%`), a subscribe must be in canonical encoded form (`post:%31` is refused), and key validators must be string-valued, because a keyless name `a:b` and a keyed name `a` with key `b` would otherwise share a wire string.
+- D5: the ref carries the stream id, not a path. `liveTopicSubscription(client, ref, options)` derives the route, and a `shardKey` option replaces the hand-written `?shard=`. `sessionKey` stays an option on the hook.
+- `_generated/live.ts` is emitted whenever a stream is declared, not only when the target serves live streams; only `ctx.live` and the shard check follow the platform verdict.
 
 ## 0. Headline finding
 

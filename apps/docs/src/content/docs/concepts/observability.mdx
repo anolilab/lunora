@@ -71,6 +71,88 @@ Set `transformLog` (or point the sink at a trusted endpoint) before upgrading if
 your handlers log user data. `otlpSink` doesn't have this expansion.
 :::
 
+### Enrich and route
+
+`enrichSink(sink, enrich)` adds derived attributes to every event a sink
+receives. `filterSink(sink, { include, exclude })` keeps only the signals whose
+function path matches. Both wrap any sink and return a sink, so they compose with
+`combineSinks` and with each other. Pass the same wrapped object to
+`createWorker` and `createShardDO` and both halves of telemetry are covered: the
+RPC event from the worker, and `ctx.log`, `ctx.trace` and `ctx.metrics` from the
+shard.
+
+```ts
+const routed = filterSink(
+    enrichSink(otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN }), (event, signal) => ({
+        signal,
+        tenant: event.shardKey,
+    })),
+    { exclude: ["admin:*"], include: ["messages:*", "alarm:*"] },
+);
+```
+
+- The enricher receives the event and its signal (`"log"`, `"metric"`, `"span"`
+  or `"rpc"`). Its values land in the log `fields` or the `attributes` of the
+  other signals.
+- In a pattern, `*` matches any run of characters, including `:` and `/`.
+  `exclude` wins over `include`. An absent or empty `include` matches every path.
+- Platform records use synthetic paths such as `ttl:sweep` or `scheduler:outbox`.
+  Some are kept only in the shard's local log and never reach a sink, so no filter
+  can route them. The filter applies to the records a sink receives.
+- Enriched values are redacted, then normalized to JSON-safe primitives. Log lines use the same
+  rules as logged fields, which mask personal data such as emails and ids. Metric,
+  span and RPC values use credential-only redaction, so ids and URLs survive on
+  those signals. Keep personal data out of an enricher for those signals. An
+  enricher that throws leaves the event unchanged.
+
+### Other OTLP vendors
+
+Any vendor that accepts OTLP over HTTP works through `otlpSink`, so there is no
+per-vendor sink to install. You provide three things: the vendor's base endpoint,
+its credentials, and any routing headers it needs. The sink appends
+`/v1/traces`, `/v1/logs` and `/v1/metrics` to the endpoint.
+
+```ts
+otlpSink({
+    endpoint: env.OTLP_ENDPOINT, // the vendor's OTLP base URL, without a path
+    token: env.OTLP_TOKEN, // sent as `Authorization: Bearer <token>`
+    headers: { "x-vendor-project": env.OTLP_PROJECT }, // any other header the vendor requires
+});
+```
+
+Keep the credentials in the environment so they can be injected at deploy time.
+
+**Routing headers can differ per signal.** `otlpSink` sends one `headers` object
+for every signal. When a vendor needs a different header for one signal, give that
+signal its own instance and forward only the signals the vendor should receive.
+Axiom is an example: traces and logs use `x-axiom-dataset`, and metrics use
+`x-axiom-metrics-dataset`, so metrics go through a second instance:
+
+```ts
+const endpoint = `https://${env.AXIOM_DOMAIN}`;
+const traces = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-dataset": "app-traces" } });
+const metrics = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-metrics-dataset": "app-metrics" } });
+
+observability: combineSinks(
+    { flush: traces.flush, onLog: traces.onLog, onRpc: traces.onRpc, onSpan: traces.onSpan },
+    { flush: metrics.flush, onMetric: metrics.onMetric },
+),
+```
+
+For Sentry, or any other vendor, take the endpoint, the auth header and the
+dataset or project header from that vendor's OpenTelemetry setup page. Check
+which signals it accepts before you forward them. The pattern is the same: one
+`otlpSink` per header set, and an object that forwards only the accepted methods.
+
+Checklist for a new vendor:
+
+1. **Endpoint.** Use the base URL. The sink adds the signal paths.
+2. **Auth.** Use `token` for a Bearer token. Put any other auth header in `headers`.
+3. **Routing.** If a signal needs a different header, give it its own `otlpSink`.
+4. **Signals.** Forward only the signals the vendor accepts.
+5. **Verify.** Send one event and confirm it arrives. A failed POST is swallowed,
+   so a wrong header or endpoint looks like missing data, not an error.
+
 ### `otlpSink`
 
 ```ts

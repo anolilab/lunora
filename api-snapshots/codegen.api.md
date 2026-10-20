@@ -133,6 +133,7 @@ interface CodegenResult {
         functionModules: Record<string, string>;
         functions: string;
         internal: string;
+        live: string;
         openApi: string;
         openApiModule: string;
         openRpc: string;
@@ -458,6 +459,7 @@ interface LintSchemaOptions {
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
     countReads?: ReadonlyArray<CountReadIR>;
+    crons?: ReadonlyArray<CronJobIR>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
@@ -1451,7 +1453,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSockets, lazyFunctions, hasVectors, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1494,6 +1496,12 @@ const evaluateSchemaDrift: (options: {
     current: SchemaSnapshot;
     migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
 }) => SchemaDriftDecision;
+```
+
+### `findCodegenConfigFile` (const)
+
+```ts
+const findCodegenConfigFile: (lunoraDirectory: string) => string | undefined;
 ```
 
 ### `findLunoraSolution` (const)
@@ -1592,6 +1600,12 @@ const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | und
 
 ```ts
 const platformMatrixIds: () => ReadonlyArray<string>;
+```
+
+### `projectConfigCandidatePaths` (const)
+
+```ts
+const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
 ```
 
 ### `readPackageDependencies` (const)
@@ -2550,6 +2564,7 @@ interface EmitShardOptions {
     hasSockets?: boolean;
     hasVectors?: boolean;
     lazyFunctions?: boolean;
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     mutators?: ReadonlyArray<MutatorIR>;
@@ -2744,6 +2759,26 @@ interface KvKeyAccessIR {
     method: string;
     scope: CallSiteScope;
     visibility?: "internal" | "public";
+}
+```
+
+### `LiveStreamIR` (interface)
+
+```ts
+interface LiveStreamIR {
+    exportName: string;
+    filePath: string;
+    id: string;
+    topics: ReadonlyArray<LiveTopicIR>;
+}
+```
+
+### `LiveTopicIR` (interface)
+
+```ts
+interface LiveTopicIR {
+    fields: ReadonlyArray<string>;
+    name: string;
 }
 ```
 

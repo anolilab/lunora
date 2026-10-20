@@ -41,7 +41,7 @@ describe("queue ctx.live.publish", () => {
             handler: async (context, b) => {
                 await Promise.all(
                     b.messages.map(async (m) => {
-                        await context.live?.publish(`post:${m.body.postId}`, { event: "digest_ready" }, { stream: "posts" });
+                        await context.live?.publish({ __lunoraLive: "posts", topic: `post:${m.body.postId}` }, { event: "digest_ready" });
                         m.ack();
                     }),
                 );
@@ -62,7 +62,7 @@ describe("queue ctx.live.publish", () => {
         );
 
         expect(published).toHaveLength(1);
-        expect(published[0]).toEqual({ options: { stream: "posts" }, payload: { event: "digest_ready" }, topic: "post:1" });
+        expect(published[0]).toEqual({ options: undefined, payload: { event: "digest_ready" }, topic: { __lunoraLive: "posts", topic: "post:1" } });
     });
 
     it("leaves ctx.live absent when the runtime supplies no publisher", async () => {

@@ -7,7 +7,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { collectPages } from "../../../shared/collect-pages";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
-import { decodeErrorDetail, describeError, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -156,7 +156,7 @@ interface HttpActionContext {
      * `@lunora/server`'s `LivePublisher`. Present on every worker; built with
      * `liveStreams: false` (a target that does not serve live streams), its `publish` rejects.
      */
-    live?: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
+    live?: { publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void> };
 
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -643,7 +643,13 @@ type QueueConsumerHandler = (
  * its own copy and this package stays decoupled from it.
  */
 interface QueueLivePublisherLike {
-    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void>;
+}
+
+/** The live topic reference a publish is addressed with: `_generated/live.ts` hands it out, and the stream id rides in it. */
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
 }
 
 /**
@@ -2072,10 +2078,11 @@ const buildErrorEvent = (
     const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? error.status : 500;
     const { message, name, stack } = describeError(error);
+    const internal = describeInternal(error, { capped: false });
 
     return {
         durationMs,
-        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }) },
+        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }), ...(internal === undefined ? {} : { internal }) },
         functionPath,
         ok: false,
         ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
@@ -3234,12 +3241,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      */
     const publishLiveToShard = async (
         origin: string,
-        topic: string,
+        ref: LiveTopicRefLike,
         payload: unknown,
-        publishOptions: { shardKey?: string; stream: string },
+        publishOptions: { shardKey?: string } | undefined,
         caller: "trusted" | { identity: ResolvedIdentity | null },
     ): Promise<void> => {
-        const shardKey = publishOptions.shardKey ?? defaultShard;
+        const { __lunoraLive: stream, topic } = ref;
+        const shardKey = publishOptions?.shardKey ?? defaultShard;
 
         if (caller === "trusted") {
             // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
@@ -3253,7 +3261,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             shardKey,
             new Request(new URL(LIVE_PUBLISH_PATH, origin), {
                 // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
-                body: JSON.stringify({ data: encodeWire(payload ?? null), stream: publishOptions.stream, topic }),
+                body: JSON.stringify({ data: encodeWire(payload ?? null), stream, topic }),
                 headers: { "content-type": "application/json" },
                 method: "POST",
             }),
@@ -4296,7 +4304,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 options.liveStreams === false
                     ? unsupportedLivePublisher()
                     : {
-                          publish: (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }) =>
+                          publish: (topic: LiveTopicRefLike, payload: unknown, publishOptions?: { shardKey?: string }) =>
                               publishLiveToShard(request.url, topic, payload, publishOptions, { identity }),
                       },
             runAction: run,
@@ -5236,13 +5244,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     parsed = await response.json();
                 } catch {
                     // Malformed shard response — fail every entry to its own slot
-                    // rather than dropping them silently into "no result".
+                    // rather than dropping them silently into "no result". Coded
+                    // `SHARD_UNAVAILABLE`, not `SHARD_ERROR`: a shard that could not
+                    // answer at all says nothing about any write in the batch, and
+                    // the client re-queues that code instead of settling the write.
                     const message = `shard batch returned a non-JSON response (${String(response.status)})`;
 
-                    failSubBatch(entries, response.status, "SHARD_ERROR", message, (entry) => {
+                    failSubBatch(entries, response.status, "SHARD_UNAVAILABLE", message, (entry) => {
                         return {
                             durationMs,
-                            error: { code: "SHARD_ERROR", message, status: response.status },
+                            error: { code: "SHARD_UNAVAILABLE", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
                             ...entryTraceFields(shardSpanId),
@@ -5263,9 +5274,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 // Any entry the shard omitted (short/partial response) gets an
                 // explicit slot error rather than a silent "no result" client-side.
+                // `SHARD_UNAVAILABLE` for the same reason as the non-JSON case above.
                 for (const entry of entries) {
                     if (!seenIds.has(entry.id)) {
-                        results.push(slotError(entry, response.status, "SHARD_ERROR", `shard batch omitted result for call ${String(entry.id)}`));
+                        results.push(slotError(entry, response.status, "SHARD_UNAVAILABLE", `shard batch omitted result for call ${String(entry.id)}`));
                     }
                 }
             }),

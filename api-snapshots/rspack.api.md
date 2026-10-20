@@ -43,7 +43,7 @@ class LunoraRspackPlugin {
     #private;
     constructor(options: ResolvedLunoraRspackOptions);
     prepareDevSession(): Promise<void>;
-    generateForDev(): Promise<void>;
+    generateForDev(): Promise<string>;
     apply(compiler: CompilerLike): void;
 }
 ```
@@ -205,6 +205,7 @@ type ProxyArrayEntry = Record<string, unknown> & {
 ```ts
 interface ResolvedLunoraRspackOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
+    explicitTarget: string | undefined;
     lazyFunctions: boolean;
     projectRoot: string;
     schemaDir: string;

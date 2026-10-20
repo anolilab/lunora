@@ -146,9 +146,8 @@ type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: QueueMessa
 
 ```ts
 interface QueueLivePublisher {
-    publish: (topic: string, payload: unknown, options: {
+    publish: <Payload>(topic: QueueLiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
         shardKey?: string;
-        stream: string;
     }) => Promise<void>;
 }
 ```
@@ -399,6 +398,16 @@ interface DispatchOptions {
     fetchImpl?: typeof fetch;
     live?: QueueLivePublisher;
     traceparent?: string;
+}
+```
+
+### `QueueLiveTopicRef` (interface)
+
+```ts
+interface QueueLiveTopicRef<Payload = unknown> {
+    readonly __lunoraLive: string;
+    readonly __payload?: Payload;
+    readonly topic: string;
 }
 ```
 

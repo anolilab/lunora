@@ -1,3 +1,52 @@
+## @lunora/do [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.231...@lunora/do@1.0.0-alpha.232) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.156
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+
+## @lunora/do [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.230...@lunora/do@1.0.0-alpha.231) (2026-10-19)
+
+### Bug Fixes
+
+* **do:** bound subscription work and apply replica pages atomically ([#1265](https://github.com/anolilab/lunora/issues/1265)) ([d3b5c5c](https://github.com/anolilab/lunora/commit/d3b5c5ccc5c1c7ca72636cd4b2d8232143f79547))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/observability:** upgraded to 1.0.0-alpha.155
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+
+## @lunora/do [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.229...@lunora/do@1.0.0-alpha.230) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/observability:** upgraded to 1.0.0-alpha.154
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.98
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/do [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.228...@lunora/do@1.0.0-alpha.229) (2026-10-18)
 
 ### Features

@@ -29,7 +29,7 @@ export type { DevConfigKind } from "./dev-config";
 export type { WithheldBinding } from "./dev-config";
 export { describeWithheld, withheldBindings } from "./dev-config";
 export type { LocalHyperdrive } from "./local-hyperdrive";
-export { startLocalHyperdrive } from "./local-hyperdrive";
+export { bindingsNeedingDatabase, startLocalHyperdrive } from "./local-hyperdrive";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

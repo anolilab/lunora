@@ -1,3 +1,32 @@
+## @lunora/shard-engine [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.144...@lunora/shard-engine@1.0.0-alpha.145) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+
+## @lunora/shard-engine [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.143...@lunora/shard-engine@1.0.0-alpha.144) (2026-10-19)
+
+### Bug Fixes
+
+* **do:** bound subscription work and apply replica pages atomically ([#1265](https://github.com/anolilab/lunora/issues/1265)) ([d3b5c5c](https://github.com/anolilab/lunora/commit/d3b5c5ccc5c1c7ca72636cd4b2d8232143f79547))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+
+## @lunora/shard-engine [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.142...@lunora/shard-engine@1.0.0-alpha.143) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/shard-engine [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.141...@lunora/shard-engine@1.0.0-alpha.142) (2026-10-18)
 
 ### Features

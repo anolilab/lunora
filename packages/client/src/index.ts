@@ -29,8 +29,8 @@ export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
 export type { ConnectLiveStreamOptions, LiveStream, LiveStreamEvent, LiveStreamSubscribeError, LiveStreamSubscribeOptions } from "./live-stream";
 export { connectLiveStream } from "./live-stream";
-export type { SubscribeLiveTopicOptions } from "./live-topic";
-export { subscribeLiveTopic } from "./live-topic";
+export type { LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "./live-topic";
+export { liveTopicSubscription, subscribeLiveTopic } from "./live-topic";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
@@ -42,6 +42,7 @@ export type {
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
+    SyncStatus,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";

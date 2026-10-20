@@ -641,6 +641,22 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Socket route path is not a string literal";
     };
+    readonly LIVE_STREAM_DUPLICATE: {
+        readonly status: 500;
+        readonly title: "Duplicate live stream id or export name";
+    };
+    readonly LIVE_STREAM_NOT_EXPORTED: {
+        readonly status: 500;
+        readonly title: "Live stream is not a named export";
+    };
+    readonly LIVE_STREAM_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Live stream declaration is not a literal";
+    };
+    readonly LIVE_TOPIC_INVALID: {
+        readonly status: 500;
+        readonly title: "Live topic name or key field is not allowed";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
@@ -698,6 +714,10 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
+    };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
@@ -817,6 +837,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Stream id already in use";
     };
+    readonly STREAM_IDLE: {
+        readonly status: 504;
+        readonly title: "Stream went idle";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";
@@ -824,6 +848,10 @@ const ERROR_CATALOG: {
     readonly STREAM_TOO_LONG: {
         readonly status: 507;
         readonly title: "Durable stream exceeded its chunk ceiling";
+    };
+    readonly SUBSCRIPTION_RESULT_TOO_LARGE: {
+        readonly status: 413;
+        readonly title: "Subscription result too large";
     };
     readonly TOKEN_EXPIRED: {
         readonly hint: readonly [
@@ -958,6 +986,7 @@ interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    why?: string;
 }
 ```
 
@@ -1002,6 +1031,8 @@ class LunoraError extends Error {
     readonly status: number;
     readonly docsUrl: string | undefined;
     readonly data: unknown;
+    readonly why: string | undefined;
+    readonly internal: Record<string, unknown> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1028,6 +1059,7 @@ interface LunoraErrorLike extends Error {
     hint?: ErrorHint;
     status: number;
     type: "VisulimaError";
+    why?: string;
 }
 ```
 
@@ -1039,10 +1071,12 @@ interface LunoraErrorOptions {
     data?: unknown;
     docsUrl?: string;
     hint?: ErrorHint;
+    internal?: Record<string, unknown>;
     location?: ErrorLocation;
     name?: string;
     status?: number;
     title?: string;
+    why?: string;
 }
 ```
 

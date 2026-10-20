@@ -1,7 +1,7 @@
 import { ShardDO } from "@lunora/do";
 import { createSocketHost } from "@lunora/platform-cloudflare";
 import { createWorker } from "@lunora/runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createNodeShardNamespace } from "../src/node-shard-namespace";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
@@ -64,6 +64,48 @@ describe("shardDO on a Node-backed shard", () => {
         });
     });
 
+    it("keeps a quiet live stream alive with the same keepalive comment the client's idle watchdog counts on", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        try {
+            await withShardDo(async (shardDo) => {
+                const response = await shardDo.fetch(new Request("http://shard.test/_lunora/live/connect"));
+                const reader = response.body?.getReader();
+                const decoder = new TextDecoder();
+
+                // The stream's first chunk flushes the headers; nothing is published after it.
+                const opening = await reader?.read();
+
+                expect(opening?.value).toStrictEqual(new TextEncoder().encode(":ok\n\n"));
+
+                // The client treats 75s of silence as a dead connection; the host must speak well inside that.
+                const quiet = reader?.read();
+
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                const chunk = await quiet;
+
+                expect(decoder.decode(chunk?.value)).toBe(":ka\n\n");
+
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                const second = await reader?.read();
+
+                expect(decoder.decode(second?.value)).toBe(":ka\n\n");
+
+                // The last stream going away stops the timer, so it cannot keep the process alive.
+                await reader?.cancel();
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                expect(vi.getTimerCount()).toBe(0);
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("round-trips a socket attachment through accept and enumeration", async () => {
         expect.assertions(2);
 
@@ -123,7 +165,7 @@ describe("queue consumer on a Node-backed worker", () => {
             const worker = createWorker({
                 queue: async (_batch, _env, _context, _trigger, live, fetchImpl) => {
                     consumerFetch = fetchImpl;
-                    await live.publish("orders", { id: 1 }, { shardKey: "tenant-42", stream: "orders" });
+                    await live.publish({ __lunoraLive: "orders", topic: "orders" }, { id: 1 }, { shardKey: "tenant-42" });
                 },
                 queueFetchImpl: hostFetch,
                 shardDO: createNodeShardNamespace(registry.directory),

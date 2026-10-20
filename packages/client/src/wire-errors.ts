@@ -75,6 +75,12 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
 };
 
 /**
+ * The envelope's `why`, as an own property to spread onto a thrown error. Absent unless the
+ * envelope carries a string, so an error never has a `why` key whose value is undefined.
+ */
+const whyProperty = (envelope: { why?: string }): { why?: string } => (envelope.why === undefined ? {} : { why: envelope.why });
+
+/**
  * The `{ code, message, data?, … }` envelope a response carries, or `undefined`
  * when it carries none.
  *
@@ -89,10 +95,20 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
  * eight `sdks/*` ports narrow the slot this way and are held to
  * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
  */
-const errorEnvelopeOf = (body: unknown): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string } | undefined => {
+
+const errorEnvelopeOf = (
+    body: unknown,
+): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string; why?: string } | undefined => {
     const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
 
-    return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
+    if (typeof slot !== "object" || slot === null || Array.isArray(slot)) {
+        return undefined;
+    }
+
+    // `why` is typed as a string on the wire, so a malformed one is dropped rather than passed on.
+    const { why, ...rest } = slot as { why?: unknown };
+
+    return typeof why === "string" ? { ...rest, why } : rest;
 };
 
 /**
@@ -129,11 +145,17 @@ const parseServerError = (message: ServerErrorMessage, fallbackMessage: string):
     return { code, messageText: (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? fallbackMessage };
 };
 
-/** Build a coded `Error` from a stream-scoped server `error` frame. */
+/** Build a coded `Error` from a stream-scoped server `error` frame, keeping the server's `why` explanation. */
 const buildStreamError = (message: ServerErrorMessage): Error => {
     const { code, messageText } = parseServerError(message, "stream error");
+    const why = (message.error as { why?: unknown } | undefined)?.why;
+    const error: Error & { why?: string } = code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
 
-    return code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
+    if (typeof why === "string") {
+        error.why = why;
+    }
+
+    return error;
 };
 
 /**
@@ -143,12 +165,20 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
  */
 const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError => {
     const { code, messageText } = parseServerError(message, "subscription error");
+    const why = (message.error as { why?: unknown } | undefined)?.why;
 
-    return { message: messageText, ...(code === undefined ? {} : { code }) };
+    return { message: messageText, ...(code === undefined ? {} : { code }), ...(typeof why === "string" ? { why } : {}) };
 };
 
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
-const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): LunoraClientError => {
+const reconstructError = (errorBody: {
+    code?: string;
+    data?: unknown;
+    docsUrl?: string;
+    hint?: string | string[];
+    message?: string;
+    why?: string;
+}): LunoraClientError => {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;
@@ -171,6 +201,10 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
 
     if (errorBody.docsUrl !== undefined) {
         error.docsUrl = errorBody.docsUrl;
+    }
+
+    if (typeof errorBody.why === "string") {
+        error.why = errorBody.why;
     }
 
     return error;
@@ -221,7 +255,7 @@ const slotError = (inner: { error?: unknown }): LunoraClientError => {
  * forward-compat/unknown server codes assignable without losing autocomplete on
  * the known `LunoraErrorCode` union.
  */
-type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[] };
+type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[]; why?: string };
 
 export {
     buildStreamError,
@@ -233,5 +267,6 @@ export {
     retryAfterHeaderMs,
     slotError,
     unreadableSlotError,
+    whyProperty,
 };
 export type { LunoraClientError, RpcEnvelopeBody };

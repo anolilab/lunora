@@ -551,7 +551,7 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
-### `useLiveTopic` (const)
+### `useLiveTopic` (function)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -608,6 +608,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useSubscription` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useSuspenseQuery` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 

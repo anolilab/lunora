@@ -65,3 +65,118 @@ export const LIVE_SSE_HEADERS: Record<string, string> = {
  */
 export const encodeLiveFrame = (topic: string, dataJson: string): string =>
     `event: ${LIVE_EVENT_NAME}\ndata: {"topic":${JSON.stringify(topic)},"data":${dataJson}}\n\n`;
+
+/**
+ * The whisper-topic prefix a `defineRoom` lives under. A server publish may not name a room
+ * topic: the room's members trust a frame there as its handler's output.
+ */
+export const ROOM_TOPIC_PREFIX = "room:";
+
+/**
+ * Prefix of the reserved whisper topic a `defineWebSocket` route's sockets join. No
+ * client-supplied or published topic may address a route channel.
+ */
+export const SOCKET_TOPIC_PREFIX = "__lunora_socket__:";
+
+/**
+ * Longest topic or subscription id a live control call may name, and the longest topic a
+ * publish may name. Both are held in the shard's memory for the life of the connection, so
+ * an unbounded name is a memory lever. It applies to the ENCODED topic string.
+ */
+export const MAX_LIVE_CONTROL_KEY_LENGTH = 256;
+
+/** `GET` path of a stream's SSE connection. The one place the route shape is spelled. */
+export const liveConnectPath = (id: string): string => `/live/${id}/connect`;
+
+/** `POST` path of a stream's subscribe / unsubscribe control. */
+export const liveControlPath = (id: string): string => `/live/${id}/control`;
+
+/**
+ * A declared topic name or key field: an identifier. It cannot hold `:` (the segment
+ * delimiter) or `%` (the escape), which is what keeps {@link encodeLiveTopic} injective.
+ */
+const LIVE_IDENTIFIER = /^[A-Za-z]\w*$/u;
+
+/** Whether `name` is usable as a declared topic name or key field. */
+export const isLiveIdentifier = (name: string): boolean => LIVE_IDENTIFIER.test(name);
+
+/** Whether a topic named `name` would encode into a topic space a live publish cannot address. */
+export const isReservedLiveTopicName = (name: string): boolean => `${name}:`.startsWith(ROOM_TOPIC_PREFIX) || `${name}:`.startsWith(SOCKET_TOPIC_PREFIX);
+
+/**
+ * The wire topic for a declared topic `name` and its `key`: `name` alone for a keyless
+ * topic, otherwise `name:<seg>:<seg>…` with one percent-encoded segment per key field, in
+ * `fields` order (the declaration's order, never the caller's object order).
+ *
+ * Injective: `encodeURIComponent` escapes `:`, so a segment can never hold the delimiter,
+ * and a declared name cannot either. Two different `(name, key)` pairs never share a string.
+ */
+export const encodeLiveTopic = (name: string, fields: readonly string[], key: Readonly<Record<string, string>>): string =>
+    [
+        name,
+        ...fields.map((field) => {
+            const value = key[field];
+
+            if (typeof value !== "string") {
+                throw new TypeError(`live topic "${name}" needs a string key.${field}`);
+            }
+
+            return encodeURIComponent(value);
+        }),
+    ].join(":");
+
+/**
+ * Parse a raw wire topic back into its declared `(name, key)`, or `undefined` when it is
+ * not exactly what {@link encodeLiveTopic} would have produced for a declared topic.
+ *
+ * Rejects an undeclared name, the wrong number of segments, undecodable escapes, and any
+ * non-canonical spelling (`post:%31`, `post:%3a`): two raw strings that decode to the same
+ * key would otherwise be two subscription-registry entries for one logical topic.
+ */
+export const parseLiveTopic = (
+    raw: string,
+    declared: Readonly<Record<string, readonly string[]>>,
+): undefined | { key: Record<string, string>; name: string } => {
+    if (raw.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+        return undefined;
+    }
+
+    const [name, ...segments] = raw.split(":");
+
+    if (name === undefined || !Object.hasOwn(declared, name)) {
+        return undefined;
+    }
+
+    const fields = declared[name] as readonly string[];
+
+    if (segments.length !== fields.length) {
+        return undefined;
+    }
+
+    const key: Record<string, string> = {};
+
+    try {
+        for (const [index, field] of fields.entries()) {
+            key[field] = decodeURIComponent(segments[index] as string);
+        }
+
+        return encodeLiveTopic(name, fields, key) === raw ? { key, name } : undefined;
+    } catch {
+        // A malformed escape, or a lone surrogate that cannot re-encode.
+        return undefined;
+    }
+};
+
+/**
+ * A reference to one declared live topic, as `_generated/live.ts` hands it out. Plain data
+ * (no server code), so a client bundle can hold it; the phantom `Payload` is what lets
+ * `ctx.live.publish` and the framework hooks type the event.
+ */
+export interface LiveTopicRef<Payload = unknown> {
+    /** Phantom: carries the declared payload type. Never present at runtime. */
+    readonly __payload?: Payload;
+    /** The `id` of the `defineLiveStream` that declares and authorizes this topic. */
+    readonly __lunoraLive: string;
+    /** The encoded wire topic (see {@link encodeLiveTopic}). */
+    readonly topic: string;
+}

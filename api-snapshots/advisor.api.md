@@ -214,6 +214,19 @@ interface AdvisorCountRead {
 }
 ```
 
+### `AdvisorCron` (interface)
+
+```ts
+interface AdvisorCron {
+    cron: string;
+    functionPath?: string;
+    name: string;
+    workflow?: {
+        exportName: string;
+    };
+}
+```
+
 ### `AdvisorExportSink` (interface)
 
 ```ts
@@ -1095,6 +1108,7 @@ interface LintContext {
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
     countReads?: ReadonlyArray<AdvisorCountRead>;
+    crons?: ReadonlyArray<AdvisorCron>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
@@ -1454,6 +1468,12 @@ const containerStartEnableInternetOverride: Lint;
 
 ```ts
 const countWithoutIndex: Lint;
+```
+
+### `cronEveryMinute` (const)
+
+```ts
+const cronEveryMinute: Lint;
 ```
 
 ### `crossModuleTableWrite` (const)

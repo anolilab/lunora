@@ -154,14 +154,14 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/service binding points at/u);
     });
 
-    it("preserves hint and docsUrl, not just code", async () => {
-        expect.assertions(2);
+    it("preserves hint, why and docsUrl, not just code", async () => {
+        expect.assertions(3);
 
         // These come from the error catalog and are what make a failure
         // actionable; restoring only `code`/`data` would give a service-binding
         // caller a weaker error than the same function throws over HTTP.
         const service = binding(
-            { error: { code: "NOT_FOUND", docsUrl: "https://lunora.dev/e/not-found", hint: "check the id", message: "nope" } },
+            { error: { code: "NOT_FOUND", docsUrl: "https://lunora.dev/e/not-found", hint: "check the id", message: "nope", why: "no such thread" } },
             { status: 404 },
         );
 
@@ -169,6 +169,7 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({
             docsUrl: "https://lunora.dev/e/not-found",
         });
+        await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({ why: "no such thread" });
     });
 
     it("reports a JSON body that is not an object instead of crashing on it", async () => {

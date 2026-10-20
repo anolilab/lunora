@@ -413,6 +413,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LiveSubscribeOptions` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicKey` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicPayload` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopics` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LogFields` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1763,6 +1787,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `LiveTopicOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2003,6 +2035,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SyncStatus` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `SyncWatermark` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2156,6 +2192,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isUnauthorizedError` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `liveTopicSubscription` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -3707,6 +3747,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `redactCredentials` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `resolveTraceAnchor` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -4869,6 +4913,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `SinkEnricher` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkEvent` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkRouteOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkSignalKind` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `SpanEvent` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5054,6 +5114,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `enforceOrigin` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `enrichSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `filterSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -5572,6 +5640,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LiveSubscribeHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveSubscribeOptions` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicKey` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicPayload` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopics` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -8468,6 +8560,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `isOrWrapsFromValidator` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `isStringValidator` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

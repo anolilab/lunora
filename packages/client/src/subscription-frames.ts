@@ -49,6 +49,20 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
 };
 
 /**
+ * Whether a full data frame is an older snapshot than the one already applied. A re-sent
+ * `subscribe` can leave two seeds of one subscription running, and the older may land last.
+ * Only the same epoch is comparable, and only against a value this subscription holds: a
+ * cursor that a `settled` frame advanced before any value arrived says nothing about it.
+ */
+export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: number; epoch?: string }): boolean =>
+    position.cursor !== undefined &&
+    state.serverCursor !== undefined &&
+    state.serverBase !== undefined &&
+    position.epoch !== undefined &&
+    position.epoch === state.serverEpoch &&
+    position.cursor < state.serverCursor;
+
+/**
  * Whether a cross-tab frame was stamped for another identity. A frame with no stamp
  * (a mixed-version leader) is accepted, as before.
  */

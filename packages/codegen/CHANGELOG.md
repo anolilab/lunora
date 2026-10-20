@@ -1,3 +1,95 @@
+## @lunora/codegen [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.333...@lunora/codegen@1.0.0-alpha.334) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.241
+* **@lunora/agent:** upgraded to 1.0.0-alpha.231
+* **@lunora/container:** upgraded to 1.0.0-alpha.85
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/queue:** upgraded to 1.0.0-alpha.118
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.140
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/payment:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
+## @lunora/codegen [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.332...@lunora/codegen@1.0.0-alpha.333) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.240
+* **@lunora/agent:** upgraded to 1.0.0-alpha.230
+* **@lunora/container:** upgraded to 1.0.0-alpha.84
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/queue:** upgraded to 1.0.0-alpha.117
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+* **@lunora/payment:** upgraded to 1.0.0-alpha.224
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+
+## @lunora/codegen [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.331...@lunora/codegen@1.0.0-alpha.332) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
+## @lunora/codegen [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.330...@lunora/codegen@1.0.0-alpha.331) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.239
+
+## @lunora/codegen [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.329...@lunora/codegen@1.0.0-alpha.330) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.238
+* **@lunora/agent:** upgraded to 1.0.0-alpha.229
+* **@lunora/container:** upgraded to 1.0.0-alpha.83
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/queue:** upgraded to 1.0.0-alpha.116
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.138
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.86
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+* **@lunora/payment:** upgraded to 1.0.0-alpha.223
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+
+## @lunora/codegen [1.0.0-alpha.329](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.328...@lunora/codegen@1.0.0-alpha.329) (2026-10-19)
+
+### Features
+
+* **cli:** add a cloudflare cost audit skill and a cron cadence lint ([#1269](https://github.com/anolilab/lunora/issues/1269)) ([365571a](https://github.com/anolilab/lunora/commit/365571a2c39e366e3ba9826ce5656ff1526d8015))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.237
+
+## @lunora/codegen [1.0.0-alpha.328](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.327...@lunora/codegen@1.0.0-alpha.328) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
 ## @lunora/codegen [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.326...@lunora/codegen@1.0.0-alpha.327) (2026-10-18)
 
 ### Features

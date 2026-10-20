@@ -5,6 +5,7 @@ import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import type { LiveTopicRef } from "../../../shared/live-stream";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { parseValidatorMap } from "./functions";
@@ -128,18 +129,11 @@ type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetch
 interface LivePublishOptions {
     /** The shard to publish on. Defaults to the ctx's default shard. */
     shardKey?: string;
-
-    /**
-     * The `id` of the `defineLiveStream` whose subscribers see the event. A
-     * subscriber follows a topic through the stream that authorized it, so a
-     * publish reaches only that stream's subscribers.
-     */
-    stream: string;
 }
 
 /**
- * `ctx.live` — publish an arbitrary event to a named topic. The event reaches
- * the SSE subscribers of `options.stream` that followed the topic, and the
+ * `ctx.live` — publish an event to a declared live topic. The event reaches the
+ * SSE subscribers of the stream that declares the topic and followed it, and the
  * WebSocket whisper members that hold a live grant for that stream and topic
  * (see the live-stream docblock).
  *
@@ -148,14 +142,16 @@ interface LivePublishOptions {
  */
 interface LivePublisher {
     /**
-     * Publish `payload` to `topic` on `options.stream`. Best-effort — a topic
-     * with no subscribers is a no-op. Rejects when the shard refuses the publish:
-     * a `room:` topic (403), a topic over the control-key bound (400), or a
+     * Publish `payload` to the topic `ref` names, from `_generated/live.ts`
+     * (`live.posts.post({ postId })`). The stream comes from the ref, and the payload
+     * is checked against the validator the topic declares. Best-effort — a topic with
+     * no subscribers is a no-op. Rejects when the shard refuses the publish: a payload
+     * its validator rejects or an undeclared topic (400), a `room:` topic (403), or a
      * payload over the publish cap (413), so a refused publish is not silently
      * dropped. On a target that does not serve live streams it rejects with
      * `LIVE_STREAMS_UNSUPPORTED`.
      */
-    publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
 }
 
 /**
@@ -499,7 +495,7 @@ const errorResponse = (error: unknown): Response => {
             console.error("[lunora] http action error (redacted on the wire):", error);
         }
 
-        return Response.json({ code: body.code, error: body.message }, { status });
+        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
     }
 
     throw error;
@@ -833,7 +829,9 @@ const buildStreamHandler =
                     // enqueueing onto the closed controller would throw out of
                     // this catch.
                     if (!ac.signal.aborted) {
-                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                        controller.enqueue(
+                            encoder.encode(sseFrame({ code: body.code, message: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, "error")),
+                        );
                     }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);

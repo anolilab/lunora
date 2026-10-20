@@ -608,15 +608,15 @@ interface UseInfiniteQueryResult<T> {
 ### `UseLiveTopicOptions` (type)
 
 ```ts
-type UseLiveTopicOptions = SubscribeLiveTopicOptions;
+type UseLiveTopicOptions<Payload = unknown> = LiveTopicOptions<Payload>;
 ```
 
 ### `UseLiveTopicResult` (interface)
 
 ```ts
-interface UseLiveTopicResult {
+interface UseLiveTopicResult<Payload = unknown> {
     error: LiveStreamSubscribeError | undefined;
-    lastEvent: unknown;
+    lastEvent: Payload | undefined;
 }
 ```
 
@@ -997,10 +997,10 @@ const useImpersonate: () => UseImpersonateResult;
 const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UseInfiniteQueryOptions) => UseInfiniteQueryResult<PageItemOf<F>>;
 ```
 
-### `useLiveTopic` (const)
+### `useLiveTopic` (function)
 
 ```ts
-const useLiveTopic: (options: UseLiveTopicOptions) => UseLiveTopicResult;
+function useLiveTopic<Payload>(topic: LiveTopicRef<Payload>, options?: UseLiveTopicOptions<Payload>): UseLiveTopicResult<Payload>;
 ```
 
 ### `useLunora` (const)
@@ -1083,6 +1083,12 @@ const useStream: <F extends FunctionReference<"stream">>(function_: F, args: "sk
 
 ```ts
 const useSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => UseSubscriptionResult<ReturnOf<F>>;
+```
+
+### `useSuspenseQuery` (const)
+
+```ts
+const useSuspenseQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: UseQueryOptions) => ReturnOf<F>;
 ```
 
 ### `useTusUpload` (const)

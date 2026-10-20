@@ -58,8 +58,8 @@ export interface QueueRunContext {
     readonly env: Record<string, unknown>;
 
     /**
-     * `ctx.live.publish` — push an event to the SSE subscribers of a
-     * `defineLiveStream` on the shard the publish names. Present only when the
+     * `ctx.live.publish(ref, payload)` — push an event to the SSE subscribers of the
+     * `defineLiveStream` that declares `ref`'s topic, on the shard the publish names. Present only when the
      * runtime hands the consumer a publisher (an app that declares a live stream on
      * a target that serves one); absent otherwise. A consumer runs in the Worker, so
      * the publish is forwarded to the shard rather than made in-process.
@@ -84,7 +84,18 @@ export interface QueueRunContext {
  * builds it without importing this package. See {@link QueueRunContext.live}.
  */
 export interface QueueLivePublisher {
-    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+    publish: <Payload>(topic: QueueLiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: { shardKey?: string }) => Promise<void>;
+}
+
+/**
+ * A reference to one declared live topic, as `_generated/live.ts` hands it out.
+ * Structural, so this package needs neither the server nor the client: the phantom
+ * `Payload` is what types the event.
+ */
+export interface QueueLiveTopicRef<Payload = unknown> {
+    readonly __lunoraLive: string;
+    readonly __payload?: Payload;
+    readonly topic: string;
 }
 
 /**

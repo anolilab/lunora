@@ -1,8 +1,11 @@
-import type { CallExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { readFileSync } from "node:fs";
+
+import type { CallExpression, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import { PROJECT_CONFIG_FILENAMES } from "../project-config-path";
 import { chainRootOf, listLunoraSourceFiles, memberAccessOf, propertyKeyName, unwrapExpression } from "./ast";
+import { callsServerFactory } from "./callee";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -333,13 +336,21 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
             signals.liveContext = signals.liveContext || contextReads.has("live");
         }
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
+
+        for (const call of calls) {
             const signal = callSignal(sourceFile, call) ?? declarationSignal(sourceFile, call);
 
             if (signal !== undefined) {
                 signals[signal] = true;
             }
         }
+
+        // A stream imported under another name (`import { defineLiveStream as stream }`) has no tell in the callee's text, and
+        // discovery reads it by import, so the gate must too or a declared stream would slip past the platform verdict.
+        signals.liveStreams =
+            signals.liveStreams ||
+            (sourceFile.getFullText().includes("defineLiveStream") && calls.some((call) => callsServerFactory(call, "defineLiveStream")));
 
         if (Object.values(signals).every(Boolean)) {
             break;
@@ -353,7 +364,16 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
     // `lunora/`, so the walk above never reaches it. Only the builder call is
     // read here: the name-only declarations are a `lunora/` concern.
     if (!signals.deliveryAuthorization && projectConfigFile !== undefined) {
-        const configFile = project.getSourceFile(projectConfigFile) ?? project.addSourceFileAtPath(projectConfigFile);
+        // Syntax only, in a throwaway Project: a file added to the shared Project after it is built
+        // throws the program and its type checker away, and the next refresh would drop it again.
+        const configFile =
+            project.getSourceFile(projectConfigFile) ??
+            new Project({
+                compilerOptions: { allowJs: true },
+                skipFileDependencyResolution: true,
+                skipLoadingLibFiles: true,
+                useInMemoryFileSystem: true,
+            }).createSourceFile(projectConfigFile, readFileSync(projectConfigFile, "utf8"), { overwrite: true });
 
         signals.deliveryAuthorization = configFile
             .getDescendantsOfKind(SyntaxKind.CallExpression)

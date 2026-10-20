@@ -535,6 +535,10 @@ export const ERROR_CATALOG = {
     SOCKET_AUTH_NOT_LITERAL: { status: 500, title: "Socket route auth is not a literal boolean" },
     SOCKET_PATH_INVALID: { status: 500, title: "Socket route path is not a plain URL path" },
     SOCKET_PATH_NOT_LITERAL: { status: 500, title: "Socket route path is not a string literal" },
+    LIVE_STREAM_DUPLICATE: { status: 500, title: "Duplicate live stream id or export name" },
+    LIVE_STREAM_NOT_EXPORTED: { status: 500, title: "Live stream is not a named export" },
+    LIVE_STREAM_NOT_LITERAL: { status: 500, title: "Live stream declaration is not a literal" },
+    LIVE_TOPIC_INVALID: { status: 500, title: "Live topic name or key field is not allowed" },
     DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
@@ -588,6 +592,7 @@ export const ERROR_CATALOG = {
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
+    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "A later live control call already applied" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
@@ -692,8 +697,10 @@ export const ERROR_CATALOG = {
     SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
+    STREAM_IDLE: { status: 504, title: "Stream went idle" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
+    SUBSCRIPTION_RESULT_TOO_LARGE: { status: 413, title: "Subscription result too large" },
     TOKEN_EXPIRED: {
         hint: [
             "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",

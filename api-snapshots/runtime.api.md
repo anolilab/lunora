@@ -972,9 +972,8 @@ interface HttpActionContext {
     }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     live?: {
-        publish: (topic: string, payload: unknown, options: {
+        publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
             shardKey?: string;
-            stream: string;
         }) => Promise<void>;
     };
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1205,7 +1204,9 @@ class LunoraError extends LunoraError$1 {
     constructor(message: string, options?: {
         cause?: unknown;
         code?: string;
+        internal?: Record<string, unknown>;
         status?: number;
+        why?: string;
     });
     toResponse(): Response;
 }
@@ -1360,9 +1361,11 @@ interface NotifySubscriptionStoreLike {
 
 ```ts
 interface ObservabilityEvent {
+    attributes?: LogFields;
     durationMs: number;
     error?: {
         code: string;
+        internal?: Record<string, unknown>;
         message: string;
         name?: string;
         stack?: string;
@@ -2109,6 +2112,33 @@ interface ShardingInfo {
 }
 ```
 
+### `SinkEnricher` (type)
+
+```ts
+type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | undefined;
+```
+
+### `SinkEvent` (type)
+
+```ts
+type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
+```
+
+### `SinkRouteOptions` (interface)
+
+```ts
+interface SinkRouteOptions {
+    exclude?: string[];
+    include?: string[];
+}
+```
+
+### `SinkSignalKind` (type)
+
+```ts
+type SinkSignalKind = "log" | "metric" | "rpc" | "span";
+```
+
 ### `SpanEvent` (interface)
 
 ```ts
@@ -2549,6 +2579,18 @@ const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEv
 const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
 ```
 
+### `enrichSink` (const)
+
+```ts
+const enrichSink: (sink: ObservabilitySink, enrich: SinkEnricher) => ObservabilitySink;
+```
+
+### `filterSink` (const)
+
+```ts
+const filterSink: (sink: ObservabilitySink, options: SinkRouteOptions) => ObservabilitySink;
+```
+
 ### `handleCorsPreflight` (const)
 
 ```ts
@@ -2883,6 +2925,7 @@ type DefaultShardKey = string | null;
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;
@@ -2987,6 +3030,15 @@ interface KvLike {
 }
 ```
 
+### `LiveTopicRefLike` (interface)
+
+```ts
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LogSinkContext` (interface)
 
 ```ts
@@ -3056,9 +3108,8 @@ type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionCon
 
 ```ts
 interface QueueLivePublisherLike {
-    publish: (topic: string, payload: unknown, options: {
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
         shardKey?: string;
-        stream: string;
     }) => Promise<void>;
 }
 ```

@@ -1,11 +1,12 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { getSubscriptionRegistry, lunoraQueryKeyFromArgsKey } from "./cache";
+import { lunoraQueryKeyFromArgsKey } from "./cache";
 import { useLunora } from "./lunora-provider";
+import { fetchQuerySnapshot, useQuerySubscription } from "./query-core";
 import { stableWireKey } from "./query-key";
 import type { UseQueryOptions } from "./types";
 
@@ -37,22 +38,6 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     const queryClient = useQueryClient();
     const { onError, shardKey } = options;
 
-    // The registry keys its attach on the serialized query key, so the effect
-    // below must not re-run when an inline `onError` changes identity. Register a
-    // stable wrapper once and read the latest handler through a ref.
-    const onErrorRef = useRef(onError);
-
-    useEffect(() => {
-        onErrorRef.current = onError;
-    });
-
-    const stableOnError = useCallback<SubscriptionErrorCallback>(
-        (error) => {
-            onErrorRef.current?.(error);
-        },
-        [onErrorRef],
-    );
-
     const skipped = args === "skip";
     const argsRecord = skipped ? {} : (args as Record<string, unknown>);
 
@@ -66,8 +51,6 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     // fresh array reference each render is fine. React Compiler auto-memoizes
     // this derivation; no manual `useMemo` is needed.
     const queryKey = lunoraQueryKeyFromArgsKey(function_.__lunoraRef, argsKey, shardKey);
-    // `\u0001` marks an absent shardKey so it stays distinct from `""`, as in the queryKey.
-    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? "\u0001"}`;
 
     // Hydration gate — when `hydrateOnStart` is active the durable read cache
     // loads asynchronously on construction. Block the live query until it
@@ -97,42 +80,14 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped && hydrated,
         initialData: cachedData,
-        queryFn: async () => {
-            // The one-shot HTTP snapshot races the subscription that feeds this
-            // same key. TanStack applies a resolved `queryFn` result
-            // unconditionally — a `setQueryData` while the fetch is in flight
-            // does NOT cancel it — so a push that lands first would be reverted
-            // to pre-push data, and with `staleTime: Infinity` and push-driven
-            // freshness it stays reverted until the next write (and bypasses the
-            // optimistic layer engine, since the TanStack cache was written
-            // raw). Sample the key's push counter either side of the fetch and
-            // yield to anything newer.
-            const registry = getSubscriptionRegistry(client);
-            const sample = registry.openSnapshotSample(queryKey);
-            const snapshot = await client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey });
-
-            if (registry.closeSnapshotSample(sample)) {
-                return snapshot;
-            }
-
-            return queryClient.getQueryData<ReturnOf<F>>(queryKey) ?? snapshot;
-        },
+        queryFn: async () => fetchQuerySnapshot(client, queryClient, function_, argsRecord, shardKey, queryKey),
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns
         // freshness, so the value never goes stale on a timer.
         staleTime: Number.POSITIVE_INFINITY,
     });
 
-    useEffect(() => {
-        if (skipped) {
-            return () => {};
-        }
-
-        const registry = getSubscriptionRegistry(client);
-
-        return registry.attach(queryClient, queryKey, function_, argsRecord, shardKey, { onError: stableOnError });
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash), the client, or the skip flag changes — not on every fresh `function_`/`argsRecord`/`shardKey` object identity. `stableOnError` is ref-backed and never changes. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
-    }, [client, queryClient, subscriptionKey, skipped, stableOnError]);
+    useQuerySubscription({ args: argsRecord, argsKey, client, function_, onError, queryClient, queryKey, shardKey, skipped });
 
     // When skipped, the queryKey collapses to `["lunora", ref, {}, null]` — the
     // same key a real `useQuery(fn, {})` uses — and TanStack still hands back

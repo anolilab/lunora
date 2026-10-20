@@ -80,6 +80,13 @@ const deployCommand: Command = {
             name: "skip-services",
             type: Boolean,
         },
+        // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
+        {
+            description: "Evaluate every lazy function module in workerd before shipping (default; nothing to check for an eager registry)",
+            name: "smoke-load",
+            type: Boolean,
+        },
+        { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
         TARGET_OPTION,
         {
             description:
@@ -112,6 +119,7 @@ export type DeployOptions = CreateOptions<{
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
     "skip-services": boolean | undefined;
+    "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     temporary: boolean | undefined;

@@ -71,10 +71,12 @@ const useSubscription = <F extends FunctionReference>(
                         // Preserve the server-supplied `code` so consumers of the
                         // `error` ref can branch on the error kind (UNAUTHORIZED
                         // vs NOT_FOUND, …) instead of only seeing a flat message.
-                        error.value =
+                        error.value = Object.assign(
                             subscriptionError.code === undefined
                                 ? new Error(subscriptionError.message)
-                                : new LunoraError(subscriptionError.code, subscriptionError.message);
+                                : new LunoraError(subscriptionError.code, subscriptionError.message),
+                            subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                        );
                         data.value = undefined;
                         // `UseQueryOptions.onError` is part of this composable's
                         // surface; forward the raw wire error (code included) so a

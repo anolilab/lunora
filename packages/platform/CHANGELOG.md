@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.69...@lunora/platform@1.0.0-alpha.70) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
 ## @lunora/platform [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.68...@lunora/platform@1.0.0-alpha.69) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES

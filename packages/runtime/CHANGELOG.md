@@ -1,3 +1,54 @@
+## @lunora/runtime [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.222...@lunora/runtime@1.0.0-alpha.223) (2026-10-20)
+
+### Features
+
+* **runtime:** add enrichSink and filterSink ([#1261](https://github.com/anolilab/lunora/issues/1261)) ([019e599](https://github.com/anolilab/lunora/commit/019e5999b4c3fdb299956bc9976d1fdcae11a7d9))
+
+## @lunora/runtime [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.221...@lunora/runtime@1.0.0-alpha.222) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.156
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+
+## @lunora/runtime [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.220...@lunora/runtime@1.0.0-alpha.221) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/observability:** upgraded to 1.0.0-alpha.155
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+
+## @lunora/runtime [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.219...@lunora/runtime@1.0.0-alpha.220) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/observability:** upgraded to 1.0.0-alpha.154
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.86
+
 ## @lunora/runtime [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.218...@lunora/runtime@1.0.0-alpha.219) (2026-10-18)
 
 ### Features

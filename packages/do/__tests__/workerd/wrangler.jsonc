@@ -19,6 +19,7 @@
             { "name": "ECHO", "class_name": "TestEchoDO" },
             { "name": "COUNTER", "class_name": "TestCounterDO" },
             { "name": "MERGED", "class_name": "TestMergedDO" },
+            { "name": "LIVE_SHARD", "class_name": "TestLiveShardDO" },
         ],
     },
     "migrations": [
@@ -26,5 +27,6 @@
         { "tag": "v2", "new_sqlite_classes": ["TestCounterDO"] },
         { "tag": "v3", "new_sqlite_classes": ["TestMergedDO"] },
         { "tag": "v4", "new_sqlite_classes": ["DeliveryAuthorizationTestDO"] },
+        { "tag": "v5", "new_sqlite_classes": ["TestLiveShardDO"] },
     ],
 }
