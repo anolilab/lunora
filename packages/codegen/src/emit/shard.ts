@@ -710,11 +710,58 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // `ensureMigrated()` runs first because the clear is a `DELETE FROM` and the
     // table has to exist: on a cold start this is the earliest code to touch SQL,
     // ahead of the dispatch that would normally have migrated.
+    //
+    // While a UNIQUE index is blocked by duplicates every user dispatch is refused
+    // (`ensureServable`), and an init hook is one — it would fail, and the base memoizes
+    // `ensureShardInit` once per instance, so it would never be retried when the de-dup
+    // unblocks the index and a cleared `.memory()` table would stay empty until eviction.
+    // So the clear still runs, the hooks are deferred, and the `ensureShardInit` override
+    // (awaited at every runtime entry point, like the base) runs them once the migration
+    // finds nothing blocked, before that entry's own dispatch proceeds.
     const shardInitOverride = `
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema as unknown as SchemaLike);\n" : ""}
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 `;
 
@@ -975,6 +1022,9 @@ const LUNORA_STORAGE_RULES = ${renderLazyJsonData(storageRulesData, "StorageRule
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioFeaturesResult")};
+
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
 ${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
@@ -1003,7 +1053,9 @@ ${dispatchRun}
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {${constructorOverride}
-        private migrated = false;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
+        private blockedUniqueIndexes: readonly string[] = [];
+        private migrated = false;
+        private migrationRetryAt = 0;${renderedPrepareFunctionOverride}${sensitiveArgsOverride}${shardDispatchMethods}
 ${relationFanout.override}
 ${subscriptionMethods}
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
@@ -1037,7 +1089,7 @@ ${lazyFunctions ? '            const requestScope = this.captureRequestScope();\
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -1109,13 +1161,40 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
 
 ${ADMIN_WRITE_METHODS}
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through \`ensureServable\`, which refuses until the
+         * index exists. \`migrated\` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per \`BLOCKED_MIGRATION_RETRY_MS\`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
-            this.migrated = true;
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true${snapshotArgument} });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 ${
     hasShardSearchIndexes

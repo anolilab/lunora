@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { DataMigrationLike } from "../src/data-migration";
+import { runDataMigration } from "../src/data-migration";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -79,5 +81,74 @@ describe("runShardMigrations — adding a UNIQUE index over existing rows", () =
         runShardMigrations(harness.sql, withUniqueIndex);
 
         expect(harness.raw(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`)).toHaveLength(1);
+    });
+});
+
+describe("runShardMigrations — recovering a shard wedged by a UNIQUE index over duplicates", () => {
+    const schemaWithSibling = (base: SchemaLike): SchemaLike => {
+        return { tables: { ...base.tables, sibling: { indexes: [], shape: { label: { kind: "string" } } } } };
+    };
+
+    const dedupSlugs: DataMigrationLike = {
+        id: "dedup-slugs",
+        table: "notes",
+        up: (document) => {
+            return { ...document, slug: `${String(document["slug"])}-${String(document["_id"])}` };
+        },
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("lets the base pass complete and reports the blocked index instead of throwing", async () => {
+        expect.assertions(4);
+
+        await seedDuplicates();
+
+        const blocked = runShardMigrations(harness.sql, schemaWithSibling(withUniqueIndex), { deferBlockedUniqueIndexes: true });
+
+        expect(blocked).toHaveLength(1);
+        expect(blocked[0]).toMatch(/duplicate/iu);
+        // Everything declared AFTER the blocked index still got provisioned.
+        expect(harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sibling'`)).toHaveLength(1);
+        // The blocked index itself is not half-built.
+        expect(harness.raw(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`)).toHaveLength(0);
+    });
+
+    it("still throws by default, so a normal dispatch refuses until the index exists", async () => {
+        expect.assertions(1);
+
+        await seedDuplicates();
+
+        expect(() => {
+            runShardMigrations(harness.sql, withUniqueIndex);
+        }).toThrow(/duplicate/iu);
+    });
+
+    it("lets a de-dup data migration run, after which the index builds and is enforced", async () => {
+        expect.assertions(5);
+
+        await seedDuplicates();
+
+        expect(runShardMigrations(harness.sql, withUniqueIndex, { deferBlockedUniqueIndexes: true })).toHaveLength(1);
+
+        const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: withUniqueIndex, sql: harness.sql });
+        const result = await runDataMigration({ migration: dedupSlugs, sql: harness.sql, writer });
+
+        expect(result.status).toBe("completed");
+        expect(runShardMigrations(harness.sql, withUniqueIndex, { deferBlockedUniqueIndexes: true })).toHaveLength(0);
+        expect(() => {
+            runShardMigrations(harness.sql, withUniqueIndex);
+        }).not.toThrow();
+
+        const { page } = await writer.findMany("notes", {});
+        const [first] = page;
+
+        await expect(writer.insert("notes", { slug: `dup-${String(first?.["_id"])}` })).rejects.toThrow(/unique|conflict/iu);
     });
 });

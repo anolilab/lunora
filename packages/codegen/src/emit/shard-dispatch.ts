@@ -134,7 +134,7 @@ __PREPARE_FUNCTION__            const registered = LUNORA_FUNCTIONS[functionPath
                 throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // \`headroom\`, when the caller supplied one, is threaded straight
             // through to \`buildCtx\` — bypassing its \`this.transactionHeadroom()\`
@@ -316,7 +316,7 @@ const SUBSCRIPTION_METHODS = `        protected override async executeSubscripti
                 return null;
             }
 
-__PREPARE_FUNCTION__            this.ensureMigrated();
+__PREPARE_FUNCTION__            this.ensureServable();
 
             const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
@@ -339,7 +339,7 @@ __PREPARE_FUNCTION__            this.ensureMigrated();
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),

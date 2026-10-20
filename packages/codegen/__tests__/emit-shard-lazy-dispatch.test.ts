@@ -145,6 +145,7 @@ class TestShard {
   restoreRequestScope() { this.restores += 1; }
   isSystemDispatch() { return this.system; }
   ensureMigrated() {}
+  ensureServable() {}
   buildCtx() { return {}; }
   async deferPastResponse() {}
 ${generatedMethod}

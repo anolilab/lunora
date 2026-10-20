@@ -100,6 +100,9 @@ const LUNORA_STORAGE_RULES = ((): (() => StorageRulesResult) => { let cached: St
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ((): (() => StudioFeaturesResult) => { let cached: StudioFeaturesResult | undefined; return () => (cached ??= JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"privacy\":true,\"queues\":false,\"scheduler\":true,\"storage\":false,\"vectors\":false,\"workflows\":true}") as StudioFeaturesResult); })();
 
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
+
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "f2cbd1d0f86f950a", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"exportFiles\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"encoding\": {\n          \"kind\": \"union\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"members\": [\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"base64\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"text\\\"\"\n            }\n          ]\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"requestId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"byRequestAndName\": {\n          \"fields\": [\n            \"requestId\",\n            \"name\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"privacy_archive\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"datasetId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"retainUntil\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"row\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"subjectId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"table\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"byRetainUntil\": {\n          \"fields\": [\n            \"retainUntil\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"privacy_events\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"at\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"detail\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"kind\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"requestId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"privacy_requests\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"dueAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"erasureGraceUntil\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"expiresAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"extendedDueAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"reason\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"receivedAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"requestId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"members\": [\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"cancelled\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"completed\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"expired\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"failed\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"grace\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"processing\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"ready\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"received\\\"\"\n            }\n          ]\n        },\n        \"storageKey\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"subjectId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"type\": {\n          \"kind\": \"union\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"members\": [\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"erasure\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"export\\\"\"\n            }\n          ]\n        }\n      },\n      \"indexes\": {\n        \"byRequestId\": {\n          \"fields\": [\n            \"requestId\"\n          ],\n          \"unique\": false\n        },\n        \"byStatus\": {\n          \"fields\": [\n            \"status\",\n            \"dueAt\"\n          ],\n          \"unique\": false\n        },\n        \"bySubject\": {\n          \"fields\": [\n            \"subjectId\",\n            \"type\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"tasks\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"done\": {\n          \"kind\": \"boolean\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"byUser\": {\n          \"fields\": [\n            \"userId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
@@ -301,7 +304,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
+        private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;
+        private migrationRetryAt = 0;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown> {
             // A dispatch that did not come through the shard's `/rpc` (a scheduled call,
@@ -327,7 +332,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // `headroom`, when the caller supplied one, is threaded straight
             // through to `buildCtx` — bypassing its `this.transactionHeadroom()`
@@ -509,7 +514,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
@@ -532,7 +537,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
@@ -549,10 +554,49 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 
         // One `onQueryChange` dispatch. Mirrors `executeSubscription` — the
@@ -581,7 +625,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -706,19 +750,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const writer = this.adminWriter();
 
-            return runDataMigration({
-                ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
-                ...(args.direction === undefined ? {} : { direction: args.direction }),
-                ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-                ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
-                migration: migration as unknown as DataMigrationLike,
-                // Flush after each batch so live migrationStatus subscribers see
-                // progress mid-run (the base method records the reserved state
-                // table the raw-SQL progress write is invisible to the tracker).
-                onBatch: () => this.flushMigrationProgress(),
-                sql: this.sql as SqlExec,
-                writer,
-            });
+            try {
+                return await runDataMigration({
+                    ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
+                    ...(args.direction === undefined ? {} : { direction: args.direction }),
+                    ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+                    ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                    migration: migration as unknown as DataMigrationLike,
+                    // Flush after each batch so live migrationStatus subscribers see
+                    // progress mid-run (the base method records the reserved state
+                    // table the raw-SQL progress write is invisible to the tracker).
+                    onBatch: () => this.flushMigrationProgress(),
+                    sql: this.sql as SqlExec,
+                    writer,
+                });
+            } finally {
+                // The de-dup that unblocks a deferred UNIQUE index runs through here;
+                // let the next call rebuild it now instead of after the retry interval.
+                this.migrationRetryAt = 0;
+            }
         }
 
         protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -884,13 +934,40 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { applied: args.changes.length };
         }
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through `ensureServable`, which refuses until the
+         * index exists. `migrated` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per `BLOCKED_MIGRATION_RETRY_MS`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
-            this.migrated = true;
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 
         private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {

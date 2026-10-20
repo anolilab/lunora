@@ -100,6 +100,9 @@ const LUNORA_STORAGE_RULES = ((): (() => StorageRulesResult) => { let cached: St
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ((): (() => StudioFeaturesResult) => { let cached: StudioFeaturesResult | undefined; return () => (cached ??= JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":true,\"privacy\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult); })();
 
+/** How long a shard with a UNIQUE index blocked by duplicate rows serves the cached diagnostic before re-attempting the build. */
+const BLOCKED_MIGRATION_RETRY_MS = 5000;
+
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "d18d2384a9c44406", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"payment_customers\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        },\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"payment_events\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"payment_sessions\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"subscriptionId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"subscriptionId\"\n          ],\n          \"unique\": false\n        },\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"payment_subscriptions\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"lastEventAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"priceIds\": {\n          \"kind\": \"array\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false,\n          \"of\": {\n            \"kind\": \"string\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false\n          }\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        },\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"payment_usageEvents\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"mode\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        },\n        \"by_reference_created\": {\n          \"fields\": [\n            \"referenceId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_reference_feature_created\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
@@ -331,7 +334,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
+        private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;
+        private migrationRetryAt = 0;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown> {
             // A dispatch that did not come through the shard's `/rpc` (a scheduled call,
@@ -357,7 +362,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // `headroom`, when the caller supplied one, is threaded straight
             // through to `buildCtx` — bypassing its `this.transactionHeadroom()`
@@ -539,7 +544,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
@@ -562,7 +567,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return null;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
@@ -579,10 +584,49 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
+        private shardInitDeferred = false;
+        private deferredShardInit?: Promise<void>;
+
         protected override async runShardInit(): Promise<void> {
             this.ensureMigrated();
 
+            if (this.blockedUniqueIndexes.length > 0) {
+                this.shardInitDeferred = true;
+
+                return;
+            }
+
             await this.dispatchShardInit();
+        }
+
+        protected override async ensureShardInit(): Promise<void> {
+            await super.ensureShardInit();
+
+            if (!this.shardInitDeferred) {
+                return;
+            }
+
+            try {
+                this.ensureMigrated();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+
+                return;
+            }
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                return;
+            }
+
+            this.deferredShardInit ??= (async (): Promise<void> => {
+                try {
+                    await this.dispatchShardInit();
+                } finally {
+                    this.shardInitDeferred = false;
+                }
+            })();
+
+            await this.deferredShardInit;
         }
 
         // One `onQueryChange` dispatch. Mirrors `executeSubscription` — the
@@ -611,7 +655,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
@@ -732,19 +776,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const writer = this.adminWriter();
 
-            return runDataMigration({
-                ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
-                ...(args.direction === undefined ? {} : { direction: args.direction }),
-                ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-                ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
-                migration: migration as unknown as DataMigrationLike,
-                // Flush after each batch so live migrationStatus subscribers see
-                // progress mid-run (the base method records the reserved state
-                // table the raw-SQL progress write is invisible to the tracker).
-                onBatch: () => this.flushMigrationProgress(),
-                sql: this.sql as SqlExec,
-                writer,
-            });
+            try {
+                return await runDataMigration({
+                    ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
+                    ...(args.direction === undefined ? {} : { direction: args.direction }),
+                    ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+                    ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                    migration: migration as unknown as DataMigrationLike,
+                    // Flush after each batch so live migrationStatus subscribers see
+                    // progress mid-run (the base method records the reserved state
+                    // table the raw-SQL progress write is invisible to the tracker).
+                    onBatch: () => this.flushMigrationProgress(),
+                    sql: this.sql as SqlExec,
+                    writer,
+                });
+            } finally {
+                // The de-dup that unblocks a deferred UNIQUE index runs through here;
+                // let the next call rebuild it now instead of after the retry interval.
+                this.migrationRetryAt = 0;
+            }
         }
 
         protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -910,13 +960,40 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { applied: args.changes.length };
         }
 
+        /**
+         * Migrate the base schema. A UNIQUE index that existing duplicate rows block
+         * is deferred, not thrown: the rest of the pass completes so the admin path
+         * (including the data migration that de-duplicates the table) keeps working.
+         * User dispatch goes through `ensureServable`, which refuses until the
+         * index exists. `migrated` stays false while one is outstanding, but the
+         * retry (a schema-ledger write plus a full-table duplicate scan per blocked
+         * index) runs at most once per `BLOCKED_MIGRATION_RETRY_MS`; in between,
+         * callers see the cached diagnostics. The first call after a cold start
+         * always migrates, and an admin data migration resets the clock so the
+         * de-dup that unblocks the index takes effect on the next call.
+         */
         protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
-            this.migrated = true;
+            const now = Date.now();
+
+            if (this.blockedUniqueIndexes.length > 0 && now < this.migrationRetryAt) {
+                return;
+            }
+
+            this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true, schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT });
+            this.migrated = this.blockedUniqueIndexes.length === 0;
+            this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+        }
+
+        private ensureServable(): void {
+            this.ensureMigrated();
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+            }
         }
 
         private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {

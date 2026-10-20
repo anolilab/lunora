@@ -150,6 +150,8 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
     // at the type level), so this boundary cast is sound.
     const ddlSchema = schema as unknown as SchemaLike;
 
+    // `deferBlockedUniqueIndexes` stays off here on purpose: this host never reads the returned
+    // diagnostics, so deferring would serve writes with a unique index silently missing.
     runShardMigrations(sql, ddlSchema);
 
     // One meter for the whole runtime (every identity view shares the one SQLite

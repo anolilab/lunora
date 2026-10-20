@@ -74,15 +74,48 @@ import { recordSchemaVersion } from "./schema-history";
 const INDEX_SORT_KEYS = dsql`_creationTime, id`;
 
 /**
+ * Suffix of the default-order index on a table. It is the only framework index on
+ * the table itself: the rank, geo, aggregate and search companions (`__rank_`,
+ * `__geo_`, `__agg_`, `__fts_`) index their own companion tables, so a lookup by
+ * `tbl_name` never sees them. A declared index named `_x` is `<table>__x`, which
+ * is why the exclusion is this exact name and not the whole `<table>__` prefix.
+ */
+const BY_CREATION_INDEX_SUFFIX = "__by_creation";
+
+/** How a sort-keyed index's `CREATE INDEX` statement ends, rendered from {@link INDEX_SORT_KEYS}. */
+const INDEX_SORT_KEYS_TAIL = `, ${renderSql("sqlite", INDEX_SORT_KEYS).sql})`;
+
+/**
+ * Reserved table recording the secondary and `.unique()` indexes this module created, by name. It is what decides which
+ * index {@link dropUndeclaredIndexes} may drop: an index someone made by hand is not in it, however closely its name and
+ * SQL resemble ours. `name` compares case-insensitively because SQLite does for an index name.
+ */
+const INDEX_LEDGER_TABLE = "__lunora_framework_indexes";
+
+/** An identifier as SQLite compares it: ASCII letters folded, everything else untouched. Not `toLowerCase()`, which also equates `ä` and `Ä`. */
+const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/**
+ * Raised when a UNIQUE index cannot be built because existing rows already violate
+ * it. A distinct type so a caller that opted into deferral
+ * (`deferBlockedUniqueIndexes`) can tell this recoverable state from a real
+ * migration failure, which must keep propagating.
+ */
+class BlockedUniqueIndexError extends LunoraError {}
+
+/**
  * Refuse to build a UNIQUE index over rows that already violate it.
  *
  * `CREATE UNIQUE INDEX` raises a bare `UNIQUE constraint failed: index '<name>'`
- * on duplicates, and it raises it from inside the cold-start migration —
- * `ensureMigrated()` leaves `migrated` false, so every later dispatch re-runs
- * the pass and re-throws. The shard never opens, and the de-dup
- * `defineMigration` that would clear it cannot run either, because
- * `runShardDataMigration` calls `ensureMigrated()` first. Probing first turns a
- * wedged shard into a diagnostic that names the table and the remedy.
+ * on duplicates, and it raises it from inside the cold-start migration. Probing
+ * first turns that into a diagnostic that names the table and the remedy.
+ *
+ * Throwing from the migration would also wedge the shard: the de-dup
+ * `defineMigration` that clears the duplicates runs through the admin path, which
+ * migrates first. So a host that serves admin traffic passes
+ * `deferBlockedUniqueIndexes` to {@link runShardMigrations}: the rest of the pass
+ * completes, the blocked index is reported instead of thrown, and the host
+ * refuses user dispatch (not admin) until a later pass builds it.
  *
  * Restricted to rows where EVERY indexed column is non-NULL, because the two
  * sides disagree about NULL: `GROUP BY` treats NULLs as equal, a SQLite UNIQUE
@@ -99,7 +132,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
     const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
 
     if (duplicates.toArray().length > 0) {
-        throw new LunoraError(
+        throw new BlockedUniqueIndexError(
             "INTERNAL",
             `unique index "${indexName}" on "${tableName}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
         );
@@ -134,7 +167,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
 const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
     const existing = runDrizzle<{ sql: null | string }>(
         sql,
-        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName}`,
+        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE`,
     ).toArray();
 
     const current = existing[0]?.sql;
@@ -185,7 +218,10 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
  * along, and re-scanning for it on every cold start would be pure cost.
  */
 const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolean =>
-    runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName} LIMIT 1`).toArray().length > 0;
+    runDrizzle(
+        sql,
+        dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE LIMIT 1`,
+    ).toArray().length > 0;
 
 /**
  * Create one index, probing for duplicates first when it is UNIQUE and not yet
@@ -202,6 +238,98 @@ const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, 
 };
 
 /**
+ * Run one index build; when `blocked` is supplied, a {@link BlockedUniqueIndexError}
+ * is recorded there instead of propagating, so the remaining indexes and tables
+ * still migrate. Any other failure still throws.
+ */
+const deferIfBlocked = (blocked: string[] | undefined, build: () => void): void => {
+    try {
+        build();
+    } catch (error) {
+        if (blocked === undefined || !(error instanceof BlockedUniqueIndexError)) {
+            throw error;
+        }
+
+        blocked.push(error.message);
+    }
+};
+
+/**
+ * Whether an index that predates the ledger looks like one this module created: named `<table>_<something>` (bar the
+ * default-order {@link BY_CREATION_INDEX_SUFFIX} index) and built over the document column's JSON path or ending in the
+ * {@link INDEX_SORT_KEYS} suffix. Only used once, to adopt the indexes of a database that has no ledger yet.
+ */
+const looksFrameworkCreated = (tableName: string, name: string, statement: null | string): boolean =>
+    foldIdentifier(name).startsWith(`${foldIdentifier(tableName)}_`) &&
+    foldIdentifier(name) !== foldIdentifier(`${tableName}${BY_CREATION_INDEX_SUFFIX}`) &&
+    statement !== null &&
+    (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
+
+/** Note that this module owns the index `indexName` on `tableName`. */
+const recordFrameworkIndex = (sql: SqlExec, indexName: string, tableName: string): void => {
+    runDrizzle(sql, dsql`INSERT OR IGNORE INTO ${dsql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`);
+};
+
+/**
+ * Create the ledger of framework-created indexes. A database that has none yet predates it, so the first run adopts every
+ * index the old name-and-SQL-shape rule would have called ours: a stale one is then still dropped exactly once, and from
+ * then on only the ledger decides.
+ *
+ * The adoption follows the CREATE in the same synchronous turn, which a Durable Object commits as one write.
+ */
+const ensureIndexLedger = (sql: SqlExec, tableNames: ReadonlyArray<string>): void => {
+    const existed =
+        runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${INDEX_LEDGER_TABLE} COLLATE NOCASE`).toArray().length > 0;
+
+    runDrizzle(sql, dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(INDEX_LEDGER_TABLE)} (name TEXT PRIMARY KEY COLLATE NOCASE, table_name TEXT NOT NULL)`);
+
+    if (existed) {
+        return;
+    }
+
+    for (const tableName of tableNames) {
+        const held = runDrizzle<{ name: string; sql: null | string }>(
+            sql,
+            dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} COLLATE NOCASE AND sql IS NOT NULL`,
+        ).toArray();
+
+        for (const { name, sql: statement } of held) {
+            if (looksFrameworkCreated(tableName, name, statement)) {
+                recordFrameworkIndex(sql, name, tableName);
+            }
+        }
+    }
+};
+
+/**
+ * Drop the indexes this module created for a table that its schema no longer declares.
+ *
+ * `CREATE INDEX IF NOT EXISTS` only ever adds, so a `.unique()` taken off a column
+ * kept rejecting duplicates (as `ConflictError`) forever, and an index removed from
+ * a table's declarations kept taxing every write.
+ *
+ * Only indexes in the {@link INDEX_LEDGER_TABLE} are candidates, so an index added
+ * by hand is left alone whatever it looks like — and so is one on a system field
+ * (`_creationTime`), which no shape test could have told from a hand-made one.
+ */
+const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: ReadonlySet<string>): void => {
+    // SQLite folds ASCII case in an identifier, so `By_Slug` IS `by_slug`: an index renamed that way
+    // is the declared one, and dropping it would leave the table with nothing.
+    const declaredFolded = new Set([...declared].map((name) => foldIdentifier(name)));
+    const owned = runDrizzle<{ name: string }>(
+        sql,
+        dsql`SELECT "l"."name" FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} AS "l" WHERE "l"."table_name" = ${tableName} COLLATE NOCASE`,
+    ).toArray();
+
+    for (const { name } of owned) {
+        if (!declaredFolded.has(foldIdentifier(name))) {
+            runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE ${dsql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
+        }
+    }
+};
+
+/**
  * Create the secondary + `.unique()` expression indexes declared on a table.
  *
  * A UNIQUE index does NOT get the sort keys appended: they would become part of
@@ -209,16 +337,23 @@ const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, 
  * the constraint would silently stop rejecting duplicates. That is data
  * corruption rather than a slow query, so the two cases are split deliberately.
  */
-const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, blocked: string[] | undefined): void => {
+    const declared = new Set<string>();
+
     for (const index of definition.indexes) {
         const indexName = `${tableName}_${index.name}`;
+
         const unique = index.unique ?? false;
         const refs = index.fields.map((field) => jsonPathSql(field));
         const fields = dsql.join(refs, dsql`, `);
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
-        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
-        createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+        declared.add(indexName);
+        deferIfBlocked(blocked, () => {
+            dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
+            createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+            recordFrameworkIndex(sql, indexName, tableName);
+        });
     }
 
     // `.unique()` columns synthesize a UNIQUE expression index so SQLite
@@ -229,9 +364,18 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         }
 
         const reference = jsonPathSql(field);
+        const indexName = `${tableName}_unique_${field}`;
 
-        createIndexGuarded(sql, `${tableName}_unique_${field}`, tableName, reference, true, [reference]);
+        declared.add(indexName);
+        deferIfBlocked(blocked, () => {
+            // The name only differs from a held one by the field's case, whose path is another expression.
+            dropIndexIfShapeChanged(sql, indexName, tableName, reference, true, [reference]);
+            createIndexGuarded(sql, indexName, tableName, reference, true, [reference]);
+            recordFrameworkIndex(sql, indexName, tableName);
+        });
     }
+
+    dropUndeclaredIndexes(sql, tableName, declared);
 };
 
 /**
@@ -327,6 +471,27 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
 };
 
 /**
+ * Drop a rank companion whose `__sort_k<i>__` columns no longer match the declared
+ * `sortBy`. `CREATE TABLE IF NOT EXISTS` never reshapes a table that exists, so a
+ * `sortBy` that gained a key would leave the companion without the column its
+ * rebuild INSERTs into, and every write to the source table would fail with "no
+ * such column". The companion is derived data: its rebuild marker keys on the sort
+ * fields, so the changed `sortBy` that got us here also rebuilds it on its next
+ * touch. Dropping the table takes its btree index with it.
+ */
+const dropRankCompanionIfColumnsChanged = (sql: SqlExec, rankTable: string, sortColumns: ReadonlyArray<string>): void => {
+    const held = runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(rankTable)})`)
+        .toArray()
+        .map((column) => column.name)
+        .filter((name) => name.startsWith("__sort_k"));
+
+    // An absent table reports no columns, so there is nothing to drop.
+    if (held.length > 0 && (held.length !== sortColumns.length || held.some((name, i) => name !== sortColumns[i]))) {
+        runDrizzle(sql, dsql`DROP TABLE ${dsql.identifier(rankTable)}`);
+    }
+};
+
+/**
  * Create the rank companion tables + their sorted btree index for a table's
  * `rankIndex` declarations. One row per source row keyed by `__id__`; the index
  * on `(__partition__, __sort_k0__, …, __id__)` answers `rank()` in O(log n).
@@ -341,6 +506,8 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
         const columnDdls = sortColumns.map((column) => dsql`${dsql.identifier(column)} BLOB`);
         const columnPart = columnDdls.length > 0 ? dsql`, ${dsql.join(columnDdls, dsql`, `)}` : dsql``;
+
+        dropRankCompanionIfColumnsChanged(sql, rankTable, sortColumns);
 
         runDrizzle(
             sql,
@@ -360,7 +527,11 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
 
         const btreeName = `${tableName}__rank_${index.name}__btree`;
 
-        runDrizzle(sql, createIndexSql(btreeName, rankTable, dsql.join(orderedColumns, dsql`, `), false));
+        const btreeColumns = dsql.join(orderedColumns, dsql`, `);
+
+        // A flipped sort direction changes the btree's column list under the same name.
+        dropIndexIfShapeChanged(sql, btreeName, rankTable, btreeColumns, false, []);
+        runDrizzle(sql, createIndexSql(btreeName, rankTable, btreeColumns, false));
     }
 };
 
@@ -371,13 +542,34 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
  *
  * Global tables (`.global()`) live in D1, not in the DO — they're skipped
  * here. The DO sees them via the D1 adapter exposed elsewhere.
+ *
+ * Returns the diagnostics of UNIQUE indexes that were deferred (always empty
+ * unless `deferBlockedUniqueIndexes` is set).
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runShardMigrations }`), per the repo's no-default-mixing convention
 export const runShardMigrations = (
     sql: SqlExec,
     schema: SchemaLike,
-    options: { cdc?: boolean; schemaSnapshot?: { hash: string; json: string } } = {},
-): void => {
+    options: {
+        cdc?: boolean;
+
+        /**
+         * Report a UNIQUE index that existing duplicate rows block, rather than
+         * throwing: every other table, index and companion still migrates. The
+         * blocked index stays absent (or keeps its previous shape) until a later
+         * pass finds the table de-duplicated.
+         *
+         * Opt-in on purpose: the returned list is the host's only signal that a
+         * unique index is missing. A host that ignores it (the in-process host, the
+         * conformance suite) must leave this off and let the migration throw, or it
+         * would serve writes with no uniqueness enforcement and no diagnostic.
+         */
+        deferBlockedUniqueIndexes?: boolean;
+        schemaSnapshot?: { hash: string; json: string };
+    } = {},
+): ReadonlyArray<string> => {
+    const blocked: string[] | undefined = options.deferBlockedUniqueIndexes ? [] : undefined;
+
     // Record this schema shape in the version ledger before touching any table.
     // Codegen threads the snapshot it already computes for the deploy gate, so
     // the ledger and the gate can never describe different shapes. Absent (a
@@ -389,6 +581,12 @@ export const runShardMigrations = (
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);
+    ensureIndexLedger(
+        sql,
+        Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName),
+    );
 
     const declaredCompanions: string[] = [];
 
@@ -431,9 +629,9 @@ export const runShardMigrations = (
         // partial index plus a persisted cursor, and would leave the reads this
         // exists for on the O(table) plan for as long as it ran — which on a
         // table big enough to care is the expensive state, not the build.
-        runDrizzle(sql, createIndexSql(`${tableName}__by_creation`, tableName, INDEX_SORT_KEYS, false));
+        runDrizzle(sql, createIndexSql(`${tableName}${BY_CREATION_INDEX_SUFFIX}`, tableName, INDEX_SORT_KEYS, false));
 
-        migrateSecondaryIndexes(sql, tableName, definition);
+        migrateSecondaryIndexes(sql, tableName, definition, blocked);
         migrateSearchIndexes(sql, tableName, definition);
         migrateGeoIndexes(sql, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
@@ -510,4 +708,6 @@ export const runShardMigrations = (
     // a schema change, so the transcript tables have to exist before the first
     // one runs. Empty (and free) on a shard that never opens a durable stream.
     migrateDurableStreams(sql);
+
+    return blocked ?? [];
 };

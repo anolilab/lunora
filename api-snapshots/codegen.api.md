@@ -325,6 +325,7 @@ interface FieldSnapshot {
     members?: ReadonlyArray<FieldSnapshot>;
     nullable?: boolean;
     of?: FieldSnapshot;
+    output?: string;
     optional: boolean;
     ref?: string;
     refined?: boolean;
