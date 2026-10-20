@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,6 +352,77 @@ describe("open-shard-access gate", () => {
         expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.some((line) => line.includes("src/app-options.ts:3"))).toBe(true);
     });
+
+    it("refuses the flag in a declared service's entrypoint, which the deploy publishes first", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+        mkdirSync(join(workdir, "services", "parser", "src"), { recursive: true });
+        writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`, "utf8");
+        writeFileSync(
+            join(workdir, "services", "parser", "src", "index.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+
+        const { errors, logger } = silentLogger();
+        const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.some((line) => line.includes("services/parser/src/index.ts:2"))).toBe(true);
+    });
+
+    it("does not gate a service the deploy does not publish, under --skip-services", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+        mkdirSync(join(workdir, "services", "parser", "src"), { recursive: true });
+        writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`, "utf8");
+        writeFileSync(
+            join(workdir, "services", "parser", "src", "index.ts"),
+            `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`,
+            "utf8",
+        );
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, skipServices: true, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(0);
+    });
+
+    it("leaves wrangler.jsonc as it was when the open-shard gate blocks the deploy", async () => {
+        expect.assertions(2);
+
+        writeAppConfig("allowUnauthenticatedShardAccess: true");
+        const before = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+        const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(before);
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+        "refuses a file it cannot read, so the open-shard option cannot be ruled out there",
+        async () => {
+            expect.assertions(2);
+
+            const locked = join(workdir, "src", "locked");
+
+            mkdirSync(locked, { recursive: true });
+            writeFileSync(join(locked, "app.ts"), `export const options = () => ({\n    allowUnauthenticatedShardAccess: true,\n});\n`, "utf8");
+            chmodSync(locked, 0o000);
+
+            try {
+                const { errors, logger } = silentLogger();
+                const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(errors.some((line) => line.includes("src/locked"))).toBe(true);
+            } finally {
+                chmodSync(locked, 0o755);
+            }
+        },
+    );
 
     it("does not gate `lunora build`, which publishes nothing", async () => {
         expect.assertions(1);

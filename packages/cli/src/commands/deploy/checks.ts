@@ -394,13 +394,7 @@ const isAppSourceModule = (cwd: string, file: string): boolean => {
  * (the Analog template deploys a root `worker.ts`). An environment may override `main`, so the
  * merged view is read; an undeclared `--env` falls back to the top level, which the validator reports.
  */
-const wranglerMainEntry = (cwd: string, environment?: string): string[] => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (wranglerPath === undefined) {
-        return [];
-    }
-
+const wranglerMainEntry = (cwd: string, wranglerPath: string, environment?: string): string[] => {
     const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
 
     if (parsed === undefined) {
@@ -434,11 +428,45 @@ const isLiteralFalse = (node: Node | undefined): boolean => {
         : false;
 };
 
+/** Whether a regular file is at `path`. Used to resolve imports, where a missing candidate is normal and not a finding. */
+const isFileAt = (path: string): boolean => {
+    try {
+        return statSync(path).isFile();
+    } catch {
+        return false;
+    }
+};
+
+/** Codes that mean nothing is at the path, so skipping it cannot hide a shipped option. Any other failure must block. */
+const NOTHING_AT_PATH: ReadonlySet<string> = new Set(["ELOOP", "ENOENT", "ENOTDIR"]);
+
+/** Note a path the scan could not read, unless nothing is there (a broken or self-referential link). */
+const recordUnreadable = (path: string, error: unknown, unreadable: string[]): void => {
+    const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "";
+
+    if (!NOTHING_AT_PATH.has(code)) {
+        unreadable.push(path);
+    }
+};
+
 /** A path's stats, following links. A broken or self-referential link has none: `statSync` throws, and the entry is skipped. */
-const statEntry = (path: string): ReturnType<typeof statSync> | undefined => {
+const statEntry = (path: string, unreadable: string[]): ReturnType<typeof statSync> | undefined => {
     try {
         return statSync(path);
-    } catch {
+    } catch (error) {
+        recordUnreadable(path, error, unreadable);
+
+        return undefined;
+    }
+};
+
+/** A file's text, or `undefined` when it cannot be read; the failure is recorded so the deploy blocks unless the scan rules the file out. */
+const readSource = (file: string, unreadable: string[]): string | undefined => {
+    try {
+        return readFileSync(file, "utf8");
+    } catch (error) {
+        recordUnreadable(file, error, unreadable);
+
         return undefined;
     }
 };
@@ -449,12 +477,14 @@ const statEntry = (path: string): ReturnType<typeof statSync> | undefined => {
  * and generated folders pruned before descent. Paths are `/`-separated relative
  * to `root`, so `isTestPath` sees the same shape on Windows.
  */
-const appSourceFiles = (root: string, directory: string, visited = new Set<string>()): string[] => {
+const appSourceFiles = (root: string, directory: string, unreadable: string[], visited = new Set<string>()): string[] => {
     let realDirectory: string;
 
     try {
         realDirectory = realpathSync(directory);
-    } catch {
+    } catch (error) {
+        recordUnreadable(directory, error, unreadable);
+
         return [];
     }
 
@@ -464,9 +494,19 @@ const appSourceFiles = (root: string, directory: string, visited = new Set<strin
 
     visited.add(realDirectory);
 
-    return readdirSync(directory).flatMap((entry) => {
+    let entries: string[];
+
+    try {
+        entries = readdirSync(directory);
+    } catch (error) {
+        recordUnreadable(directory, error, unreadable);
+
+        return [];
+    }
+
+    return entries.flatMap((entry) => {
         const full = join(directory, entry);
-        const info = statEntry(full);
+        const info = statEntry(full, unreadable);
 
         if (info === undefined) {
             return [];
@@ -478,7 +518,7 @@ const appSourceFiles = (root: string, directory: string, visited = new Set<strin
             // Build output and dot-folders (`.svelte-kit`, `.open-next`) are not walked, the same rule as the imported modules: a bundle carries the runtime inlined.
             const skipped = NON_SOURCE_DIRECTORIES.has(entry) || entry.startsWith(".") || isTestPath(`${relativePath}/`);
 
-            return skipped ? [] : appSourceFiles(root, full, visited);
+            return skipped ? [] : appSourceFiles(root, full, unreadable, visited);
         }
 
         return info.isFile() && SOURCE_FILE.test(entry) && !TEST_FILE.test(entry) && !isTestPath(relativePath) ? [full] : [];
@@ -517,7 +557,7 @@ const resolveRelativeImport = (fromFile: string, specifier: string): string | un
         ...IMPORT_EXTENSIONS.map((extension) => `${withoutJsExtension}${extension}`),
     ];
 
-    return candidates.find((candidate) => statEntry(candidate)?.isFile() === true);
+    return candidates.find((candidate) => isFileAt(candidate));
 };
 
 /**
@@ -525,14 +565,20 @@ const resolveRelativeImport = (fromFile: string, specifier: string): string | un
  * through their own imports. An open-shard option kept in a module beside the
  * config reaches the worker through it, so the module is read as well.
  */
-const importedModules = (roots: string[], project: Project, cwd: string): string[] => {
+const importedModules = (roots: string[], project: Project, cwd: string, unreadable: string[]): string[] => {
     const seen = new Set(roots);
     const queue = [...roots];
     const found: string[] = [];
 
     for (let index = 0; index < queue.length; index += 1) {
         const file = queue[index] ?? "";
-        const source = project.createSourceFile(relative(cwd, file), readFileSync(file, "utf8"), { overwrite: true });
+        const text = readSource(file, unreadable);
+
+        if (text === undefined) {
+            continue;
+        }
+
+        const source = project.createSourceFile(relative(cwd, file), text, { overwrite: true });
         const specifiers = [...source.getImportDeclarations(), ...source.getExportDeclarations()]
             .map((declaration) => declaration.getModuleSpecifierValue())
             .filter((specifier): specifier is string => specifier !== undefined);
@@ -592,22 +638,33 @@ const isOpenShardAssignment = (expression: BinaryExpression): boolean => {
  * app-authored module kept under such a name is not seen either. Rename the
  * folder, or pass `--allow-open-shards`, if that matters.
  */
-const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShardAccess[] => {
+const findOpenShardAccess = (
+    cwd: string,
+    environment: string | undefined,
+    servicePaths: ReadonlyArray<string>,
+): { sites: AdvisorOpenShardAccess[]; unreadable: string[] } => {
+    const unreadable: string[] = [];
     const directories = [...new Set([resolveSchemaDirectory(cwd), "src"])].filter((directory) => existsSync(join(cwd, directory)));
-    const roots = [...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)), ...wranglerMainEntry(cwd, environment)];
+    const appWrangler = findWranglerFile(cwd);
+    const roots = [
+        ...OPEN_SHARD_SCAN_ROOT_FILES.map((file) => join(cwd, file)).filter((file) => existsSync(file)),
+        ...(appWrangler === undefined ? [] : wranglerMainEntry(cwd, appWrangler, environment)),
+        // Each service this run publishes is an entrypoint of its own, deployed before the app.
+        ...servicePaths.flatMap((servicePath) => wranglerMainEntry(cwd, servicePath)),
+    ];
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
     const files = [
         ...new Set([
-            ...directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory))),
+            ...directories.flatMap((directory) => appSourceFiles(join(cwd, directory), join(cwd, directory), unreadable)),
             ...roots,
-            ...importedModules(roots, project, cwd),
+            ...importedModules(roots, project, cwd, unreadable),
         ]),
     ];
 
-    return files.flatMap((file) => {
-        const text = readFileSync(file, "utf8");
+    const sites = files.flatMap((file) => {
+        const text = readSource(file, unreadable);
 
-        if (!text.includes(OPEN_SHARD_OPTION)) {
+        if (!text?.includes(OPEN_SHARD_OPTION)) {
             return [];
         }
 
@@ -636,6 +693,8 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
             return { file: relative(cwd, file), line };
         });
     });
+
+    return { sites, unreadable };
 };
 
 /**
@@ -649,30 +708,65 @@ const findOpenShardAccess = (cwd: string, environment?: string): AdvisorOpenShar
  * publish one, and the template build matrix runs `lunora build` on every
  * template as shipped. Returns the error message, or `undefined` when clean.
  */
-const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCommand, allowOpenShards: boolean, environment?: string): string | undefined => {
+const checkOpenShardAccess = (
+    cwd: string,
+    logger: Logger,
+    command: PreDeployCommand,
+    allowOpenShards: boolean,
+    environment: string | undefined,
+    servicePaths: ReadonlyArray<string>,
+): string | undefined => {
     if (command !== "deploy") {
         return undefined;
     }
 
-    const findings = runAdvisor({ openShardAccess: findOpenShardAccess(cwd, environment), schema: { tables: [] } }, { lints: [openShardAccess] });
+    const { sites: candidates, unreadable } = findOpenShardAccess(cwd, environment, servicePaths);
+    const findings = runAdvisor({ openShardAccess: candidates, schema: { tables: [] } }, { lints: [openShardAccess] });
 
-    if (findings.length === 0) {
+    if (findings.length === 0 && unreadable.length === 0) {
         return undefined;
     }
 
-    const sites = findings.map((finding) => `${String(finding.metadata["file"])}:${String(finding.metadata["line"])}`).join(", ");
+    const parts: string[] = [];
+
+    if (findings.length > 0) {
+        const sites = findings.map((finding) => `${String(finding.metadata["file"])}:${String(finding.metadata["line"])}`).join(", ");
+
+        parts.push(`${sites} enable the open-shard option (any value but a literal false), so any caller may target any shard.`);
+    }
+
+    // A file the scan could not read might hold the option, so it blocks the same way a finding does.
+    if (unreadable.length > 0) {
+        parts.push(`could not read ${unreadable.join(", ")}, so the open-shard option cannot be ruled out there.`);
+    }
 
     if (allowOpenShards) {
-        logger.warn(`deploying with open shard access (--allow-open-shards): ${sites}`);
+        logger.warn(`deploying past the open-shard gate (--allow-open-shards): ${parts.join(" ")}`);
 
         return undefined;
     }
 
-    const message = `deploy blocked (open_shard_access): ${sites} enable the open-shard option (any value but a literal false), so any caller may target any shard. ${openShardAccess.remediation}`;
+    const message = `deploy blocked (open_shard_access): ${parts.join(" ")} ${openShardAccess.remediation}`;
 
     logger.error(message);
 
     return message;
+};
+
+/**
+ * The open-shard gate on its own, run before codegen or provisioning writes
+ * anything: a blocked deploy must leave `wrangler.jsonc` as it found it. Returns
+ * the stop to report, or `undefined` to continue.
+ */
+const runOpenShardGate = (
+    cwd: string,
+    options: DeployCommandOptions,
+    command: PreDeployCommand,
+    servicePaths: ReadonlyArray<string>,
+): { code: ExitCode; error: string } | undefined => {
+    const error = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true, options.env, servicePaths);
+
+    return error === undefined ? undefined : { code: EXIT_CODE.USAGE, error };
 };
 
 /**
@@ -686,12 +780,6 @@ const checkOpenShardAccess = (cwd: string, logger: Logger, command: PreDeployCom
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
 const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
-    const openShardError = checkOpenShardAccess(cwd, options.logger, command, options.allowOpenShards === true, options.env);
-
-    if (openShardError !== undefined) {
-        return { code: EXIT_CODE.USAGE, error: openShardError };
-    }
-
     const d1Error = checkD1Placeholder(cwd, options.logger, command, options.env);
 
     if (d1Error !== undefined) {
@@ -718,4 +806,4 @@ const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command:
 };
 
 export type { PreDeployCommand };
-export { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight };
+export { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight };
