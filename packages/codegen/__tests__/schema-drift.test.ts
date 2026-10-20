@@ -776,6 +776,40 @@ describe("schema-drift", () => {
             expect(fields?.tag).toMatchObject({ output: "string" });
         });
 
+        it("records a package-qualified output type and sees it change", () => {
+            expect.assertions(4);
+
+            const snapshot = buildSchemaSnapshot(schema([table("users", { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } })]), []);
+
+            expect(snapshot.tables.users?.fields?.score).toMatchObject({ output: 'import("@acme/schema").OldScore' });
+
+            const { changes, hashMoved } = compare(
+                { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } },
+                { score: { kind: "from", tsType: 'import("@acme/schema").NewScore' } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(hashMoved).toBe(true);
+        });
+
+        it("still skips a Windows drive path and a UNC path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", {
+                        a: { kind: "from", tsType: String.raw`import("C:\work\app\schemas").Score` },
+                        b: { kind: "from", tsType: String.raw`import("\\host\share\schemas").Score` },
+                    }),
+                ]),
+                [],
+            );
+
+            expect(snapshot.tables.users?.fields?.a).not.toHaveProperty("output");
+            expect(snapshot.tables.users?.fields?.b).not.toHaveProperty("output");
+        });
+
         it("sees an array element type change (it moves the storage projection)", () => {
             expect.assertions(3);
 

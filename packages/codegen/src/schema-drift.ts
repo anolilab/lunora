@@ -135,6 +135,9 @@ const objectFieldsOf = (shape: Record<string, ValidatorIR>): Record<string, Fiel
     return sortKeys(fields);
 };
 
+/** An `import("...")` qualifier whose specifier is an absolute path (POSIX, drive-letter or UNC), i.e. one that names a file on the machine that printed it. */
+const MACHINE_LOCAL_IMPORT = /import\(\s*["'`](?:[A-Za-z]:)?[\\/]/u;
+
 /**
  * How to read the interior of each validator kind that has one. A kind with no
  * entry contributes nothing beyond its name — which is exactly what the whole
@@ -145,7 +148,9 @@ const STRUCTURAL_DETAIL: Record<string, (validator: ValidatorIR) => Partial<Fiel
     // An `import("/abs/path").X` qualifier names a file on THIS machine: the same
     // schema snapshotted elsewhere prints differently, which would read as a
     // breaking output change nobody made. Leave it unrecorded, so it is skipped.
-    from: (validator) => (validator.tsType === undefined || validator.tsType.includes("import(") ? {} : { output: validator.tsType }),
+    // A package-qualified import (`import("@acme/schema").X`) prints the same
+    // everywhere, so its output stays recorded and a change to it is seen.
+    from: (validator) => (validator.tsType === undefined || MACHINE_LOCAL_IMPORT.test(validator.tsType) ? {} : { output: validator.tsType }),
     id: (validator) => (validator.tableName === undefined ? {} : { ref: validator.tableName }),
     literal: (validator) => (validator.literalValue === undefined ? {} : { literal: validator.literalValue }),
     object: (validator) => (validator.shape ? { fields: objectFieldsOf(validator.shape) } : {}),
