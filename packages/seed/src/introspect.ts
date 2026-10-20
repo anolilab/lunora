@@ -108,8 +108,9 @@ const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
  * Order `selected` tables so a table's foreign-key parents are inserted first.
  * Edges are the `v.id("parent")` columns whose parent is also selected;
  * self-references and edges into unselected tables are ignored for ordering
- * (the plan resolves those FKs against whatever rows exist, or null). Cycles
- * across tables are broken by emitting remaining tables in declaration order.
+ * (the plan resolves those FKs against whatever rows exist, or refuses). A
+ * table cycle is broken arbitrarily here; the plan fills the cycle's FK cells
+ * in a second pass once every table has ids, so the choice does not dangle.
  */
 const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<string>): ReadonlyArray<string> => {
     const byName = new Map(specs.map((spec) => [spec.name, spec]));
@@ -200,4 +201,4 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
 };
 
 export { fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
-export type { FieldSpec };
+export type { FieldSpec, TableSpec };

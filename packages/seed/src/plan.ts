@@ -3,7 +3,7 @@ import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";
-import type { FieldSpec } from "./introspect";
+import type { FieldSpec, TableSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
 import { planUniqueDeal, planUniqueFkDeal } from "./unique-value";
@@ -48,6 +48,12 @@ type SeedOverrides = Record<string, Record<string, unknown>>;
 type SeedCounts = Record<string, number>;
 
 interface SeedOptions {
+    /**
+     * Let a REQUIRED foreign key with no parent to point at take a fresh, dangling
+     * uuid instead of refusing. Off by default: a dangling id fails every join and
+     * `ctx.db.get` on the row, so it should be a deliberate choice.
+     */
+    allowOrphans?: boolean;
     /** Rows per table; falls back to {@link SeedOptions.defaultCount} when a table is absent. */
     counts?: SeedCounts;
     /** Count used for any selected table not present in `counts` (default `10`). */
@@ -102,14 +108,34 @@ interface TablePlan {
 const resolveOverride = (override: unknown, context: OverrideContext): unknown =>
     typeof override === "function" ? (override as (context: OverrideContext) => unknown)(context) : override;
 
-/** Resolve the value a foreign-key column takes when no seeded parent exists. */
-const fkFallback = (field: FieldSpec, input: unknown): unknown => {
+/** Marks a foreign-key cell whose parent table is generated later (a cycle); filled by the second pass. */
+const DEFERRED = Symbol("deferred foreign key");
+
+/**
+ * Resolve the value a foreign-key column takes when no parent exists to point at.
+ *
+ * A required column has no honest value then, so it is refused with the column
+ * named — unless the caller opted into orphans with `allowOrphans`, which takes a
+ * fresh uuid.
+ */
+const fkFallback = (field: FieldSpec, table: string, input: unknown, allowOrphans: boolean): unknown => {
     if (field.optional) {
         return undefined;
     }
 
-    // eslint-disable-next-line unicorn/no-null -- null is the SQL value a nullable FK takes when no parent exists
-    return field.nullable ? null : copycat.uuid(input);
+    if (field.nullable) {
+        // eslint-disable-next-line unicorn/no-null -- null is the SQL value a nullable FK takes when no parent exists
+        return null;
+    }
+
+    if (allowOrphans) {
+        return copycat.uuid(input);
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `cannot seed "${table}": required foreign key "${field.name}" points at "${field.fkTable as string}", which has no rows to reference. Seed "${field.fkTable as string}" too, make "${field.name}" optional or nullable, supply "${field.name}" yourself, or pass \`allowOrphans: true\` to accept dangling ids.`,
+    );
 };
 
 /**
@@ -204,6 +230,8 @@ const cellInput = (seed: number, table: string, index: number, column: string): 
 
 /** Everything one cell's generation depends on beyond the column itself. */
 interface RowContext {
+    /** Whether a required foreign key may take a dangling id when its pool is empty. */
+    allowOrphans: boolean;
     /** Ids that already exist in the target store, keyed by table. */
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>;
     /** Ids generated so far this run, keyed by table. */
@@ -218,10 +246,36 @@ interface RowContext {
     now: number;
     /** Each foreign-key column's pool, built once per table (see {@link fkPoolFor}). */
     pools: ReadonlyMap<string, (localIndex: number) => ReadonlyArray<string>>;
+    /** The tables this run seeds, so a parent generated later (a cycle) can be told from one that is simply absent. */
+    selected: ReadonlySet<string>;
     table: string;
     /** How each `.unique()` column deals its values, keyed by column name (see {@link planUniqueDeals}). */
     uniqueDeals: ReadonlyMap<string, UniqueDeal>;
 }
+
+/**
+ * The value for a foreign key whose pool is empty. A parent generated LATER in
+ * this run (a table cycle) leaves the cell for the second pass; otherwise there
+ * is no parent at all, so the column is omitted, nulled, refused or — with
+ * `allowOrphans` — given a placeholder id.
+ */
+const emptyPoolValue = (field: FieldSpec, context: RowContext): unknown => {
+    const { allowOrphans, idsByTable, input, selected, table } = context;
+    const parent = field.fkTable as string;
+
+    if (parent === table || !selected.has(parent) || idsByTable.has(parent)) {
+        return fkFallback(field, table, input, allowOrphans);
+    }
+
+    if (field.unique) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `cannot seed "${table}": unique foreign key "${field.name}" points at "${parent}", which is part of a table cycle and is seeded after it, so its values cannot be dealt. Supply "${field.name}" yourself or break the cycle.`,
+        );
+    }
+
+    return DEFERRED;
+};
 
 /** Generate a single column value, resolving foreign keys against seeded and pre-existing parents. */
 const generateField = (field: FieldSpec, context: RowContext): unknown => {
@@ -231,9 +285,7 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
         const pool = (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(localIndex);
 
         if (pool.length === 0) {
-            // No parent to point at. Omit when the column tolerates it; otherwise
-            // fall back to a placeholder id so the row stays insertable.
-            return fkFallback(field, input);
+            return emptyPoolValue(field, context);
         }
 
         if (!field.unique) {
@@ -374,13 +426,61 @@ const planUniqueDeals = (
     return deals;
 };
 
+/** A foreign-key cell a cycle left open for the second pass. */
+interface DeferredCell {
+    field: FieldSpec;
+    input: ReadonlyArray<unknown>;
+    row: Record<string, unknown>;
+    table: string;
+}
+
+/** The value for one deferred cell, drawn from its parent's ids now that every table has been generated. */
+const resolveDeferred = (
+    { field, input, table }: DeferredCell,
+    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
+    existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
+    allowOrphans: boolean,
+): unknown => {
+    const parent = field.fkTable as string;
+    const pool = [...(idsByTable.get(parent) ?? []), ...(existingIds[parent] ?? [])];
+
+    return pool.length === 0 ? fkFallback(field, table, input, allowOrphans) : copycat.oneOf(input, pool);
+};
+
+/** Refuse a seed `only` list naming a table the schema does not define. */
+const assertKnownTables = (specs: ReadonlyArray<TableSpec>, only: ReadonlyArray<string> | undefined): void => {
+    if (only === undefined) {
+        return;
+    }
+
+    const known = new Set(specs.map((spec) => spec.name));
+
+    for (const name of only) {
+        if (!known.has(name)) {
+            const available = specs.map((spec) => spec.name).join(", ");
+
+            throw new LunoraError("BAD_REQUEST", `unknown table "${name}" in seed \`only\` — schema defines: ${available || "(no tables)"}`);
+        }
+    }
+};
+
 /**
  * Build a deterministic, FK-consistent set of rows for `schema`.
  * @returns one {@link TablePlan} per seeded table, ordered so a table's FK
  * parents come before it.
  */
 const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<TablePlan> => {
-    const { counts = {}, defaultCount = 10, existingIds = {}, indexOffset = {}, now = Date.now(), only, overrides = {}, seed = 0 } = options;
+    const {
+        allowOrphans = false,
+        counts = {},
+        defaultCount = 10,
+        existingIds = {},
+        indexOffset = {},
+        now = Date.now(),
+        only,
+        overrides = {},
+        seed = 0,
+    } = options;
 
     setHashKey(seed);
 
@@ -389,17 +489,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // Surface an explicit error for a typo'd table rather than silently seeding
     // nothing. The CLI guards `--table` upstream, but the testing adapter and any
     // direct `seedPlan` caller would otherwise get a confusing empty plan.
-    if (only !== undefined) {
-        const known = new Set(specs.map((spec) => spec.name));
-
-        for (const name of only) {
-            if (!known.has(name)) {
-                const available = specs.map((spec) => spec.name).join(", ");
-
-                throw new LunoraError("BAD_REQUEST", `unknown table "${name}" in seed \`only\` — schema defines: ${available || "(no tables)"}`);
-            }
-        }
-    }
+    assertKnownTables(specs, only);
 
     const requested = new Set(only ?? specs.map((spec) => spec.name));
     // Parents fully covered by `existingIds` (and not requested outright) are not
@@ -420,6 +510,18 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // A live view of generated rows handed to override functions as `store`.
     const storeRows: Record<string, Record<string, unknown>[]> = {};
     const plan: TablePlan[] = [];
+    // Cells whose parent table is generated later in a cycle; filled once every table has ids.
+    const deferred: DeferredCell[] = [];
+    // A deferred cell is recorded for the second pass; any other generated value passes through.
+    const settle = (value: unknown, field: FieldSpec, input: ReadonlyArray<unknown>, row: Record<string, unknown>, table: string): unknown => {
+        if (value !== DEFERRED) {
+            return value;
+        }
+
+        deferred.push({ field, input, row, table });
+
+        return undefined;
+    };
 
     for (const table of order) {
         const spec = specByName.get(table);
@@ -477,18 +579,28 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             ids.push(row._id as string);
 
             for (const field of spec.fields) {
+                const input = cellInput(seed, table, index, field.name);
+
                 apply(field.name, () =>
-                    generateField(field, {
-                        existingIds,
-                        idsByTable,
-                        index,
-                        input: cellInput(seed, table, index, field.name),
-                        localIndex,
-                        now,
-                        pools,
+                    settle(
+                        generateField(field, {
+                            allowOrphans,
+                            existingIds,
+                            idsByTable,
+                            index,
+                            input,
+                            localIndex,
+                            now,
+                            pools,
+                            selected,
+                            table,
+                            uniqueDeals,
+                        }),
+                        field,
+                        input,
+                        row,
                         table,
-                        uniqueDeals,
-                    }),
+                    ),
                 );
             }
 
@@ -496,6 +608,16 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         }
 
         plan.push({ rows, table });
+    }
+
+    // Second pass: every table now has ids, so each cell a cycle left open can
+    // point at a real parent row.
+    for (const cell of deferred) {
+        const value = resolveDeferred(cell, idsByTable, existingIds, allowOrphans);
+
+        if (value !== undefined) {
+            cell.row[cell.field.name] = value;
+        }
     }
 
     return plan;
