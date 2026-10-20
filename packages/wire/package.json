@@ -1,6 +1,6 @@
 {
     "name": "@lunora/wire",
-    "version": "1.0.0-alpha.1",
+    "version": "1.0.0-alpha.2",
     "description": "Wire codec and stable keys shared by every Lunora tier",
     "keywords": [
         "cloudflare",
