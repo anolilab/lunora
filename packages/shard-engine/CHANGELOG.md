@@ -1,3 +1,16 @@
+## @lunora/shard-engine [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.145...@lunora/shard-engine@1.0.0-alpha.146) (2026-10-20)
+
+### Tests
+
+* run the shard-engine and observability SQL suites on real workerd SQLite ([#1273](https://github.com/anolilab/lunora/issues/1273)) ([914e4ad](https://github.com/anolilab/lunora/commit/914e4adc091c12e2e8d264aaf470ab317e3a309f))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.127
+
 ## @lunora/shard-engine [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.144...@lunora/shard-engine@1.0.0-alpha.145) (2026-10-19)
 
 
