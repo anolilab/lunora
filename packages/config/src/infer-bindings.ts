@@ -109,7 +109,7 @@ const CODEGEN_CAPABILITIES = [
     "kv",
     "mail",
     // No Cloudflare binding and no secrets of its own: each push channel's secrets
-    // are keyed by the channel `lunora/notify.ts` configures — see NOTIFY_CHANNEL_SECRETS.
+    // are keyed by the channel `lunora/notify.ts` configures — see SECRET_SOURCE_FLAGS.
     "notify",
     "payments",
     "pipelines",
@@ -178,9 +178,13 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
  * package — says which secrets an app needs, so a `webPush`-only app is not told
  * to set `FCM_*`. Read from `defineNotify({...})` in `lunora/notify.ts`.
  */
-const NOTIFY_CHANNEL_SECRETS = [
+const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // The secret store behind `requestSecretTool`. The tool's own import is the
+    // signal, not `@lunora/agent`: an app that imports the package for something
+    // else needs no key.
+    ["usesRequestSecretTool", "@lunora/agent:requestSecretTool"],
 ] as const;
 
 /** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
@@ -344,6 +348,8 @@ interface InferredBindings {
     usesPipelines: boolean;
     /** `@lunora/bindings/r2sql` is value-imported or `ctx.r2sql` read (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
     usesR2sql: boolean;
+    /** `lunora/` value-imports `requestSecretTool` from `@lunora/agent` → the `LUNORA_SECRET_VALUE_KEY` secret in `.dev.vars` (no binding). Read off the same rule codegen gates on. */
+    usesRequestSecretTool: boolean;
     /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
     /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
@@ -365,16 +371,19 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
-/** Creates the in-memory project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. */
+/**
+ * Creates the project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. It reads
+ * the app from disk, so a file's relative re-export (a barrel of the secret tool) resolves against the app's own files.
+ */
 type ScanProject = () => Project;
 
 const createScanProject = (): ScanProject => {
     let project: Project | undefined;
 
     return () => {
-        project ??= new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+        project ??= new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
 
         return project;
     };
@@ -389,9 +398,12 @@ const createScanProject = (): ScanProject => {
  * (`.tsx` / `.jsx` vs `.ts` / `.js`); the TypeScript parser recovers from a
  * mid-edit syntax error.
  */
+/** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
+const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
+
 const parseSourceSignals = (code: string, fileName: string, scanProject: ScanProject): SourceCapabilitySignals => {
     const project = scanProject();
-    const sourceFile = project.createSourceFile(`/scan/${fileName.slice(fileName.lastIndexOf("/") + 1)}`, code, { overwrite: true });
+    const sourceFile = project.createSourceFile(fileName, code, { overwrite: true });
     const signals = sourceCapabilitySignals(sourceFile);
 
     project.removeSourceFile(sourceFile);
@@ -495,7 +507,9 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
 
-            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && mayReadCapabilityContext(code))) {
+            // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
+            // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
+            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
                 (inLunora ? lunoraFiles : otherFiles).push(parseSourceSignals(code, file, scanProject));
             }
         }
@@ -515,6 +529,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return {
         ...flags,
         needsD1: usesEnvDatabase,
+        usesRequestSecretTool: lunora.requestSecretTool,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
@@ -747,10 +762,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
  * {@link FLAG_PACKAGES}' sources whose flag is `true` in `bindings` — in
  * flag-name order — followed by the configured `@lunora/notify` channels
- * ({@link NOTIFY_CHANNEL_SECRETS}), keeping only sources that carry secrets.
+ * ({@link SECRET_SOURCE_FLAGS}), keeping only sources that carry secrets.
  */
 const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
-    [...FLAG_PACKAGES, ...NOTIFY_CHANNEL_SECRETS]
+    [...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
         .filter(([flag, source]) => bindings[flag] && PACKAGE_SECRETS_REGISTRY[source] !== undefined)
         .map(([, source]) => source);
 

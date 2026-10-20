@@ -377,6 +377,44 @@ describe(createVoiceAgent, () => {
         unmount();
     });
 
+    it("drops the streamed prefix of a failed turn", async () => {
+        const { result, socket, unmount } = renderVoice();
+
+        await result.startCall();
+
+        socket().emitServer({ audioFormat: "mp3", type: "ready" });
+        socket().emitServer({ text: "what is the weather", type: "user_transcript" });
+        socket().emitServer({ text: "It is ", type: "assistant_delta" });
+
+        expect(result.interimTranscript()).toBe("It is ");
+
+        socket().emitServer({ type: "assistant_discarded" });
+        socket().emitServer({ message: "stream truncated", type: "error" });
+
+        expect(result.interimTranscript()).toBe("");
+        expect(result.error()?.message).toBe("stream truncated");
+        expect(result.status()).toBe("listening");
+
+        unmount();
+    });
+
+    it("starts a retried turn's text from empty, not from the failed attempt's prefix", async () => {
+        const { result, socket, unmount } = renderVoice();
+
+        await result.startCall();
+
+        socket().emitServer({ audioFormat: "mp3", type: "ready" });
+        socket().emitServer({ text: "what is the weather", type: "user_transcript" });
+        socket().emitServer({ text: "It is ", type: "assistant_delta" });
+        socket().emitServer({ message: "stream truncated", type: "error" });
+        socket().emitServer({ text: "what is the weather", type: "user_transcript" });
+        socket().emitServer({ text: "It is sunny.", type: "assistant_delta" });
+
+        expect(result.interimTranscript()).toBe("It is sunny.");
+
+        unmount();
+    });
+
     it("names an expired credential instead of going quietly idle (TOKEN_EXPIRED + close 4001)", async () => {
         const { result, socket } = renderVoice();
 

@@ -19,6 +19,7 @@ interface BuildContextParts {
     everyContextField: string;
     facadeBlock: string;
     globalDatabaseLine: string;
+    hasSensitiveArgs?: boolean;
     lazyFunctions?: boolean;
     notifyBuild: string;
     ormContextField: string;
@@ -47,6 +48,7 @@ const renderBuildContext = ({
     everyContextField,
     facadeBlock,
     globalDatabaseLine,
+    hasSensitiveArgs = false,
     lazyFunctions = false,
     notifyBuild,
     ormContextField,
@@ -82,8 +84,15 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
     // Only emit `isAction` when an action-only helper is wired — otherwise it
     // would be an unused local.
     const isActionLine = actionOnlyHasAny ? `            const isAction = contextKind === "action";\n` : "";
+    // Only with a `v.sensitive` argument somewhere in the app: the key is the one
+    // `admitSensitiveArgs` in `@lunora/server` looks up, and a validator can only
+    // hand over a marked value when one exists.
+    const sensitiveAdmitField = hasSensitiveArgs
+        ? `
+                [Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),`
+        : "";
 
-    return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+    return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -206,7 +215,7 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // dispatch's wide-event handle.
             const observability = config.observability?.(env);
             const logFunctionPath = options.functionPath ?? "";
-            const log = this.makeLogger(logFunctionPath, observability);
+            const log = this.makeLogger(logFunctionPath, observability, undefined, options.sensitive);
             const traceAnchor = this.resolveDispatchAnchor(Boolean(options.identity));
 
             // \`ctx.span\`: the handle onto the DISPATCH's own span — the wide-event
@@ -214,7 +223,7 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // and are folded into the one span it already emits, instead of
             // becoming N separate log lines. Shares \`traceAnchor\` with \`ctx.trace\`
             // so both write to the same trace.
-            const span = this.makeDispatchSpan(traceAnchor, observability);
+            const span = this.makeDispatchSpan(traceAnchor, observability, options.sensitive);
 
 ${globalDatabaseLine}            // \`ctx.db\`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
@@ -224,7 +233,7 @@ ${globalDatabaseLine}            // \`ctx.db\`, wrapped in automatic instrumenta
             // Schema triggers close over this DB's scheduler, so a composed
             // mutation must rebuild its DB and table/ORM views with its own queue.
             const makeDatabaseContext = (scheduler: SchedulerLike) => {
-                const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability);
+                const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability, options.sensitive);
 ${facadeBlock}                return ${databaseContextReturn};
             };
             const databaseContext = makeDatabaseContext(scheduler);
@@ -235,8 +244,8 @@ ${paymentsBuild}
             // The trace anchor is threaded explicitly for the same reason \`identity\`
             // is — a deferred caller (a subscription re-run) must not inherit the
             // writing mutation's trace from the shared per-request field.
-            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor);
-            const metrics = this.makeMetrics(logFunctionPath, observability);
+            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor, options.sensitive);
+            const metrics = this.makeMetrics(logFunctionPath, observability, options.sensitive);
 ${notifyBuild}
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
@@ -267,7 +276,7 @@ ${notifyBuild}
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare
                 // global when no sink is configured.
-                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
+                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive),
                 // A GETTER, not a plain field, so the reactive cache can tell a
                 // handler that reads the caller's address from the majority that
                 // never do. \`ctx.ip\` is per-request state the memo must be keyed
@@ -292,7 +301,7 @@ ${notifyBuild}
                 scheduler,
                 span,
                 storage: contextStorage,
-                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}
+                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${sensitiveAdmitField}
             };
 ${isActionLine}${actionOnlyBlock}
 ${
@@ -305,11 +314,17 @@ ${
 `
         : ""
 }            const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
-                target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind${lazyFunctions ? ", undefined, captureScope" : ""});
+                target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => {
+                    // The callee runs inside this invocation, so its marked arguments are scrubbed here too.
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
+
+                    return dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind${lazyFunctions ? ", undefined, captureScope" : ""});
+                };
                 // The composed mutation runs under the SAME wrapper the top-level RPC
                 // uses, so "do the transactional work in a mutation and call it from the
                 // action" — the recipe the docs give for atomicity — actually is atomic.
                 target.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => {
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
                     // An action can start sibling mutations concurrently. Each owns its
                     // context and deferral queues; only calls from an admitted mutation
                     // inherit that mutation's transaction.
@@ -346,16 +361,19 @@ ${
                 // to the shared per-request fields, which a concurrent RPC may have
                 // re-set, and an RLS-scoped sub-query would then read as the wrong user
                 // from the wrong address. A tracked call runs on \`queryContext()\` below.
-                target.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
-                    dispatchRun(
+                target.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) => {
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
+
+                    return dispatchRun(
                         "query",
                         reference.__lunoraRef,
                         fnArgs,
                         runOptions?.untracked === true
-                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope })
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })
                             : queryContext(),
                         kind,${lazyFunctions ? "\n                        undefined,\n                        captureScope," : ""}
                     );
+                };
             };
 
             // A query composed from a mutation or action runs on a QUERY view of

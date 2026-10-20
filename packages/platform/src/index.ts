@@ -93,6 +93,11 @@ export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 
 // Scheduler host
 export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
+export type { SecretValueKeyOptions } from "./secret-value-encryption";
+export { encryptingSecretValueHost, SecretValueKeyError } from "./secret-value-encryption";
+// Secret value host
+export type { SecretValueHost, SecretValuePutOptions, SecretValueStore, SecretValueTakeOptions } from "./secret-value-host";
+export { assertSecretValueSize, clampSecretValueTtl, SECRET_VALUE_MAX_BYTES, SECRET_VALUE_MAX_TTL_MS, SecretValueTooLargeError } from "./secret-value-host";
 
 // Shard directory
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";

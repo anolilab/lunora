@@ -32,6 +32,7 @@ import {
     buildSecurityAudit,
     createDatabaseTally,
     createMetrics,
+    createSensitiveScope,
     createSpanCollector,
     createTracedFetch,
     createTracer,
@@ -48,8 +49,10 @@ import {
     ISSUE_STATE_TABLE,
     latencyBucketIndex,
     LogBuffer,
+    maskSensitiveArgs,
     mergeScanAttribution,
     MetricBuffer,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readFunctionMetricBuckets,
@@ -65,11 +68,13 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    sensitiveNames,
+    sensitiveValues,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
-import type { ShardHost, SocketHost } from "@lunora/platform";
-import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
+import type { SecretValueHost, ShardHost, SocketHost } from "@lunora/platform";
+import { createSecretValueHost, createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
     AdvisorProcedure,
     AdvisoryFinding,
@@ -478,6 +483,35 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 
     return decoded as Record<string, unknown>;
 };
+
+/** The empty answer of {@link ShardDO.sensitiveArgNames}: a function with no `v.sensitive` argument. */
+const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * The scrub scope of one invocation: the structural projection of
+ * `@lunora/observability`'s `SensitiveScope`, declared here so generated code can
+ * name it without depending on observability (see {@link ShardDO.openSensitiveScope}).
+ */
+interface SensitiveScope {
+    /** Admit more values and marked property names into the invocation (a composed call's marked arguments). */
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+    /** Mark the dispatch settled; the values outlive it only while a record opened under the scope is still held. */
+    clear: () => void;
+    /** Scrub a field bag; `undefined` passes through. */
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    /** Keep the values for a record opened under the scope and not yet written. Returns the release. */
+    hold: () => () => void;
+
+    /**
+     * Scrub a telemetry name (an event, span or metric name, or a plain log message). A name that is exactly a
+     * marked property name masks whole; any other name is scrubbed as free text.
+     */
+    name: (name: string) => string;
+    /** Scrub a free-text string. */
+    text: (text: string) => string;
+    /** Scrub one structured value. */
+    value: <T>(value: T) => T;
+}
 
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
@@ -2257,6 +2291,13 @@ abstract class ShardDO {
      */
     protected globalPoll: GlobalPollCounters = createGlobalPollCounters();
 
+    /**
+     * Human-supplied secret values for durable steps, over the same
+     * `state.storage` as {@link ShardDO.shardHost}. Protected so an agent-layer
+     * subclass can reach it; nothing in this class calls it.
+     */
+    protected readonly secretValues: SecretValueHost;
+
     private readonly deliveryAuthorization: DeliveryAuthorization | undefined;
     private readonly deliveryFence = new DeliveryFence(() => this.shardHost.sql);
     private readonly deliveryResponsePermits = new WeakMap<Response, DeliveryPermit>();
@@ -3187,6 +3228,7 @@ abstract class ShardDO {
         // tests and public API stay stable.
         this.shardHost = createShardHost(state as never);
         this.socketHost = createSocketHost(state as never);
+        this.secretValues = createSecretValueHost(state.storage as never, env);
         this.runner = new ShardRunner(this.shardHost, this.socketHost, {
             handlers: {
                 handleAlarm: () => this.handleAlarmCloudflare(),
@@ -3626,6 +3668,7 @@ abstract class ShardDO {
         headroom?: TransactionHeadroomTracker,
         scope?: QueryReadScope,
         bookmarks?: DispatchBookmark,
+        sensitive?: SensitiveScope,
     ): Promise<unknown>;
 
     /**
@@ -3688,23 +3731,28 @@ abstract class ShardDO {
      */
     protected async dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void> {
         for (const functionPath of this.lifecycleHookPaths(event)) {
-            try {
-                // The event is passed as the handler's `args`; the lifecycle
-                // wrapper forwards it verbatim. `handleRpc` builds the ctx and
-                // enforces the internal-visibility gate, which the system flag
-                // satisfies.
-                // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
-                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
-                    this.withSystemDispatch(() => this.handleRpc(functionPath, info.event as unknown as Record<string, unknown>)),
-                );
-            } catch (error: unknown) {
-                this.logs.push({
-                    functionPath,
-                    level: "error",
-                    message: error instanceof Error ? error.message : String(error),
-                    timestamp: Date.now(),
-                });
-            }
+            // The event is passed as the handler's `args`; the lifecycle
+            // wrapper forwards it verbatim. `handleRpc` builds the ctx and
+            // enforces the internal-visibility gate, which the system flag
+            // satisfies.
+            const hookArgs = info.event as unknown as Record<string, unknown>;
+
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
+            await this.withSensitiveScope(functionPath, hookArgs, async (sensitive) => {
+                try {
+                    await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                        this.withSystemDispatch(() => this.handleRpc(functionPath, hookArgs, undefined, undefined, undefined, sensitive)),
+                    );
+                } catch (error: unknown) {
+                    // Written while the scope is still open: it holds the values the hook's validator admitted.
+                    this.logs.push({
+                        functionPath,
+                        level: "error",
+                        message: sensitive.text(error instanceof Error ? error.message : String(error)),
+                        timestamp: Date.now(),
+                    });
+                }
+            });
         }
     }
 
@@ -3826,7 +3874,9 @@ abstract class ShardDO {
         for (const functionPath of this.lifecycleHookPaths("init")) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: a later hook may depend on state an earlier one rebuilt, and a throwing hook must not skip the rest
-                await this.withSystemDispatch(() => this.handleRpc(functionPath, event));
+                await this.withSensitiveScope(functionPath, event, (sensitive) =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, event, undefined, undefined, undefined, sensitive)),
+                );
             } catch (error: unknown) {
                 this.recordShardInitError(functionPath, error);
             }
@@ -5840,6 +5890,92 @@ abstract class ShardDO {
     }
 
     /**
+     * The argument names of `functionPath` whose validators carry a `v.sensitive`
+     * marker. The request log replaces them before anything is persisted, logged or
+     * shipped, so a marked value survives neither the durable row nor a dev
+     * `captureRaw` capture. The base class has no function registry and marks
+     * nothing; the codegen-generated subclass answers from `LUNORA_FUNCTIONS`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected sensitiveArgNames(_functionPath: string): ReadonlySet<string> {
+        return NO_SENSITIVE_ARGS;
+    }
+
+    /**
+     * The scrub scope for ONE invocation: every free-text and structured record it
+     * writes (logs, spans, the wide event, metrics, the root span's error) has the
+     * values of its marked arguments replaced. The single place those values are
+     * read. Built from the DECODED args, because a wire-encoded bigint or byte
+     * string would not match the text the handler actually sees. The caller owns
+     * the scope and clears it once the dispatch's records are written.
+     */
+    protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope {
+        const sensitive = this.sensitiveArgNames(functionPath);
+
+        return createSensitiveScope(sensitiveValues(args, sensitive), sensitiveNames(args, sensitive));
+    }
+
+    /**
+     * Run a dispatch outside `/rpc` under the sensitive scope its arguments open, so a
+     * `v.sensitive` argument is masked in the records it writes, as it is on `/rpc`. The
+     * scope is released once the dispatch and its records are done.
+     */
+    protected async withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T> {
+        const sensitive = this.openSensitiveScope(functionPath, args);
+
+        try {
+            return await run(sensitive);
+        } finally {
+            sensitive.clear();
+        }
+    }
+
+    /**
+     * The error a shape resolve throws, with its message and stack scrubbed through the scope the
+     * resolve ran under. The scope has admitted the validator's output, which a re-open from the raw
+     * args would miss, so the scrub must happen before the scope is cleared, at the throw site.
+     */
+    // eslint-disable-next-line class-methods-use-this -- the scope is passed in: the generated resolve closes over one per call
+    protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown {
+        if (!(error instanceof Error)) {
+            return new Error(scope.text(String(error)));
+        }
+
+        // Scrubbed on the same object, not a copy: the caller reads `code` and `status` off it to answer the socket.
+        // eslint-disable-next-line no-param-reassign -- see above
+        error.message = scope.text(error.message);
+
+        if (error.stack !== undefined) {
+            // eslint-disable-next-line no-param-reassign -- see above
+            error.stack = scope.text(error.stack);
+        }
+
+        return error;
+    }
+
+    /**
+     * Admit a composed call's marked arguments into the invocation that makes the
+     * call. The callee runs inside that invocation, so its own `v.sensitive` values
+     * are scrubbed from its records too, not only the caller's.
+     */
+    protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void {
+        this.admitSensitiveValues(scope, args, this.sensitiveArgNames(functionPath));
+    }
+
+    /**
+     * Admit the marked values of one function's arguments into a dispatch's scope,
+     * with the names its validators declared. The validator may transform a marked
+     * value (trim, decode, parse), so the value the handler logs is not the one the
+     * scope opened from the raw args holds; the generated ctx calls this with the
+     * parsed args. Names are taken as given, not looked up by path: a composed
+     * call's ctx carries the caller's path, which would name the wrong arguments.
+     */
+    // eslint-disable-next-line class-methods-use-this -- the scope is passed in: the generated ctx closes over one per dispatch
+    protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void {
+        scope?.add(sensitiveValues(args, names), sensitiveNames(args, names));
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -7318,15 +7454,43 @@ abstract class ShardDO {
      * stamps `fields` onto every line. The generated `buildCtx` calls this once
      * per dispatch and assigns the result to `ctx.log`.
      */
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger {
+    protected makeLogger(
+        functionPath: string,
+        sink?: TelemetrySink,
+        boundFields?: Record<string, unknown>,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): ContextLogger {
+        // A handler may keep its logger and write through it after it has returned. The hold is
+        // never released on purpose: a late write that found the values already dropped would be
+        // recorded raw, and dropping the write instead would lose the line without a trace. The
+        // values therefore live as long as the logger, whose closures keep the scope reachable.
+        scope.hold();
+
+        // Every part of the line is scrubbed before it is recorded: the arguments
+        // reach the buffer and the sink raw, and the message, fields and error do too.
         const at =
             (level: ContextLogLevel) =>
             (...args: unknown[]): void => {
-                const { fields, message } = parseLogArgs(args, boundFields);
+                // A string argument that is exactly a marked property name is masked before the message is
+                // rendered from it: the message joins the arguments, so masking only the finished message
+                // would miss a key that sits beside other words. Every other argument is scrubbed before it
+                // renders too: a byte value renders as its numeric indices, which no text match can find.
+                const masked = args.map((argument) => (typeof argument === "string" ? scope.name(argument) : scope.value(argument)));
+                const { fields, message } = parseLogArgs(masked, boundFields === undefined ? undefined : scope.value(boundFields));
                 // Searched before `parseLogArgs` stringified any Error in the fields.
                 const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 
-                this.recordUserLog(functionPath, level, args, message, fields, sink, undefined, undefined, error);
+                this.recordUserLog(
+                    functionPath,
+                    level,
+                    scope.value(masked),
+                    scope.text(message),
+                    scope.fields(fields),
+                    sink,
+                    undefined,
+                    undefined,
+                    error === undefined ? undefined : scope.value(error),
+                );
             };
 
         return {
@@ -7337,14 +7501,24 @@ abstract class ShardDO {
                 // viewer still shows something meaningful; the structured payload
                 // is `fields`, and `eventName` is what makes a collector treat the
                 // record as a queryable event rather than prose.
-                this.recordUserLog(functionPath, "info", [name], name, boundFields ? { ...boundFields, ...fields } : fields, sink, name);
+                const eventName = scope.name(name);
+
+                this.recordUserLog(
+                    functionPath,
+                    "info",
+                    [eventName],
+                    eventName,
+                    scope.fields(boundFields ? { ...boundFields, ...fields } : fields),
+                    sink,
+                    eventName,
+                );
             },
             fatal: at("fatal"),
             info: at("info"),
             log: at("log"),
             trace: at("trace"),
             warn: at("warn"),
-            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
+            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields, scope),
         };
     }
 
@@ -7364,7 +7538,7 @@ abstract class ShardDO {
      * The Cloudflare custom-spans bridge is threaded here but stays off unless the
      * resolved sink sets `fuseCloudflareTraces` (see {@link resolveHostTracing}).
      */
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextTracer {
         // Resolve the anchor once so its `sampled` verdict is snapshotted for every
         // span this tracer records — carried to `recordSpan` rather than re-looked-up
         // from `traceSampling` at span-close time, so a span that ends AFTER the
@@ -7383,6 +7557,7 @@ abstract class ShardDO {
                 this.recordSpan(span, sink, resolvedAnchor.sampled);
             },
             resolveHostTracing,
+            scope,
             shardKey: this.runner.shardKey,
             userId: () => this.getCurrentUserId(),
         });
@@ -7413,8 +7588,14 @@ abstract class ShardDO {
      * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
      * nothing.
      */
-    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink);
+    protected instrumentDb<T extends object>(
+        database: T,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink?: TelemetrySink,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): T {
+        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink, scope);
 
         return deps === undefined ? database : instrumentDatabase(database, deps);
     }
@@ -7431,8 +7612,14 @@ abstract class ShardDO {
      * spans go to the sink, and the folded counters reach the host invocation
      * span through the root-span mirroring in `recordDispatchRootSpan`.
      */
-    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink);
+    protected instrumentSql<T extends SqlClientLike>(
+        client: T,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink?: TelemetrySink,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
+    ): T {
+        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink, scope);
 
         return deps === undefined ? client : instrumentSqlClient(client, deps);
     }
@@ -7450,7 +7637,7 @@ abstract class ShardDO {
      * nobody collects, and an app calling a third party it would rather not send
      * trace ids to needs a way to say so.
      */
-    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch {
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextFetch {
         const base: ContextFetch = (input, init) => globalThis.fetch(input, init);
 
         if (sink === undefined || sink.traceFetch === false) {
@@ -7475,6 +7662,7 @@ abstract class ShardDO {
                 record: (span) => {
                     this.recordSpan(span, sink, anchor.sampled);
                 },
+                scope,
                 shardKey: this.runner.shardKey,
                 userId: () => userId,
             },
@@ -7482,7 +7670,7 @@ abstract class ShardDO {
         );
     }
 
-    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanHandle {
         const spanKey = dispatchSpanKey(anchor);
 
         /**
@@ -7515,6 +7703,7 @@ abstract class ShardDO {
             entry.collector ??= createSpanCollector(
                 { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId },
                 isDevEnvironment(this.env),
+                scope,
             );
             this.dispatchSpans.set(spanKey, entry);
 
@@ -7557,12 +7746,13 @@ abstract class ShardDO {
      * Build the `ctx.metrics` recorder for one dispatched function. Thin wiring
      * over {@link createMetrics}, which owns the instrument semantics.
      */
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics {
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): ContextMetrics {
         return createMetrics({
             functionPath,
             record: (event) => {
                 this.recordMetric(event, sink);
             },
+            scope,
             shardKey: this.runner.shardKey,
         });
     }
@@ -8268,8 +8458,17 @@ abstract class ShardDO {
         // blank classification over the real one and break the in-transaction
         // watermark handshake.
         let dispatchScope: RequestScope = this.captureRequestScope();
+        // Declared out here so the `finally` can release it: the dispatch's records
+        // (root span, wide event, request log) are written after the handler returns.
+        let sensitive: SensitiveScope | undefined;
 
         try {
+            // Decoded once for the whole dispatch: the scrub scope and the handler both
+            // read these, so a value the handler sees is the value the scope masks.
+            const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
+
+            sensitive = this.openSensitiveScope(payload.functionPath, handlerArgs);
+
             // Reserved cross-shard relation read/count (reverse cross-backend
             // relations). Served BEFORE user dispatch and returned BARE (row
             // array / number) — never `{ result }`-wrapped — so the Query
@@ -8385,9 +8584,7 @@ abstract class ShardDO {
             // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
             // the request log/metrics below (JSON-safe — a raw `bigint` there
             // would throw `JSON.stringify`).
-            const runHandler = async (): Promise<unknown> => {
-                const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
-
+            const runHandler = async (): Promise<unknown> =>
                 // A registered `query` goes through the reactive cache when one
                 // is configured; every other kind dispatches straight through. The
                 // decoded args are what get keyed (`stableWireKey` handles the
@@ -8395,18 +8592,17 @@ abstract class ShardDO {
                 // encoding still share an entry. `runCachedQuery` is a pass-through
                 // when `reactiveCache` is undefined, but the cacheability lookup is
                 // skipped in that case so a cache-less shard pays nothing.
-                return this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
+                this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
                     ? this.runCachedQuery(
                           payload.functionPath,
                           handlerArgs,
                           // The scope is threaded BY VALUE into the handler's ctx
                           // (see `handleRpc`), so this dispatch's reads stamp its
                           // own tracker even while a sibling is mid-await.
-                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark),
+                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark, sensitive),
                           dispatchAttribution,
                       )
-                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark);
-            };
+                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark, sensitive);
 
             const dedupMutationId = requestScope.mutationId;
 
@@ -8568,7 +8764,10 @@ abstract class ShardDO {
             this.metrics.errors += 1;
             dispatchError = { thrown: error };
             const durationMs = Date.now() - dispatchStartedAt;
-            const message = error instanceof Error ? error.message : String(error);
+            // A handler's own message can quote a `v.sensitive` argument it rejected;
+            // the free-text sinks below (metrics, request log, dev log) get it scrubbed.
+            const thrownText = error instanceof Error ? error.message : String(error);
+            const message = sensitive?.text(thrownText) ?? thrownText;
             // Count only OCC conflicts as write contention — a unique-index
             // breach / onDelete-restrict / trigger-overflow also surfaces as a
             // 409 ConflictError but is a constraint failure, not contention, and
@@ -8657,13 +8856,13 @@ abstract class ShardDO {
             const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
             const rootSpan =
                 this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)
-                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace)
+                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace, sensitive)
                     : undefined;
 
             // Outside that gate: a handler that threw before recording anything
             // is the most common server fault, and its invocation span must still
             // read as failed. The sink was registered eagerly by `makeDispatchSpan`.
-            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault);
+            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault, sensitive);
 
             this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
 
@@ -8691,6 +8890,10 @@ abstract class ShardDO {
                 this.inFlightClaims.release(heldClaim);
             }
 
+            // Every record this dispatch makes is written by now, except a span or
+            // fetch a handler left open: the scope keeps the values until that
+            // record is written (see `SensitiveScope.hold`).
+            sensitive?.clear();
             this.endDispatch();
         }
     }
@@ -9080,6 +9283,7 @@ abstract class ShardDO {
         functionPath: string,
         anchor: TraceAnchor,
         sink: TelemetrySink | undefined,
+        scope: SensitiveScope,
     ): DatabaseTelemetryDeps | undefined {
         const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
 
@@ -9105,6 +9309,7 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink, anchor.sampled);
             },
+            scope,
             shardKey: this.runner.shardKey,
             // Parked on the dispatch entry rather than written through `ctx.span`:
             // a query pays only integer increments, and the tally is read ONCE in
@@ -9244,6 +9449,7 @@ abstract class ShardDO {
         startedAt: number,
         failure: { thrown: unknown } | undefined,
         anchor: TraceAnchor,
+        sensitive?: SensitiveScope,
     ): SpanEvent | undefined {
         const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
         const durationMs = Date.now() - startedAt;
@@ -9283,6 +9489,7 @@ abstract class ShardDO {
                 durationMs,
                 failure,
                 functionPath,
+                scope: sensitive,
                 shardKey: this.runner.shardKey,
                 startTs: startedAt,
                 userId: this.getCurrentUserId(),
@@ -9314,6 +9521,7 @@ abstract class ShardDO {
         rootSpan: SpanEvent | undefined,
         failure: { thrown: unknown } | undefined,
         serverFault: boolean,
+        scope: SensitiveScope = NO_SENSITIVE_SCOPE,
     ): void {
         if (sink?.fuseCloudflareTraces !== true) {
             return;
@@ -9328,7 +9536,7 @@ abstract class ShardDO {
                           error: {
                               // Redacted exactly as the root span's own error message.
                               message: redactArgs(
-                                  failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown),
+                                  scope.text(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown)),
                                   isDevEnvironment(this.env),
                               ) as string,
                               serverFault,
@@ -10860,7 +11068,11 @@ abstract class ShardDO {
         // `currentRequestIp` holds either nothing or a concurrently-parked
         // `/rpc`'s address — the admin request scope clears it for exactly that
         // reason. The identity is forged here; an IP would be borrowed.
-        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () => this.handleRpc(parsed.functionPath, parsed.args));
+        const result = await this.withSensitiveScope(parsed.functionPath, parsed.args, (sensitive) =>
+            this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () =>
+                this.handleRpc(parsed.functionPath, parsed.args, undefined, undefined, undefined, sensitive),
+            ),
+        );
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -11720,7 +11932,9 @@ abstract class ShardDO {
             outcome,
             // Same by-value capture as `traceId` below.
             ...(trace.rayId === undefined ? {} : { rayId: trace.rayId }),
-            redactedArgs: Object.keys(args).length === 0 ? undefined : args,
+            // Masked here, before `redactArgs` and before the dev `captureRaw` branch
+            // either of them takes, so no sink can see a marked value.
+            redactedArgs: Object.keys(args).length === 0 ? undefined : maskSensitiveArgs(args, this.sensitiveArgNames(functionPath)),
             shardKey: this.runner.shardKey,
             tablesRead: attribution.readTables === undefined ? [] : [...attribution.readTables],
             tablesWritten,
@@ -16307,34 +16521,37 @@ abstract class ShardDO {
         let allowed = true;
 
         for (const functionPath of paths) {
-            try {
-                // Same dispatch shape as `dispatchLifecycle`: the socket's verified
-                // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
-                // is RLS-scoped to them) under a trusted system dispatch (so the
-                // internal-visibility gate lets it through). The registration is a
-                // QUERY, so `handleRpc` runs it without a write span.
-                //
-                // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
-                const verdict = await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
-                    this.withSystemDispatch(() => this.handleRpc(functionPath, event as unknown as Record<string, unknown>)),
-                );
+            const authorizerArgs = event as unknown as Record<string, unknown>;
 
-                if (verdict !== true) {
-                    allowed = false;
+            // Same dispatch shape as `dispatchLifecycle`: the socket's verified
+            // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
+            // is RLS-scoped to them) under a trusted system dispatch (so the
+            // internal-visibility gate lets it through). The registration is a
+            // QUERY, so `handleRpc` runs it without a write span.
+            //
+            // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
+            const verdict = await this.withSensitiveScope(functionPath, authorizerArgs, async (sensitive) => {
+                try {
+                    return await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                        this.withSystemDispatch(() => this.handleRpc(functionPath, authorizerArgs, undefined, undefined, undefined, sensitive)),
+                    );
+                } catch (error: unknown) {
+                    // Unlike a lifecycle hook — whose failure is logged and otherwise
+                    // ignored — a failed authorizer is a DENIAL. There is no safe way to
+                    // read "the check crashed" as permission. Written while the scope is
+                    // still open, so the message masks the values the validator admitted.
+                    this.logs.push({
+                        functionPath,
+                        level: "error",
+                        message: sensitive.text(error instanceof Error ? error.message : String(error)),
+                        timestamp: Date.now(),
+                    });
 
-                    break;
+                    return false;
                 }
-            } catch (error: unknown) {
-                // Unlike a lifecycle hook — whose failure is logged and otherwise
-                // ignored — a failed authorizer is a DENIAL. There is no safe way to
-                // read "the check crashed" as permission.
-                this.logs.push({
-                    functionPath,
-                    level: "error",
-                    message: error instanceof Error ? error.message : String(error),
-                    timestamp: Date.now(),
-                });
+            });
 
+            if (verdict !== true) {
                 allowed = false;
 
                 break;
@@ -16770,26 +16987,40 @@ abstract class ShardDO {
             userId: info.event.userId,
         };
 
+        // Declared out here so the `catch` scrubs with it and the `finally` releases it.
+        let sensitive: SensitiveScope | undefined;
+
         try {
             // The inbound frame is wire-encoded; decoding it here keeps a malformed
             // payload inside the logged dispatch instead of throwing out of the socket handler.
             const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
 
-            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(route.functionPath, args)));
+            sensitive = this.openSensitiveScope(route.functionPath, args);
+
+            const scope = sensitive;
+
+            await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                this.withSystemDispatch(() => this.handleRpc(route.functionPath, args, undefined, undefined, undefined, scope)),
+            );
         } catch (error: unknown) {
             // A failure after the handler's writes committed (a deferred step that would not run) leaves those
             // writes durable, so the frames announcing them are still owed, as for a room. Only a failure before
             // the commit drops them.
-            if (!this.absorbCommittedFailure(route.functionPath, error)) {
+            if (!this.absorbCommittedFailure(route.functionPath, error, sensitive)) {
+                const thrownText = error instanceof Error ? error.message : String(error);
+
                 this.logs.push({
                     functionPath: route.functionPath,
                     level: "error",
-                    message: error instanceof Error ? error.message : String(error),
+                    // A handler's own message can quote a `v.sensitive` argument it rejected.
+                    message: sensitive?.text(thrownText) ?? thrownText,
                     timestamp: Date.now(),
                 });
 
                 return;
             }
+        } finally {
+            sensitive?.clear();
         }
 
         // The mutation has committed, so every queued frame is still owed. One that cannot
@@ -16968,15 +17199,17 @@ abstract class ShardDO {
      * Whether a failure is one the room event survives: a post-commit step after durable writes.
      * It is logged, and the event's broadcasts and membership stand.
      */
-    private absorbCommittedFailure(functionPath: string, error: unknown): boolean {
+    private absorbCommittedFailure(functionPath: string, error: unknown, sensitive?: SensitiveScope): boolean {
         if (!isCommittedFailure(error)) {
             return false;
         }
 
+        const text = error instanceof Error ? error.message : String(error);
+
         this.logs.push({
             functionPath,
             level: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: sensitive?.text(text) ?? text,
             timestamp: Date.now(),
         });
 
@@ -16986,6 +17219,8 @@ abstract class ShardDO {
     /**
      * Refuse a room event that failed or could not run: log it, and if it was a join,
      * undo the membership it created and remember the refusal for the leave queued behind it.
+     * `sensitive` is the event's dispatch scope, still open where the handler failed; a refusal
+     * raised before any dispatch has none.
      */
     private refuseRoomEvent(
         ws: ShardSocketLike,
@@ -16994,11 +17229,14 @@ abstract class ShardDO {
         kind: RoomEventKind,
         joinEpoch: number | undefined,
         error: unknown,
+        sensitive?: SensitiveScope,
     ): false {
+        const text = error instanceof Error ? error.message : String(error);
+
         this.logs.push({
             functionPath,
             level: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: sensitive?.text(text) ?? text,
             timestamp: Date.now(),
         });
 
@@ -17102,19 +17340,33 @@ abstract class ShardDO {
             shardKey: info.event.shardKey,
             userId: info.event.userId,
         };
-        try {
-            // The client wire-encoded `message`; decode it back to real values here
-            // so a malformed payload is logged, not thrown out of the socket handler.
-            const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
+        // The client wire-encoded `message`; decode it back to real values here so a malformed
+        // payload is refused by the caller's catch, not thrown out of the socket handler.
+        const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
 
-            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(functionPath, args)));
-        } catch (error: unknown) {
-            // A failure after the write committed (a deferred schedule that would not enqueue) leaves
-            // the room's writes durable. Members must still hear them and a join keeps its membership,
-            // so only a failure before the commit is refused.
-            if (!this.absorbCommittedFailure(functionPath, error)) {
-                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error);
+        // The refusal is written inside the dispatch's scope: a validator-transformed marked value the
+        // handler threw is masked only by the scope the handler admitted it into.
+        const admitted = await this.withSensitiveScope(functionPath, args, async (sensitive) => {
+            try {
+                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, args, undefined, undefined, undefined, sensitive)),
+                );
+
+                return true;
+            } catch (error: unknown) {
+                // A failure after the write committed (a deferred schedule that would not enqueue) leaves
+                // the room's writes durable. Members must still hear them and a join keeps its membership,
+                // so only a failure before the commit is refused.
+                if (this.absorbCommittedFailure(functionPath, error, sensitive)) {
+                    return true;
+                }
+
+                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error, sensitive);
             }
+        });
+
+        if (!admitted) {
+            return false;
         }
 
         // A join that committed clears any earlier refusal of the same topic.
@@ -17803,6 +18055,7 @@ export type {
     HibernatableWebSocket,
     LiveStreamDeclaration,
     QueryReadScope,
+    SensitiveScope,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,

@@ -350,6 +350,35 @@ take whichever of these fits:
 An opt-in `{ ordered: true }` mode for plain mutations is deliberately not
 shipped; see [Design boundaries](/docs/non-goals#also-deliberately-absent).
 
+## Keeping a write off the queue
+
+A write queued offline is persisted with its arguments, so it survives a reload.
+A write whose arguments must never reach disk passes `onlineOnly: true`:
+
+```ts
+await client.mutation(api.accounts.linkApiKey, { apiKey }, { onlineOnly: true });
+```
+
+- **Connected:** the call is sent as usual.
+- **Connection down** (the shard's socket is closed or reconnecting, after it has
+  connected once): it rejects at once with `OFFLINE_NOT_QUEUED`. Nothing is queued,
+  persisted or replayed, and no optimistic update is shown. Retry it yourself once
+  the connection is back. A call made before the shard has ever connected is sent
+  over HTTP as usual.
+- **Ordering:** it does not wait for, or queue behind, writes already waiting for
+  the same shard. When it is sent it can overtake them, so it may commit before an
+  older queued write to the same document. Use it only for a write that does not
+  depend on that order.
+- **Failed on the wire:** on a shard with no open socket (polling, idle-closed, or
+  not yet connected), a request that the network drops before a response is refused
+  with `OFFLINE_NOT_QUEUED`, and the transport failure is its `cause`. The server may
+  already have applied the write, so handle it as you would any failed request. On a
+  shard with an open socket, a failed request rejects with its transport error, as a
+  normal write does.
+
+Use it for a credential a person typed in, or a one-time token such as an invite
+code or a verification code.
+
 ## Stale offline writes (`.dropStalePatches()`)
 
 Queued writes replay in order, and by default the replay wins: a write composed

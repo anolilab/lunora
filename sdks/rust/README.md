@@ -113,6 +113,16 @@ _restored_ record whose args no longer decode is purged and settled
 discard — including one the capacity cap evicts out of a restored queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
 
+A write that must never sit on disk — a credential, a one-time token — sets
+`online_only = true` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` fails with
+`CODE_OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its
+arguments never reach the persistence adapter. A send that gets no reply while
+the socket is down is refused the same way, with the transport error as its
+`source()`. It does not wait for a flush or
+queue behind pending writes, so it may land before an older queued write to the
+same document.
+
 One rule classifies a failed replay, whether the write went out alone or in a
 batch: a CODED envelope is classified by its code alone, whatever the HTTP
 status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`, `RATE_LIMITED`,

@@ -22,8 +22,10 @@ const listPresentRef = { __lunoraRef: "presence:listPresent" } as FunctionRefere
 const tokenStreamRef = { __lunoraRef: "chat:events" } as FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 const agentApi = {
     agents: {
+        agentApprovalGrants: { __lunoraRef: "agents:agentApprovalGrants" },
         agentMessages: { __lunoraRef: "agents:agentMessages" },
         agentResolveApproval: { __lunoraRef: "agents:agentResolveApproval" },
+        agentRevokeApprovalGrant: { __lunoraRef: "agents:agentRevokeApprovalGrant" },
         agentThread: { __lunoraRef: "agents:agentThread" },
     },
 } as never;

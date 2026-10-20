@@ -14,7 +14,7 @@ import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import type { FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
+import type { FunctionArgumentDescriptor, FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
 import { argumentsTemplate, formatSignature } from "./function-signature";
 
 /**
@@ -26,9 +26,205 @@ import { argumentsTemplate, formatSignature } from "./function-signature";
  */
 const RUN_AS = adminRef(ADMIN_FUNCTIONS.runAs);
 
+/** What a `v.sensitive` argument's value is replaced with wherever the runner keeps args. */
+const SENSITIVE_PLACEHOLDER = "«sensitive»";
+
+/** The names of a function's `v.sensitive` arguments, from its discovery descriptor. */
+const sensitiveNamesOf = (args: FunctionArgumentDescriptor[] | undefined): string[] =>
+    (args ?? []).filter((argument) => argument.sensitive === true).map((argument) => argument.name);
+
+/**
+ * The args text history may keep: the typed JSON with each sensitive value replaced
+ * by {@link SENSITIVE_PLACEHOLDER}. Text that is not a JSON object is not kept.
+ */
+const historyArgsText = (argsText: string, sensitive: ReadonlyArray<string>): string => {
+    if (sensitive.length === 0) {
+        return argsText;
+    }
+
+    try {
+        const parsed: unknown = JSON.parse(argsText);
+
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            return "";
+        }
+
+        const masked: Record<string, unknown> = { ...parsed };
+
+        for (const name of sensitive) {
+            if (Object.hasOwn(masked, name)) {
+                masked[name] = SENSITIVE_PLACEHOLDER;
+            }
+        }
+
+        return JSON.stringify(masked, null, 2);
+    } catch {
+        return "";
+    }
+};
+
+/** Below this length a value is masked only as a whole token, so a short PIN does not mangle ordinary words. */
+const SUBSTRING_MASK_MIN_LENGTH = 4;
+
+/**
+ * The UTF-8 text of a byte value, or `undefined` when its bytes are not UTF-8: a handler that decodes them logs
+ * that text, and bytes that are not UTF-8 have none.
+ */
+const bytesTextOf = (value: ArrayBuffer | ArrayBufferView): string | undefined => {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+        return undefined;
+    }
+};
+
+/** The non-empty record keys of an object. An array's indices are positions, not keys, so an array has none. */
+const recordKeysOf = (value: object): string[] => (Array.isArray(value) ? [] : Object.keys(value).filter((key) => key.length > 0));
+
+/**
+ * Every string, number and record key under a sensitive argument's value, as the text an
+ * error might quote it in. A record key can be the secret (a caller-chosen account name),
+ * so it is collected with the values; array indices are not keys and are left out. Booleans
+ * are not leaves: a bare `true` is ordinary prose, so {@link booleansOf} masks them only in
+ * their field spellings. The walk has no depth limit: a value however deep is found, and a
+ * `seen` set keeps a shared or cyclic reference from being walked twice.
+ */
+const leavesOf = (value: unknown): string[] => {
+    const found: string[] = [];
+    const seen = new Set<object>();
+    const pending: unknown[] = [value];
+
+    while (pending.length > 0) {
+        const current = pending.pop();
+
+        if (typeof current === "string") {
+            if (current.length > 0) {
+                found.push(current);
+            }
+        } else if (typeof current === "number" || typeof current === "bigint") {
+            found.push(String(current));
+        } else if (current instanceof ArrayBuffer || ArrayBuffer.isView(current)) {
+            // A byte value keeps its content in its buffer, which a property walk never reaches.
+            const text = bytesTextOf(current);
+
+            if (text !== undefined && text.length > 0) {
+                found.push(text);
+            }
+        } else if (typeof current === "object" && current !== null && !seen.has(current)) {
+            seen.add(current);
+            found.push(...recordKeysOf(current));
+            pending.push(...Object.values(current as Record<string, unknown>));
+        }
+    }
+
+    return found;
+};
+
+/** A boolean under a sensitive argument, with the record key it sits under (none for an array element or a bare argument). */
+interface BooleanField {
+    key: string | undefined;
+    text: "false" | "true";
+}
+
+/**
+ * Every boolean under a sensitive argument's value, with its key. The walk is the same
+ * as {@link leavesOf}: no depth limit, and a `seen` set for shared or cyclic references.
+ */
+const booleansOf = (name: string, value: unknown): BooleanField[] => {
+    const found: BooleanField[] = [];
+    const seen = new Set<object>();
+    const pending: [string | undefined, unknown][] = [[name, value]];
+
+    while (pending.length > 0) {
+        const [key, current] = pending.pop() ?? [undefined, undefined];
+
+        if (typeof current === "boolean") {
+            found.push({ key, text: current ? "true" : "false" });
+        } else if (typeof current === "object" && current !== null && !seen.has(current)) {
+            seen.add(current);
+
+            if (Array.isArray(current)) {
+                pending.push(...current.map((element): [string | undefined, unknown] => [undefined, element]));
+            } else {
+                pending.push(...Object.entries(current as Record<string, unknown>));
+            }
+        }
+    }
+
+    return found;
+};
+
+const escapeForRegExp = (text: string): string => text.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+
+const maskLeaf = (text: string, leaf: string): string => {
+    if (leaf.length >= SUBSTRING_MASK_MIN_LENGTH) {
+        return text.replaceAll(leaf, SENSITIVE_PLACEHOLDER);
+    }
+
+    return text.replaceAll(new RegExp(`(?<![A-Za-z0-9])${escapeForRegExp(leaf)}(?![A-Za-z0-9])`, "gu"), SENSITIVE_PLACEHOLDER);
+};
+
+/**
+ * Masks one sensitive boolean in the spellings an error prints it in: the quoted token
+ * `"true"`, a key=value token `flag=true`, and a JSON field `"flag":true`. Any other
+ * `true` in the text is prose and stays.
+ */
+const maskBoolean = (text: string, field: BooleanField): string => {
+    const quoted = text.replaceAll(`"${field.text}"`, SENSITIVE_PLACEHOLDER);
+
+    if (field.key === undefined) {
+        return quoted;
+    }
+
+    const key = escapeForRegExp(field.key);
+    const keyValue = quoted.replaceAll(new RegExp(`(?<![A-Za-z0-9_])${key}=${field.text}(?![A-Za-z0-9_])`, "gu"), `${field.key}=${SENSITIVE_PLACEHOLDER}`);
+
+    // JSON.stringify(args, null, n) puts a space after the colon, so the field form allows one.
+    return keyValue.replaceAll(new RegExp(String.raw`"${key}":\s*${field.text}(?![A-Za-z0-9_])`, "gu"), `"${field.key}":${SENSITIVE_PLACEHOLDER}`);
+};
+
+/**
+ * A run's error text with every sensitive value taken out, for a handler that quotes
+ * the argument it rejected: nested object and array members included, and numbers as
+ * well as strings. Longest first, so a value containing another is masked whole.
+ */
+const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: ReadonlyArray<string>): string => {
+    if (sensitive.length === 0 || typeof parsedArgs !== "object" || parsedArgs === null) {
+        return message;
+    }
+
+    // A handler that quotes `JSON.stringify(args)` prints a value with its quotes, backslashes and
+    // newlines escaped, so mask that spelling as well as the raw one.
+    // Booleans first: a boolean's field spelling carries its record key, and the leaf pass
+    // then masks that key wherever else it appears.
+    const booleans = sensitive.flatMap((name) => booleansOf(name, (parsedArgs as Record<string, unknown>)[name]));
+    const leaves = sensitive
+        .flatMap((name) => leavesOf((parsedArgs as Record<string, unknown>)[name]))
+        .flatMap((leaf) => {
+            const escaped = JSON.stringify(leaf).slice(1, -1);
+
+            return escaped === leaf ? [leaf] : [leaf, escaped];
+        })
+        .toSorted((a, b) => b.length - a.length);
+
+    let scrubbed = message;
+
+    for (const field of booleans) {
+        scrubbed = maskBoolean(scrubbed, field);
+    }
+
+    for (const leaf of leaves) {
+        scrubbed = maskLeaf(scrubbed, leaf);
+    }
+
+    return scrubbed;
+};
+
 /** A single recorded invocation, kept purely in component state. */
 interface RunHistoryEntry {
-    /** The raw JSON args text used for the run. */
+    /** The raw JSON args text used for the run, with sensitive values masked. */
     argsText: string;
     /** Epoch-ms the run resolved. */
     at: number;
@@ -36,6 +232,8 @@ interface RunHistoryEntry {
     id: number;
     kind: FunctionKind;
     path: string;
+    /** True when the run had sensitive arguments, so `argsText` cannot be re-run as is. */
+    redacted: boolean;
     /** Free-text shard key (empty for the root shard). */
     shardKey: string;
     status: "error" | "success";
@@ -71,6 +269,30 @@ const formatResult = (value: unknown): string => {
     }
 
     return JSON.stringify(value, jsonRowReplacer, 2);
+};
+
+interface RecordedRun {
+    argsText: string;
+    runStatus: "error" | "success";
+    selected: FunctionDescriptor;
+    sensitive: ReadonlyArray<string>;
+    shardKey: string;
+}
+
+/** `previous` with this run at the front, newest first, capped at {@link MAX_HISTORY}. */
+const withRecordedRun = (previous: RunHistoryEntry[], run: RecordedRun): RunHistoryEntry[] => {
+    const entry: RunHistoryEntry = {
+        argsText: historyArgsText(run.argsText, run.sensitive),
+        at: Date.now(),
+        id: (previous[0]?.id ?? 0) + 1,
+        kind: run.selected.kind,
+        path: run.selected.path,
+        redacted: run.sensitive.length > 0,
+        shardKey: run.shardKey,
+        status: run.runStatus,
+    };
+
+    return [entry, ...previous].slice(0, MAX_HISTORY);
 };
 
 /**
@@ -170,22 +392,12 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         // observes that user. Empty userId (or the gate off) keeps the normal
         // path, running with the caller's own admin identity.
         const forgedUserId = runAsIdentity ? runAsUserId.trim() : "";
+        const sensitive = sensitiveNamesOf(selected.args);
 
-        // Snapshot the inputs so a re-run from history replays exactly what ran.
+        // Snapshot the inputs so a re-run from history replays what ran, except that a
+        // sensitive value is never kept: the entry holds a placeholder and is flagged.
         const record = (runStatus: "error" | "success"): void => {
-            setRuns((previous) => {
-                const entry: RunHistoryEntry = {
-                    argsText,
-                    at: Date.now(),
-                    id: (previous[0]?.id ?? 0) + 1,
-                    kind: selected.kind,
-                    path: selected.path,
-                    shardKey,
-                    status: runStatus,
-                };
-
-                return [entry, ...previous].slice(0, MAX_HISTORY);
-            });
+            setRuns((previous) => withRecordedRun(previous, { argsText, runStatus, selected, sensitive, shardKey }));
         };
 
         setStatus("running");
@@ -207,17 +419,27 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
             record("success");
         } catch (runError) {
             setResult(undefined);
-            setError((runError as Error).message);
+            setError(scrubSensitiveValues(errorMessage(runError), parsedArgs, sensitive));
             setStatus("error");
             record("error");
         }
     };
 
-    // Reload a recorded run's path + inputs into the form so it can be re-run.
+    // Reload a recorded run's path + inputs into the form so it can be re-run. A run
+    // with sensitive arguments keeps only the placeholder, so its args are not reloaded.
     const loadRun = (entry: RunHistoryEntry): void => {
         setSelectedPath(entry.path);
-        setArgsText(entry.argsText);
         setShardKey(entry.shardKey);
+
+        if (entry.redacted) {
+            setResult(undefined);
+            setError(t("Re-enter the sensitive values before running this again."));
+            setStatus("error");
+
+            return;
+        }
+
+        setArgsText(entry.argsText);
     };
 
     const onSelectChange = (event: ChangeEvent<HTMLSelectElement>): void => {

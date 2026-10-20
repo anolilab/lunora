@@ -85,6 +85,7 @@ const irReader: SchemaNodeReader<ValidatorIR> = {
     kind: (validator) => validator.kind as ReturnType<SchemaNodeReader<ValidatorIR>["kind"]>,
     literalSchema: (validator) => literalConst(validator.literalValue),
     members: (validator) => validator.members ?? [],
+    sensitive: (validator) => validator.sensitive === true,
     shape: (validator) => validator.shape ?? {},
     tableName: (validator) => validator.tableName,
     valueChild: (validator) => validator.valueType,

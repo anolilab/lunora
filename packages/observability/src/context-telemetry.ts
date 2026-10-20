@@ -22,7 +22,8 @@ import { buildTraceparent, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared
 import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
 import type { HostSpanLike, HostTracingResolver } from "./host-span";
 import { applyHostSpanAttributes } from "./host-span";
-import { redactArgs, redactCredentials } from "./request-log";
+import type { SensitiveScope } from "./request-log";
+import { NO_SENSITIVE_SCOPE, redactArgs, redactCredentials } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -283,6 +284,12 @@ export interface TracerDeps {
      */
     resolveHostTracing?: HostTracingResolver;
 
+    /**
+     * The invocation's `v.sensitive` values (see {@link SensitiveScope}). Applied
+     * to every span this tracer records, and to the body's own collector.
+     */
+    scope?: SensitiveScope;
+
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
 
@@ -294,6 +301,8 @@ export interface TracerDeps {
 export interface MetricsDeps {
     functionPath: string;
     record: (event: MetricEvent) => void;
+    /** The invocation's `v.sensitive` values, applied to each measurement's attributes. */
+    scope?: SensitiveScope;
     shardKey: string | undefined;
 }
 
@@ -325,8 +334,13 @@ export interface SpanCollector {
  * error message — a stack is file paths and internals by definition, the exact
  * class `isInternalCode` redaction exists for, so it rides the same dev-only
  * escape hatch rather than shipping to a third-party collector by default.
+ *
+ * `scope` scrubs the invocation's `v.sensitive` values out of everything written
+ * here, at write time, so the collector never holds the raw value. It is applied
+ * whatever `captureRaw` says: the dev escape hatch exists for stacks and
+ * internals, not for a marked argument.
  */
-export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): SpanCollector => {
+export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanCollector => {
     const collected: SpanCollection = { attributes: {}, events: [], links: [] };
 
     const handle: SpanHandle = {
@@ -336,11 +350,11 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = redactCredentials(boundedAttributes(attributes), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(scope.fields(boundedAttributes(attributes)), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
-                name,
+                name: scope.name(name),
                 ts: Date.now(),
             });
         },
@@ -349,7 +363,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = redactCredentials(boundedAttributes(link.attributes), captureRaw) as LogFields | undefined;
+            const normalized = redactCredentials(scope.fields(boundedAttributes(link.attributes)), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -364,7 +378,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             // no special casing downstream. `evaluationAttributes` throws on an
             // empty name / non-finite score — caller misuse, so it surfaces in the
             // body rather than being silently dropped.
-            assignBoundedAttributes(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(evaluationAttributes(evaluation))));
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
@@ -372,6 +386,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             // other record (nothing re-throws it for a top-level handler to log),
             // but a stack is exactly the kind of internal detail the production
             // redaction posture exists to keep off third-party sinks.
+            // `addEvent` scrubs every field value it stores, so the message and stack are covered there.
             const rawMessage = error instanceof Error ? error.message : String(error);
 
             handle.addEvent("exception", {
@@ -381,10 +396,10 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             });
         },
         setAttribute: (key, value) => {
-            assignBoundedAttributes(collected.attributes, normalizeLogFields({ [key]: value }));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields({ [key]: value })));
         },
         setAttributes: (fields) => {
-            assignBoundedAttributes(collected.attributes, normalizeLogFields(fields));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(fields)));
         },
     };
 
@@ -448,7 +463,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
  * waterfall is unaffected.
  */
 export const createTracer = (deps: TracerDeps): ContextTracer => {
-    const { anchor, captureRaw = false, fuseHostSpans, functionPath, record, resolveHostTracing, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, fuseHostSpans, functionPath, record, resolveHostTracing, scope = NO_SENSITIVE_SCOPE, shardKey, userId } = deps;
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
@@ -471,7 +486,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             const resolved: SpanOptions = resolveSpanOptions(options);
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
-            const normalized = normalizeLogFields(resolved.attributes);
+            const normalized = scope.fields(normalizeLogFields(resolved.attributes));
+            // The span name is the same on the recorded span and on the Cloudflare trace it is mirrored
+            // to, so a marked property name is masked once here, before either sees it.
+            const spanName = scope.name(name);
 
             // Post-hoc attributes/events/links the body attaches through its
             // `SpanHandle`. Attributes merge over `normalized` at record time
@@ -480,7 +498,12 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             const { collected, handle: spanHandle } = createSpanCollector(
                 { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId, traceId: anchor.traceId },
                 captureRaw,
+                scope,
             );
+
+            // Held from here until the span is recorded: the body can outlive the
+            // dispatch that opened it, and the record must still be scrubbed.
+            const releaseScope = scope.hold();
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
@@ -500,7 +523,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // instrumentation, never flow control.
                     ok = false;
 
-                    const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+                    const rawMessage = scope.text(error_ instanceof Error ? error_.message : String(error_));
 
                     error = {
                         // Redacted like the request log's error message by default
@@ -543,7 +566,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     const attributes = redactCredentials(merged, captureRaw) as LogFields;
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
-                    const links = [...(resolved.links ?? []), ...collected.links];
+                    const links = scope.value([...(resolved.links ?? []), ...collected.links]);
 
                     // Guarded here, not only in the injected `record`: the span is
                     // recorded *after* the body already settled, so a telemetry
@@ -563,7 +586,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // bytes and pre-existing recorded spans stay identical.
                             ...(resolved.kind === undefined || resolved.kind === "internal" ? {} : { kind: resolved.kind }),
                             ...(links.length === 0 ? {} : { links }),
-                            name,
+                            name: spanName,
                             ok,
                             parentSpanId: parentId,
                             ...spanAnchorFields(anchor),
@@ -594,6 +617,8 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // Best-effort — the CF mirror is additive telemetry.
                         }
                     }
+
+                    releaseScope();
                 }
             };
 
@@ -615,7 +640,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     const cfTracing = await resolveHostTracing();
 
                     if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
-                        return await cfTracing.enterSpan(name, (span) => {
+                        return await cfTracing.enterSpan(spanName, (span) => {
                             bodyStarted = true;
 
                             return runRecorded(span);
@@ -662,8 +687,11 @@ export interface TracedFetchDeps {
      * predicate, to which destinations. Default `true`.
      */
     propagate?: ((url: URL) => boolean) | boolean;
+
     /** Hand a finished span to the buffer + sink. */
     record: (span: SpanEvent) => void;
+    /** The invocation's `v.sensitive` values; a query string or path can carry one. */
+    scope?: SensitiveScope;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
     /** Read lazily — the acting user is resolved per span. */
@@ -707,7 +735,7 @@ export type ContextFetch = (input: Request | string | URL, init?: RequestInit) =
  * control.
  */
 export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): ContextFetch => {
-    const { anchor, captureRaw = false, functionPath, propagate = true, record, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, functionPath, propagate = true, record, scope = NO_SENSITIVE_SCOPE, shardKey, userId } = deps;
 
     return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
         const spanId = otlpRandomHex(8);
@@ -730,6 +758,9 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
         // seeded `let ok = true` was a dead write CodeQL rightly flagged.
         let error: SpanEvent["error"];
         let status: number | undefined;
+        // Held until the span is recorded, as in `createTracer`: the response can
+        // arrive after the dispatch has settled.
+        const releaseScope = scope.hold();
 
         try {
             const response = await base(request);
@@ -745,7 +776,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             // A `fetch` failure message routinely embeds the full request URL,
             // query string included; `redactArgs` drops every URL's query,
             // fragment and userinfo, the same as `redactUrl` does for `url.full`.
-            const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+            const rawMessage = scope.text(error_ instanceof Error ? error_.message : String(error_));
 
             error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
 
@@ -756,7 +787,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     attributes: {
                         "http.request.method": request.method,
                         ...(status === undefined ? {} : { "http.response.status_code": status }),
-                        "url.full": redactUrl(request.url),
+                        "url.full": scope.text(redactUrl(request.url)),
                     },
                     durationMs: Date.now() - startTs,
                     ...(error === undefined ? {} : { error }),
@@ -766,7 +797,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     // path. A span name built from a path with ids in it makes
                     // every request its own group in a collector, which is how a
                     // trace backend's aggregate views get destroyed.
-                    name: `${request.method} ${safeHost(request.url)}`,
+                    name: scope.text(`${request.method} ${safeHost(request.url)}`),
                     ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
                     ...spanAnchorFields(anchor),
@@ -778,6 +809,8 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             } catch {
                 // Best-effort — see createTracer.
             }
+
+            releaseScope();
         }
     };
 };
@@ -793,7 +826,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
  * built for exactly this, does the aggregation.
  */
 export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
-    const { functionPath, record, shardKey } = deps;
+    const { functionPath, record, scope = NO_SENSITIVE_SCOPE, shardKey } = deps;
 
     const emit = (kind: MetricKind, name: string, value: number, attributes?: LogFields): void => {
         // A NaN/Infinity measurement has no meaningful encoding and would poison
@@ -803,7 +836,7 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
         }
 
         // Credentials masked like span attributes: metric attributes ship to the same collector.
-        const normalized = redactCredentials(normalizeLogFields(attributes)) as LogFields | undefined;
+        const normalized = redactCredentials(scope.fields(normalizeLogFields(attributes))) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.
         try {
@@ -811,7 +844,7 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
                 ...(normalized === undefined ? {} : { attributes: normalized }),
                 functionPath,
                 kind,
-                name,
+                name: scope.name(name),
                 shardKey,
                 ts: Date.now(),
                 value,
@@ -866,11 +899,13 @@ export const dispatchRootSpan = (input: {
     durationMs: number;
     failure: { thrown: unknown } | undefined;
     functionPath: string;
+    /** The invocation's `v.sensitive` values; the failure message can quote one. */
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     startTs: number;
     userId: string | undefined;
 }): SpanEvent => {
-    const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
+    const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, scope = NO_SENSITIVE_SCOPE, shardKey, startTs, userId } = input;
     // Credentials masked, like `ctx.trace` attributes: `ctx.span` writes
     // whatever the handler holds onto the span a collector receives.
     const attributes = redactCredentials(collected?.attributes ?? {}, captureRaw) as LogFields;
@@ -884,7 +919,7 @@ export const dispatchRootSpan = (input: {
             ? {}
             : {
                   error: {
-                      message: redactArgs(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown), captureRaw) as string,
+                      message: redactArgs(scope.text(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown)), captureRaw) as string,
                       type: toErrorType(failure.thrown),
                   },
               }),

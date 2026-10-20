@@ -12,10 +12,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use lunora::client::{Client, ClientError};
+use lunora::client::{Client, ClientError, TransportError};
 use lunora::offline::{
     is_stale_version, random_id, replay_identity_verdict, same_shard, token_digest, token_stamp, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
-    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
     CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
@@ -2214,4 +2214,204 @@ fn every_request_of_a_pass_carries_its_token() {
     assert_eq!(report.committed.len(), MAX_BATCH_ENTRIES + 1);
     assert!(bearers.lock().expect("bearers").len() >= 4, "two halves of a split chunk, then the tail");
     assert!(sent(&bearers).iter().all(|bearer| bearer.as_deref() == Some("Bearer token-a")));
+}
+
+/// An online-only write is the one a socket-down client must refuse, so its
+/// arguments never reach the queue or the persistence adapter.
+const SECRET: &str = "sentinel-secret-7731";
+
+fn online_only_write() -> SubmitOptions {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let mut options = SubmitOptions::new("auth:setPassword", args);
+    options.online_only = true;
+
+    options
+}
+
+fn disconnected_client(store: &MemoryStore, posts: Arc<Mutex<Vec<Vec<u8>>>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, body| {
+            posts.lock().expect("posts").push(body.to_vec());
+
+            Ok((200, br#"{"commitCursor":3,"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+    client.offline_queue = OfflineQueue::new()
+        .with_persistence(Box::new(store.clone()))
+        .with_queue_before_first_connect(true);
+
+    client
+}
+
+/// With the socket down, an online-only write is refused before anything is
+/// queued, persisted or sent.
+pub fn offline_online_only_refused_when_disconnected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    // A subscription on the write's own path and args, primed with a server value,
+    // so an overlay the write applied would be displayed.
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    client.attach_socket(Box::new(|_frame| {}));
+    client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
+    client.detach_socket();
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("an online-only write must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+
+    assert!(!seen.lock().expect("seen").contains(&predicted), "a refused write's overlay is never displayed");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+    let persisted = serde_json::to_string(&store.inner.lock().expect("store lock").records).expect("records");
+    assert!(!persisted.contains(SECRET), "the arguments reached durable storage");
+    assert!(posts.lock().expect("posts").is_empty(), "a refused write reached the wire");
+}
+
+/// With the socket up, an online-only write is sent normally and commits.
+pub fn offline_online_only_sends_when_connected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let outcome = client.submit(online_only_write()).expect("committed");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    let sent = posts.lock().expect("posts");
+    assert_eq!(sent.len(), 1, "one request for the write");
+    assert!(String::from_utf8_lossy(&sent[0]).contains(SECRET), "the arguments go out on the wire");
+    assert_eq!(store.appended(), 0, "a sent write is not persisted");
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+pub fn offline_online_only_leaves_normal_writes_queued() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    let args = WireValue::Object(vec![("text".into(), WireValue::String("hi".into()))]);
+    let outcome = client.submit(SubmitOptions::new("messages:send", args)).expect("queued");
+
+    assert_eq!(outcome.status, MutationStatus::Queued);
+    assert_eq!(client.pending_mutation_count(), 1);
+    assert_eq!(store.appended(), 1);
+    assert!(posts.lock().expect("posts").is_empty(), "a queued write is not sent");
+}
+
+/// A client that has never connected, so an online-only write takes the direct
+/// path. Every request gets `reply`, the only answer the network gives.
+fn never_connected_client(store: &MemoryStore, reply: Result<(u16, Vec<u8>), String>, sends: Arc<Mutex<usize>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, _body| {
+            *sends.lock().expect("sends") += 1;
+
+            reply.clone()
+        })),
+    );
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    client
+}
+
+/// Subscribes to the write's own path and args, primed with the server value
+/// `["a"]`, so an overlay the write applies is displayed. No socket is attached.
+fn primed_online_only_subscription(client: &mut Client) -> Arc<Mutex<Vec<WireValue>>> {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+    let id = client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client
+        .handle_frame(&format!(r#"{{"cursor":1,"data":["a"],"id":"{id}","type":"data"}}"#))
+        .expect("prime");
+
+    seen
+}
+
+/// An online-only write sent directly to a shard that never connected, whose
+/// request got no reply, is refused as a queued write would be: nothing queued or
+/// persisted, the overlay rolled back, the transport error kept as the source. A
+/// coded rejection surfaces as itself, and a failure while the socket is up
+/// surfaces unchanged.
+pub fn offline_online_only_transport_failure_refused() {
+    use std::error::Error as _;
+
+    let unreachable = "dial tcp: connection refused";
+    let sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), Arc::clone(&sends));
+    let seen = primed_online_only_subscription(&mut client);
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("a send with no reply must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let cause = error.source().and_then(|cause| cause.downcast_ref::<TransportError>());
+    assert_eq!(
+        cause,
+        Some(&TransportError(unreachable.into())),
+        "the transport error is the cause, got {error:?}"
+    );
+    assert_eq!(*sends.lock().expect("sends"), 1, "one direct send, not a queued one");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+
+    let shown = seen.lock().expect("seen").clone();
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+    assert!(shown.contains(&predicted), "the overlay was never shown, so its rollback proves nothing");
+    assert_eq!(
+        shown.last(),
+        Some(&WireValue::Array(vec![WireValue::String("a".into())])),
+        "the overlay is rolled back"
+    );
+
+    let coded_sends = Arc::new(Mutex::new(0));
+    let coded = Ok((403, br#"{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}"#.to_vec()));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, coded, coded_sends);
+    primed_online_only_subscription(&mut client);
+
+    let error = client.submit(online_only_write()).expect_err("a coded rejection is an error");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == "PERMISSION_DENIED" && api.source.is_none()),
+        "a coded rejection surfaces as itself, got {error:?}"
+    );
+
+    let connected_sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), connected_sends);
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let error = client.submit(online_only_write()).expect_err("a failed send is an error");
+
+    assert!(
+        matches!(&error, ClientError::Transport(message) if message == unreachable),
+        "a failure while connected surfaces unchanged, got {error:?}"
+    );
 }

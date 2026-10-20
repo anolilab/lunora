@@ -1,6 +1,15 @@
-import { resolveShard } from "../index";
+import type { CapabilityLevel, SecretValueHost } from "../index";
+import {
+    encryptingSecretValueHost,
+    resolveShard,
+    SECRET_VALUE_MAX_BYTES,
+    SECRET_VALUE_MAX_TTL_MS,
+    SecretValueKeyError,
+    SecretValueTooLargeError,
+} from "../index";
 import type { SocketHandle } from "../socket-host";
 import type { ConformanceHost, ConformanceHostFactory } from "./reference-host";
+import { createSecretValueTestKey } from "./reference-host";
 
 /**
  * Vitest API surface required by `defineHostContractSuite`. Passing the API in
@@ -33,6 +42,21 @@ type VitestApi = {
  */
 /** The message every host raises once `disposeTerminally` has run. */
 const PLATFORM_CLOSED = /platform closed/u;
+
+/** A host rated supported for `secretValues`, narrowed to the surfaces its legs use. */
+type SecretValueConformanceHost = ConformanceHost & {
+    advanceClock: NonNullable<ConformanceHost["advanceClock"]>;
+    secretValues: SecretValueHost;
+    secretValueStore: NonNullable<ConformanceHost["secretValueStore"]>;
+};
+
+/**
+ * The matrix rating for `secretValues`, or `undefined` when the matrix leaves
+ * the key undeclared (codegen fails closed on that too). A host with no matrix
+ * is the reference harness, held to `native`.
+ */
+const secretValuesRating = (host: ConformanceHost): CapabilityLevel | undefined =>
+    host.capabilities === undefined ? "native" : host.capabilities.features.secretValues?.level;
 
 /** Yield the turn for `ms`, hoisted so legs nested inside a host closure stay flat. */
 const sleep = (ms: number): Promise<void> =>
@@ -68,6 +92,37 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             }
         };
+
+        /**
+         * Run a secret-value leg against the host, held to the matrix rating.
+         *
+         * Rated `unsupported`, the host has no store to exercise, so the leg
+         * asserts that absence and passes; it does not skip. Rated `native` or
+         * `emulated`, the host must offer the store, its clock and its raw
+         * records. One that does not fails here, so a dropped surface turns the
+         * suite red instead of skipping every leg that needs it. An undeclared
+         * rating fails too.
+         */
+        const withSecretValues = (run: (host: SecretValueConformanceHost) => Promise<void>): Promise<void> =>
+            withHost(async (host) => {
+                const rating = secretValuesRating(host);
+
+                if (rating === "unsupported") {
+                    expect(host.secretValues, `${name} is rated unsupported for secretValues`).toBeUndefined();
+
+                    return;
+                }
+
+                const { advanceClock, secretValues, secretValueStore } = host;
+
+                if (rating === undefined || advanceClock === undefined || secretValues === undefined || secretValueStore === undefined) {
+                    throw new Error(
+                        `${name} is rated ${String(rating)} for secretValues but does not offer SecretValueHost, advanceClock and secretValueStore`,
+                    );
+                }
+
+                await run({ ...host, advanceClock, secretValueStore, secretValues });
+            });
 
         describe("ShardHost", () => {
             it("serializes mutations so no two closures interleave", async () => {
@@ -965,6 +1020,322 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                     expect([...scoped.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["s:a", "s:b"]);
                     expect(all.size).toBe(3);
+                });
+            });
+        });
+
+        // The sealed fields of one raw record, read through the host's own store.
+        const sealedFields = async (
+            store: NonNullable<ConformanceHost["secretValueStore"]>,
+            ref: string,
+        ): Promise<{ ciphertext: string; iv: string; keyId: string }> => {
+            const record = await store.peek(ref);
+
+            if (record === undefined) {
+                throw new Error(`no raw record under ${ref}`);
+            }
+
+            return JSON.parse(record.value) as { ciphertext: string; iv: string; keyId: string };
+        };
+
+        // The secret-value contract. Which legs run is decided by the host's
+        // `capabilities` rating (see `withSecretValues`), never by a skip: a host
+        // with no agents is rated unsupported and must offer none of the surfaces.
+        describe("SecretValueHost", () => {
+            const SCOPE = "run-1";
+
+            it("matches the capability matrix's rating for secretValues", async () => {
+                expect.assertions(4);
+
+                await withHost(async (host) => {
+                    const rating = secretValuesRating(host);
+                    const offered = rating !== undefined && rating !== "unsupported";
+
+                    expect(rating === undefined, `${name} leaves secretValues undeclared in its capability matrix`).toBe(false);
+                    expect(host.secretValues !== undefined, "secretValues is offered").toBe(offered);
+                    expect(host.advanceClock !== undefined, "advanceClock is offered").toBe(offered);
+                    expect(host.secretValueStore !== undefined, "secretValueStore is offered").toBe(offered);
+                });
+            });
+
+            it("round-trips a value to its first claimant", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(1);
+
+                    const ref = await host.secretValues.put("hunter2", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("hunter2");
+                });
+            });
+
+            it("refuses a second claimant and lets the first re-take (a retried step)", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(3);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                    expect(await host.secretValues.take(ref, { claimant: "step-b", scope: SCOPE })).toBeUndefined();
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                });
+            });
+
+            it("reads undefined for a wrong scope without consuming the value", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(2);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: "run-2" })).toBeUndefined();
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("v");
+                });
+            });
+
+            it("reads undefined after discard, and discard is idempotent", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(3);
+
+                    const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
+
+                    expect(await host.secretValues.discard(ref)).toBe(true);
+                    expect(await host.secretValues.discard(ref)).toBe(false);
+                    expect(await host.secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("refuses a value past its TTL and clamps an oversized TTL", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(4);
+
+                    const advance = host.advanceClock;
+                    const short = await host.secretValues.put("short", { scope: SCOPE, ttlMs: 1000 });
+
+                    advance(999);
+                    expect(await host.secretValues.take(short, { claimant: "step-a", scope: SCOPE })).toBe("short");
+
+                    const expiring = await host.secretValues.put("gone", { scope: SCOPE, ttlMs: 1000 });
+
+                    advance(1000);
+                    expect(await host.secretValues.take(expiring, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const clamped = await host.secretValues.put("long", { scope: SCOPE, ttlMs: Number.MAX_SAFE_INTEGER });
+
+                    advance(SECRET_VALUE_MAX_TTL_MS);
+                    expect(await host.secretValues.take(clamped, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+                    expect(await host.secretValues.put("x", { scope: SCOPE, ttlMs: Number.NaN }).catch((error: unknown) => error)).toBeInstanceOf(RangeError);
+                });
+            });
+
+            it("rejects a value over the byte limit, counting UTF-8 bytes", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(3);
+
+                    await expect(host.secretValues.put("x".repeat(SECRET_VALUE_MAX_BYTES), { scope: SCOPE, ttlMs: 60_000 })).resolves.toBeTypeOf("string");
+                    await expect(host.secretValues.put("x".repeat(SECRET_VALUE_MAX_BYTES + 1), { scope: SCOPE, ttlMs: 60_000 })).rejects.toBeInstanceOf(
+                        SecretValueTooLargeError,
+                    );
+                    // 4097 two-byte characters: 4097 < 8192 by length, 8194 by bytes.
+                    await expect(host.secretValues.put("\u00E9".repeat(4097), { scope: SCOPE, ttlMs: 60_000 })).rejects.toBeInstanceOf(
+                        SecretValueTooLargeError,
+                    );
+                });
+            });
+
+            it("exposes no enumerating or reading member beyond put, take and discard", async () => {
+                await withSecretValues(async (host) => {
+                    expect.assertions(1);
+
+                    expect(Object.keys(host.secretValues).toSorted((x, y) => x.localeCompare(y))).toStrictEqual(["discard", "put", "take"]);
+                });
+            });
+
+            it("keeps secret values out of ShardKvStore's listing and reads", async () => {
+                await withSecretValues(async (host) => {
+                    // A host without a KV store has no listing to keep secrets out of, so the
+                    // check does not apply. That has to be the matrix's claim, asserted here,
+                    // not a silent skip: a host that rates keyValueStore but lacks it fails.
+                    if (host.kv === undefined) {
+                        // A host with no matrix is taken as supporting every surface, as `secretValuesRating` does.
+                        const rating = host.capabilities === undefined ? "native" : (host.capabilities.features.keyValueStore?.level ?? "unsupported");
+
+                        expect(rating, `${name} has no ShardKvStore but rates keyValueStore ${rating}`).toBe("unsupported");
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    await host.kv.put("s:visible", 1);
+                    const beforeListing = await host.kv.list();
+                    const before = [...beforeListing.keys()].toSorted((a, b) => a.localeCompare(b));
+
+                    const ref = await host.secretValues.put("plaintext", { scope: SCOPE, ttlMs: 60_000 });
+                    const listed = await host.kv.list();
+                    const after = [...listed.keys()].toSorted((a, b) => a.localeCompare(b));
+
+                    expect(after).toStrictEqual(before);
+                    expect(await host.kv.get(ref)).toBeUndefined();
+                    expect(listed.size).toBe(before.length);
+                });
+            });
+        });
+
+        describe("SecretValueHost encryption", () => {
+            const SCOPE = "run-1";
+            const PLAINTEXT = "plaintext-sentinel-4c1d";
+            const TTL = { scope: SCOPE, ttlMs: 60_000 };
+
+            it("never holds the plaintext in the raw store", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    expect.assertions(2);
+
+                    const ref = await secretValues.put(PLAINTEXT, TTL);
+                    const dumped = await secretValueStore.dump();
+
+                    expect(dumped).toContain(ref);
+                    expect(dumped).not.toContain(PLAINTEXT);
+                });
+            });
+
+            it("reads a tampered, moved or re-scoped record as undefined", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    expect.assertions(3);
+
+                    const tampered = await secretValues.put("tamper-me", TTL);
+                    const { ciphertext } = await sealedFields(secretValueStore, tampered);
+                    const flipped = `${ciphertext.startsWith("A") ? "B" : "A"}${ciphertext.slice(1)}`;
+
+                    await secretValueStore.poke(tampered, {
+                        value: JSON.stringify({ ...(await sealedFields(secretValueStore, tampered)), ciphertext: flipped }),
+                    });
+                    expect(await secretValues.take(tampered, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const source = await secretValues.put("source", TTL);
+                    const moved = await secretValues.put("moved", TTL);
+
+                    const sourceRecord = await secretValueStore.peek(source);
+
+                    await secretValueStore.poke(moved, { value: sourceRecord?.value });
+                    expect(await secretValues.take(moved, { claimant: "step-a", scope: SCOPE })).toBeUndefined();
+
+                    const rescoped = await secretValues.put("rescoped", TTL);
+
+                    await secretValueStore.poke(rescoped, { scope: "run-2" });
+                    expect(await secretValues.take(rescoped, { claimant: "step-a", scope: "run-2" })).toBeUndefined();
+                });
+            });
+
+            it("binds the claimant only on a take that opens the record", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    expect.assertions(3);
+
+                    const wrongKey = encryptingSecretValueHost(secretValueStore.store, { key: createSecretValueTestKey() });
+                    const ref = await secretValues.put("bound-later", TTL);
+
+                    expect(await wrongKey.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                    expect(await secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("bound-later");
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("leaves a tampered record unbound until a take opens it", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    expect.assertions(3);
+
+                    const ref = await secretValues.put("restore-me", TTL);
+                    const original = await secretValueStore.peek(ref);
+                    const sealed = await sealedFields(secretValueStore, ref);
+                    const flipped = `${sealed.ciphertext.startsWith("A") ? "B" : "A"}${sealed.ciphertext.slice(1)}`;
+
+                    await secretValueStore.poke(ref, { value: JSON.stringify({ ...sealed, ciphertext: flipped }) });
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+
+                    await secretValueStore.poke(ref, { value: original?.value });
+                    expect(await secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("restore-me");
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("gives every put of the same value a fresh nonce", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    expect.assertions(2);
+
+                    const first = await secretValues.put("same", TTL);
+                    const second = await secretValues.put("same", TTL);
+
+                    const firstSealed = await sealedFields(secretValueStore, first);
+                    const secondSealed = await sealedFields(secretValueStore, second);
+
+                    expect(firstSealed.iv).not.toBe(secondSealed.iv);
+                    expect(firstSealed.ciphertext).not.toBe(secondSealed.ciphertext);
+                });
+            });
+
+            it("opens a value sealed under the previous key until that key is dropped", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValueStore } = host;
+
+                    expect.assertions(4);
+
+                    const oldKey = createSecretValueTestKey();
+                    const newKey = createSecretValueTestKey();
+                    const before = encryptingSecretValueHost(secretValueStore.store, { key: oldKey });
+                    const sealedUnderOld = await before.put("rotate-me", TTL);
+
+                    const rotating = encryptingSecretValueHost(secretValueStore.store, { key: newKey, previousKey: oldKey });
+
+                    expect(await rotating.take(sealedUnderOld, { claimant: "step-a", scope: SCOPE })).toBe("rotate-me");
+
+                    const sealedUnderNew = await rotating.put("written-after-rotation", TTL);
+
+                    const newSealed = await sealedFields(secretValueStore, sealedUnderNew);
+                    const oldSealed = await sealedFields(secretValueStore, sealedUnderOld);
+
+                    expect(newSealed.keyId).not.toBe(oldSealed.keyId);
+
+                    const dropped = encryptingSecretValueHost(secretValueStore.store, { key: newKey });
+
+                    expect(await dropped.take(sealedUnderNew, { claimant: "step-a", scope: SCOPE })).toBe("written-after-rotation");
+                    expect(await dropped.take(sealedUnderOld, { claimant: "step-b", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("refuses put and take with SecretValueKeyError when the key is missing or malformed, and takes nothing", async () => {
+                await withSecretValues(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    const cases: { key: string | undefined; previousKey?: string }[] = [
+                        { key: undefined },
+                        { key: "" },
+                        { key: "not-a-key" },
+                        { key: btoa("x".repeat(31)) },
+                        { key: createSecretValueTestKey(), previousKey: "not-a-key" },
+                    ];
+
+                    expect.assertions(cases.length * 2 + 1);
+
+                    const kept = await secretValues.put("kept", TTL);
+
+                    await Promise.all(
+                        cases.map(async (options) => {
+                            const broken = encryptingSecretValueHost(secretValueStore.store, options);
+
+                            await expect(broken.put("refused", TTL)).rejects.toBeInstanceOf(SecretValueKeyError);
+                            await expect(broken.take(kept, { claimant: "step-a", scope: SCOPE })).rejects.toBeInstanceOf(SecretValueKeyError);
+                        }),
+                    );
+
+                    expect(await secretValues.take(kept, { claimant: "step-a", scope: SCOPE })).toBe("kept");
                 });
             });
         });

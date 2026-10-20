@@ -102,6 +102,16 @@ record whose args no longer decode is purged and settled
 `OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute args, which
 would commit a different write than the caller made.
 
+A write that must never sit on disk — a credential, a one-time token — is built
+with `.onlineOnly(true)` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws an
+`OfflineException` coded `Offline.OFFLINE_NOT_QUEUED` before any optimistic layer
+is installed, and its arguments never reach the persistence adapter. It does not
+wait for a flush or queue behind pending writes, so it may land before an older
+queued write to the same document. A transport failure on such a write, sent
+directly while the connection is down, is refused the same way, with the
+transport error as its `cause`.
+
 The durable record holds the **wire** form of a write's args, so a store that
 serialises — a file, a SQLite column, a preferences store — round-trips a
 `bigint`, `bytes`, date or map argument intact.

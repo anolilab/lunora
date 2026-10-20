@@ -438,6 +438,21 @@ const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): Valid
     argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
 
 /**
+ * True when the IR tree rooted at `validator` holds a `v.sensitive(...)` marker
+ * anywhere. Mirrors `containsSensitive` in `@lunora/values` on the build-time side:
+ * an argument with a secret inside it is treated as a secret as a whole.
+ */
+const validatorContainsSensitive = (validator: ValidatorIR): boolean => {
+    if (validator.sensitive === true) {
+        return true;
+    }
+
+    const children = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    return children.some((child) => child !== undefined && validatorContainsSensitive(child));
+};
+
+/**
  * Render a `v.literal(...)` argument as the IR's `literalValue` source text.
  *
  * String and no-substitution template literals are normalized to canonical JSON
@@ -542,6 +557,12 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
             };
         }
 
+        case "sensitive": {
+            // The inner kind is kept, so the compiled parser, the arg types and the
+            // schema are the wrapped validator's; the marker only rides along.
+            return { ...parseArgument(first, { kind: "any" }), sensitive: true };
+        }
+
         case "storage": {
             return first && Node.isStringLiteral(first) ? { bucket: first.getLiteralText(), kind: "storage" } : { kind: "storage" };
         }
@@ -639,5 +660,6 @@ export {
     REFINEMENT_MODIFIERS,
     resolveObjectLiteral,
     setStandardTypeResolver,
+    validatorContainsSensitive,
 };
 export type { StandardTypeResolver };

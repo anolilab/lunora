@@ -327,6 +327,7 @@ interface PlatformCapabilities {
         scheduler?: Capability;
         scheduleRateBreaker?: Capability;
         secrets?: Capability;
+        secretValues?: Capability;
         serverReactors?: Capability;
         services?: Capability;
         shardAlarms?: Capability;
@@ -550,6 +551,18 @@ interface R2UploadedPartLike {
 }
 ```
 
+### `SECRET_VALUE_MAX_BYTES` (const)
+
+```ts
+const SECRET_VALUE_MAX_BYTES: number;
+```
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
+
+```ts
+const SECRET_VALUE_MAX_TTL_MS: number;
+```
+
 ### `SOCKET_TAG_BUDGET` (const)
 
 ```ts
@@ -605,6 +618,71 @@ interface SchedulerHost {
     };
     list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
+}
+```
+
+### `SecretValueHost` (interface)
+
+```ts
+interface SecretValueHost {
+    discard: (ref: string) => Promise<boolean>;
+    put: (value: string, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+}
+```
+
+### `SecretValueKeyError` (class)
+
+```ts
+class SecretValueKeyError extends Error {
+    readonly code = "SECRET_VALUE_KEY_UNAVAILABLE";
+    constructor(reason: "missing" | "malformed");
+}
+```
+
+### `SecretValueKeyOptions` (interface)
+
+```ts
+interface SecretValueKeyOptions {
+    key: string | undefined;
+    previousKey?: string;
+}
+```
+
+### `SecretValuePutOptions` (interface)
+
+```ts
+interface SecretValuePutOptions {
+    scope: string;
+    ttlMs: number;
+}
+```
+
+### `SecretValueStore` (interface)
+
+```ts
+interface SecretValueStore {
+    discard: (ref: string) => Promise<boolean>;
+    put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions, open: (stored: string) => Promise<string | undefined>) => Promise<string | undefined>;
+}
+```
+
+### `SecretValueTakeOptions` (interface)
+
+```ts
+interface SecretValueTakeOptions {
+    claimant: string;
+    scope: string;
+}
+```
+
+### `SecretValueTooLargeError` (class)
+
+```ts
+class SecretValueTooLargeError extends Error {
+    readonly code = "SECRET_VALUE_TOO_LARGE";
+    constructor(bytes: number);
 }
 ```
 
@@ -861,6 +939,24 @@ interface VectorizeVector {
 }
 ```
 
+### `assertSecretValueSize` (const)
+
+```ts
+const assertSecretValueSize: (value: string) => void;
+```
+
+### `clampSecretValueTtl` (const)
+
+```ts
+const clampSecretValueTtl: (ttlMs: number) => number;
+```
+
+### `encryptingSecretValueHost` (const)
+
+```ts
+const encryptingSecretValueHost: (raw: SecretValueStore, options: SecretValueKeyOptions) => SecretValueHost;
+```
+
 ### `findSocketTagBudgetViolation` (const)
 
 ```ts
@@ -879,8 +975,10 @@ const resolveShard: (directory: ShardDirectory, name: string, locationHint?: Sha
 
 ```ts
 interface ConformanceHost {
+    advanceClock?: (ms: number) => void;
     awaitAlarmFired?: (target: number) => Promise<void>;
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+    capabilities?: PlatformCapabilities;
     cleanup?: () => void;
     createSocket?: () => unknown;
     cronTicks?: (functionPath: string) => number;
@@ -891,6 +989,19 @@ interface ConformanceHost {
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
+    secretValues?: SecretValueHost;
+    secretValueStore?: {
+        dump: () => Promise<string>;
+        peek: (ref: string) => Promise<{
+            scope: string;
+            value: string;
+        } | undefined>;
+        poke: (ref: string, fields: {
+            scope?: string;
+            value?: string;
+        }) => Promise<void>;
+        store: SecretValueStore;
+    };
     shard: ShardHost;
     simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;

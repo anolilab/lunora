@@ -1,10 +1,12 @@
-import { generateText, streamText } from "ai";
+import { generateText, simulateReadableStream, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
+import { defineAgent } from "../../src/define-agent";
+import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
 import { braintrustTelemetry } from "../../src/telemetry/braintrust";
-import { drain, generatingModel, settle, streamingModel, withTelemetry } from "./model-fixtures";
+import { drain, generatingModel, reportedUsage, settle, streamingModel, withTelemetry } from "./model-fixtures";
 
 /**
  * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
@@ -126,6 +128,86 @@ describe(braintrustTelemetry, () => {
         // the raw resolved value sees as no usage at all.
         expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
         expect(calls[0]?.endedAt).toBeDefined();
+    });
+
+    it("logs cache and reasoning buckets under Braintrust's metric names, without counting reasoning twice", async () => {
+        expect.assertions(2);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({ cacheRead: 5, cacheWrite: 2, input: 12, output: 3, reasoning: 1 }) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        // Reasoning (1) is inside the output count (3), so `tokens` stays prompt + completion.
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({
+            completion_reasoning_tokens: 1,
+            completion_tokens: 3,
+            prompt_cache_creation_tokens: 2,
+            prompt_cached_tokens: 5,
+            prompt_tokens: 12,
+            tokens: 15,
+        });
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "complete" });
+    });
+
+    it("omits a cache or reasoning bucket the provider did not report, or reported as zero", async () => {
+        expect.assertions(1);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({ cacheRead: 0, input: 12, output: 3 }) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
+    });
+
+    it("logs no metrics for a call whose usage is unavailable, and says so in metadata", async () => {
+        expect.assertions(2);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({}) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall)).not.toHaveProperty("metrics");
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
+    });
+
+    it("logs a total the provider reported alone as a token count, while its usage stays unavailable for pricing", async () => {
+        expect.assertions(2);
+
+        // Driven by hand, not through `generateText`: the SDK never hands over a total
+        // without its split, so only a direct end event can exercise this gate.
+        const { calls, logger } = fakeBraintrust();
+        const telemetry = braintrustTelemetry({ logger });
+
+        await telemetry.executeLanguageModelCall?.({
+            callId: "call-1",
+            execute: async () => {
+                return {};
+            },
+        });
+        telemetry.onLanguageModelCallEnd?.({ callId: "call-1", usage: { totalTokens: 15 } } as never);
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ tokens: 15 });
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
     });
 
     it("returns execute()'s value to the caller without waiting for the span to close", async () => {
@@ -335,6 +417,65 @@ describe(braintrustTelemetry, () => {
         expect(calls).toHaveLength(1);
         expect(calls[0]?.args).toStrictEqual({ name: "error", type: "error" });
         expect(calls[0]?.logs[0]).toStrictEqual({ error: { message: "kaboom", name: "Error" } });
+    });
+
+    it("logs the usage a non-streamed attempt was billed before it failed", async () => {
+        const { calls, logger } = fakeBraintrust();
+
+        // A provider that bills the attempt and then finishes with `error`: the agent's
+        // turn seam fails it in-band, so the call rejects with the billed usage attached.
+        const model = new MockLanguageModelV4({
+            doGenerate: () =>
+                Promise.resolve({
+                    content: [],
+                    finishReason: { raw: "length", unified: "error" },
+                    usage: reportedUsage({ input: 2, output: 1 }),
+                    warnings: [],
+                }),
+        });
+
+        await expect(
+            createAgentGenerate(
+                defineAgent({ model, telemetry: withTelemetry(braintrustTelemetry({ logger })) }),
+                {},
+            )({ messages: [{ content: "hi", role: "user" }] }),
+        ).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const llmSpans = calls.filter((call) => call.args?.type === "llm");
+
+        expect(llmSpans).toHaveLength(1);
+        expect(merged(llmSpans[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 1, prompt_tokens: 2, tokens: 3 });
+        expect(merged(llmSpans[0] as TracedCall).error).toBe("model finished with an error reason (provider reason: length)");
+    });
+
+    it("logs the usage a streamed attempt that fails in-band was billed", async () => {
+        const { calls, logger } = fakeBraintrust();
+
+        const model = new MockLanguageModelV4({
+            doStream: () =>
+                Promise.resolve({
+                    stream: simulateReadableStream({
+                        chunks: [{ finishReason: { raw: "length", unified: "error" }, type: "finish", usage: reportedUsage({ input: 2, output: 1 }) }],
+                    }),
+                }),
+        });
+
+        await expect(
+            createStreamGenerate(defineAgent({ model, telemetry: withTelemetry(braintrustTelemetry({ logger })) }), {})(
+                { messages: [{ content: "hi", role: "user" }] },
+                () => undefined,
+            ),
+        ).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const llmSpans = calls.filter((call) => call.args?.type === "llm");
+
+        expect(llmSpans).toHaveLength(1);
+        expect(merged(llmSpans[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 1, prompt_tokens: 2, tokens: 3 });
+        expect(merged(llmSpans[0] as TracedCall).error).toBe("the model call ended with an error");
     });
 
     it("passes the caller's logger through (dependency injection)", async () => {

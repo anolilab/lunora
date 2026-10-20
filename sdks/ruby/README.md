@@ -115,6 +115,16 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only: true`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `Lunora::OfflineError` coded
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `cause`.
+
 The durable record holds the **wire** form of the args, so a store that
 serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
 `WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose

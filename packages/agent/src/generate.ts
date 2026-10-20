@@ -1,8 +1,10 @@
 import { jsonSchema } from "@ai-sdk/provider-utils";
+import { usageStatus } from "@lunora/ai/create";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 
 import resolveAgentAi from "./agent-ai";
+import { FAILED_TURN_USAGE, summarizeUsage } from "./telemetry/common";
 import type {
     AgentCompact,
     AgentDefinition,
@@ -17,24 +19,21 @@ import type {
     AgentUsage,
 } from "./types";
 
-/** Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage` (defined fields only). */
-const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => {
-    if (!usage) {
-        return undefined;
-    }
-
-    const result: AgentUsage = {};
-
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
-        const value = usage[key];
-
-        if (value !== undefined) {
-            result[key] = value;
-        }
-    }
-
-    return Object.keys(result).length > 0 ? result : undefined;
+/**
+ * A turn's usage as the loop accumulates it: the reported counts plus the status their report
+ * grades to, graded by the same function the telemetry spans use. A turn that reported nothing
+ * is `unavailable`, not absent, so it still marks the run's total as not complete.
+ */
+const withStatus = (counts: Record<string, number> | undefined): AgentUsage => {
+    return { ...counts, status: usageStatus(counts) };
 };
+
+/**
+ * Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage`. The breakdowns
+ * come from the `*TokenDetails` objects through the projection the telemetry bridges
+ * use, so a persisted total and a span agree on every bucket.
+ */
+const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage => withStatus(summarizeUsage(usage));
 
 /**
  * Normalize a provider's tool-call list onto the loop's {@link AgentToolCall} shape.
@@ -184,6 +183,167 @@ const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeToo
 };
 
 /**
+ * The error an in-band `error` stream part fails the turn with. An `Error` is
+ * rethrown as-is, exactly as a rejected stream would be; any other carried value
+ * is wrapped so the durable step still fails with an `Error` that keeps the
+ * original as its `cause`.
+ */
+const toStreamError = (error: unknown): Error => {
+    if (error instanceof Error) {
+        return error;
+    }
+
+    return new Error(`model stream failed: ${String(error)}`, { cause: error });
+};
+
+/**
+ * A provider's usage as a middleware receives it, before the AI SDK flattens it: each
+ * count sits under `total`, with its breakdown beside it.
+ */
+interface ProviderUsage {
+    inputTokens?: { cacheRead?: number; cacheWrite?: number; total?: number };
+    outputTokens?: { reasoning?: number; total?: number };
+}
+
+/**
+ * A provider usage with both buckets present, each count left `undefined` when the provider omitted it. The SDK's
+ * finish normalizer reads both buckets, so a forwarded error finish with one missing throws instead of reporting it.
+ */
+const completeUsageOf = (usage: ProviderUsage | undefined) => {
+    return {
+        inputTokens: {
+            cacheRead: usage?.inputTokens?.cacheRead,
+            cacheWrite: usage?.inputTokens?.cacheWrite,
+            noCache: undefined,
+            total: usage?.inputTokens?.total,
+        },
+        outputTokens: { reasoning: usage?.outputTokens?.reasoning, text: undefined, total: usage?.outputTokens?.total },
+    };
+};
+
+/**
+ * The loop's usage from a provider's usage, the same projection the SDK applies to a finished turn.
+ * An error finish may report one bucket or none: a bucket it left out is `undefined`, never a crash,
+ * because the provider's failure is what the caller has to see.
+ */
+const providerUsageOf = (usage: ProviderUsage | undefined): AgentUsage => {
+    if (usage === undefined) {
+        return withStatus(undefined);
+    }
+
+    const input = usage.inputTokens?.total;
+    const output = usage.outputTokens?.total;
+    const total = input === undefined || output === undefined ? undefined : input + output;
+
+    return withStatus(
+        summarizeUsage({
+            inputTokens: input,
+            inputTokenDetails: { cacheReadTokens: usage.inputTokens?.cacheRead, cacheWriteTokens: usage.inputTokens?.cacheWrite },
+            outputTokens: output,
+            outputTokenDetails: { reasoningTokens: usage.outputTokens?.reasoning },
+            totalTokens: total,
+        }),
+    );
+};
+
+/**
+ * The error a provider's `error` finish reason fails the turn with. The provider's
+ * raw reason rides in the message when it has one, and the whole finish reason is
+ * kept as `cause` so a log reader sees exactly what the provider reported. The usage
+ * the provider reported on that finish is kept too: the attempt was billed whether or
+ * not it produced an answer, so the loop counts it (see {@link usageOfFailedTurn}).
+ */
+const finishErrorOf = (finishReason: { raw: string | undefined; unified: string }, usage: ProviderUsage | undefined): Error => {
+    const error: Error & { [FAILED_TURN_USAGE]?: AgentUsage } = new Error(
+        finishReason.raw === undefined ? "model finished with an error reason" : `model finished with an error reason (provider reason: ${finishReason.raw})`,
+        { cause: finishReason },
+    );
+
+    error[FAILED_TURN_USAGE] = providerUsageOf(usage);
+
+    return error;
+};
+
+/**
+ * The usage a failed model turn was billed before it failed, or `undefined` when the
+ * error did not come from a turn or the provider reported none. A turn that is retried
+ * by its durable step is counted once, by the attempt whose error reaches the loop.
+ */
+const usageOfFailedTurn = (error: unknown): AgentUsage | undefined => {
+    if (typeof error !== "object" || error === null) {
+        return undefined;
+    }
+
+    return (error as { [FAILED_TURN_USAGE]?: AgentUsage })[FAILED_TURN_USAGE];
+};
+
+/**
+ * Wrap the turn's model so a provider turn that did not complete fails in-band.
+ * Two shapes qualify. A stream that closes without its `finish` part is kept by
+ * the AI SDK as a finished turn (`finishReason: "other"`), indistinguishable from
+ * a provider that legitimately ends with `other`, so only the provider stream
+ * tells them apart. A `finish` whose unified reason is `error` is the provider's
+ * own report that it cut the generation short or failed it, so the partial text
+ * must not be persisted as an answer. Any other reason, including `other`, is a
+ * healthy finish.
+ */
+const failIncompleteTurn = (ai: AiModule, model: Exclude<LanguageModel, string>) =>
+    ai.wrapLanguageModel({
+        middleware: {
+            wrapGenerate: async ({ doGenerate }) => {
+                const result = await doGenerate();
+
+                if (result.finishReason.unified === "error") {
+                    throw finishErrorOf(result.finishReason, result.usage);
+                }
+
+                return result;
+            },
+            wrapStream: async ({ doStream }) => {
+                const { stream, ...rest } = await doStream();
+                let finished = false;
+
+                return {
+                    ...rest,
+                    stream: stream.pipeThrough(
+                        new TransformStream({
+                            flush: (controller) => {
+                                if (!finished) {
+                                    controller.enqueue({ error: new Error("model stream ended without a finish part"), type: "error" });
+                                }
+                            },
+                            transform: (part, controller) => {
+                                if (part.type === "finish") {
+                                    finished = true;
+
+                                    // The finish is forwarded, not replaced: the SDK drops the usage of a turn that never
+                                    // finished, so telemetry would meter the billed attempt at zero. The in-band error
+                                    // after it fails the turn through the same path as any other error part.
+                                    if (part.finishReason.unified === "error") {
+                                        controller.enqueue({ ...part, usage: completeUsageOf(part.usage) });
+                                        controller.enqueue({ error: finishErrorOf(part.finishReason, part.usage), type: "error" });
+
+                                        return;
+                                    }
+                                }
+
+                                controller.enqueue(part);
+                            },
+                        }),
+                    ),
+                };
+            },
+        },
+        model,
+    });
+
+/**
+ * The turn's model with {@link failIncompleteTurn} applied. `resolveAgentModel`
+ * always yields a model object; the string arm only narrows the AI SDK union.
+ */
+const guardTurnModel = (ai: AiModule, model: LanguageModel): LanguageModel => (typeof model === "string" ? model : failIncompleteTurn(ai, model));
+
+/**
  * Build the production LLM-turn seam over AI SDK `generateText`. The agent's
  * tools are exposed to the model schema-only (NO `execute`) — the model can
  * decide to call them, but execution happens back in the loop as named
@@ -201,14 +361,13 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
 
     return async (options) => {
         const { ai, base } = await getBase();
-        const result = await ai.generateText(buildTurnRequest(base, options));
-
-        const usage = toAgentUsage(result.usage);
+        const request = buildTurnRequest(base, options);
+        const result = await ai.generateText({ ...request, model: guardTurnModel(ai, request.model) });
 
         return {
             text: result.text,
             toolCalls: mapToolCalls(result.toolCalls),
-            ...(usage === undefined ? {} : { usage }),
+            usage: toAgentUsage(result.usage),
             ...(base.output === undefined ? {} : { output: result.output }),
         };
     };
@@ -233,28 +392,40 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
 
     return async (options, onDelta) => {
         const { ai, base } = await getBase();
-        const result = ai.streamText(buildTurnRequest(base, options));
+        const request = buildTurnRequest(base, options);
+        const result = ai.streamText({ ...request, model: guardTurnModel(ai, request.model) });
 
-        // Drain the delta stream first, teeing each chunk to the live sink. This
+        // Drain the full part stream, teeing each text delta to the live sink. This
         // both feeds the live channel and drives the call to completion, so the
-        // settled promises below resolve to the final turn.
+        // settled promises below resolve to the final turn. `textStream` is not
+        // used: it drops `error` parts, so a provider error that arrives in-band
+        // after text would resolve as a successful, truncated turn.
         let streamed = "";
 
         try {
-            for await (const delta of result.textStream) {
-                streamed += delta;
-                onDelta(delta);
+            for await (const part of result.stream) {
+                if (part.type === "error") {
+                    throw toStreamError(part.error);
+                }
+
+                if (part.type === "text-delta") {
+                    streamed += part.text;
+                    onDelta(part.text);
+                }
             }
         } catch (error) {
-            // A barge-in aborts the turn: `streamText` rejects the stream once
-            // its `abortSignal` fires. Resolve to the text streamed so far (the
-            // spoken prefix) rather than propagating — the caller persists it.
-            // Any non-abort failure is re-thrown.
-            if (options.signal?.aborted) {
-                return { text: streamed, toolCalls: [] };
+            // Any failure that is not a barge-in abort is re-thrown below.
+            if (!options.signal?.aborted) {
+                throw error;
             }
+        }
 
-            throw error;
+        // A barge-in aborts the turn. The delta stream may end by rejecting or by
+        // closing cleanly; either way resolve to the text streamed so far (the
+        // spoken prefix) rather than reading the settled promises, which reject
+        // with the abort — the caller persists the prefix.
+        if (options.signal?.aborted) {
+            return { text: streamed, toolCalls: [], usage: withStatus(undefined) };
         }
 
         // `output` is only awaited when the agent declared a structured schema —
@@ -266,12 +437,10 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
             base.output === undefined ? Promise.resolve(undefined) : result.output,
         ]);
 
-        const agentUsage = toAgentUsage(usage);
-
         return {
             text,
             toolCalls: mapToolCalls(toolCalls),
-            ...(agentUsage === undefined ? {} : { usage: agentUsage }),
+            usage: toAgentUsage(usage),
             ...(base.output === undefined ? {} : { output }),
         };
     };
@@ -341,7 +510,7 @@ const createGraphExtract =
     async ({ assistantText, env, model, userInput }) => {
         const ai = await loadAi();
         const { output } = await ai.generateText({
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             output: ai.Output.object({ schema: GRAPH_EXTRACTION_SCHEMA }),
             prompt: buildExtractionPrompt(userInput, assistantText),
         });
@@ -374,7 +543,7 @@ const createEpisodeExtract =
     async ({ assistantText, env, model, userInput }) => {
         const ai = await loadAi();
         const { text } = await ai.generateText({
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             prompt: buildEpisodePrompt(userInput, assistantText),
         });
 
@@ -409,11 +578,11 @@ const createCompact =
         const ai = await loadAi();
         const { text } = await ai.generateText({
             messages,
-            model: resolveAgentModel(model, env),
+            model: guardTurnModel(ai, resolveAgentModel(model, env)),
             system: previousSummary === undefined ? COMPACTION_SYSTEM : `${COMPACTION_SYSTEM}${COMPACTION_MERGE_SYSTEM}`,
         });
 
         return text.trim();
     };
 
-export { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel };
+export { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel, usageOfFailedTurn };

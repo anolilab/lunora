@@ -208,9 +208,18 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Too many subscriptions";
     };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
+    };
+    readonly OFFLINE_NOT_QUEUED: {
+        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
+        readonly status: 503;
+        readonly title: "Offline, write not queued";
     };
     readonly IDENTITY_MISMATCH: {
         readonly hint: readonly [
@@ -714,10 +723,6 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_TOPIC: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
-    };
-    readonly LIVE_CONTROL_SUPERSEDED: {
-        readonly status: 409;
-        readonly title: "A later live control call already applied";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;

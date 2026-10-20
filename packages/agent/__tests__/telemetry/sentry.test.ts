@@ -2,9 +2,12 @@ import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
+import { defineAgent } from "../../src/define-agent";
+import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { SentryLike, SentrySpan } from "../../src/telemetry/sentry";
 import { sentryTelemetry } from "../../src/telemetry/sentry";
-import { drain, generatingModel, settle, streamingModel, withTelemetry } from "./model-fixtures";
+import type { GenerateResult } from "./model-fixtures";
+import { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, settle, STOP, streamingModel, withTelemetry } from "./model-fixtures";
 
 /**
  * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
@@ -159,7 +162,38 @@ describe(sentryTelemetry, () => {
         // the raw resolved value sees as no usage at all.
         expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(12);
         expect(span.attributes["gen_ai.usage.total_tokens"]).toBe(15);
+        expect(span.attributes["lunora.usage.status"]).toBe("complete");
+        // No breakdown was reported, so no bucket attribute is written at all.
+        expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBeUndefined();
         expect(span.endedAt).toBeDefined();
+    });
+
+    it("carries the cache and reasoning buckets when the provider reports them", async () => {
+        const { Sentry, spans } = fakeSentry();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        usage: reportedUsage({ input: 12, output: 3, cacheRead: 4, cacheWrite: 2, reasoning: 2 }),
+                        warnings: [],
+                    }),
+                modelId: "mock-model-id",
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(sentryTelemetry({ functionId: "support", Sentry })),
+        });
+
+        await settle();
+
+        const span = spans[0] as RecordedSpan;
+
+        expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(4);
+        expect(span.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(2);
+        expect(span.attributes["gen_ai.usage.reasoning.output_tokens"]).toBe(2);
+        expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(3);
     });
 
     it("marks a stream that dies mid-way as failed", async () => {
@@ -203,6 +237,35 @@ describe(sentryTelemetry, () => {
         // should capture, not the envelope.
         expect(captured[0]).toBeInstanceOf(Error);
         expect((captured[0] as Error).message).toBe("model down");
+    });
+
+    it("meters the usage a non-streamed attempt was billed before it failed, on an errored span", async () => {
+        const { Sentry, spans } = fakeSentry();
+        const agent = defineAgent({ model: failedGenerateModel(), telemetry: withTelemetry(sentryTelemetry({ Sentry })) });
+
+        await expect(createAgentGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        expect((spans[0] as RecordedSpan).status?.code).toBe(2);
+        expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.input_tokens"]).toBe(2);
+        expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.output_tokens"]).toBe(1);
+        expect((spans[0] as RecordedSpan).attributes["lunora.usage.status"]).toBe("complete");
+    });
+
+    it("meters the usage a streamed attempt that fails in-band was billed, on an errored span", async () => {
+        const { Sentry, spans } = fakeSentry();
+        const agent = defineAgent({ model: failedStreamModel(), telemetry: withTelemetry(sentryTelemetry({ Sentry })) });
+
+        await expect(createStreamGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] }, () => undefined)).rejects.toThrow(
+            "model finished with an error reason",
+        );
+
+        await settle();
+
+        expect((spans[0] as RecordedSpan).status?.code).toBe(2);
+        expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.input_tokens"]).toBe(2);
+        expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.output_tokens"]).toBe(1);
     });
 
     it("an abort in one run does not close a concurrent run's span on a SHARED integration", async () => {

@@ -2534,6 +2534,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -5459,6 +5462,9 @@ importers:
       '@lunora/notify':
         specifier: workspace:*
         version: link:../notify
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
@@ -5477,6 +5483,9 @@ importers:
       '@visulima/notification':
         specifier: catalog:notify
         version: 1.2.0(6691b4649286111316d827f0a35e0d3d)
+      ai:
+        specifier: catalog:ai
+        version: 7.0.127(zod@4.6.5)
     devDependencies:
       '@lunora/observability':
         specifier: workspace:*

@@ -67,6 +67,11 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Never `pnpm -r run test`.** Every package's vitest in parallel fails a different arbitrary set each run (resource contention, not real failures). Use `pnpm run test`, `test:affected`, or one `--filter`.
 - **Never text-merge `pnpm-lock.yaml`.** Discard a conflicted lockfile and regenerate (`pnpm install --lockfile-only`). CI builds `refs/pull/N/merge`, not your branch head, so a hand-resolved lockfile fails there and nowhere else.
 - **Prettier before ESLint** when fixing by hand. The reverse lets Prettier reformat lines ESLint just fixed and reintroduce the violations.
+- **Never kill by pattern.** No `pkill -f`, no `pgrep … | kill`, no `kill` of a PID found by matching a name, path or worktree string. Your own process has this worktree's path in its argv, and several other sessions' dev servers run on this machine. Kill only a PID you captured when you spawned it.
+- **The tree and the stash are shared.** Other sessions edit the same checkout and push to the same branches. Stage explicit paths — never `git add -A` / `git commit -a` — and never use bare `git stash` / `git stash pop`; the stack is shared across worktrees, so you can pop someone else's work.
+- **The shell's working directory persists between calls.** A `cd` in one call silently relocates the next, and an edit or a "passing" check can land in the wrong worktree. Use absolute paths, or prefix each call with `cd <worktree> &&`.
+- **A test must fail without the fix.** Before trusting a new test, revert the fix (or break the code under test) and watch it go red. Tests have passed for the wrong reason repeatedly: a fixture too small to trigger the planner, a `mockRestore` in `finally` that clears the very calls being asserted, a presence check where a count was needed.
+- **Dev ports are per checkout.** The playground (`:5173`) and studio (`:5174`) ports come from `shared/dev-ports.ts`: a linked git worktree gets an offset from its path. Read the ports from the startup line (`dev ports: playground :N, studio :M`); never hard-code them. `LUNORA_DEV_PORT_OFFSET=0` forces the legacy pair.
 
 ## Conventions
 
@@ -74,6 +79,19 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Build what is asked.** Simplest implementation that meets the current requirement; no config knobs, extension points, or abstractions with a single implementation until a second one exists.
 - **Reach for a maintained dependency before hand-rolling**, and pin its version in the right catalog (below). Exceptions: the zero-dep packages (`@lunora/errors`, `@lunora/fingerprint`, `@lunora/platform`), `shared/`, and anything that would not survive the Workers runtime.
 - **Never skip verification** — no `--no-verify`, no `.skip`ped tests, no silenced type errors or disabled lint rules to get something green.
+- **An `eslint-disable` is line-scoped and carries its reason.** It names the rule and gives the reason after `--`, sits on the one line it excuses, and goes once the code stops needing it. A file-level disable is not accepted; if a whole file seems to need one, the rule is wrong for that file and the change belongs in the lint config, reviewed on its own.
+- **Comments say why** — a constraint, an external quirk, or an invariant the code cannot show. Do not restate a name or signature, narrate steps, or record history. Agent docs follow the same rule: decisions and traps a maintainer would get wrong, not file catalogues or feature indexes; rewrite stale text rather than appending a second account of the new behaviour.
+- **Tests wait on a milestone, never on a clock.** Await the persisted row, the settled promise or the emitted event that marks the state. A test that needs a sleep or a polling timeout to pass is wrong; inject the clock instead.
+
+### Hit every surface
+
+The commonest defect is a change that works on the path you tested and is missing everywhere else. Before calling a change done, walk this list and say which entries applied:
+
+- **Entry points.** A behaviour reachable from a function is usually also reachable from the CLI, Studio, the MCP server and an agent tool. Put the capability in a function or service the transports call, not in handler code, so each surface stays a thin decode → call → map-errors wrapper.
+- **Generated and mirrored output.** Codegen emitters, golden fixtures and example `_generated/`, `api-snapshots/`, the `registry/*` and `templates/*` copies, and the 8 non-JS SDKs all follow a public-surface change.
+- **Platform targets.** Every new `ctx.*` surface states its mapping (see Platform parity below).
+- **Reverse states.** If you added a way in, add the way out and the way to see it: grant needs revoke, pause needs resume, approve needs reject. A one-way door is a bug.
+- **Docs.** Check whether the change makes existing guidance inaccurate before adding any.
 
 ### Module imports — no `.js` extensions
 
@@ -127,4 +145,6 @@ Branches: **`alpha`** is the default and the target for most PRs; `main` carries
 
 ## Agent worktree isolation
 
-When spawning sub-agents in this repo, default to `isolation: "worktree"` for anything that edits code, so the agent cannot stomp uncommitted changes in the main checkout. Skip it for read-only research — each worktree needs a fresh `pnpm install` and starts with a cold vis cache. Clean up with `git worktree remove <path>` (empty ones auto-clean); `.worktrees/` is gitignored.
+When spawning sub-agents that edit code, give each its own worktree so it cannot stomp uncommitted changes in another checkout. Create it yourself — `git worktree add -b <branch> <abs-path> <sha>` — rather than relying on `isolation: "worktree"`, which cuts from the _main checkout's_ HEAD, and that is often a feature branch rather than the tip you meant. Brief the agent with the absolute path. Skip worktrees for read-only research: each one needs a fresh `pnpm install` and starts with a cold vis cache.
+
+Run at most three at once, and tell them not to run `test:workerd` or `build:packages`: concurrent runs of those across worktrees have crashed node with out-of-memory. Run the workerd suites yourself, one branch at a time. Clean up with `wt remove` (raw `git worktree remove` leaves the branch behind); each stale tree costs ~3 GiB, and `.worktrees/` is gitignored.

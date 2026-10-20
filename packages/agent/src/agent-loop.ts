@@ -1,15 +1,18 @@
+import { usageStatus } from "@lunora/ai/create";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
+import { SECRET_VALUE_MAX_TTL_MS } from "@lunora/platform";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
-import { resolveAgentModel } from "./generate";
+import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
+import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import { secretLabelOf, SecretUnavailableError } from "./secret-request-tool";
 import { flushTelemetry, traceToolExecution } from "./telemetry/tool-execution";
 import { capToolOutputText } from "./tool-output";
 import type {
@@ -113,6 +116,8 @@ const normalizeDepth = (depth: number | undefined): number => (isPositiveInteger
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
+    /** Dispatch ref of `agents:agentApprovalGranted` — whether a tool is granted for the thread (read inside the gate's step). */
+    approvalGrantedRef: ReturnType<typeof toFunctionReference>;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
     compact: AgentCompact | undefined;
     /** Patch this run's thread by key (status/error/usage/…). */
@@ -134,6 +139,8 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
+    /** Dispatch ref of `agents:agentOpenSecretRequest` — writes the pending request row when a run pauses on a secret. */
+    openSecretRef: ReturnType<typeof toFunctionReference>;
     /** Verified owner of THIS run's thread (`params.owner`), handed to every tool context. */
     owner: string | undefined;
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
@@ -141,6 +148,8 @@ interface TurnContext {
     run: AgentRunFunction;
     /** Replace the thread's synced state (dispatches `agents:agentSetState`) — the tool ctx's `setState`. */
     setState: (state: Record<string, unknown>) => Promise<void>;
+    /** Dispatch ref of `agents:agentSettleSecretRequest` — reads a paused secret request's status once its wait ends. */
+    settleSecretRef: ReturnType<typeof toFunctionReference>;
     step: AgentStepLike;
     /** The streaming LLM-turn seam, when available (else `undefined`). */
     streamGenerate: AgentStreamGenerate | undefined;
@@ -148,10 +157,15 @@ interface TurnContext {
     tools: Record<string, AnyAgentTool>;
 }
 
-/** The decision a client sends to resolve a human-in-the-loop tool approval. */
+/**
+ * The decision a client sends to resolve a human-in-the-loop tool approval.
+ * `scope: "thread"` rides an `approve` that also granted the tool for the rest of
+ * the thread; the grant itself is written by `agentResolveApproval`, not here.
+ */
 interface ApprovalDecision {
     decision: "approve" | "reject";
     note?: string;
+    scope?: "thread";
 }
 
 /** JSON-encode a tool's non-string output; `undefined` encodes as "null". */
@@ -194,19 +208,46 @@ const isStopConditionMet = async (conditions: ReadonlyArray<StopCondition<ToolSe
     return results.some(Boolean);
 };
 
-/** Accumulate a turn's usage into the running total (defined fields only; a field absent on both sides stays absent). */
+/** Every field of {@link AgentUsage}, each summed across turns. The breakdowns sum like the totals; each stays a subset of its total. */
+const USAGE_KEYS = ["inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
+
+/**
+ * A turn's status. A step written before the field existed (a memoized replay, a scripted
+ * fixture) has none, so it is graded from its counts rather than assumed complete.
+ */
+const statusOf = (usage: AgentUsage): NonNullable<AgentUsage["status"]> => usage.status ?? usageStatus(usage);
+
+/**
+ * Two steps' statuses, combined. The total is `complete` only when both are complete and
+ * `unavailable` only when both are unavailable: any other pairing has a turn whose bucket is
+ * missing from the total, so it is `partial`.
+ */
+const mergeStatus = (base: NonNullable<AgentUsage["status"]>, next: NonNullable<AgentUsage["status"]>): NonNullable<AgentUsage["status"]> => {
+    if (base === next) {
+        return base;
+    }
+
+    return "partial";
+};
+
+/**
+ * Accumulate a turn's usage into the running total. A field absent on both sides stays
+ * absent, so a provider that never reports a cache or reasoning bucket never shows one.
+ * A row or a memoized step written before a field existed is absent there, not zero.
+ * `next` absent means the turn carried no usage record at all, and leaves the total as it was.
+ */
 const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): AgentUsage | undefined => {
     if (next === undefined) {
         return base;
     }
 
     if (base === undefined) {
-        return { ...next };
+        return { ...next, status: statusOf(next) };
     }
 
-    const result: AgentUsage = {};
+    const result: AgentUsage = { status: mergeStatus(statusOf(base), statusOf(next)) };
 
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+    for (const key of USAGE_KEYS) {
         if (base[key] !== undefined || next[key] !== undefined) {
             result[key] = (base[key] ?? 0) + (next[key] ?? 0);
         }
@@ -216,13 +257,18 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
 };
 
 /**
- * Resolve a tool's `needsApproval` gate against the (replay-stable) model
- * input. The `true`/`false`/`undefined` forms are compile-time constants —
- * replay re-derives them identically for free, so they stay outside any
- * durable step. The FUNCTION form can read `getState`/`run` and so can be
- * non-deterministic or (if misused) side-effecting; it is memoized in its own
- * durable step (`gateStepName`, distinct from the tool's own step — see
- * `runToolCall`) so it now resolves exactly ONCE per call, not once per replay.
+ * Resolve a tool's `needsApproval` gate against the (replay-stable) model input.
+ * Only the absent/`false` forms are compile-time constants; a gated tool — the
+ * `true` form or the FUNCTION form — resolves inside its own durable step
+ * (`gateStepName`, distinct from the tool's own step — see `runToolCall`), so the
+ * decision is memoized and never re-derived on a replay.
+ *
+ * The thread's approval grant is read INSIDE that step, before the gate itself:
+ * a granted tool resolves to `false` (no pause), and that `false` is memoized
+ * with the step. A grant made after this call's gate resolved therefore never
+ * changes it, and a revoke never reaches back into a run already in flight.
+ * The memo stays a plain boolean, so a run parked across a deploy reads it back
+ * unchanged.
  */
 const resolveNeedsApproval = async (
     tool: AnyAgentTool,
@@ -230,6 +276,7 @@ const resolveNeedsApproval = async (
     step: AgentStepLike,
     gateStepName: string,
     context: AgentApprovalContext,
+    isGranted: () => Promise<boolean>,
 ): Promise<boolean> => {
     const { needsApproval } = tool;
 
@@ -237,11 +284,13 @@ const resolveNeedsApproval = async (
         return false;
     }
 
-    if (needsApproval === true) {
-        return true;
-    }
+    return step.do(gateStepName, async () => {
+        if (await isGranted()) {
+            return false;
+        }
 
-    return step.do(gateStepName, async () => needsApproval(input, context));
+        return needsApproval === true || needsApproval(input, context);
+    });
 };
 
 /**
@@ -335,24 +384,34 @@ const approvalTimeoutMs = (configured: number | string | undefined): number => {
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
     const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
+    const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
 
-    await persist({
-        content: `Awaiting approval to run tool "${call.name}".`,
-        messageKey: `${instanceId}:approval:${call.id}`,
-        role: "tool",
-        status: "awaiting_approval",
-        toolCallId: call.id,
-        toolName: call.name,
+    // Memoized by name: a replay after the decision must not re-insert the marker that
+    // the decision retired, nor move its deadline forward from the replay's clock.
+    await step.do(`approval:request:${call.id}`, async (): Promise<void> => {
+        await persist({
+            content: `Awaiting approval to run tool "${call.name}".`,
+            expiresAt: Date.now() + timeoutMs,
+            messageKey: `${instanceId}:approval:${call.id}`,
+            role: "tool",
+            status: "awaiting_approval",
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+        await patchThread({ status: "awaiting_input" });
     });
-    await patchThread({ status: "awaiting_input" });
 
     const decision = await step
         .waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
-            timeout: approvalTimeoutMs(agent.approvalTimeout),
+            timeout: timeoutMs,
             type: `agent-approval:${call.id}`,
         })
         .then((event): ApprovalDecision => {
-            return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+            return {
+                decision: event.payload.decision,
+                ...(event.payload.note === undefined ? {} : { note: event.payload.note }),
+                ...(event.payload.scope === undefined ? {} : { scope: event.payload.scope }),
+            };
         })
         .catch((error: unknown): ApprovalDecision => {
             // ONLY an elapsed timeout becomes a decision. Without it the run
@@ -389,6 +448,98 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 };
 
 /**
+ * How a paused `requestSecretTool` call ended. The value itself is never part of
+ * the outcome: a supplied call hands the model its request id, and the consuming
+ * tool reads the value from the store.
+ */
+type SecretOutcome = "declined" | "expired" | "supplied";
+
+/** Why a non-supplied secret request did not run, as the model reads it. */
+const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> = {
+    declined: "the user declined to supply it",
+    expired: "the secret was not supplied before the timeout",
+};
+
+/**
+ * The key one secret request is stored, waited on and settled under. A provider can reuse a tool-call id in a later
+ * turn of the same run, and every step, wait and row keyed on the bare id would then replay the earlier request. The
+ * turn makes the slot unique within the run; the call id still correlates the tool result.
+ */
+const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:${callId}`;
+
+/**
+ * Pause the run on a `requestSecretTool` call until a human supplies or declines a
+ * value. Same shape as {@link awaitApproval}, with the request row as the authority:
+ *
+ * 1. The pending request row is written inside a durable step. The step computes its deadline, and a replay keeps the stored one.
+ * 2. The `"awaiting_secret"` marker (filtered out of the model prompt) and the `"awaiting_input"` thread status are written in a durable step, so a replay after settlement cannot reopen them.
+ * 3. A wait on `secret:<slot>` is armed for `approvalTimeout` plus a grace (see `SECRET_WAIT_GRACE_MS`). Supply and decline wake it with no payload.
+ * 4. When the wait ends, woken or timed out, a settle step reads the row's outcome. A pending row becomes `expired` there, so a late supply is refused. A supply that already landed is honoured even if the wait timed out.
+ *
+ * Only the status is journaled. The host ref stays in the row, and the model is handed
+ * the request id as its `secretRef`.
+ */
+const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, label: string, slot: string): Promise<SecretOutcome> => {
+    const { agent, deleteMessage, instanceId, openSecretRef, patchThread, persist, run, settleSecretRef, step, threadKey } = turnContext;
+    const markerKey = `${instanceId}:secret:${slot}`;
+    // The supplied value outlives the request by the grace, and the host keeps a value at most
+    // SECRET_VALUE_MAX_TTL_MS. A longer deadline would let a lost wake-up find the value gone.
+    const timeoutMs = Math.min(approvalTimeoutMs(agent.approvalTimeout), SECRET_VALUE_MAX_TTL_MS - SECRET_WAIT_GRACE_MS);
+
+    await step.do(`secret:request:${slot}`, async (): Promise<void> => {
+        await run(openSecretRef, {
+            consumerTool,
+            expiresAt: Date.now() + timeoutMs,
+            instanceId,
+            callId: call.id,
+            label,
+            threadKey,
+            toolCallId: slot,
+            toolName: call.name,
+        });
+    });
+
+    // Memoized by name, as the approval marker is: a replay after the settlement must not re-insert the
+    // marker that the settlement retired, nor reopen the thread's status.
+    await step.do(`secret:await:${slot}`, async (): Promise<void> => {
+        await persist({
+            content: `Awaiting a secret for tool "${call.name}": ${label}`,
+            messageKey: markerKey,
+            role: "tool",
+            status: "awaiting_secret",
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+        await patchThread({ ifInstanceId: instanceId, status: "awaiting_input" });
+    });
+
+    await step
+        .waitForEvent(`secret:${slot}`, {
+            timeout: timeoutMs + SECRET_WAIT_GRACE_MS,
+            type: `agent-secret:${slot}`,
+        })
+        .catch((error: unknown): void => {
+            // A timeout is not an error here: the settle step below reads the row and decides.
+            if (!isWaitTimeoutError(error)) {
+                throw error;
+            }
+        });
+
+    const { status } = await step.do(
+        `secret:settle:${slot}`,
+        async (): Promise<{ status: SecretOutcome }> => (await run(settleSecretRef, { instanceId, threadKey, toolCallId: slot })) as { status: SecretOutcome },
+    );
+
+    // Retired on every outcome, as the approval marker is: a client offers its
+    // supply/decline controls from this row alone.
+    await deleteMessage(markerKey);
+    // Owned by this run: a replacement that took the thread over while it waited keeps its own status.
+    await patchThread({ ifInstanceId: instanceId, status: "running" });
+
+    return status;
+};
+
+/**
  * Wrapper key under which a tool step memoizes its outcome.
  *
  * `step.do` memoizes BY NAME, and the tool step's name (`tool:<name>:<id>`) is
@@ -421,8 +572,65 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
     return { ok: memo };
 };
 
-const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { agent, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
+/**
+ * A `requestSecretTool` call, run as its own step rather than inside `runToolCall`: pause
+ * for the owner, then record the request id or why none came. Outside `step.do` for the
+ * same reason an approval wait is: the pause must not be memoized as a tool output.
+ */
+const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, turn: number): Promise<void> => {
+    const { instanceId, persist } = turnContext;
+    // Keyed on the slot, not the provider's call id: a reused id would otherwise dedupe this result onto the earlier turn's row.
+    // Its own namespace too, so an ordinary call whose id reads as a slot cannot share the key.
+    const slot = secretSlotOf(turn, call.id);
+    const messageKey = `${instanceId}:secret-result:${slot}`;
+    const stepName = `tool:${call.name}:${slot}`;
+    const label = secretLabelOf(call.input);
+
+    // The owner decides from this label, so a request without one is refused, as a bad argument is.
+    if (label === undefined) {
+        await persist({
+            content: `Error: invalid input for tool "${call.name}" — it was not run. \`label\` must be a non-empty string saying what the secret is for.`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    // Supply and decline are owner-only, so on an ownerless run nobody could ever answer: it is
+    // refused here, as a bad argument is, rather than left to wait out the deadline.
+    if (turnContext.owner === undefined) {
+        await persist({
+            content: `Error: tool "${call.name}" was not run: this run has no owner, so no one can supply a secret for it.`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    const outcome = await awaitSecret(turnContext, call, consumerTool, label, slot);
+
+    await persist({
+        // The request id is the handle: the consuming tool resolves it inside the thread.
+        content: outcome === "supplied" ? JSON.stringify({ secretRef: slot }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
+        messageKey,
+        role: "tool",
+        stepName,
+        toolCallId: call.id,
+        toolName: call.name,
+    });
+};
+
+const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
+    const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
+        turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -455,6 +663,16 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         return;
     }
 
+    // A `requestSecretTool` call never runs `execute`: it pauses for a human-supplied
+    // value and records only the opaque ref (or why none came). Outside `step.do`
+    // for the same reason an approval wait is: the pause must not be memoized as a
+    // tool output.
+    if (tool.secretRequest !== undefined) {
+        await runSecretRequestCall(turnContext, call, tool.secretRequest.consumer, turn);
+
+        return;
+    }
+
     // Ephemeral progress: tees onto the SAME live-only sink the token deltas
     // ride. A no-op when the runtime wired no sink (the durable default), and —
     // because it fires from inside the tool's memoized `step.do` below — never
@@ -463,11 +681,25 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { depth, env, exports, getState, idempotencyKey: stepName, owner, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
+    const toolContext = {
+        depth,
+        env,
+        exports,
+        getState,
+        idempotencyKey: stepName,
+        instanceId,
+        owner,
+        reportProgress,
+        run,
+        setState,
+        step,
+        threadKey,
+        toolCallId: call.id,
+    };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, run, threadKey, toolCallId: call.id };
+    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, threadKey, toolCallId: call.id };
     // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name
@@ -480,9 +712,11 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // rejects it. A rejection skips the tool and records why, so the next LLM
     // turn can recover instead of stalling.
     let status: "approved" | undefined;
+    let approvalScope: "thread" | undefined;
+    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { key: threadKey, toolName: call.name })) === true;
 
-    if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext)) {
-        const { decision, note } = await awaitApproval(turnContext, call);
+    if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext, isGranted)) {
+        const { decision, note, scope } = await awaitApproval(turnContext, call);
 
         if (decision === "reject") {
             const reason = note === undefined ? "" : ` Reason: ${note}`;
@@ -501,7 +735,15 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         }
 
         status = "approved";
+        approvalScope = scope;
     }
+
+    // The approval outcome as the tool-result row carries it: `status` for the
+    // approve/reject lifecycle, `approvalScope` when the approval was for the thread.
+    const approvalFields = {
+        ...(status === undefined ? {} : { status }),
+        ...(approvalScope === undefined ? {} : { approvalScope }),
+    };
 
     // The `invalid` branch above only fires for a tool whose `inputSchema`
     // carries a `validate` — a bare `jsonSchema()` (every batteries-included
@@ -532,7 +774,9 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
 
                 return { [TOOL_OUTCOME_KEY]: { ok: output } };
             } catch (error: unknown) {
-                if (isDeterministicDispatchFailure(error)) {
+                // A consumed secret that is gone is deterministic like a 404 from the
+                // app: a retry reads the same absence.
+                if (isDeterministicDispatchFailure(error) || error instanceof SecretUnavailableError) {
                     return { [TOOL_OUTCOME_KEY]: { failed: error.message } };
                 }
 
@@ -550,7 +794,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
             messageKey,
             role: "tool",
             stepName,
-            ...(status === undefined ? {} : { status }),
+            ...approvalFields,
             toolCallId: call.id,
             toolName: call.name,
         });
@@ -569,7 +813,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         messageKey,
         role: "tool",
         stepName,
-        ...(status === undefined ? {} : { status }),
+        ...approvalFields,
         toolCallId: call.id,
         toolName: call.name,
     });
@@ -1317,7 +1561,7 @@ const handleTurn = async (
     // independently, so a crash between two calls resumes after the completed one.
     for (const call of decision.toolCalls) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps ARE the execution model
-        await runToolCall(turnContext, call);
+        await runToolCall(turnContext, call, turn);
     }
 
     await notifyStepFinish(turnContext, { text: decision.text, toolCalls: decision.toolCalls, turn, ...stepUsage });
@@ -1418,6 +1662,9 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
     const appendMessage = toFunctionReference(paths.appendMessage);
+    const approvalGrantedRef = toFunctionReference(paths.approvalGranted);
+    const openSecretRef = toFunctionReference(paths.openSecretRequest);
+    const settleSecretRef = toFunctionReference(paths.settleSecretRequest);
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
@@ -1519,6 +1766,9 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const turnContext: TurnContext = {
         agent,
+        approvalGrantedRef,
+        openSecretRef,
+        settleSecretRef,
         compact,
         depth: normalizeDepth(params.depth),
         env,
@@ -1635,6 +1885,8 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // as `error`, blaming the run for its transport. The replay re-dispatches
         // the same terminal write, which converges on the right one.
         if (!completion.dispatched) {
+            // The failed turn was billed even though it produced no answer, so its tokens belong to this run's total.
+            usageBox.value = addUsage(usageBox.value, usageOfFailedTurn(error));
             await finishFailedRun(finishRun, error, usageBox.value);
         }
 
@@ -1647,4 +1899,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
+export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };

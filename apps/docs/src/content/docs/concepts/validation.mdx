@@ -119,7 +119,9 @@ undeclared keys instead:
 ```
 
 The error names the keys, so the fix is either adding them to the validator or
-saying you meant to drop them.
+saying you meant to drop them. The exception is a shape that holds a
+`v.sensitive` field: there the error reports the count and `[redacted]`, because
+a key a caller chose can be the secret itself.
 
 #### Narrowing on purpose: `.strip()`
 

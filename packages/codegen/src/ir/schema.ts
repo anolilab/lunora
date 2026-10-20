@@ -43,6 +43,13 @@ export interface ValidatorIR {
     literalValue?: string;
     /** For `v.union(a, b, ...)`. */
     members?: ValidatorIR[];
+
+    /**
+     * `true` when the validator is wrapped in `v.sensitive(...)`. The kind and the
+     * accepted values are the wrapped validator's; the flag only changes what the
+     * request log, the client's offline queue and the JSON Schema do with the value.
+     */
+    sensitive?: boolean;
     /** For `v.object({...})`. */
     shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */

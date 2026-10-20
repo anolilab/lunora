@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable on Node ^22.15 || >=24.10 and is the deliberate in-memory engine for this Node-only reference host
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+    PlatformCapabilities,
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
+    SecretValueHost,
+    SecretValueStore,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -16,12 +20,27 @@ import type {
     SocketHost,
 } from "../index";
 import { findSocketTagBudgetViolation } from "../socket-host";
+import { assertSecretValueSize, clampSecretValueTtl, encryptingSecretValueHost } from "../index";
+
+/**
+ * A fresh base64 AES-256 key for a test host. Generated per host rather than
+ * written as a literal, so no key material sits in the source.
+ */
+const createSecretValueTestKey = (): string => btoa(String.fromCodePoint(...crypto.getRandomValues(new Uint8Array(32))));
 
 /**
  * A conformance host bundles all four platform contracts so a single factory
  * can stand up a complete, isolated test environment.
  */
 interface ConformanceHost {
+    /**
+     * Move the secret-value clock forward by `ms`. Required whenever
+     * {@link ConformanceHost.capabilities} rates `secretValues` supported: the
+     * expiry legs cannot drive a real TTL, so a supported host without it fails
+     * the suite. A host rated unsupported omits it.
+     */
+    advanceClock?: (ms: number) => void;
+
     /**
      * Resolve once a pending alarm has actually fired. Optional: hosts whose
      * alarm delivery is owned by the platform and can't be observed from inside
@@ -40,6 +59,19 @@ interface ConformanceHost {
      * @returns `true` when the job was dispatched at least once.
      */
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+
+    /**
+     * The capability matrix this host is rated against. The suite holds the
+     * host to its rating for `secretValues`: a host rated supported must offer
+     * `secretValues`, its clock and its raw store, and a host rated unsupported
+     * must offer none of them. Either mismatch fails the suite rather than
+     * skipping the legs.
+     *
+     * Omitted only by the reference harness, which is not a deployable target.
+     * It implements every optional surface, so it is held to `native`.
+     */
+    capabilities?: PlatformCapabilities;
+
     /** Optional cleanup hook (close DBs, release timers). */
     cleanup?: () => void;
 
@@ -63,6 +95,7 @@ interface ConformanceHost {
      * has no per-tick identity.
      */
     cronTicks?: (functionPath: string) => number;
+
     /** The shard directory under test. */
     directory: ShardDirectory;
 
@@ -144,6 +177,31 @@ interface ConformanceHost {
      * A full composition root must supply one.
      */
     scheduler?: SchedulerHost;
+
+    /**
+     * The human-supplied secret store under test. Present exactly when
+     * {@link ConformanceHost.capabilities} rates `secretValues` supported (see
+     * there for the check in both directions).
+     */
+    secretValues?: SecretValueHost;
+
+    /**
+     * The raw store beneath `secretValues`, plus read and write access to its
+     * records. The legs that prove what is at rest (no plaintext in storage, a
+     * tampered or moved record reads as absent, rotation) need it, so it is
+     * present exactly when `secretValues` is.
+     */
+    secretValueStore?: {
+        /** Every record the store holds, serialized: the plaintext scan reads this. */
+        dump: () => Promise<string>;
+        /** The scope and sealed value of one record, or `undefined` when absent. */
+        peek: (ref: string) => Promise<{ scope: string; value: string } | undefined>;
+        /** Overwrite fields of one record in place. The tamper legs use this. */
+        poke: (ref: string, fields: { scope?: string; value?: string }) => Promise<void>;
+        /** The raw store `secretValues` wraps, so a leg can build its own encrypting host over it. */
+        store: SecretValueStore;
+    };
+
     /** The shard execution slot under test. */
     shard: ShardHost;
 
@@ -631,15 +689,32 @@ const createReferenceHost = (): ReferenceHost => {
     // on write so a caller mutating the object it stored cannot reach back into
     // the "durable" copy — the same isolation a real serializing store gives.
     const kvData = new Map<string, unknown>();
+
+    // The secret-value records live in the SAME map as the KV surface, under a
+    // reserved prefix the KV surface hides. Sharing the map is what makes the
+    // "ShardKvStore shows no secret keys" leg mean something: with two stores it
+    // would pass no matter what the KV surface did.
+    const SECRET_KEY_PREFIX = "__secret_value:";
+    const isSecretKey = (key: string): boolean => key.startsWith(SECRET_KEY_PREFIX);
+    const assertNotSecretKey = (key: string): void => {
+        if (isSecretKey(key)) {
+            throw new TypeError(`key "${key}" is in the reserved secret-value namespace`);
+        }
+    };
+
     const kv: ShardKvStore = {
-        delete: async (key) => kvData.delete(key),
-        get: async (key) => kvData.get(key) as never,
+        delete: async (key) => {
+            assertNotSecretKey(key);
+
+            return kvData.delete(key);
+        },
+        get: async (key) => (isSecretKey(key) ? undefined : (kvData.get(key) as never)),
         list: async (options) => {
             const prefix = options?.prefix ?? "";
             const result = new Map<string, unknown>();
 
             for (const [key, value] of kvData) {
-                if (key.startsWith(prefix)) {
+                if (key.startsWith(prefix) && !isSecretKey(key)) {
                     result.set(key, value);
                 }
             }
@@ -647,8 +722,92 @@ const createReferenceHost = (): ReferenceHost => {
             return result as never;
         },
         put: async (key, value) => {
+            assertNotSecretKey(key);
             kvData.set(key, structuredClone(value));
         },
+    };
+
+    // A fully fake clock, started at real time: real elapsed time must not leak
+    // into the expiry legs, or a slow run expires a value the test has not moved.
+    let secretClock = Date.now();
+    const now = (): number => secretClock;
+
+    type SecretRecord = { claimant?: string; expiresAt: number; scope: string; value: string };
+    const secretKey = (ref: string): string => `${SECRET_KEY_PREFIX}${ref}`;
+
+    // The raw layer beneath the encryption wrapper: it mints the ref, stores
+    // whatever `seal` returns, and applies the claimant, scope and expiry rules.
+    const secretStore: SecretValueStore = {
+        discard: async (ref) => kvData.delete(secretKey(ref)),
+        put: async (seal, options) => {
+            // Sweep expired records on every put, so a value that is never taken
+            // does not outlive its TTL indefinitely.
+            const at = now();
+
+            for (const [key, stored] of kvData) {
+                if (isSecretKey(key) && (stored as SecretRecord).expiresAt <= at) {
+                    kvData.delete(key);
+                }
+            }
+
+            const expiresAt = at + clampSecretValueTtl(options.ttlMs);
+            const ref = `${String(expiresAt).padStart(15, "0")}.${randomUUID()}`;
+
+            kvData.set(secretKey(ref), { expiresAt, scope: options.scope, value: await seal(ref) } satisfies SecretRecord);
+
+            return ref;
+        },
+        take: async (ref, options, open) => {
+            const key = secretKey(ref);
+            const record = kvData.get(key) as SecretRecord | undefined;
+
+            if (record === undefined) {
+                return undefined;
+            }
+
+            if (record.expiresAt <= now()) {
+                kvData.delete(key);
+
+                return undefined;
+            }
+
+            if (record.scope !== options.scope) {
+                return undefined;
+            }
+
+            if (record.claimant !== undefined && record.claimant !== options.claimant) {
+                return undefined;
+            }
+
+            const value = await open(record.value);
+
+            // `open` awaits, so re-check the record and the claim before binding: a
+            // discard or a rival take that landed meanwhile must not be overwritten.
+            if (value === undefined || kvData.get(key) !== record || (record.claimant ?? options.claimant) !== options.claimant) {
+                return undefined;
+            }
+
+            // The first take that opens the record binds it; a retry by that same
+            // claimant still reads it, and anyone else is refused.
+            record.claimant = options.claimant;
+
+            return value;
+        },
+    };
+
+    const secretValues = encryptingSecretValueHost(secretStore, { key: createSecretValueTestKey() });
+
+    const secretValueStore: NonNullable<ConformanceHost["secretValueStore"]> = {
+        dump: async () => JSON.stringify([...kvData].filter(([key]) => isSecretKey(key))),
+        peek: async (ref) => {
+            const record = kvData.get(secretKey(ref)) as SecretRecord | undefined;
+
+            return record === undefined ? undefined : { scope: record.scope, value: record.value };
+        },
+        poke: async (ref, fields) => {
+            Object.assign(kvData.get(secretKey(ref)) as SecretRecord, fields);
+        },
+        store: secretStore,
     };
 
     type ReferenceJob = {
@@ -808,7 +967,12 @@ const createReferenceHost = (): ReferenceHost => {
         cleanup: teardown,
         directory,
         disposeTerminally: teardown,
+        advanceClock: (ms: number) => {
+            secretClock += ms;
+        },
         kv,
+        secretValues,
+        secretValueStore,
         // Text frames only: every Lunora wire frame is JSON, and returning
         // binary as a lossy string would let a corrupted frame read as a
         // delivered one.
@@ -864,3 +1028,5 @@ interface ReferenceHost extends ConformanceHost {
 
 export { createReferenceHost };
 export type { ConformanceHost, ConformanceHostFactory, ReferenceHost };
+
+export { createSecretValueTestKey };

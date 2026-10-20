@@ -70,6 +70,16 @@ describe("createCelldWorkerPlatform", () => {
 });
 
 describe("createCelldShardPlatform", () => {
+    it("omits the secret-value host, since celld rates secretValues unsupported", () => {
+        expect.assertions(2);
+
+        const platform = createCelldShardPlatform(createStateDouble());
+
+        // The surface is absent, not present and refusing: a cell never offers a store it cannot seal.
+        expect(platform).not.toHaveProperty("secretValues");
+        expect(Object.keys(platform).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["kv", "shard", "sockets"]);
+    });
+
     it("runs sql.exec straight through to the cell's storage.sql", () => {
         expect.assertions(2);
 
