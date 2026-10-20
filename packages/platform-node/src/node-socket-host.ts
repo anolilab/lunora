@@ -35,7 +35,9 @@
 
 import { deserialize, serialize } from "node:v8";
 
+import { LunoraError } from "@lunora/errors";
 import type { SocketHandle, SocketHost } from "@lunora/platform";
+import { findSocketTagBudgetViolation } from "@lunora/platform";
 import type Database from "better-sqlite3";
 
 import type { NodeServerEnd } from "./node-socket-pair";
@@ -337,6 +339,14 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         accept: (raw, attachment, tags) => {
             if (!database.open) {
                 throw new Error("platform closed: cannot accept a socket");
+            }
+
+            // Refuse before the INSERT below, so an over-budget call leaves no row
+            // behind for a socket that never existed.
+            const violation = findSocketTagBudgetViolation(tags);
+
+            if (violation !== undefined) {
+                throw new LunoraError("SOCKET_TAG_BUDGET_EXCEEDED", violation);
             }
 
             const id = crypto.randomUUID();

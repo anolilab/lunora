@@ -15,6 +15,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "../index";
+import { findSocketTagBudgetViolation } from "../socket-host";
 
 /**
  * A conformance host bundles all four platform contracts so a single factory
@@ -530,6 +531,12 @@ const createReferenceHost = (): ReferenceHost => {
         upgradeResponse: () => new Response(null, { status: 200 }),
         accept: (rawSocket, attachment, tags) => {
             assertOpen("accept a socket");
+
+            const violation = findSocketTagBudgetViolation(tags);
+
+            if (violation !== undefined) {
+                throw new Error(violation);
+            }
 
             const id = nextSocketId();
             const socketState: ReferenceSocket = {

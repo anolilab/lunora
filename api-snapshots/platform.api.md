@@ -550,6 +550,15 @@ interface R2UploadedPartLike {
 }
 ```
 
+### `SOCKET_TAG_BUDGET` (const)
+
+```ts
+const SOCKET_TAG_BUDGET: {
+    readonly maxTagLength: 256;
+    readonly usableTags: 9;
+};
+```
+
 ### `ScheduleOptions` (interface)
 
 ```ts
@@ -850,6 +859,12 @@ interface VectorizeVector {
     namespace?: string;
     values: VectorValues;
 }
+```
+
+### `findSocketTagBudgetViolation` (const)
+
+```ts
+const findSocketTagBudgetViolation: (tags?: ReadonlyArray<string>) => string | undefined;
 ```
 
 ### `resolveShard` (const)
