@@ -1,3 +1,20 @@
+## @lunora/do [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.232...@lunora/do@1.0.0-alpha.233) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/observability:** upgraded to 1.0.0-alpha.157
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.127
+
 ## @lunora/do [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.231...@lunora/do@1.0.0-alpha.232) (2026-10-19)
 
 ### Features
