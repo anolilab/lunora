@@ -8,6 +8,7 @@ import {
     inferLunoraBindings,
     isPlaceholderValue,
     parseDevVariableEntries,
+    probeCelldToolchain,
     readProjectDependencies,
     resolveSchemaDirectory,
 } from "@lunora/config";
@@ -64,6 +65,9 @@ const DOCTOR_CODES = [
     "artifacts-jurisdiction-ok",
     "artifacts-jurisdiction-unchecked",
     "artifacts-namespace-missing",
+    "celld-toolchain-missing",
+    "celld-toolchain-ok",
+    "celld-toolchain-warn",
     "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
@@ -818,6 +822,30 @@ const checkDurableObjectClassBudget = async (
     }
 };
 
+/**
+ * The celld toolchain a deploy needs (`celld`, `esbuild`, `CELLD_BUCKET`), checked
+ * the way `lunora deploy` checks it. Only for a celld project.
+ */
+const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "celld") {
+        return;
+    }
+
+    const probe = await probeCelldToolchain({ env: options.environment ?? process.env, purpose: "deploy" });
+
+    for (const message of probe.errors) {
+        findings.push({ code: "celld-toolchain-missing", level: "fail", message });
+    }
+
+    for (const message of probe.warnings) {
+        findings.push({ code: "celld-toolchain-warn", level: "warn", message });
+    }
+
+    if (probe.errors.length === 0 && probe.warnings.length === 0) {
+        findings.push({ code: "celld-toolchain-ok", level: "pass", message: "celld, esbuild and CELLD_BUCKET are in place for a deploy." });
+    }
+};
+
 /** The doctor code and level for each Artifacts jurisdiction verdict. Unchecked warns: residency is not best-effort. */
 const ARTIFACTS_JURISDICTION_FINDINGS = {
     mismatch: { code: "artifacts-jurisdiction-mismatch", level: "fail" },
@@ -916,6 +944,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkCelldToolchain(cwd, options, findings);
     await checkDurableObjectClassBudget(cwd, parsed, options, findings);
     await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);

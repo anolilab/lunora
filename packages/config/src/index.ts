@@ -12,6 +12,8 @@ export {
     LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
+export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/celld-toolchain";
+export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
 export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions } from "./codegen-env";

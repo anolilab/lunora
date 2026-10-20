@@ -41,6 +41,9 @@ vi.mock("@lunora/codegen", async (importOriginal) => {
 // exercise the gate inject their own lister.
 const noRemoteSecrets = (): Promise<{ names: string[]; ok: boolean }> => Promise.resolve({ names: [], ok: false });
 
+/** A celld toolchain that is in place, so the deploy tests do not look for `celld` and `esbuild` on this host. */
+const celldReady = (): Promise<{ errors: string[]; warnings: string[] }> => Promise.resolve({ errors: [], warnings: [] });
+
 // The container deploy cases run a full ts-morph codegen pass (container
 // discovery + class generation), which is fast locally (~0.5s) but can blow past
 // the shared 30s CI timeout when the runner is under heavy concurrent load (e.g.
@@ -274,7 +277,14 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN/u) });
                 expect(result.error).toMatch(/one bootstrap credential in vars/u);
@@ -289,7 +299,14 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger, warns } = silentLogger();
 
-                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(result.code).toBe(0);
                 expect(calls.map((call) => [call.descriptor.command, ...call.descriptor.args])).toStrictEqual([
@@ -311,13 +328,44 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(calls.at(-1)?.descriptor.args.at(-1)).toBe("--dry-run");
             });
 
             // The refusal lives in the driver's argv builder, which runs before
             // the projection is written: a refused deploy changes nothing.
+            it("refuses a celld deploy when the toolchain is missing, before the pipeline writes anything", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: () => Promise.resolve({ errors: ["celld is not on PATH"], warnings: [] }),
+                });
+
+                expect(result).toMatchObject({ code: 2, error: "celld is not on PATH" });
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+                expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+                expect(calls).toHaveLength(0);
+            });
+
             it("refuses --preview for celld before the pipeline writes anything", async () => {
                 expect.assertions(4);
 
@@ -326,7 +374,15 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                const result = await runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    preview: true,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/no preview versions/u) });
                 // Refused before provisioning, so the committed config is untouched —
@@ -393,7 +449,15 @@ describe("lunora deploy", () => {
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
-                const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
                 const projection = join(workdir, "services", "parser", ".celld.wrangler.json");
 
                 expect(result.code).toBe(0);
@@ -1522,7 +1586,15 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+            const result = await runDeployCommand({
+                cwd: workdir,
+                dryRun: true,
+                logger,
+                secretLister: noRemoteSecrets,
+                spawner,
+                target: "celld",
+                celldToolchain: celldReady,
+            });
             const written = JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8")) as { d1_databases: unknown[] };
 
             expect(result.code).toBe(0);

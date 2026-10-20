@@ -1,5 +1,5 @@
 /** The options `lunora deploy` takes and the result it reports — shared by `build`, `prepare` and the package API. */
-import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
+import type { CelldToolchainProbe, DevProcessSpawner, DiscoveryCache } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { DockerProbe } from "../../util/docker";
@@ -18,6 +18,9 @@ interface DeployCommandOptions {
     /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
 
+    /** The celld toolchain check a celld deploy runs before codegen; injected in tests. Defaults to `probeCelldToolchain`. */
+    celldToolchain?: () => Promise<CelldToolchainProbe>;
+
     /**
      * The command the operator actually ran. `build` delegates here with
      * `dryRun: true`; without this the gate names the wrong command in its
@@ -25,6 +28,7 @@ interface DeployCommandOptions {
      */
     commandName?: PreDeployCommand;
     cwd?: string;
+
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
     /** Memoises project discovery for this invocation; `executeDeploy` creates one, and codegen clears it. */
     discoveryCache?: DiscoveryCache;
@@ -49,6 +53,7 @@ interface DeployCommandOptions {
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
+
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
 
@@ -61,7 +66,6 @@ interface DeployCommandOptions {
      * into a red build for an unrelated reason.
      */
     healthCheck?: boolean;
-
     /** Injectable fetch for `--health-check`; defaults to the global `fetch`. */
     healthFetch?: HealthFetch;
     /** Injectable inter-attempt delay for `--health-check`; injected in tests to skip the real wait. */
@@ -70,6 +74,7 @@ interface DeployCommandOptions {
     interactive?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
+
     logger: Logger;
 
     /**

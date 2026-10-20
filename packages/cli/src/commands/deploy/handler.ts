@@ -9,6 +9,7 @@ import {
     discoverSchemaInfo,
     inferLunoraBindings,
     planToolchainInvocation,
+    probeCelldToolchain,
     resolveDeployDriver,
     resolveLazyFunctions,
     resolveSchemaDirectory,
@@ -496,6 +497,25 @@ type PreDeployPipelineResult =
       };
 
 /**
+ * The celld toolchain a deploy runs (`celld`, `esbuild`, and `CELLD_BUCKET` for a
+ * live deploy): its warnings print, and its errors come back as the deploy's
+ * refusal. Nothing for any other target.
+ */
+const celldToolchainError = async (options: DeployCommandOptions, target: string): Promise<string | undefined> => {
+    if (target !== "celld") {
+        return undefined;
+    }
+
+    const probe = await (options.celldToolchain ?? (() => probeCelldToolchain({ dryRun: options.dryRun === true, env: process.env, purpose: "deploy" })))();
+
+    for (const warning of probe.warnings) {
+        options.logger.warn(warning);
+    }
+
+    return probe.errors.length > 0 ? probe.errors.join("; ") : undefined;
+};
+
+/**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
  * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
@@ -561,6 +581,16 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         options.logger.error(message);
 
         return { error: message, target, validation: empty };
+    }
+
+    // The same stop for a missing celld toolchain (`celld`, `esbuild`, the fleet
+    // bucket): it is checked before codegen or provisioning writes a file.
+    const toolchainError = await celldToolchainError(options, target);
+
+    if (toolchainError !== undefined) {
+        options.logger.error(toolchainError);
+
+        return { error: toolchainError, target, validation: empty };
     }
 
     let codegen: CodegenResult | undefined;
@@ -735,6 +765,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 };
 
 /** Warn when a Cloudflare deploy's account is near or at its Durable Object class cap; say nothing otherwise. */
+
 const warnDurableObjectBudget = async (wranglerPath: string | undefined, target: string, environment: string | undefined, logger: Logger): Promise<void> => {
     if (target !== "cloudflare") {
         return;
