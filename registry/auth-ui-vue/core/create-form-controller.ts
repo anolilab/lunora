@@ -280,7 +280,9 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
     const reset = (): void => {
         edited.clear();
-        store.set(initialState());
+        // The resend deadline outlives a reset: the same address sent again inside it is still refused.
+        const { resendAvailableAt } = state();
+        store.set({ ...initialState(), resendAvailableAt });
 
         // `initialState()` restores `loading: true` for a prefilled form, so
         // without re-running the load the form spins forever.

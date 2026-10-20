@@ -984,6 +984,19 @@ describe("resend cooldown", () => {
         expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
     });
 
+    it("keeps the resend cooldown across a reset, so the same address is still refused", async () => {
+        const client = stubClient();
+        const otp = createEmailOtpController(makeContext(client).context);
+
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+        otp.actions.reset();
+        otp.actions.setEmail("a@b.co");
+        await otp.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    });
+
     it("gives no cooldown to an address edited while its request was in flight", async () => {
         vi.useFakeTimers();
 

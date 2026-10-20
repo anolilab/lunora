@@ -151,7 +151,8 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             store.update({ code: emptyField(), formError: undefined, status: "idle", step: "request", successMessage: undefined });
         },
         reset: () => {
-            store.set({ code: emptyField(), email: emptyField(), status: "idle", step: "request" });
+            // The resend deadline outlives a reset: the same address sent again inside it is still refused.
+            store.set({ code: emptyField(), email: emptyField(), resendAvailableAt: store.get().resendAvailableAt, status: "idle", step: "request" });
         },
         sendCode,
         setCode,
