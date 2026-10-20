@@ -339,10 +339,10 @@ const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
 
 /**
  * The shortest marked value replaced as a whole token inside free text (a CVV or a
- * three-digit PIN is the case this exists for). Below it a value is masked only when
- * it is the whole text: a numeric leaf of a marked object collects its decimal form
- * (`{ count: 3 }` yields `"3"`), and whole-token masking of one digit would erase
- * every standalone digit from the invocation's log lines.
+ * three-digit PIN is the case this exists for). Below it a value is masked only as the
+ * whole text, in its JSON string form, or where a value is written (see {@link maskSecret}).
+ * A numeric leaf of a marked object collects its decimal form (`{ count: 3 }` yields `"3"`),
+ * so whole-token masking of one digit would erase every standalone digit from the log lines.
  */
 const SENSITIVE_TOKEN_MIN_LENGTH = 3;
 
@@ -368,6 +368,9 @@ const assignedValuePattern = (secret: string, separators: string): RegExp =>
  * JSON object body.
  */
 const BOOLEAN_SPELLINGS: ReadonlySet<string> = new Set(["false", "true"]);
+
+/** A secret made only of digits: the decimal form of a numeric leaf, not a string a handler wrote. */
+const DIGITS_ONLY = /^\p{N}+$/u;
 
 /**
  * The text forms of the named arguments of one dispatch: the string leaves of each
@@ -555,9 +558,15 @@ const maskSecret = (text: string, secret: string): string => {
         return text.includes(secret) ? text.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK) : text;
     }
 
-    // Bare, a one- or two-character value matches ordinary prose, so only its JSON string
-    // form is masked: a logged `JSON.stringify({ token })` quotes it, and no prose does.
-    return text.replaceAll(JSON.stringify(secret), JSON.stringify(SENSITIVE_ARG_MASK));
+    // Bare, a one- or two-character value matches ordinary prose, so it is masked only where a
+    // value is written: as its JSON string form (a logged `JSON.stringify({ token })` quotes it), or
+    // right after `=` or `:`. Prose does not write a value that way.
+    const quoted = text.replaceAll(JSON.stringify(secret), JSON.stringify(SENSITIVE_ARG_MASK));
+
+    // A digits-only secret is a numeric leaf of a marked object: `"retries":3` and `attempt: 3` are counts,
+    // not the secret. The cost is that a marked two-digit string written as `token=42` is not caught here;
+    // the marked object's JSON form is still registered, so it is masked wherever that form is logged.
+    return DIGITS_ONLY.test(secret) ? quoted : quoted.replaceAll(assignedValuePattern(secret, "=:"), SENSITIVE_ARG_MASK);
 };
 
 /**
@@ -565,7 +574,7 @@ const maskSecret = (text: string, secret: string): string => {
  * A whole-text match is masked at any length. Inside longer text a value of
  * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more is replaced wherever it
  * occurs; one of {@link SENSITIVE_TOKEN_MIN_LENGTH} or more only as a whole token;
- * shorter ones only in their JSON string form. Longest first, so a value that contains
+ * shorter ones only where a value is written (see {@link maskSecret}). Longest first, so a value that contains
  * another is masked whole.
  */
 const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {

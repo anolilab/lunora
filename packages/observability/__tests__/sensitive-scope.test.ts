@@ -67,7 +67,7 @@ describe("createSensitiveScope", () => {
         expect(scope.text("ok!")).toBe("ok!");
     });
 
-    it("masks a short value of one or two characters only when it is the whole text", () => {
+    it("masks a short numeric value only as the whole text, so a count in prose is left alone", () => {
         expect.assertions(2);
 
         // A numeric leaf of a marked object (`{ count: 3 }` collects "3") must not erase every standalone digit.
@@ -109,6 +109,26 @@ describe("createSensitiveScope", () => {
 
         expect(scope.text(logged)).toBe(JSON.stringify({ label: "primary", value: { token: SENSITIVE_ARG_MASK } }));
         expect(scope.text("the ab side of the ledger")).toBe("the ab side of the ledger");
+    });
+
+    it("masks a one- or two-character value written after `=` or `:`, and leaves its letters in prose alone", () => {
+        expect.assertions(4);
+
+        const scope = createSensitiveScope(["ab"]);
+
+        expect(scope.text("token=ab")).toBe(`token=${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("token: ab")).toBe(`token: ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("token=abc")).toBe("token=abc");
+        // `about` and `abacus` begin with the same letters, and neither follows a separator.
+        expect(scope.text("about the abacus")).toBe("about the abacus");
+    });
+
+    it("leaves a marked numeric leaf's digits alone where a count is written, and masks a marked string beside them", () => {
+        expect.assertions(1);
+
+        const scope = createSensitiveScope(sensitiveValues({ value: { token: "ab", count: 3 } }, new Set(["value"])));
+
+        expect(scope.text('{"retries":3} attempt: 3 token=ab')).toBe(`{"retries":3} attempt: 3 token=${SENSITIVE_ARG_MASK}`);
     });
 
     it("masks a value of exactly the substring threshold inside other text", () => {
@@ -621,13 +641,14 @@ describe("ctx.trace under a sensitive scope", () => {
     });
 
     it("masks a marked boolean where a value is written, and leaves an unrelated `true` in the logs alone", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const scope = createSensitiveScope(sensitiveValues({ flag: true, other: "visible", token: SECRET }, new Set(["flag", "token"])));
 
         expect(scope.text('{"ok":true,"retry":false} will construe it')).toBe('{"ok":true,"retry":false} will construe it');
         // A marked string beside it is still masked, so the scope is not simply empty.
         expect(scope.text(`charged with ${SECRET}`)).toBe(`charged with ${SENSITIVE_ARG_MASK}`);
+        expect(scope.text("token=true")).toBe(`token=${SENSITIVE_ARG_MASK}`);
         expect(sensitiveValues({ flag: true }, new Set(["flag"]))).toStrictEqual(["true"]);
     });
 
