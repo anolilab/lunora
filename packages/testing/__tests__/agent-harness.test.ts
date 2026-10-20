@@ -171,4 +171,72 @@ describe("agentHarness", () => {
 
         await expect(harness.run({ input: "go", threadKey: "t1" })).rejects.toThrow(/scripted generate exhausted/u);
     });
+
+    describe("human-in-the-loop approvals", () => {
+        const gatedAgent = (): ReturnType<typeof defineAgent> =>
+            defineAgent({
+                model: "test-model",
+                tools: {
+                    refund: defineAgentTool({
+                        description: "Refund an order.",
+                        execute: async (input, { run }) => run({ __lunoraRef: "billing:refund" }, { id: (input as { id: string }).id }),
+                        inputSchema: anySchema,
+                        needsApproval: true,
+                    }),
+                },
+            });
+
+        it("resumes a paused tool call with the approved decision from the approvals map", async () => {
+            expect.hasAssertions();
+
+            const harness = agentHarness(gatedAgent(), {
+                approvals: { c1: { decision: "approve" } },
+                functions: {
+                    "billing:refund": () => {
+                        return { refunded: true };
+                    },
+                },
+                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Refunded.")],
+            });
+
+            const result = await harness.run({ input: "refund o_9", threadKey: "t1" });
+
+            expect(result.text).toBe("Refunded.");
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).toContain("billing:refund");
+        });
+
+        it("skips the tool when the approvals map rejects the call", async () => {
+            expect.hasAssertions();
+
+            const harness = agentHarness(gatedAgent(), {
+                approvals: { c1: { decision: "reject", note: "not today" } },
+                functions: {
+                    "billing:refund": () => {
+                        return { refunded: true };
+                    },
+                },
+                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Understood.")],
+            });
+
+            const result = await harness.run({ input: "refund o_9", threadKey: "t1" });
+
+            expect(result.text).toBe("Understood.");
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).not.toContain("billing:refund");
+        });
+
+        it("throws a LunoraError naming the limitation when no decision is supplied, instead of hanging", async () => {
+            expect.hasAssertions();
+
+            const harness = agentHarness(gatedAgent(), {
+                functions: {
+                    "billing:refund": () => {
+                        return { refunded: true };
+                    },
+                },
+                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("unreachable")],
+            });
+
+            await expect(harness.run({ input: "refund o_9", threadKey: "t1" })).rejects.toThrow(/paused for human approval.*"c1"/u);
+        });
+    });
 });

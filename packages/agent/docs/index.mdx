@@ -1118,6 +1118,11 @@ expect(harness.dispatches).toContainEqual({ args: { city: "Berlin" }, path: "wea
 scripts; `harness.thread(key)` reads the persisted thread record; provide `functions`
 runtime stubs to back the functions your tools dispatch to.
 
+A tool gated by `needsApproval` pauses the run. Resolve it with
+`approvals: { [toolCallId]: { decision: "approve" } }` (or `"reject"`, with an
+optional `note`); a paused call with no decision makes `run` reject with a
+`LunoraError` rather than hang.
+
 ## See also
 
 - [@lunora/ai](/docs/packages/ai): the model surface (`ctx.ai`) + `defineRag`

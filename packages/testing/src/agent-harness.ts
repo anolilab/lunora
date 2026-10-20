@@ -10,6 +10,7 @@ import type {
     AgentStepLike,
 } from "@lunora/agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
+import { LunoraError } from "@lunora/errors";
 
 /** A thread message as the in-memory runtime stores it (superset of {@link AgentMessageRow}). */
 interface HarnessMessage extends AgentMessageRow {
@@ -39,7 +40,23 @@ interface HarnessDispatch {
 /** Extra function-dispatch handler layered over the built-in `agents:*` runtime double. */
 type HarnessFunction = (args?: Record<string, unknown>) => unknown;
 
+/** A human's decision on one paused tool call, as a client sends it to `agents:agentResolveApproval`. */
+interface HarnessApproval {
+    decision: "approve" | "reject";
+    note?: string;
+}
+
+/** The match-`type` prefix the loop waits on for a tool call's approval (`agent-approval:<toolCallId>`). */
+const APPROVAL_EVENT_PREFIX = "agent-approval:";
+
 interface AgentHarnessOptions {
+    /**
+     * Decisions for human-in-the-loop tool approvals, keyed by tool call id — the
+     * event the run would otherwise hibernate on is delivered from here. A paused
+     * call with no entry is an error (the run cannot resume), not a hang.
+     */
+    approvals?: Record<string, HarnessApproval>;
+
     /**
      * Worker `env` bindings visible to tool `execute` and a dynamic
      * `instructions` thunk. Default `{ LUNORA_TEST: true }`.
@@ -127,14 +144,16 @@ const scriptedGenerate = (script: ReadonlyArray<AgentGenerateResult>): AgentGene
  * Faithful in-memory model of Cloudflare Workflows' `step.do` memoization: a step
  * name with a recorded output returns it WITHOUT re-invoking the callback, so
  * reusing a journal across two `runAgentLoop` calls models a crash + resume of
- * the same instance. `waitForEvent` hibernates forever — the harness is for the
- * ordinary tool-loop, not human-in-the-loop approval pauses (those need a real
- * `sendEvent`, out of scope for a single synchronous drive).
+ * the same instance. `waitForEvent` cannot hibernate in a single synchronous
+ * drive, so it resolves an approval from the `approvals` map and throws on any
+ * other wait rather than never settling.
  */
 class DurableStepJournal implements AgentStepLike {
     public readonly invoked: string[] = [];
 
     private readonly entries = new Map<string, { output: unknown }>();
+
+    public constructor(private readonly approvals: Readonly<Record<string, HarnessApproval>>) {}
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -152,9 +171,26 @@ class DurableStepJournal implements AgentStepLike {
         return output;
     }
 
-    // eslint-disable-next-line class-methods-use-this -- mirrors AgentStepLike.waitForEvent's host signature so the mock stays assignable
-    public async waitForEvent<T>(_name: string, _options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
-        return new Promise<{ payload: Readonly<T>; type: string }>(() => {});
+    public waitForEvent<T>(_name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
+        const { type } = options;
+
+        if (!type.startsWith(APPROVAL_EVENT_PREFIX)) {
+            return Promise.reject(new LunoraError("INTERNAL", `agentHarness: the run waits on durable event "${type}", which the harness cannot deliver.`));
+        }
+
+        const toolCallId = type.slice(APPROVAL_EVENT_PREFIX.length);
+        const approval = this.approvals[toolCallId];
+
+        if (approval === undefined) {
+            return Promise.reject(
+                new LunoraError(
+                    "INTERNAL",
+                    `agentHarness: tool call "${toolCallId}" is paused for human approval. Pass \`approvals: { "${toolCallId}": { decision: "approve" } }\` to resolve it; the harness cannot otherwise pause and resume a run.`,
+                ),
+            );
+        }
+
+        return Promise.resolve({ payload: approval as T, type });
     }
 }
 
@@ -225,6 +261,13 @@ const createRuntime = (
         return { seq };
     };
 
+    // Retires a row by key; like the real mutation it leaves the `seq` counter alone.
+    const deleteMessage = (args?: Record<string, unknown>): unknown => {
+        messages.delete(`${args?.["threadKey"] as string}:${args?.["messageKey"] as string}`);
+
+        return undefined;
+    };
+
     const listMessages = (args?: Record<string, unknown>): unknown => {
         const key = args?.["key"] as string;
 
@@ -273,6 +316,7 @@ const createRuntime = (
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
+        [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
@@ -315,8 +359,10 @@ const createRuntime = (
  * expect(harness.messages("t1").at(-1)?.content).toBe("It shipped.");
  * ```
  *
- * The harness deliberately does NOT model the concurrency guard or a
- * human-in-the-loop approval pause — it is for exercising an agent's tools and
+ * A human-in-the-loop approval resolves from the `approvals` option, keyed by
+ * tool call id; a paused call with no decision throws a `LunoraError` instead of
+ * hanging. The harness deliberately does NOT model the concurrency guard or a
+ * real pause-and-resume across calls — it is for exercising an agent's tools and
  * turn logic, not the durable orchestration itself (that is covered inside
  * `@lunora/agent`).
  */
@@ -342,7 +388,7 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             params,
             paths: DEFAULT_AGENT_FUNCTION_PATHS,
             run: runtime.run,
-            step: new DurableStepJournal(),
+            step: new DurableStepJournal(options.approvals ?? {}),
         });
     };
 
@@ -368,5 +414,5 @@ const toolCallTurn = (id: string, name: string, input: unknown, text = ""): Agen
     return { text, toolCalls: [{ id, input, name }] };
 };
 
-export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessDispatch, HarnessMessage, HarnessThread };
+export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessApproval, HarnessDispatch, HarnessMessage, HarnessThread };
 export { agentHarness, finalTurn, toolCallTurn };
