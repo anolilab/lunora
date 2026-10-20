@@ -123,6 +123,19 @@ describe("client batch transport (088)", () => {
         expect(slots[3]?.ok).toBe(false);
     });
 
+    it("marks the rebuilt error as the server's verdict, so a consumer can trust its message", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "FORBIDDEN", message: "denied" } }, { status: 403 }));
+
+        const error = (await client(fetchMock)
+            .batch([{ fn: fnRef("docs:a") }])
+            .catch((error_: unknown) => error_)) as Record<symbol, unknown>;
+
+        expect(error[Symbol.for("lunora.serverVerdict")]).toBe(true);
+        expect(error["message"]).toBe("denied");
+    });
+
     it("rejects the whole batch (not per-slot) when the worker returns a batch-level error", async () => {
         expect.assertions(2);
 
