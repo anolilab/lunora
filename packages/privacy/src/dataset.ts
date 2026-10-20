@@ -94,6 +94,18 @@ const defineDataset = (id: string, spec: DatasetSpec): Dataset => {
  */
 const erasureOrder = (datasets: ReadonlyArray<Dataset>): ReadonlyArray<Dataset> => [...datasets].toSorted((a, b) => PHASE_RANK[a.phase] - PHASE_RANK[b.phase]);
 
+/**
+ * Refuse a data port result that leaves out one of the dataset's tables. A missing key would read as zero rows,
+ * so an export would omit the table and an erasure would report it clean without checking it.
+ */
+const requireTables = (result: Readonly<Record<string, unknown>>, dataset: Dataset, call: string): void => {
+    const missing = dataset.tableNames.find((table) => result[table] === undefined);
+
+    if (missing !== undefined) {
+        throw new LunoraError("INTERNAL", `The data port's ${call} returned no entry for table "${missing}" of dataset "${dataset.id}".`);
+    }
+};
+
 /** One table a retention rule may keep rows of after erasure, and the rule's directive. */
 interface RetainedTable {
     readonly directive: RetainDirective;
@@ -118,6 +130,7 @@ export {
     type DatasetSpec,
     defineDataset,
     erasureOrder,
+    requireTables,
     type RetainedTable,
     retainedTables,
     type TableErasure,

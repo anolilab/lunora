@@ -209,6 +209,39 @@ describe("runErasure", () => {
 
         await expect(privacy.runErasure(opened.id)).resolves.toStrictEqual({ leftover: ["goals"], status: "failed" });
     });
+
+    it("fails rather than completing when the verify read leaves out a table of the dataset", async () => {
+        const { port } = memoryData({ goals: 0, jobs: 0, tasks: 0 });
+        const partial: DataPort = {
+            ...port,
+            remaining: async () => {
+                return { goals: 0 };
+            },
+        };
+        const { privacy, store } = setup({ data: partial, datasets: [tasks, quiesced], erasure: NO_GRACE });
+        const opened = await privacy.requestErasure();
+
+        await expect(privacy.runErasure(opened.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+    });
+});
+
+describe("a data port that leaves out a table", () => {
+    it("fails the export rather than writing an archive without that table", async () => {
+        const { port } = memoryData({});
+        const partial: DataPort = {
+            ...port,
+            collect: async () => {
+                return { goals: [] };
+            },
+        };
+        const { files, privacy, store } = setup({ data: partial, datasets: [tasks] });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect([...files.files.keys()].some((key) => key.endsWith("export.zip"))).toBe(false);
+    });
 });
 
 describe("omitted columns", () => {

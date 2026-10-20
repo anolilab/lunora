@@ -8,7 +8,7 @@ import type { ManifestDataset } from "./archive";
 import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
-import { retainedTables } from "./dataset";
+import { requireTables, retainedTables } from "./dataset";
 import type { PrivacyPorts } from "./ports";
 import type { RequestRecord } from "./requests";
 
@@ -43,6 +43,8 @@ const withoutColumns = (
  */
 const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
     const rows = await ports.data.collect(dataset, request.subjectId);
+
+    requireTables(rows, dataset, "collect");
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 

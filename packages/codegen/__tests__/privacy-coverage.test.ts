@@ -163,6 +163,42 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_table_unclassified: "notes"/u);
     });
 
+    it("classifies a table by a v.id of the users table even when its owner column has another name", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.optional(v.id("users")) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("leaves a table alone when its v.id names a table that is not a user table", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    tags: defineTable({ label: v.string(), postId: v.id("posts") }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).not.toThrow();
+    });
+
     it("checks a table whose name starts with privacy_", () => {
         expect.assertions(1);
 

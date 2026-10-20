@@ -12,7 +12,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { Dataset } from "./dataset";
-import { erasureOrder, retainedTables } from "./dataset";
+import { erasureOrder, requireTables, retainedTables } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
@@ -146,6 +146,8 @@ const allowedRows = async (
     const rows = await scope.ports.data.collect(dataset, subjectId);
     const now = scope.ports.now();
 
+    requireTables(rows, dataset, "collect");
+
     for (const table of retained) {
         allowed[table] = (rows[table] ?? []).filter((row) => scope.disposition(dataset, table, row, now).kind === "keep").length;
     }
@@ -169,6 +171,7 @@ const verifySubjectErased = async (
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
         const counts = await scope.ports.data.remaining(dataset, subjectId);
 
+        requireTables(counts, dataset, "remaining");
         Object.assign(remaining, counts);
 
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order

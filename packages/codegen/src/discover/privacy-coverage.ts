@@ -17,14 +17,17 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CoverageProblem, TableClassification } from "../../../../shared/privacy-coverage";
 import { AUTH_DEFAULT_TABLES, checkCoverage, classifyTables } from "../../../../shared/privacy-coverage";
-import type { TableIR } from "../ir";
+import type { TableIR, ValidatorIR } from "../ir";
 import { listLunoraSourceFiles } from "./ast";
 
 /** The package whose declaration turns the lint on. Read from the same manifest signal `studio-features` uses. */
 const PRIVACY_PACKAGE = "@lunora/privacy";
 
-/** The column that marks a table as holding a user's data. */
+/** The column that marks a table as holding a user's data, by name. A `v.id` of a user table marks it too. */
 const OWNER_COLUMN = "userId";
+
+/** The tables a `v.id` must name to mark its row as holding a user's data: the app's own and the better-auth one. */
+const USER_TABLES: ReadonlySet<string> = new Set(["user", "users"]);
 
 /** Same normalisation as `toPosixPath` in `run-codegen.ts`: `getFilePath()` is POSIX, OS paths may not be. */
 const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
@@ -429,14 +432,22 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
     return { classifications, enabled: privacyCalls.length > 0, unusedDatasets };
 };
 
-/** A table holds a user's data when it has an owner column and is not one of the privacy package's own tables. */
-const holdsUserData = (table: TableIR): boolean => table.extensionKey !== PRIVACY_EXTENSION_KEY && OWNER_COLUMN in table.shape;
+/** A `v.id` of a user table, looking through `v.optional` and `v.array` wrappers. */
+const referencesUser = (validator: ValidatorIR): boolean =>
+    validator.kind === "id" ? USER_TABLES.has(validator.tableName ?? "") : validator.inner !== undefined && referencesUser(validator.inner);
+
+/**
+ * A table holds a user's data when it has an owner column, or a `v.id` of a user table, and is not one of the
+ * privacy package's own tables. The `v.id` case catches a table whose owner column is named otherwise.
+ */
+const holdsUserData = (table: TableIR): boolean =>
+    table.extensionKey !== PRIVACY_EXTENSION_KEY && (OWNER_COLUMN in table.shape || Object.values(table.shape).some((validator) => referencesUser(validator)));
 
 /** The message for one coverage problem. Names the table, so the reviewer knows which one to fix. */
 const messageFor = (problem: CoverageProblem): string =>
     problem.code === "excluded_without_reason"
         ? `privacy_exclusion_unexplained: "${problem.table}" is excluded without a reason. Give one in definePrivacy({ exclude }).`
-        : `privacy_table_unclassified: "${problem.table}" holds user data (it has a "${OWNER_COLUMN}" column) but no dataset exports it. Add it to a defineDataset, or exclude it in definePrivacy({ exclude }) with a reason.`;
+        : `privacy_table_unclassified: "${problem.table}" holds user data (a "${OWNER_COLUMN}" column or a v.id of a user table) but no dataset exports it. Add it to a defineDataset, or exclude it in definePrivacy({ exclude }) with a reason.`;
 
 /**
  * Fail when the app uses the package and a table with user data is neither covered by a dataset nor excluded
