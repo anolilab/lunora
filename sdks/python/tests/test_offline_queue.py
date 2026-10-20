@@ -1157,6 +1157,35 @@ class TestOnlineOnlyWrites(unittest.TestCase):
 
         self.assertEqual(len(posts), sent, "and nothing was sent")
 
+    def test_an_online_only_transport_type_error_is_refused_with_its_cause(self):
+        covers("offline_online_only_transport_failure_refused")
+        store = _Store()
+        refusal = TypeError("transport rejected the request object")
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            raise refusal
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                    )
+                )
+            )
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertIs(refused.exception.__cause__, refusal)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(store.appended, [])
+
     def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
         covers("offline_online_only_leaves_normal_writes_queued")
         store = _Store()
