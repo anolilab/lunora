@@ -97,7 +97,8 @@ while !Task.isCancelled {
                     var backoff = 1.0
                     var wait = report.retryAfterMs.map { Double($0) / 1000 }
                     while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(wait ?? Double.random(in: backoff / 2 ... backoff)))
+                        let pause = wait ?? Double.random(in: backoff / 2 ... backoff)
+                        try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
                         guard !Task.isCancelled else { return }
                         let next = client.flushOfflineQueue(shardKey: shard)
                         if next.requeued.isEmpty && next.retryAfterMs == nil { return }
@@ -115,7 +116,7 @@ while !Task.isCancelled {
         socket.close() // your socket library: without this each reconnect leaks a connection
     }
     let delay = min(30.0, pow(2.0, Double(min(attempt, 5))))
-    try? await Task.sleep(for: .seconds(Double.random(in: delay / 2...delay)))
+    try? await Task.sleep(nanoseconds: UInt64(Double.random(in: delay / 2...delay) * 1_000_000_000))
     attempt += 1
 }
 ```

@@ -79,7 +79,8 @@ while (isActive) {
                     socket.send(Json.write(Client.buildConnectFrame()))
                     client.attachSocket { frame -> socket.send(Json.write(frame)) }
                     client.resendSubscriptions()
-                    val report = client.flushOfflineQueue(shard)
+                    // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it
+                    val report = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
                     if (report.requeued.isNotEmpty() || report.retryAfterMs != null) {
                         // requeued writes never stop the read loop: retry in a child coroutine
                         retry = launch {
@@ -87,7 +88,7 @@ while (isActive) {
                             var wait = report.retryAfterMs ?: jitter(backoff)
                             while (true) {
                                 delay(wait)
-                                val again = client.flushOfflineQueue(shard)
+                                val again = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
                                 if (again.requeued.isEmpty() && again.retryAfterMs == null) break
                                 // a persistent transient failure backs off instead of replaying every second
                                 backoff = minOf(30_000L, backoff * 2)

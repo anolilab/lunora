@@ -196,7 +196,7 @@ def build_shape_subscribe_frame(
     return frame
 
 
-def _run_callbacks(calls: list) -> None:
+def _run_callbacks(calls: list, what: str = "callback") -> None:
     """Run consumer callbacks, each in its own guard.
 
     One callback raising must not stop the ones queued after it: a frame fans
@@ -210,7 +210,7 @@ def _run_callbacks(calls: list) -> None:
         try:
             call()
         except Exception:  # noqa: PERF203 - each callback needs its own guard
-            _log.exception("lunora: frame handler raised")
+            _log.exception("lunora: %s raised", what)
 
 
 def _frame_key(value: Any) -> Optional[str]:
@@ -486,9 +486,9 @@ class LunoraClient:
             # is not consulted, and a token refresh is not a change of user.
             if previous is not None and previous != self._identity_fingerprint():
                 self._evict_session(deferred)
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
         if changed:
-            _run_callbacks(listeners)
+            _run_callbacks(listeners, "token listener")
 
     def _identity_fingerprint(self) -> Identity:
         """Who a write queued now belongs to; call with the lock held.
@@ -545,7 +545,7 @@ class LunoraClient:
             previous, self._identity = self._identity, value
             if previous is not None and previous != value:
                 self._evict_session(deferred)
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
 
     def _evict_session(self, deferred: list[Callable[[], None]]) -> None:
         """Drop every resume cursor and shape row; call with the lock held.
@@ -579,7 +579,7 @@ class LunoraClient:
         close_queue(self)
         with self._lock:
             hooks = list(self._close_hooks)
-        _run_callbacks(hooks)
+        _run_callbacks(hooks, "close hook")
 
     # --- HTTP RPC -----------------------------------------------------------
 
@@ -935,7 +935,7 @@ class LunoraClient:
         # User callbacks run with the lock released. Holding it would let a callback
         # that subscribes deadlock the read loop, and would run arbitrary
         # application code inside the client's critical section.
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
 
         return descriptor
 
