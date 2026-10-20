@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.385...@lunora/config@1.0.0-alpha.386) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.336
+* **@lunora/container:** upgraded to 1.0.0-alpha.87
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/seed:** upgraded to 1.0.0-alpha.243
+* **@lunora/studio:** upgraded to 1.0.0-alpha.326
+
 ## @lunora/config [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.384...@lunora/config@1.0.0-alpha.385) (2026-10-20)
 
 
