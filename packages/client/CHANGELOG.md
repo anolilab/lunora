@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.236...@lunora/client@1.0.0-alpha.237) (2026-10-20)
+
+### Bug Fixes
+
+* **sdk:** harden the Python read loop, add reconnect and redirect guidance ([#1275](https://github.com/anolilab/lunora/issues/1275)) ([ad29202](https://github.com/anolilab/lunora/commit/ad2920205392cdc45ebb4138c8934f209178ded8))
+
 ## @lunora/client [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.235...@lunora/client@1.0.0-alpha.236) (2026-10-20)
 
 ### Bug Fixes
