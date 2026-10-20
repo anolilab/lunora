@@ -102,7 +102,10 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
 
                 if (cooldownActive(store.get().resendAvailableAt) && trimmed === sentTo) {
                     // Say why nothing was sent: this flow has no shipped countdown, so a silent refusal reads as a broken button.
-                    store.update({ error: cooldownLabel(context.localization, secondsUntil(store.get().resendAvailableAt)), status: "error" });
+                    // A send still in flight keeps its status, or the single-flight guard in `run` would let another one overlap it.
+                    if (store.get().status !== "submitting") {
+                        store.update({ error: cooldownLabel(context.localization, secondsUntil(store.get().resendAvailableAt)), status: "error" });
+                    }
 
                     return;
                 }
