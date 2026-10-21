@@ -216,7 +216,10 @@ worth knowing about, and it gates as **authenticated**.
 `setToken(null)` signs out. It does **not** re-authenticate an open
 subscription: a socket keeps the session credential it connected with. Rotating it
 is `client.setWsToken(token)`, which sends the new value in the next `connect`
-frame, and closes the shard sockets to force a reconnect. `user` is resolved from better-auth's
+frame, and closes the shard sockets to force a reconnect. A server gated by
+`LUNORA_WS_BEARER` accepts only its one shared value there, so a per-user session
+needs an ungated server; the [React Native guide](/docs/frameworks/react-native)
+explains why. `user` is resolved from better-auth's
 `get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are

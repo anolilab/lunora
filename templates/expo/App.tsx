@@ -20,10 +20,10 @@ function Root(): ReactElement {
     const { data: session, isPending } = authClient.useSession();
 
     // Bridge the better-auth Expo session into the Lunora client as a bearer
-    // token — HTTP `Authorization` (`setAuthToken`), the socket upgrade's
+    // token — HTTP `Authorization` (`setAuthToken`) and the socket upgrade's
     // `Authorization` (`setSessionBearer`, so the server knows the user at
-    // connect), and the socket's `connect` frame (`setWsToken`) — re-synced
-    // whenever the session changes (sign-in/out).
+    // connect) — re-synced whenever the session changes (sign-in/out). The
+    // session is not the shared `LUNORA_WS_BEARER`, so it never goes in `connect`.
     //
     // The user id goes with it as the STABLE subject. Without it the offline
     // queue keys identity on the token bytes, so a routine session-token refresh
@@ -50,7 +50,6 @@ function Root(): ReactElement {
 
             setSessionBearer(token);
             lunoraClient.setAuthToken(token, session?.user.id ?? null);
-            lunoraClient.setWsToken(token ?? undefined);
         })();
 
         return () => {

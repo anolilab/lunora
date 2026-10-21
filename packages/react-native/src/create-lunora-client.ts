@@ -39,7 +39,7 @@ const isNativeRuntime = (): boolean => typeof document === "undefined";
  * happens to hold the session cookie that launch — which is what let it hide.
  *
  * `credentials: "omit"` is the fix, and it costs nothing on native: the session
- * is a bearer there (`setAuthToken` / `setWsToken`), so the cookie was never the
+ * is a bearer there (`setAuthToken` / `setSessionBearer`), so the cookie was never the
  * credential — only an accident of transport riding along. Wrapped INNERMOST by
  * {@link createLunoraClient}, so it runs after every other layer and also
  * overrides the `credentials: "include"` `@lunora/client` sends on its

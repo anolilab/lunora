@@ -123,8 +123,10 @@ export const client = createLunoraClient({
 });
 ```
 
-Bridge the session into the client whenever it changes — `setAuthToken` for HTTP,
-`setSessionBearer` for the socket's upgrade, and `setWsToken` for its `connect` frame:
+Bridge the session into the client whenever it changes — `setAuthToken` for HTTP and
+`setSessionBearer` for the socket's upgrade. The session is per user, so it never goes in
+the `connect` frame: leave `LUNORA_WS_BEARER` unset for an Expo app, because a shipped app
+cannot hold that shared secret.
 
 ```tsx
 // App.tsx
@@ -150,7 +152,6 @@ function Root() {
             if (cancelled) return;
             setSessionBearer(token); // the socket upgrade's `Authorization: Bearer …`
             client.setAuthToken(token); // HTTP `Authorization: Bearer …`
-            client.setWsToken(token ?? undefined); // the socket's `connect` frame
         })();
 
         return () => {

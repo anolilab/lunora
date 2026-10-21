@@ -21,9 +21,10 @@ export const setSessionBearer = (token: string | null): void => {
  * - `storage: AsyncStorage` persists the offline mutation queue, so a message
  *   sent while offline survives an app restart and flushes on reconnect.
  * - Auth is a **bearer** token, wired outside this module: `App.tsx` bridges
- *   the better-auth Expo session into `setAuthToken` (HTTP RPC),
- *   `setSessionBearer` (the upgrade's `Authorization` header), and `setWsToken`
- *   (the `connect` frame) via `expoBearerToken`, re-synced on sign-in/out. A
+ *   the better-auth Expo session into `setAuthToken` (HTTP RPC) and
+ *   `setSessionBearer` (the upgrade's `Authorization` header) via
+ *   `expoBearerToken`, re-synced on sign-in/out. The upgrade header identifies
+ *   the socket, so `LUNORA_WS_BEARER` stays unset for an Expo app. A
  *   bearer avoids the `Cookie` header the runtime's CSRF guard rejects on
  *   `Origin`-less native requests — `createLunoraClient` also sends
  *   `credentials: "omit"` so the platform cookie jar cannot re-attach one
