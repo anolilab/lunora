@@ -188,7 +188,7 @@ describe("lunora build — client build", () => {
             expect(frameworkCalls(eager.calls)[0]?.env).not.toHaveProperty("LUNORA_LAZY_FUNCTIONS");
         });
 
-        it("tells the client build the target this run resolved and a metafile path only this process names", async () => {
+        it("tells the client build the target this run resolved and a metafile path only this run names", async () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
@@ -199,7 +199,7 @@ describe("lunora build — client build", () => {
             await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner });
 
             expect(frameworkCalls(calls)[0]?.env).toMatchObject({ LUNORA_BUILD_TARGET: "cloudflare" });
-            expect(frameworkCalls(calls)[0]?.env?.LUNORA_BUNDLE_META_PATH).toBe(join(workdir, ".lunora", `vite-bundle-meta-${String(process.pid)}.json`));
+            expect(frameworkCalls(calls)[0]?.env?.LUNORA_BUNDLE_META_PATH).toMatch(/vite-bundle-meta-[0-9a-f-]{36}\.json$/u);
         });
 
         it("rolls back wrangler.jsonc edits the client build makes, so build leaves the committed config alone", async () => {
@@ -284,7 +284,6 @@ describe("lunora build — client build", () => {
 
             await runClientBuild({
                 cwd: workdir,
-                keepBundleMeta: false,
                 lazyFunctions: false,
                 logger: silentLogger(),
                 outputJson: false,
@@ -309,7 +308,6 @@ describe("lunora build — client build", () => {
             const { calls, spawner } = recordingSpawner();
             const failure = await runClientBuild({
                 cwd: workdir,
-                keepBundleMeta: false,
                 lazyFunctions: false,
                 logger: silentLogger(),
                 outputJson: false,
@@ -372,7 +370,8 @@ describe("lunora build — client build", () => {
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "src/server.ts" }), "utf8");
             mkdirSync(join(workdir, ".lunora"), { recursive: true });
-            writeFileSync(viteBundleMetaPath(workdir), "{}", "utf8");
+            // The pid-named file an older CLI wrote; no build reads it any more.
+            writeFileSync(join(workdir, ".lunora", `vite-bundle-meta-${String(process.pid)}.json`), "{}", "utf8");
 
             const { spawner } = recordingSpawner();
 
@@ -521,6 +520,52 @@ describe("lunora build — client build", () => {
         expect.assertions(1);
 
         expect(isAbsolute(viteBundleMetaPath("relative/project"))).toBe(true);
+    });
+
+    it("keeps each of two overlapping builds in one project, so neither loses its metafile to the other", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+        writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+        // Each build's Vite step writes its file, then waits for the other build to write its own. The second write lands on a
+        // shared path before either build copies, so only per-run names keep both metafiles.
+        let arrived = 0;
+        let releaseBoth: () => void = () => {};
+        const bothWritten = new Promise<void>((resolve) => {
+            releaseBoth = resolve;
+        });
+        const spawner: Spawner = async (descriptor) => {
+            const isFramework = !descriptor.args.includes("--dry-run") && descriptor.args.includes("build");
+
+            if (isFramework) {
+                arrived += 1;
+                const run = arrived;
+                const metaPath = descriptor.env?.LUNORA_BUNDLE_META_PATH ?? join(workdir, ".lunora", "missing.json");
+
+                mkdirSync(dirname(metaPath), { recursive: true });
+                writeFileSync(metaPath, JSON.stringify({ run }), "utf8");
+
+                if (arrived === 2) {
+                    releaseBoth();
+                }
+                await bothWritten;
+            }
+
+            return { code: 0, descriptor, stderr: "", stdout: "" };
+        };
+
+        const [first, second] = await Promise.all([
+            runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out-a", spawner }),
+            runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out-b", spawner }),
+        ]);
+
+        expect([first.code, second.code]).toStrictEqual([0, 0]);
+        expect(
+            [join(workdir, "out-a", "bundle-meta.json"), join(workdir, "out-b", "bundle-meta.json")]
+                .map((path) => (existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as { run: number }).run : undefined))
+                .toSorted((a = 0, b = 0) => a - b),
+        ).toStrictEqual([1, 2]);
     });
 
     describe("frameworkBuildFor", () => {

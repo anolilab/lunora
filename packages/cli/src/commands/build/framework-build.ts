@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -26,12 +27,11 @@ import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 type FrameworkTool = "rsbuild" | "script" | "vite";
 
 /**
- * Where the Vite plugin writes this run's server metafile. Named by the CLI's pid so two
- * builds in one project write different files: a single shared path let one run's cleanup
- * delete another run's output. The CLI and the plugin both read it through the env var below.
+ * Where the Vite plugin writes one client build's server metafile. Each build names its own file, so two builds that overlap
+ * (in one process or two) cannot delete each other's output. The CLI and the plugin both read it through the env var below.
  */
 // Absolute, because the Vite child resolves a relative path against its own root, not the CLI's cwd.
-const viteBundleMetaPath = (projectRoot: string): string => resolve(projectRoot, ".lunora", `vite-bundle-meta-${String(process.pid)}.json`);
+const viteBundleMetaPath = (projectRoot: string, runId: string = randomUUID()): string => resolve(projectRoot, ".lunora", `vite-bundle-meta-${runId}.json`);
 
 /** Set on a client build's child so a build script that runs `lunora` does not start another client build. */
 const CLIENT_BUILD_ENV = "LUNORA_CLIENT_BUILD";
@@ -104,10 +104,13 @@ const frameworkBuildFor = (cwd: string, environment?: string): FrameworkTool | u
 };
 
 interface FrameworkBuildOptions {
+    /**
+     * Where the child writes its Vite metafile. Set by `lunora build`, which keeps the file for its copy into the out-dir. Unset, the
+     * child gets a fresh file that is removed after the build, since a deploy has no use for it.
+     */
+    bundleMetaPath?: string;
     /** The deploy environment (`--env`); the child build gets it as `CLOUDFLARE_ENV`, so its output targets that environment. */
     environment?: string;
-    /** `true` keeps the Vite metafile after the build, for `lunora build` to copy into its out-dir. */
-    keepBundleMeta: boolean;
     /** Opt the child's codegen into lazy imports, the same way `lunora build` itself does. */
     lazyFunctions: boolean;
     logger: Logger;
@@ -138,6 +141,7 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
     options.logger.info(`running ${tool} build before bundling the Worker`);
 
     const restore = snapshotWranglerConfig(cwd);
+    const metaPath = options.bundleMetaPath ?? viteBundleMetaPath(cwd);
 
     rmSync(join(cwd, DEFAULT_BUNDLE_META_PATH), { force: true });
 
@@ -148,7 +152,7 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
             cwd,
             env: {
                 [BUILD_TARGET_ENV]: options.target,
-                [BUNDLE_META_PATH_ENV]: viteBundleMetaPath(cwd),
+                [BUNDLE_META_PATH_ENV]: metaPath,
                 ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
                 ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
                 ...(options.strictAdvisories === false ? { [STRICT_ADVISORIES_ENV]: "0" } : {}),
@@ -161,8 +165,8 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
     } finally {
         restore();
 
-        if (!options.keepBundleMeta) {
-            rmSync(viteBundleMetaPath(cwd), { force: true });
+        if (options.bundleMetaPath === undefined) {
+            rmSync(metaPath, { force: true });
         }
     }
 };
@@ -170,13 +174,13 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
 interface ClientBuildOptions {
     /** An explicit `--api-spec` is refused when a client build would run: the plugin config decides it. */
     apiSpec?: ApiSpec;
+    /** The per-run Vite metafile path `lunora build` keeps for its copy; `runFrameworkBuild` documents the unset case. */
+    bundleMetaPath?: string;
     cwd: string;
     /** Forwarded to the client build, which must build for the environment the wrangler deploy names. */
     environment?: string;
     /** `false` skips the client build (`--no-framework-build`, `--prebuilt`). */
     frameworkBuild?: boolean;
-    /** `true` keeps the Vite metafile for `lunora build`'s copy; a deploy has no use for it. */
-    keepBundleMeta: boolean;
     lazyFunctions: boolean;
     logger: Logger;
     /** `true` when the caller's stdout is a JSON document, so the build's output goes to stderr. */
@@ -260,7 +264,7 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     }
 
     return runFrameworkBuild(options.cwd, tool, {
-        keepBundleMeta: options.keepBundleMeta,
+        bundleMetaPath: options.bundleMetaPath,
         environment: options.environment,
         strictAdvisories: options.strictAdvisories,
         lazyFunctions: options.lazyFunctions,

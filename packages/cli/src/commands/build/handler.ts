@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -147,7 +148,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 
     // Both files are named for this run: a leftover from an earlier run must not stand in for this run's output.
     const destination = resolve(projectRoot, outDirectory, "bundle-meta.json");
-    const viteMeta = viteBundleMetaPath(projectRoot);
+    const viteMeta = viteBundleMetaPath(projectRoot, randomUUID());
 
     // Held in memory so a failed run can put back the metafile it did not replace.
     const previous = existsSync(destination) ? readFileSync(destination) : undefined;
@@ -163,6 +164,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         result = await runDeployCommand({
             allowSchemaDrift: options.allowSchemaDrift,
             apiSpec: options.apiSpec,
+            bundleMetaPath: viteMeta,
             frameworkBuild: options.frameworkBuild,
             lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             // So the drift gate names `build` and offers only the flags `build`

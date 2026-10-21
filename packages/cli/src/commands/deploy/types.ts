@@ -21,6 +21,9 @@ interface DeployCommandOptions {
     /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
 
+    /** The Vite metafile path this run's client build keeps for `lunora build`'s copy; unset, the build's metafile is discarded. */
+    bundleMetaPath?: string;
+
     /**
      * The `--env` this run's client build was given as `CLOUDFLARE_ENV`. Set only when a client build ran, so the generated config
      * it wrote is for that environment; without it the environment's Hyperdrive id is not written into that config.
