@@ -49,6 +49,20 @@ const store = (name: string) => {
             });
             await call("agentPatchThread", { key, status: "awaiting_input" });
         },
+        /** Pause `key` on a secret request (`awaiting_secret`), which leaves the thread `awaiting_input` with no approval. */
+        pauseForSecret: async (key: string, owner: string, instanceId: string): Promise<void> => {
+            await call("agentEnsureThread", { agent: "support", instanceId, key, owner });
+            await call("agentAppendMessage", {
+                content: "Awaiting a secret.",
+                messageKey: `${instanceId}:secret:call_secret`,
+                role: "tool",
+                status: "awaiting_secret",
+                threadKey: key,
+                toolCallId: "call_secret",
+                toolName: "charge",
+            });
+            await call("agentPatchThread", { key, status: "awaiting_input" });
+        },
         /** The inbox as `userId` sees it; no `userId` is an anonymous caller. */
         inbox: async (userId?: string, limit?: number): Promise<Approval[]> =>
             (await call("agentPendingApprovals", limit === undefined ? {} : { limit }, userId === undefined ? {} : { userId })) as Approval[],
@@ -107,6 +121,21 @@ describe("approvals inbox on real workerd storage", () => {
         expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_real"]);
     });
 
+    it("is not starved by newer secret-paused threads that hold no approval", async () => {
+        const { inbox, park, pauseForSecret } = store("secret-starve");
+
+        await park("t-approval", "user-a", "wf-approval", "call_approval");
+        // More secret-paused threads than the default page, all newer than the approval.
+        for (let index = 0; index < 60; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- seeding order decides which threads are newest
+            await pauseForSecret(`t-secret-${String(index)}`, "user-a", `wf-secret-${String(index)}`);
+        }
+
+        const pending = await inbox("user-a");
+
+        expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_approval"]);
+    });
+
     it("clamps the limit to [1, 200] and returns threads newest first", async () => {
         const { inbox, park } = store("limit");
 
@@ -127,5 +156,5 @@ describe("approvals inbox on real workerd storage", () => {
         const updatedAt = capped.map((item) => item.threadUpdatedAt);
 
         expect(updatedAt).toStrictEqual([...updatedAt].toSorted((a, b) => b - a));
-    });
+    }, 120_000); // seeding 205 threads over RPC takes ~25s, close to the 30s default
 });

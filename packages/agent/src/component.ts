@@ -30,6 +30,13 @@ const DEFAULT_APPROVALS_LIMIT = 50;
 const MAX_APPROVALS_LIMIT = 200;
 
 /**
+ * Paused threads the inbox reads before giving up. Secret-paused threads share the
+ * `awaiting_input` index but carry no approval, so a page of them would otherwise
+ * hide an older approval. This bounds how far they can starve the inbox.
+ */
+const MAX_APPROVALS_SCAN = 500;
+
+/**
  * How many runs may park behind the one in flight under
  * `onConcurrentRun: "queue"` before further starts are rejected.
  *
@@ -1360,7 +1367,9 @@ export const agentComponent = (): AgentComponent => {
      * instance that does not own the thread), so surfacing it would hand the
      * client a triple that can only fail.
      *
-     * `limit` is clamped to `[1, MAX_APPROVALS_LIMIT]`. Each thread's message read
+     * `limit` is clamped to `[1, MAX_APPROVALS_LIMIT]` and counts threads that hold an
+     * approval. Paused threads are scanned newest first, up to `MAX_APPROVALS_SCAN`, so
+     * threads paused for a secret do not consume the page. Each thread's message read
      * is a prefix range on `byMessageKey`, so it touches only that instance's
      * markers and never the whole history.
      */
@@ -1375,44 +1384,58 @@ export const agentComponent = (): AgentComponent => {
             .query(THREADS_TABLE)
             .withIndex("byOwnerStatus", (q) => q.eq("owner", userId).eq("status", "awaiting_input"))
             .order("desc")
-            .take(Math.min(MAX_APPROVALS_LIMIT, Math.max(1, Math.trunc(args.limit ?? DEFAULT_APPROVALS_LIMIT))));
-        // At most `limit` threads, each read independently: fan out, then flatten in thread order.
-        const perThread = await Promise.all(
-            threads.map(async (thread) => {
-                const instanceId = thread["instanceId"] as string | undefined;
+            .take(MAX_APPROVALS_SCAN);
+        const wanted = Math.min(MAX_APPROVALS_LIMIT, Math.max(1, Math.trunc(args.limit ?? DEFAULT_APPROVALS_LIMIT)));
+        // One thread's pending approvals. Each thread's read is a prefix range on `byMessageKey`.
+        const readApprovals = async (thread: Record<string, unknown>): Promise<Record<string, unknown>[]> => {
+            const instanceId = thread["instanceId"] as string | undefined;
 
-                if (instanceId === undefined) {
-                    return [];
+            if (instanceId === undefined) {
+                return [];
+            }
+
+            // Markers are keyed `<instanceId>:approval:<toolCallId>`. `;` is the byte after `:`,
+            // so the range `[markerPrefix, markerUpper)` holds exactly this instance's markers.
+            const markerPrefix = `${instanceId}:approval:`;
+            const markerUpper = `${instanceId}:approval;`;
+            const rows = await context.db
+                .query(MESSAGES_TABLE)
+                .withIndex("byMessageKey", (q) => q.eq("threadKey", thread["key"]).gte("messageKey", markerPrefix).lt("messageKey", markerUpper))
+                .collect();
+
+            return rows
+                .filter((row) => row["status"] === "awaiting_approval")
+                .map((row) =>
+                    definedColumns({
+                        agent: thread["agent"],
+                        content: row["content"],
+                        instanceId,
+                        requestedAt: row["createdAt"],
+                        threadKey: thread["key"],
+                        threadTitle: thread["title"],
+                        threadUpdatedAt: thread["updatedAt"],
+                        toolCallId: row["toolCallId"],
+                        toolName: row["toolName"],
+                    }),
+                );
+        };
+        // Chunks of `wanted` threads are read in parallel, stopping once `wanted` threads hold an approval.
+        const approvals: Record<string, unknown>[] = [];
+        let matched = 0;
+
+        for (let start = 0; start < threads.length && matched < wanted; start += wanted) {
+            // eslint-disable-next-line no-await-in-loop -- each chunk decides whether the next one is needed
+            const perThread = await Promise.all(threads.slice(start, start + wanted).map((thread) => readApprovals(thread)));
+
+            for (const items of perThread) {
+                if (items.length > 0 && matched < wanted) {
+                    approvals.push(...items);
+                    matched += 1;
                 }
+            }
+        }
 
-                // Markers are keyed `<instanceId>:approval:<toolCallId>`. `;` is the byte after `:`,
-                // so the range `[markerPrefix, markerUpper)` holds exactly this instance's markers.
-                const markerPrefix = `${instanceId}:approval:`;
-                const markerUpper = `${instanceId}:approval;`;
-                const rows = await context.db
-                    .query(MESSAGES_TABLE)
-                    .withIndex("byMessageKey", (q) => q.eq("threadKey", thread["key"]).gte("messageKey", markerPrefix).lt("messageKey", markerUpper))
-                    .collect();
-
-                return rows
-                    .filter((row) => row["status"] === "awaiting_approval")
-                    .map((row) =>
-                        definedColumns({
-                            agent: thread["agent"],
-                            content: row["content"],
-                            instanceId,
-                            requestedAt: row["createdAt"],
-                            threadKey: thread["key"],
-                            threadTitle: thread["title"],
-                            threadUpdatedAt: thread["updatedAt"],
-                            toolCallId: row["toolCallId"],
-                            toolName: row["toolName"],
-                        }),
-                    );
-            }),
-        );
-
-        return perThread.flat();
+        return approvals;
     });
 
     /**
