@@ -1,3 +1,14 @@
+## @lunora/rspack [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.87...@lunora/rspack@1.0.0-alpha.88) (2026-10-21)
+
+### Features
+
+* **cli:** run the vite or rsbuild build before lunora build ([#1289](https://github.com/anolilab/lunora/issues/1289)) ([5a93210](https://github.com/anolilab/lunora/commit/5a9321020df6c55a50805745177e903fa90a4570))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.392
+
 ## @lunora/rspack [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.86...@lunora/rspack@1.0.0-alpha.87) (2026-10-20)
 
 
