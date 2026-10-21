@@ -74,6 +74,25 @@ describe("lunora deploy — client build before wrangler", () => {
         expect(calls.some((call) => call.descriptor.args.includes("--dry-run"))).toBe(true);
     });
 
+    it("tells the client build when advisories are opted out, so its plugin does not fail on them", async () => {
+        expect.assertions(1);
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({
+            cwd: workdir,
+            dryRun: true,
+            logger: silentLogger(),
+            spawner,
+            secretLister: () => Promise.resolve({ names: [], ok: false }),
+            strictAdvisories: false,
+        });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor));
+
+        expect(build?.descriptor.env?.LUNORA_STRICT_ADVISORIES).toBe("0");
+    });
+
     it("builds for the environment --env names, so the client output matches the environment wrangler deploys", async () => {
         expect.assertions(1);
 

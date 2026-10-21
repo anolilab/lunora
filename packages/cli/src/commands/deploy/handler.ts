@@ -1072,6 +1072,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
         cwd: projectRoot,
         environment: options.env,
         frameworkBuild: options.frameworkBuild,
+        strictAdvisories: resolveStrictAdvisories(options),
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         logger,
         outputJson: options.format === "json" || options.clientBuildOutputJson === true,

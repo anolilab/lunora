@@ -145,13 +145,13 @@ describe("lunora build — client build", () => {
 
             await runBuildCommand({ cwd: workdir, lazyFunctions: true, logger: silentLogger(), spawner });
 
-            expect(frameworkCalls(calls)[0]?.env).toEqual({ LUNORA_LAZY_FUNCTIONS: "1" });
+            expect(frameworkCalls(calls)[0]?.env).toMatchObject({ LUNORA_LAZY_FUNCTIONS: "1" });
 
             const eager = recordingSpawner();
 
             await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: eager.spawner });
 
-            expect(frameworkCalls(eager.calls)[0]?.env).toEqual({});
+            expect(frameworkCalls(eager.calls)[0]?.env?.LUNORA_LAZY_FUNCTIONS).toBeUndefined();
         });
 
         it("rolls back wrangler.jsonc edits the client build makes, so build leaves the committed config alone", async () => {

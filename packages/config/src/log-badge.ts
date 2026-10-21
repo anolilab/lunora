@@ -70,9 +70,13 @@ const reportCodegenFindings = (result: Pick<CodegenResult, "advisories" | "platf
  * presentation — and presentation is what this module owns, which is also why
  * this needs no `tag` parameter: {@link LUNORA_TAG} is right above it.
  */
-const blockingFindingsMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">): string | undefined => {
+const blockingFindingsMessage = (
+    result: Pick<CodegenResult, "advisories" | "platformDiagnostics">,
+    options: { strictAdvisories?: boolean } = {},
+): string | undefined => {
     const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
-    const blockingNames = sortedUniqueNames([...advisoryNames, ...platformDiagnosticNames]);
+    // An advisory opt-out (--no-strict-advisories) lets advisories through; platform diagnostics always block.
+    const blockingNames = sortedUniqueNames([...(options.strictAdvisories === false ? [] : advisoryNames), ...platformDiagnosticNames]);
 
     if (blockingNames.length === 0) {
         return undefined;

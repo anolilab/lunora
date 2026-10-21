@@ -1002,6 +1002,12 @@ type RemotePreference = boolean | undefined;
 const STEP_BADGE_NAMES: ReadonlyArray<StepBadgeName>;
 ```
 
+### `STRICT_ADVISORIES_ENV` (const)
+
+```ts
+const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
+```
+
 ### `ScaffoldFileResult` (type)
 
 ```ts
@@ -1238,7 +1244,9 @@ const badgeWidth: (_spec: BadgeSpec) => number;
 ### `blockingFindingsMessage` (const)
 
 ```ts
-const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, options?: {
+    strictAdvisories?: boolean;
+}) => string | undefined;
 ```
 
 ### `buildPackageSecretsBlock` (const)

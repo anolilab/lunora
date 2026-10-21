@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow } from "@lunora/config";
+import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -62,6 +62,8 @@ interface FrameworkBuildOptions {
     /** `json` keeps the child's stdout off the parent's single JSON document. */
     outputJson: boolean;
     spawner?: Spawner;
+    /** `false` when '--no-strict-advisories' opted out: the child build then does not fail on ERROR-level advisories. */
+    strictAdvisories?: boolean;
 }
 
 /**
@@ -90,6 +92,7 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
             env: {
                 ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
                 ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
+                ...(options.strictAdvisories === false ? { [STRICT_ADVISORIES_ENV]: "0" } : {}),
             },
             stdoutToStderr: options.outputJson,
         });
@@ -113,6 +116,8 @@ interface ClientBuildOptions {
     /** `true` when the caller's stdout is a JSON document, so the build's output goes to stderr. */
     outputJson: boolean;
     spawner?: Spawner;
+    /** `false` when '--no-strict-advisories' opted out: the child build then does not fail on ERROR-level advisories. */
+    strictAdvisories?: boolean;
     /** An explicit `--target` is refused when it names a different target than the project resolves to. */
     target?: string;
 }
@@ -144,6 +149,7 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
 
     return runFrameworkBuild(options.cwd, tool, {
         environment: options.environment,
+        strictAdvisories: options.strictAdvisories,
         lazyFunctions: options.lazyFunctions,
         logger: options.logger,
         outputJson: options.outputJson,

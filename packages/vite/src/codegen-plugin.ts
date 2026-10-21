@@ -13,7 +13,15 @@ import {
     refreshCodegenProject,
     runCodegen,
 } from "@lunora/codegen";
-import { blockingFindingsMessage, CODEGEN_ENV, isCodegenDisabled, LUNORA_TAG, reportCodegenFindings, runPostCodegenHook } from "@lunora/config";
+import {
+    blockingFindingsMessage,
+    CODEGEN_ENV,
+    isCodegenDisabled,
+    LUNORA_TAG,
+    reportCodegenFindings,
+    runPostCodegenHook,
+    STRICT_ADVISORIES_ENV,
+} from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -167,7 +175,7 @@ const runCodegenSafely = (
         // target) — `vite dev` never does, matching `lunora codegen`'s own
         // advisory-outside-CI default.
         return {
-            blockingMessage: blockingFindingsMessage(result),
+            blockingMessage: blockingFindingsMessage(result, { strictAdvisories: process.env[STRICT_ADVISORIES_ENV] !== "0" }),
             outputDirectory: resolve(result.outputDirectory),
         };
     } catch (error: unknown) {

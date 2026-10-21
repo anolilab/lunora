@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { FindingLogger } from "@lunora/config";
-import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings } from "@lunora/config";
+import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings, STRICT_ADVISORIES_ENV } from "@lunora/config";
 import { reconcileWranglerExtras, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 
@@ -51,7 +51,7 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
     reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
     reportCodegenFindings(result, logger);
 
-    return blockingFindingsMessage(result);
+    return blockingFindingsMessage(result, { strictAdvisories: process.env[STRICT_ADVISORIES_ENV] !== "0" });
 };
 
 /**
