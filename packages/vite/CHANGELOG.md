@@ -1,3 +1,14 @@
+## @lunora/vite [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.365...@lunora/vite@1.0.0-alpha.366) (2026-10-21)
+
+### Features
+
+* **cli:** run the vite or rsbuild build before lunora build ([#1289](https://github.com/anolilab/lunora/issues/1289)) ([5a93210](https://github.com/anolilab/lunora/commit/5a9321020df6c55a50805745177e903fa90a4570))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.392
+
 ## @lunora/vite [1.0.0-alpha.365](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.364...@lunora/vite@1.0.0-alpha.365) (2026-10-20)
 
 
