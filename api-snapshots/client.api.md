@@ -2415,6 +2415,7 @@ interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+    token?: string;
     type: "connect";
 }
 ```

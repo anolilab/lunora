@@ -660,6 +660,8 @@ class LunoraClient {
     private wsTicket: WsCredentialSource;
     /** Bumped on every `setWsToken` / `setWsTicket` change: a provider request started under an older value is superseded. */
     private wsCredentialGeneration = 0;
+    /** The credential generation the server last refused with 4003, so that refusal notifies once. */
+    private refusedCredentialGeneration: number | undefined;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -2443,7 +2445,8 @@ class LunoraClient {
     /**
      * Subscribe to token-expiry events: invoked whenever the server drops a
      * shard socket because the connection's credential lapsed (close code
-     * `4001`). The client already reconnects automatically (re-resolving
+     * `4001`) or the server refused the session credential (close code `4003`,
+     * notified once per credential). The client already reconnects automatically (re-resolving
      * identity from the cookie/token in effect); use this to refresh a
      * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
      * with a freshly minted one. Returns an unsubscribe function.
@@ -6406,14 +6409,17 @@ class LunoraClient {
     }
 
     private wsUrlFor(shardKey: string | undefined, token: string | undefined, base: string = this.wsUrl): string {
-        if (shardKey === undefined && token === undefined) {
+        const url = parseSocketUrl(base);
+
+        if (shardKey === undefined && token === undefined && !url.searchParams.has("token")) {
             return base;
         }
 
         // The server reads the first value of a repeated parameter, so a copy already on the configured URL would
-        // win over this connection's own. Set replaces it instead of appending after it.
-        const url = parseSocketUrl(base);
-        const replaced = new Set<string>([...(shardKey === undefined ? [] : ["shard"]), ...(token === undefined ? [] : ["token"])]);
+        // win over this connection's own. Set replaces it instead of appending after it. `token` is always replaced:
+        // only the ticket may ride the URL, so a leftover `token` on the configured URL is dropped even when this
+        // connection carries none.
+        const replaced = new Set<string>([...(shardKey === undefined ? [] : ["shard"]), "token"]);
         const kept = [...url.searchParams]
             .filter(([name]) => !replaced.has(name))
             .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
@@ -6959,6 +6965,11 @@ class LunoraClient {
                 // synthesized disconnect (connect-timeout, watchdog, bare error)
                 // never carries one either.
                 if (event?.code === 4001) {
+                    this.notifyTokenExpired();
+                } else if (event?.code === 4003 && this.refusedCredentialGeneration !== this.wsCredentialGeneration) {
+                    // 4003 is the session the server refused (see protocol §6). It repeats on every
+                    // backoff retry, so the listener is told once per credential, not once per retry.
+                    this.refusedCredentialGeneration = this.wsCredentialGeneration;
                     this.notifyTokenExpired();
                 }
 

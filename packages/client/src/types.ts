@@ -711,6 +711,13 @@ export interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+
+    /**
+     * The session credential (protocol §6). A gated server checks it against
+     * `LUNORA_WS_BEARER`. Set from the client's `wsToken` and never placed in the
+     * socket URL.
+     */
+    token?: string;
     type: "connect";
 }
 

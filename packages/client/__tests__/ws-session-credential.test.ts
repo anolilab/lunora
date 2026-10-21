@@ -25,9 +25,9 @@ class MockSocket {
         this.dispatch("open");
     }
 
-    public triggerClose(): void {
+    public triggerClose(code = 1006): void {
         this.readyState = 3;
-        this.dispatch("close", { code: 1006, reason: "" });
+        this.dispatch("close", { code, reason: "" });
     }
 
     public send(data: string): void {
@@ -221,6 +221,57 @@ describe("lunoraClient session credential (protocol §6)", () => {
         expect(socket.url).toContain("token=ephemeral-ticket");
         expect(socket.url).not.toContain("session-secret");
         expect(firstFrame(socket)).toMatchObject({ token: "session-secret", type: "connect" });
+    });
+
+    it("keeps a leftover token from the configured URL out of every socket URL, even with no ticket", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsToken: "session-secret",
+            wsUrl: "wss://app.example/_lunora/ws?token=old-leftover",
+        });
+
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+
+        const socket = await openNextSocket(0);
+
+        expect(socket.url).not.toContain("old-leftover");
+        expect(firstFrame(socket)).toMatchObject({ token: "session-secret", type: "connect" });
+    });
+
+    it("notifies token-expiry once per credential when the server refuses it, not once per retry", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: WebSocketImpl, wsToken: "wrong-session" });
+        let notified = 0;
+
+        client.onTokenExpired(() => {
+            notified += 1;
+        });
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+
+        const first = await openNextSocket(0);
+        const known = sockets.length;
+
+        first.triggerClose(4003);
+
+        const retry = await openNextSocket(known);
+
+        retry.triggerClose(4003);
+
+        expect(notified).toBe(1);
+
+        const knownAfterRotation = sockets.length;
+
+        client.setWsToken("rotated-session");
+
+        const rotated = await openNextSocket(knownAfterRotation);
+
+        rotated.triggerClose(4003);
+
+        expect(notified).toBe(2);
     });
 
     it("sends connect before any subscription frame on every open", async () => {
