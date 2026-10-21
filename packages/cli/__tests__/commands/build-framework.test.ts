@@ -95,6 +95,23 @@ describe("lunora build — client build", () => {
             expect(calls[0]?.args).toEqual(expect.arrayContaining(["rsbuild", "build"]));
         });
 
+        it("runs the project's build script for a framework with no Vite or rsbuild config, such as Astro or Nuxt", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app", scripts: { build: "astro build" } }),
+                "utf8",
+            );
+
+            const { calls, spawner } = recordingSpawner();
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner });
+
+            expect(result.code).toBe(0);
+            expect(frameworkCalls(calls)[0]?.args).toEqual(["run", "build"]);
+        });
+
         it("leaves a plain Worker alone, even with a vite config on disk", async () => {
             expect.assertions(2);
 

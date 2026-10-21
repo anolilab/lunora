@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
@@ -12,7 +12,8 @@ import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 
 /** The client-build tool a project's config file names. */
-type FrameworkTool = "rsbuild" | "vite";
+/** `script` runs the project's own `build` script, for a framework (Astro, Nuxt) that has no Vite or rsbuild config to bundle through. */
+type FrameworkTool = "rsbuild" | "script" | "vite";
 
 /** The `main` `@lunora/vite` points wrangler at for a class-A framework; only the Vite build generates it. */
 const COMPOSED_MAIN = "virtual:lunora/worker";
@@ -39,8 +40,18 @@ const pickTool = (cwd: string): FrameworkTool | undefined => {
  * composed entry, when the framework is class A or B (its worker wraps the
  * framework's build output), or when `assets.directory` names a client build.
  */
+const hasBuildScript = (cwd: string): boolean => {
+    try {
+        const { scripts } = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as { scripts?: { build?: unknown } };
+
+        return typeof scripts?.build === "string" && scripts.build !== "";
+    } catch {
+        return false;
+    }
+};
+
 const frameworkBuildFor = (cwd: string): FrameworkTool | undefined => {
-    const tool = pickTool(cwd);
+    const tool = pickTool(cwd) ?? (hasBuildScript(cwd) ? "script" : undefined);
 
     if (tool === undefined) {
         return undefined;
@@ -78,7 +89,8 @@ interface FrameworkBuildOptions {
  */
 const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: FrameworkBuildOptions): Promise<string | undefined> => {
     const spawner = options.spawner ?? defaultSpawner;
-    const command = execArgsFor(detectPackageManager(cwd), tool, ["build"]);
+    const manager = detectPackageManager(cwd);
+    const command = tool === "script" ? { args: ["run", "build"], command: manager } : execArgsFor(manager, tool, ["build"]);
 
     options.logger.info(`running ${tool} build before bundling the Worker`);
 
@@ -122,6 +134,9 @@ interface ClientBuildOptions {
     target?: string;
 }
 
+/** Whether {@link runClientBuild} runs a framework build for `cwd`. */
+const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined): boolean => frameworkBuild !== false && frameworkBuildFor(cwd) !== undefined;
+
 /**
  * Run the client build wrangler depends on, if there is one, and return the
  * message to report when it cannot run. `undefined` means there was nothing to
@@ -157,5 +172,5 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     });
 };
 
-export { frameworkBuildFor, runClientBuild, runFrameworkBuild };
+export { clientBuildRuns, frameworkBuildFor, runClientBuild, runFrameworkBuild };
 export type { FrameworkTool };
