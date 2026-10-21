@@ -3723,14 +3723,21 @@ abstract class ShardDO {
         let pending = 0;
 
         for (const handle of this.socketHost.getSockets()) {
-            const attachment = handle.deserializeAttachment() as { authenticated?: boolean; pendingSince?: number } | undefined;
+            const attachment = handle.deserializeAttachment() as { authenticated?: boolean; connectionId?: string; pendingSince?: number } | undefined;
 
             if (attachment?.authenticated !== false) {
                 continue;
             }
 
             if ((attachment.pendingSince ?? now) + PENDING_CONNECT_DEADLINE_MS <= now) {
-                handle.close(4003, "connect deadline");
+                this.dropLiveSocket(attachment.connectionId);
+
+                // A socket the peer has half-closed can still be listed and refuse a second close.
+                try {
+                    handle.close(4003, "connect deadline");
+                } catch {
+                    /* socket already gone */
+                }
 
                 continue;
             }
@@ -3739,6 +3746,23 @@ abstract class ShardDO {
         }
 
         return pending < MAX_PENDING_SOCKETS;
+    }
+
+    /**
+     * Close a pending socket the shard refuses. The close is server-initiated, so the
+     * runtime does not run `webSocketClose` for it and the live-socket entry would
+     * outlive the socket; this drops that entry too.
+     */
+    protected refusePendingSocket(ws: ShardSocketLike): void {
+        this.dropLiveSocket(this.readAttachment(ws).connectionId);
+        refuseUnauthenticatedSocket(ws);
+    }
+
+    /** Forget a socket by its connection id. Keyed by id, not by object: a host may wrap the same socket in a different handle. */
+    protected dropLiveSocket(connectionId: string | undefined): void {
+        if (connectionId !== undefined) {
+            this.liveSocketsByConnection.delete(connectionId);
+        }
     }
 
     /**
@@ -7966,7 +7990,7 @@ abstract class ShardDO {
         // `connect`, which is checked in its branch. Refusing every other frame here
         // means nothing is dispatched on a socket that has not proved its credential.
         if (inboundAttachment.authenticated === false && envelope.type !== "connect") {
-            refuseUnauthenticatedSocket(ws);
+            this.refusePendingSocket(ws);
 
             return;
         }
@@ -8012,7 +8036,7 @@ abstract class ShardDO {
                 const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
 
                 if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
-                    refuseUnauthenticatedSocket(ws);
+                    this.refusePendingSocket(ws);
 
                     return;
                 }
@@ -8025,7 +8049,7 @@ abstract class ShardDO {
                 try {
                     (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
                 } catch {
-                    refuseUnauthenticatedSocket(ws);
+                    this.refusePendingSocket(ws);
 
                     return;
                 }
@@ -16056,10 +16080,10 @@ abstract class ShardDO {
      * query string is where it leaks. `?token=` carries only an ephemeral admin
      * sub-token (`POST /_lunora/admin/ws-token`).
      *
-     * Async because the admin ticket check ({@link isAdminSocket}) verifies the
-     * sub-token with WebCrypto HMAC.
+     * Takes the verdict of {@link isUpgradeAuthenticated} rather than re-reading the
+     * credential, so the route gate and the attachment stamp cannot disagree.
      */
-    private async isUpgradeAllowed(request: Request, isRouteSocket: boolean): Promise<boolean> {
+    private isUpgradeAllowed(request: Request, isRouteSocket: boolean, authenticated: boolean): boolean {
         const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -16090,7 +16114,7 @@ abstract class ShardDO {
 
         // A route socket has no `connect` frame to present the session credential in,
         // so the upgrade itself must authenticate it.
-        return !rawInQuery && (!isRouteSocket || (await this.isUpgradeAuthenticated(request)));
+        return !rawInQuery && (!isRouteSocket || authenticated);
     }
 
     /**
@@ -16311,7 +16335,12 @@ abstract class ShardDO {
         const url = new URL(request.url);
         const route = this.socketRoute(url.pathname);
 
-        if (!(await this.isUpgradeAllowed(request, route !== undefined))) {
+        // One verdict for the whole upgrade. A ticket that lapses between two reads would pass the
+        // route gate and then be stamped unauthenticated. A socket the upgrade cannot authenticate
+        // waits for `connect.token`, except a route socket, which has no `connect` frame and is refused here.
+        const authenticated = await this.isUpgradeAuthenticated(request);
+
+        if (!this.isUpgradeAllowed(request, route !== undefined, authenticated)) {
             return new Response("Forbidden", { status: 403 });
         }
 
@@ -16345,9 +16374,6 @@ abstract class ShardDO {
         // attachment stamp, or an early frame could race an unstamped socket.
         const admin = await this.isAdminSocket(request);
 
-        // A socket the upgrade cannot authenticate waits for `connect.token`. A
-        // route socket is refused by `isUpgradeAllowed` instead: it has no `connect` frame.
-        const authenticated = await this.isUpgradeAuthenticated(request);
         const acceptedAt = Date.now();
 
         if (!this.admitPendingSocket(acceptedAt, authenticated)) {

@@ -436,6 +436,9 @@ abstract class ShardDO {
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown>;
+    protected admitPendingSocket(now: number, authenticated: boolean): boolean;
+    protected refusePendingSocket(ws: ShardSocketLike): void;
+    protected dropLiveSocket(connectionId: string | undefined): void;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected roomHandlerPath(_topic: string): string | undefined;
     protected socketRoute(_path: string): {

@@ -246,6 +246,21 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
             expect(sockets.filter((ws) => ws.closes.length > 0)).toHaveLength(1);
         });
 
+        it("does not let a stale socket that refuses a second close fail the admission", () => {
+            expect.assertions(1);
+
+            const shard = new GateShard(state, bearerEnv);
+            const now = 1_000_000;
+            const stale = createFakeWebSocket();
+
+            stale.close = () => {
+                throw new Error("already closing");
+            };
+            shard.registerSocket(stale, { ...unauthenticated(), pendingSince: now - DEADLINE_MS - 1 });
+
+            expect(shard.admitPending(now)).toBe(true);
+        });
+
         it("does not count an authenticated socket against the cap", () => {
             expect.assertions(1);
 
