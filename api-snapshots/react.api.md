@@ -331,6 +331,22 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PendingApproval` (interface)
+
+```ts
+interface PendingApproval {
+    agent: string;
+    content: string;
+    instanceId: string;
+    requestedAt: number;
+    threadKey: string;
+    threadTitle?: string;
+    threadUpdatedAt: number;
+    toolCallId: string;
+    toolName?: string;
+}
+```
+
 ### `Preloaded` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -386,6 +402,35 @@ interface UseAgentApi {
             key: string;
         }, Record<string, unknown> | undefined>;
     };
+}
+```
+
+### `UseAgentApprovalsApi` (interface)
+
+```ts
+interface UseAgentApprovalsApi {
+    agents: {
+        agentPendingApprovals: FunctionReference<"query", {
+            limit?: number;
+        }, Record<string, unknown>[]>;
+    };
+}
+```
+
+### `UseAgentApprovalsOptions` (interface)
+
+```ts
+interface UseAgentApprovalsOptions {
+    api: UseAgentApprovalsApi;
+}
+```
+
+### `UseAgentApprovalsResult` (interface)
+
+```ts
+interface UseAgentApprovalsResult {
+    approvals: PendingApproval[] | undefined;
+    error: Error | undefined;
 }
 ```
 
@@ -924,6 +969,12 @@ const useAction: <F extends FunctionReference>(function_: F) => ActionHook<F>;
 
 ```ts
 const useAgent: (options: UseAgentOptions) => UseAgentResult;
+```
+
+### `useAgentApprovals` (const)
+
+```ts
+const useAgentApprovals: (options: UseAgentApprovalsOptions) => UseAgentApprovalsResult;
 ```
 
 ### `useAgentChat` (const)

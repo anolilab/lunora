@@ -446,7 +446,7 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(26);
+        expect.assertions(27);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
@@ -467,6 +467,7 @@ describe("auto-registered agent runtime functions", () => {
             "agentMessages",
             "agentOpenSecretRequest",
             "agentPatchThread",
+            "agentPendingApprovals",
             "agentResolveApproval",
             "agentRevokeApprovalGrant",
             "agentRun",
@@ -506,11 +507,12 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("exposes the public thread queries and approval mutation as typed api references", () => {
-        expect.assertions(12);
+        expect.assertions(13);
 
         const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('agentMessages: FunctionReference<"query", { key: string; limit?: number }, Record<string, unknown>[]>;');
+        expect(content).toContain('agentPendingApprovals: FunctionReference<"query", { limit?: number }, Record<string, unknown>[]>;');
         expect(content).toContain('agentState: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain(
@@ -592,6 +594,7 @@ describe("auto-registered agent runtime functions", () => {
             "agentApprovalGrants",
             "agentDeclineSecret",
             "agentMessages",
+            "agentPendingApprovals",
             "agentResolveApproval",
             "agentRevokeApprovalGrant",
             "agentRun",
@@ -603,7 +606,7 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(11);
+        expect.assertions(12);
 
         // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
@@ -623,6 +626,7 @@ describe("auto-registered agent runtime functions", () => {
             key: { kind: "string", optional: false },
             limit: { kind: "number", optional: true },
         });
+        expect(describeArgs(runtime.agentPendingApprovals.args)).toStrictEqual({ limit: { kind: "number", optional: true } });
         expect(describeArgs(runtime.agentState.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentThread.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentResolveApproval.args)).toStrictEqual({
@@ -659,7 +663,7 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("pins the synthetic api RETURN shapes to the runtime component (drift guard)", () => {
-        expect.assertions(9);
+        expect.assertions(10);
 
         // CODEGEN-04: unlike the args (validated at runtime, so `describeArgs`
         // above can introspect the LIVE `agentComponent().functions` object),
@@ -673,6 +677,7 @@ describe("auto-registered agent runtime functions", () => {
         // return-shape change in component.ts fails here instead of silently
         // going stale in the generated `api.ts`.
         expect(sourceReturnTypeOf("agentMessages")).toBe("Record<string, unknown>[]");
+        expect(sourceReturnTypeOf("agentPendingApprovals")).toBe("Record<string, unknown>[]");
         expect(sourceReturnTypeOf("agentState")).toBe("Record<string, unknown> | undefined");
         expect(sourceReturnTypeOf("agentThread")).toBe("Record<string, unknown> | undefined");
         expect(sourceReturnTypeOf("agentResolveApproval")).toBe("{ resolved: boolean }");
