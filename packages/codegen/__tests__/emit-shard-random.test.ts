@@ -34,7 +34,7 @@ describe("emitShard — ctx.random", () => {
         const shard = emitShard({ schema: discover(PLAIN) });
 
         expect(shard).toContain("newId: createStableIdFactory(stableKey, stableScope),");
-        expect(shard).toContain("random: createStableRandomFactory(stableKey, stableScope),");
+        expect(shard).toContain('random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),');
         expect(shard).toContain("createStableRandomFactory, ");
     });
 
