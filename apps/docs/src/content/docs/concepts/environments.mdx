@@ -125,7 +125,7 @@ from the deploy:
 
 ```bash
 lunora build                 # full pre-deploy pipeline, bundle written to disk
-lunora deploy --prebuilt     # ship it, skipping codegen and the drift gate
+lunora deploy --prebuilt     # ship it; refused unless the build matches these sources and --env
 ```
 
 ## Custom domains

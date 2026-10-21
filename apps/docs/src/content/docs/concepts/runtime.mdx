@@ -122,8 +122,8 @@ artifact you ship:
 
 ```bash
 lunora build                 # full pre-deploy pipeline, bundle to disk
-lunora deploy --prebuilt     # ship the bundle without redoing codegen
+lunora deploy --prebuilt     # ship that build's output, if it still matches
 ```
 
 `build` runs codegen, the schema-drift gate, and `wrangler.jsonc` validation, then
-writes the bundled worker without publishing. `--prebuilt` trusts that work.
+writes the bundled worker without publishing. `--prebuilt` ships that build's client output, and refuses if the sources, target, environment or output no longer match it. The CLI reference covers the CI split.

@@ -54,22 +54,23 @@ In order, stopping at the first failure:
    then re-blesses the schema baseline.
 
 `lunora prepare` runs steps 1–6 without deploying (useful in CI), but it takes
-no `--env`, so it validates the top-level config only. `lunora verify` runs
+no `--env`, so it validates the top-level config only. It builds no client output,
+so it is not a prerequisite for `--prebuilt`. `lunora verify` runs
 validation, a codegen dry run and `tsc --noEmit` without writing files, and does
 take `--env`.
 
 Flags worth knowing:
 
-| Flag                       | Effect                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `--env <name>`             | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
-| `--dry-run`                | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
-| `--preview`                | Upload a version (`wrangler versions upload`) with a preview URL; no traffic.   |
-| `--health-check`           | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
-| `--prebuilt`               | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
-| `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker. |
-| `--allow-schema-drift`     | Deploy despite blocked drift; the baseline is not advanced.                     |
-| `--update-schema-baseline` | Accept the current schema as the new baseline.                                  |
+| Flag                       | Effect                                                                                                                            |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--env <name>`             | Deploy a wrangler environment; checks read that env's (non-inherited) bindings.                                                   |
+| `--dry-run`                | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back.                                                   |
+| `--preview`                | Upload a version (`wrangler versions upload`) with a preview URL; no traffic.                                                     |
+| `--health-check`           | Probe `/_lunora/health/ready` on the new version; fail if it never answers.                                                       |
+| `--prebuilt`               | Ship the output of an earlier `lunora build`; refused when that build does not match the sources, target, environment, or output. |
+| `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker.                                                   |
+| `--allow-schema-drift`     | Deploy despite blocked drift; the baseline is not advanced.                                                                       |
+| `--update-schema-baseline` | Accept the current schema as the new baseline.                                                                                    |
 
 `--migrate` is checked before wrangler runs, so a missing requirement aborts the
 whole deploy:
