@@ -17,7 +17,17 @@ export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api
 export { MissingBuildOutputError } from "./build-output-error";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
-export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions, STRICT_ADVISORIES_ENV } from "./codegen-env";
+export {
+    BUILD_TARGET_ENV,
+    BUNDLE_META_PATH_ENV,
+    CODEGEN_ENV,
+    DEFAULT_BUNDLE_META_PATH,
+    isCodegenDisabled,
+    isLazyFunctionsEnabled,
+    LAZY_FUNCTIONS_ENV,
+    resolveLazyFunctions,
+    STRICT_ADVISORIES_ENV,
+} from "./codegen-env";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
 export type {
@@ -113,7 +123,14 @@ export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { RemotePreference } from "./project-config";
-export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
+export {
+    assertBuildTargetMatches,
+    interpretRemote,
+    readProjectRemotePreference,
+    readProjectTarget,
+    resolveProjectTarget,
+    resolveTargetOrThrow,
+} from "./project-config";
 export { readProjectDependencies, readProjectDependencyNames, readProjectManifest } from "./project-manifest";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";

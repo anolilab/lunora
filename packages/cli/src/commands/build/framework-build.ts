@@ -1,7 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 
-import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
+import {
+    BUILD_TARGET_ENV,
+    BUNDLE_META_PATH_ENV,
+    DEFAULT_BUNDLE_META_PATH,
+    detectFramework,
+    LAZY_FUNCTIONS_ENV,
+    resolveTargetOrThrow,
+    STRICT_ADVISORIES_ENV,
+} from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -16,6 +24,14 @@ import snapshotWranglerConfig from "../../util/wrangler-snapshot";
  * rsbuild config to bundle through.
  */
 type FrameworkTool = "rsbuild" | "script" | "vite";
+
+/**
+ * Where the Vite plugin writes this run's server metafile. Named by the CLI's pid so two
+ * builds in one project write different files: a single shared path let one run's cleanup
+ * delete another run's output. The CLI and the plugin both read it through the env var below.
+ */
+// Absolute, because the Vite child resolves a relative path against its own root, not the CLI's cwd.
+const viteBundleMetaPath = (projectRoot: string): string => resolve(projectRoot, ".lunora", `vite-bundle-meta-${String(process.pid)}.json`);
 
 /** Set on a client build's child so a build script that runs `lunora` does not start another client build. */
 const CLIENT_BUILD_ENV = "LUNORA_CLIENT_BUILD";
@@ -90,6 +106,8 @@ const frameworkBuildFor = (cwd: string, environment?: string): FrameworkTool | u
 interface FrameworkBuildOptions {
     /** The deploy environment (`--env`); the child build gets it as `CLOUDFLARE_ENV`, so its output targets that environment. */
     environment?: string;
+    /** `true` keeps the Vite metafile after the build, for `lunora build` to copy into its out-dir. */
+    keepBundleMeta: boolean;
     /** Opt the child's codegen into lazy imports, the same way `lunora build` itself does. */
     lazyFunctions: boolean;
     logger: Logger;
@@ -98,6 +116,8 @@ interface FrameworkBuildOptions {
     spawner?: Spawner;
     /** `false` when '--no-strict-advisories' opted out: the child build then does not fail on ERROR-level advisories. */
     strictAdvisories?: boolean;
+    /** The target this run resolved; the plugin refuses to build a different one. */
+    target: string;
 }
 
 /**
@@ -119,12 +139,16 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
 
     const restore = snapshotWranglerConfig(cwd);
 
+    rmSync(join(cwd, DEFAULT_BUNDLE_META_PATH), { force: true });
+
     try {
         const result = await spawner({
             args: command.args,
             command: command.command,
             cwd,
             env: {
+                [BUILD_TARGET_ENV]: options.target,
+                [BUNDLE_META_PATH_ENV]: viteBundleMetaPath(cwd),
                 ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
                 ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
                 ...(options.strictAdvisories === false ? { [STRICT_ADVISORIES_ENV]: "0" } : {}),
@@ -136,6 +160,10 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
         return result.code === 0 ? undefined : `${tool} build failed with exit code ${String(result.code)}`;
     } finally {
         restore();
+
+        if (!options.keepBundleMeta) {
+            rmSync(viteBundleMetaPath(cwd), { force: true });
+        }
     }
 };
 
@@ -147,6 +175,8 @@ interface ClientBuildOptions {
     environment?: string;
     /** `false` skips the client build (`--no-framework-build`, `--prebuilt`). */
     frameworkBuild?: boolean;
+    /** `true` keeps the Vite metafile for `lunora build`'s copy; a deploy has no use for it. */
+    keepBundleMeta: boolean;
     lazyFunctions: boolean;
     logger: Logger;
     /** `true` when the caller's stdout is a JSON document, so the build's output goes to stderr. */
@@ -202,7 +232,7 @@ const clientBuildRefusal = (options: ClientBuildOptions): string | undefined => 
     }
 
     if (options.target !== undefined && options.target !== projectTarget) {
-        return `--target ${options.target} differs from the project's target (${projectTarget}), which the ${tool} plugin reads; set it in the project config, or pass --no-framework-build`;
+        return `this run targets "${options.target}", but the project's target is "${projectTarget}", which the ${tool} plugin reads; set it in the project config, or pass --no-framework-build`;
     }
 
     return undefined;
@@ -220,14 +250,16 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     }
 
     return runFrameworkBuild(options.cwd, tool, {
+        keepBundleMeta: options.keepBundleMeta,
         environment: options.environment,
         strictAdvisories: options.strictAdvisories,
         lazyFunctions: options.lazyFunctions,
         logger: options.logger,
         outputJson: options.outputJson,
         spawner: options.spawner,
+        target: resolveTargetOrThrow(options.cwd),
     });
 };
 
-export { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, pluginBuildRuns, runClientBuild, runFrameworkBuild };
+export { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, pluginBuildRuns, runClientBuild, runFrameworkBuild, viteBundleMetaPath };
 export type { FrameworkTool };

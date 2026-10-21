@@ -19,6 +19,7 @@
  */
 import { readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 
+import { BUILD_TARGET_ENV } from "./codegen-env";
 import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
 
 /**
@@ -110,5 +111,23 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
     return target;
 };
 
+/**
+ * Refuse a plugin-resolved target that differs from the one the CLI resolved
+ * for this run. The CLI's `--target` guard only sees the config file, so a target set
+ * in a plugin's options would otherwise slip past it. A no-op outside a CLI build,
+ * where {@link BUILD_TARGET_ENV} is unset.
+ * @param target The target the plugin resolved.
+ * @throws when the CLI resolved a different target.
+ */
+const assertBuildTargetMatches = (target: string): void => {
+    const expected = process.env[BUILD_TARGET_ENV];
+
+    if (expected !== undefined && expected !== "" && expected !== target) {
+        throw new Error(
+            `the plugin resolves target "${target}" but the CLI resolved "${expected}" for this run; set the same target in the plugin options and the project config`,
+        );
+    }
+};
+
 export type { RemotePreference };
-export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };
+export { assertBuildTargetMatches, interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

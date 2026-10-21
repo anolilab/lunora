@@ -2,12 +2,20 @@ import { createRequire } from "node:module";
 import { resolve as resolvePath } from "node:path";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveLazyFunctions, resolveTargetOrThrow, runnableTargetIds, targetRunsOwnDevServer } from "@lunora/config";
+import {
+    assertBuildTargetMatches,
+    isRunnableTarget,
+    resolveLazyFunctions,
+    resolveTargetOrThrow,
+    runnableTargetIds,
+    targetRunsOwnDevServer,
+} from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
+import { bundleMetaPlugin } from "./bundle-meta-plugin";
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
 import cloudflareCliConfigPlugin from "./cloudflare-cli-config-plugin";
 import codegenPlugin from "./codegen-plugin";
@@ -75,6 +83,8 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
             `target "${target}" has no command-line toolchain, so the Lunora Vite plugin cannot build or serve it — it can only generate for it (\`lunora codegen --target ${target}\`). Buildable targets: ${runnable.join(", ")}`,
         );
     }
+
+    assertBuildTargetMatches(target);
 
     return target;
 };
@@ -172,6 +182,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // out of `config` for anyone who turned the CHECKS off.
         bindingsProvisionPlugin(resolved),
         codegenPlugin(resolved),
+        // Build-only: writes the server bundle's metafile for `lunora build`, which
+        // cannot otherwise see what a Vite-built worker contains.
+        bundleMetaPlugin(resolved.projectRoot),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
         // `lunora dev --background|stop|status|logs` manage Vite projects too.

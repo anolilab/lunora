@@ -1,11 +1,12 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { frameworkBuildFor } from "../../src/commands/build/framework-build";
+import { frameworkBuildFor, viteBundleMetaPath } from "../../src/commands/build/framework-build";
 import { runBuildCommand } from "../../src/commands/build/handler";
 import type { Logger } from "../../src/util/logger";
 import type { SpawnDescriptor, Spawner } from "../../src/util/spawn";
@@ -37,7 +38,9 @@ let workdir: string;
  * client build can also rewrite `wrangler.jsonc`, the way the Cloudflare Vite
  * plugin does, so the rollback can be checked.
  */
-const recordingSpawner = (options: { frameworkExit?: number; rewriteWrangler?: string } = {}) => {
+const recordingSpawner = (
+    options: { frameworkExit?: number; rewriteWrangler?: string; viteMeta?: string; wranglerExit?: number; wranglerMeta?: string } = {},
+) => {
     const calls: SpawnDescriptor[] = [];
     const spawner: Spawner = async (descriptor) => {
         calls.push(descriptor);
@@ -48,7 +51,21 @@ const recordingSpawner = (options: { frameworkExit?: number; rewriteWrangler?: s
             writeFileSync(join(workdir, "wrangler.jsonc"), options.rewriteWrangler, "utf8");
         }
 
-        return { code: isFramework ? (options.frameworkExit ?? 0) : 0, descriptor, stderr: "", stdout: "" };
+        if (isFramework && options.viteMeta !== undefined) {
+            // The plugin writes where `lunora build` points it through the env var.
+            const metaPath = descriptor.env?.LUNORA_BUNDLE_META_PATH ?? join(workdir, DEFAULT_BUNDLE_META_PATH);
+
+            mkdirSync(dirname(metaPath), { recursive: true });
+            writeFileSync(metaPath, options.viteMeta, "utf8");
+        }
+
+        // What wrangler's `--outdir` writes next to the bundle it emits.
+        if (!isFramework && descriptor.args.includes("--dry-run") && options.wranglerMeta !== undefined) {
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), options.wranglerMeta, "utf8");
+        }
+
+        return { code: isFramework ? (options.frameworkExit ?? 0) : (options.wranglerExit ?? 0), descriptor, stderr: "", stdout: "" };
     };
 
     return { calls, spawner };
@@ -168,7 +185,21 @@ describe("lunora build — client build", () => {
 
             await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: eager.spawner });
 
-            expect(frameworkCalls(eager.calls)[0]?.env?.LUNORA_LAZY_FUNCTIONS).toBeUndefined();
+            expect(frameworkCalls(eager.calls)[0]?.env).not.toHaveProperty("LUNORA_LAZY_FUNCTIONS");
+        });
+
+        it("tells the client build the target this run resolved and a metafile path only this process names", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            const { calls, spawner } = recordingSpawner();
+
+            await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner });
+
+            expect(frameworkCalls(calls)[0]?.env).toMatchObject({ LUNORA_BUILD_TARGET: "cloudflare" });
+            expect(frameworkCalls(calls)[0]?.env?.LUNORA_BUNDLE_META_PATH).toBe(join(workdir, ".lunora", `vite-bundle-meta-${String(process.pid)}.json`));
         });
 
         it("rolls back wrangler.jsonc edits the client build makes, so build leaves the committed config alone", async () => {
@@ -228,7 +259,7 @@ describe("lunora build — client build", () => {
 
             const refused = await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: recordingSpawner().spawner, target: "celld" });
 
-            expect(refused.error).toContain("--target celld differs from the project's target (cloudflare)");
+            expect(refused.error).toContain(`this run targets "celld", but the project's target is "cloudflare"`);
 
             const accepted = recordingSpawner();
             const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: accepted.spawner, target: "cloudflare" });
@@ -236,6 +267,208 @@ describe("lunora build — client build", () => {
             expect(result.code).toBe(0);
             expect(frameworkCalls(accepted.calls)).toHaveLength(1);
         });
+    });
+
+    describe("lunora build — bundle metafile", () => {
+        it("copies the Vite server bundle's metafile into the out-dir as bundle-meta.json", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            const meta = JSON.stringify({ inputs: {}, outputs: { "index.js": { bytes: 9, imports: [], inputs: {} } } });
+            const { spawner } = recordingSpawner({ viteMeta: meta });
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe(meta);
+        });
+
+        it("keeps wrangler's own metafile when wrangler bundled a non-Vite worker, instead of the client build's", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/worker.ts" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            const wranglerMeta = JSON.stringify({ inputs: {}, outputs: { "worker.js": { bytes: 3, imports: [], inputs: {} } } });
+            const { calls, spawner } = recordingSpawner({ viteMeta: JSON.stringify({ outputs: {} }), wranglerMeta });
+
+            await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(frameworkCalls(calls)).toHaveLength(1);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe(wranglerMeta);
+        });
+
+        it("replaces a bundle-meta.json an earlier build wrote, so a Vite-built worker reports this run's graph", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"stale":true}', "utf8");
+
+            const meta = JSON.stringify({ inputs: {}, outputs: { "index.js": { bytes: 9, imports: [], inputs: {} } } });
+            const { spawner } = recordingSpawner({ viteMeta: meta });
+
+            await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe(meta);
+        });
+
+        it("does not report a metafile an earlier client build left behind", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "src/server.ts" }), "utf8");
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(viteBundleMetaPath(workdir), "{}", "utf8");
+
+            const { spawner } = recordingSpawner();
+
+            await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(existsSync(join(workdir, "out", "bundle-meta.json"))).toBe(false);
+        });
+
+        it("copies the metafile a plain vite build left at the default path when a prebuilt worker skips the client build", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEFAULT_BUNDLE_META_PATH), '{"plain":true}', "utf8");
+
+            const { calls, spawner } = recordingSpawner();
+            const result = await runBuildCommand({ cwd: workdir, frameworkBuild: false, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe('{"plain":true}');
+            expect(frameworkCalls(calls)).toHaveLength(0);
+        });
+
+        it("clears a plain vite build's metafile before the CLI's own client build, so a later prebuilt run cannot copy it", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEFAULT_BUNDLE_META_PATH), '{"plain":true}', "utf8");
+
+            const { spawner } = recordingSpawner();
+
+            await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(existsSync(join(workdir, DEFAULT_BUNDLE_META_PATH))).toBe(false);
+        });
+
+        it("keeps the previous bundle-meta.json when the client build fails, so the out-dir keeps one metafile for its bundle", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"previous":true}', "utf8");
+
+            const { spawner } = recordingSpawner({ frameworkExit: 1 });
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).not.toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe('{"previous":true}');
+        });
+
+        it("keeps the previous bundle-meta.json when a spawn throws during the dry run", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"previous":true}', "utf8");
+
+            const spawner: Spawner = async (descriptor) => {
+                if (descriptor.args.includes("--dry-run")) {
+                    throw new Error("spawn failed");
+                }
+
+                return { code: 0, descriptor, stderr: "", stdout: "" };
+            };
+
+            await expect(runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner })).rejects.toThrow("spawn failed");
+
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe('{"previous":true}');
+        });
+
+        it("does not fail on a dangling symlink in the out-dir", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            symlinkSync(join(workdir, "nowhere"), join(workdir, "out", "dangling"));
+
+            const meta = JSON.stringify({ inputs: {}, outputs: { "index.js": { bytes: 9, imports: [], inputs: {} } } });
+            const { spawner } = recordingSpawner({ viteMeta: meta });
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe(meta);
+        });
+
+        it("does not restore the previous metafile over a bundle a failed run rewrote in the out-dir", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"previous":true}', "utf8");
+
+            const { spawner: recorded } = recordingSpawner({ viteMeta: JSON.stringify({ outputs: {} }), wranglerExit: 1 });
+            const spawner: Spawner = async (descriptor) => {
+                if (descriptor.args.includes("--dry-run")) {
+                    writeFileSync(join(workdir, "out", "worker.js"), "export default {};\n", "utf8");
+                }
+
+                return recorded(descriptor);
+            };
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).not.toBe(0);
+            expect(existsSync(join(workdir, "out", "bundle-meta.json"))).toBe(false);
+        });
+
+        it("restores the previous metafile when a Vite-built run fails before wrangler writes the out-dir", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"previous":true}', "utf8");
+
+            const { spawner } = recordingSpawner({ viteMeta: JSON.stringify({ outputs: {} }), wranglerExit: 1 });
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).not.toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe('{"previous":true}');
+        });
+
+        it("keeps the metafile wrangler wrote when the dry run fails after writing it", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/worker.ts" }), "utf8");
+            mkdirSync(join(workdir, "out"), { recursive: true });
+            writeFileSync(join(workdir, "out", "bundle-meta.json"), '{"previous":true}', "utf8");
+
+            const wranglerMeta = '{"fresh":true}';
+            const { spawner } = recordingSpawner({ wranglerExit: 1, wranglerMeta });
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), outDir: "out", spawner });
+
+            expect(result.code).not.toBe(0);
+            expect(readFileSync(join(workdir, "out", "bundle-meta.json"), "utf8")).toBe(wranglerMeta);
+        });
+    });
+
+    it("names the per-run metafile by an absolute path, so a relative project directory still reaches the Vite child", () => {
+        expect.assertions(1);
+
+        expect(isAbsolute(viteBundleMetaPath("relative/project"))).toBe(true);
     });
 
     describe("frameworkBuildFor", () => {

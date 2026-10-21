@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
@@ -54,10 +55,10 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
+import { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
-import { provisionDeployHyperdrive } from "./hyperdrive";
+import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -721,6 +722,21 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
 };
 
+// Clears the redirect a service build left behind, so one present after the build is this run's. Returns whether the build runs.
+const clearServiceRedirect = (directory: string, frameworkBuild: boolean | undefined): boolean => {
+    const clientBuilt = frameworkBuild !== false && frameworkBuildFor(directory) !== undefined;
+
+    if (clientBuilt) {
+        rmSync(join(directory, ".wrangler", "deploy", "config.json"), { force: true });
+    }
+
+    return clientBuilt;
+};
+
+// The config a service deploys after its own client build: the one that build generated, or none when it generated nothing.
+const generatedServiceConfig = (wranglerPath: string, clientBuilt: boolean): string | undefined =>
+    clientBuilt ? generatedConfigPath(wranglerPath) : undefined;
+
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
@@ -759,6 +775,39 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
     for (const service of workers) {
         const directory = dirname(service.wranglerPath);
+
+        // A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it,
+        // so the build must target the same host.
+        const clientBuilt = clearServiceRedirect(directory, options.frameworkBuild);
+
+        const serviceBuild = {
+            cwd: directory,
+            frameworkBuild: options.frameworkBuild,
+            keepBundleMeta: false,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            logger: options.logger,
+            outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+            spawner,
+            target: driver.id,
+        };
+
+        // A service whose target differs from the parent's is refused before its build runs, not built for another host.
+        const refusal = clientBuildRefusal(serviceBuild);
+
+        // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
+        const buildError = refusal ?? (await runClientBuild(serviceBuild));
+
+        if (buildError !== undefined) {
+            const message = `service ${service.name} (${service.worker}): ${buildError}`;
+
+            options.logger.error(message);
+
+            return message;
+        }
+
+        // A generated config covers only the environment its build named, and the service build names none. Under --env, deploy the source config.
+        const generated = generatedServiceConfig(service.wranglerPath, clientBuilt && options.env === undefined);
+
         let invocation: ReturnType<typeof planToolchainInvocation>;
 
         try {
@@ -766,7 +815,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
                 // Always an explicit config: wrangler left to discover one walks up
                 // from the service folder and can find the app's `wrangler.json`
                 // or a Vite build's `.wrangler/deploy/config.json` first.
-                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+                toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
             );
         } catch (error_: unknown) {
             return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
@@ -778,7 +827,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
         options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
 
-        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
         const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
@@ -1105,6 +1154,7 @@ const runDeployClientBuild = async (options: DeployCommandOptions): Promise<Depl
         cwd: projectRoot,
         environment: options.env,
         frameworkBuild: options.skipCodegen === true ? false : options.frameworkBuild,
+        keepBundleMeta: options.commandName === "build",
         strictAdvisories: resolveStrictAdvisories(options),
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         logger,

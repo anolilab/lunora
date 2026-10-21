@@ -149,6 +149,18 @@ const BADGES: Record<BadgeName, BadgeSpec>;
 const BADGE_COLUMN_WIDTH: number;
 ```
 
+### `BUILD_TARGET_ENV` (const)
+
+```ts
+const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
+```
+
+### `BUNDLE_META_PATH_ENV` (const)
+
+```ts
+const BUNDLE_META_PATH_ENV = "LUNORA_BUNDLE_META_PATH";
+```
+
 ### `BadgeName` (type)
 
 ```ts
@@ -262,6 +274,12 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `DEFAULT_BUNDLE_META_PATH` (const)
+
+```ts
+const DEFAULT_BUNDLE_META_PATH: string;
 ```
 
 ### `DEFAULT_DEPLOY_TARGET` (const)
@@ -1240,6 +1258,12 @@ const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 
 ```ts
 const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
+```
+
+### `assertBuildTargetMatches` (const)
+
+```ts
+const assertBuildTargetMatches: (target: string) => void;
 ```
 
 ### `badgeLead` (const)
