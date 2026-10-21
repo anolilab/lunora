@@ -922,7 +922,11 @@ catalogs:
     "better-auth": 1.7.7
     jose: ^6.2.12
   drizzle:
-    drizzle-orm: ^0.45.3
+    # Exact-pinned to the `rc` dist-tag: caret ranges also match the suffixed
+    # rc.5 canary builds (e.g. 1.0.0-rc.5-ab785fc) that drizzle keeps moving,
+    # and peers inherit this string verbatim. Bump to the 1.0.0 stable tag on
+    # release.
+    drizzle-orm: 1.0.0-rc.5
   # BYO-database drivers exercised by @lunora/hyperdrive (all devDeps — the
   # shipped adapters take them as optional peers) plus the kysely dialect
   # @lunora/auth tests better-auth against. pglite / mysql-memory-server are the
@@ -1141,6 +1145,12 @@ minimumReleaseAgeExclude:
   - 'deslop-js@0.0.21'
   # Renovate security update: dompurify@3.4.13
   - 'dompurify@3.4.11 || 3.4.13'
+  # Published 2026-10-21, inside the 24h window; drop this entry once it ages out.
+  - 'drizzle-orm@1.0.0-rc.5'
+  # Renovate's vite bump (#1287) resolved ^8.3.3 to this past the window; the
+  # entry just lets a local install reproduce the committed lockfile. Drop once
+  # it ages out.
+  - 'vite@8.3.5'
   - 'esbuild@0.28.1'
   - 'eslint-plugin-react-dom@5.8.17'
   - 'eslint-plugin-react-jsx@5.8.17'

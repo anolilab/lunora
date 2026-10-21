@@ -172,7 +172,7 @@ class D1Client {
      * Lazily-built drizzle handle over the bare binding. Memoised so a single
      * `D1Client` reuses the same dialect/session machinery across calls.
      */
-    private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
+    private drizzleHandle: DrizzleD1Database | undefined;
 
     public constructor(database: D1DatabaseLike) {
         this.db = database;
@@ -211,7 +211,7 @@ class D1Client {
      * D1 Sessions API (no bookmark pinning). For bookmark-scoped reads, use
      * {@link drizzleSession} instead.
      */
-    public get drizzle(): DrizzleD1Database<Record<string, unknown>> {
+    public get drizzle(): DrizzleD1Database {
         if (this.drizzleHandle) {
             return this.drizzleHandle;
         }
@@ -239,7 +239,7 @@ class D1Client {
      * drizzle calls into, so a single `unknown` cast lets us hand the session to
      * the driver.
      */
-    public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
+    public drizzleSession(bookmark?: string): DrizzleD1Database {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
         return drizzleD1(session as unknown as AnyD1Database, { logger: false });
