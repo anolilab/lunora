@@ -111,6 +111,7 @@ interface DeployCommandOptions {
     allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    clientBuildOutputJson?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -120,12 +121,11 @@ interface DeployCommandOptions {
     env?: string;
     fetchImpl?: FetchLike;
     format?: OutputFormat;
+    frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
-    frameworkBuild?: boolean;
-    clientBuildOutputJson?: boolean;
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
