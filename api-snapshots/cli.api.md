@@ -112,6 +112,7 @@ interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
     clientBuildOutputJson?: boolean;
+    clientBuildRan?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -132,8 +133,8 @@ interface DeployCommandOptions {
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
+    openShardGatePassed?: boolean;
     outDir?: string;
-    clientBuildRan?: boolean;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;

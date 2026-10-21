@@ -128,6 +128,9 @@ interface DeployCommandOptions {
      */
     migrateYes?: boolean;
 
+    /** Set once the open-shard gate has run for this deploy, so the pipeline does not run it again. */
+    openShardGatePassed?: boolean;
+
     /**
      * Emit the bundled worker to this directory via `wrangler deploy --outdir`
      * (paired with `dryRun` by `lunora build`). Also writes esbuild metadata to

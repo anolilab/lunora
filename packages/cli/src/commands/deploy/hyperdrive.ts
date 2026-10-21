@@ -604,7 +604,17 @@ const provisionDeployHyperdrive = async (
 
     // A dry run reports a missing connection string or token as a warning and creates nothing. The "check" phase of a real
     // deploy stops on them too, but defers the creation to the "create" phase, the last step before wrangler runs.
-    return provisionHyperdrive({ checkOnly: phase === "check", cwd, dryRun: options.dryRun, logger: options.logger, wranglerEnvironment: options.env });
+    // The build this deploy runs is given the --env name as CLOUDFLARE_ENV, so the generated config it wrote is for that environment.
+    const environment = options.env === undefined ? undefined : { ...process.env, CLOUDFLARE_ENV: options.env };
+
+    return provisionHyperdrive({
+        checkOnly: phase === "check",
+        cwd,
+        dryRun: options.dryRun,
+        environment,
+        logger: options.logger,
+        wranglerEnvironment: options.env,
+    });
 };
 
 export type { ProvisionHyperdriveOptions };

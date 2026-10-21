@@ -54,7 +54,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { clientBuildRefusal, clientBuildRuns, runClientBuild } from "../build/framework-build";
+import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { provisionDeployHyperdrive } from "./hyperdrive";
@@ -241,6 +241,7 @@ const runCodegenStep = async (
     spawner: Spawner | undefined,
     jsonOutput: boolean,
     strictAdvisories: boolean,
+    writeOutputs: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -252,7 +253,7 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
+        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
@@ -294,10 +295,11 @@ const runCodegenStep = async (
         // script. Without this a deploy would ship output the project considers
         // unfinished, and the deploy pipeline has no reason to run that script
         // first, so nothing else would catch it.
-        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+        // A bundler plugin's build already ran this hook after its own codegen and before it bundled. Running it again would repeat it.
+        const postCodegen = writeOutputs ? await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput }) : undefined;
 
         // Already logged by the hook — this only decides that it BLOCKS.
-        if (postCodegen.error !== undefined) {
+        if (postCodegen?.error !== undefined) {
             return { error: postCodegen.error };
         }
 
@@ -532,6 +534,7 @@ const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] 
 const preflightDeploy = (
     options: DeployCommandOptions,
     command: PreDeployCommand,
+    beforeBuild: boolean,
 ): { code?: ExitCode; error: string; kind: "refused"; validation: DeployCommandResult["validation"] } | { kind: "ok"; target: string } => {
     const cwd = options.cwd ?? process.cwd();
 
@@ -566,7 +569,11 @@ const preflightDeploy = (
     } catch (error) {
         // A client build this run is about to make creates the output a target needs, so that refusal waits for the
         // pipeline, after the build. An option the target refuses stops the deploy here, before anything is written.
-        if (!(error instanceof MissingBuildOutputError && clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env))) {
+        if (!(
+            beforeBuild &&
+            error instanceof MissingBuildOutputError &&
+            clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env)
+        )) {
             const message = error instanceof Error ? error.message : String(error);
 
             options.logger.error(message);
@@ -577,7 +584,7 @@ const preflightDeploy = (
 
     // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
     // provisioning writes anything. A service is published only when this run deploys services.
-    const gateError = runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
+    const gateError = options.openShardGatePassed === true ? undefined : runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
 
     if (gateError !== undefined) {
         return { kind: "refused", code: gateError.code, error: gateError.error, validation: NO_VALIDATION };
@@ -621,7 +628,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     const strictAdvisories = resolveStrictAdvisories(options);
     const empty = { problems: [], wranglerPath: undefined };
 
-    const preflight = preflightDeploy(options, command);
+    const preflight = preflightDeploy(options, command, false);
 
     if (preflight.kind === "refused") {
         return { code: preflight.code, error: preflight.error, validation: preflight.validation };
@@ -642,6 +649,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             options.spawner,
             options.format === "json",
             strictAdvisories,
+            options.clientBuildRan !== true,
         );
 
         if (codegenStep.error !== undefined) {
@@ -1145,7 +1153,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 
     // A refused deploy must not rewrite the project, and the client build rewrites `_generated/*` and `dist/`, so the refusals
     // that need no writes run before it.
-    const preflight = preflightDeploy(options, options.commandName ?? "deploy");
+    const preflight = preflightDeploy(options, options.commandName ?? "deploy", true);
 
     if (preflight.kind === "refused") {
         return { code: preflight.code ?? EXIT_CODE.USAGE, descriptor: undefined, error: preflight.error, validation: preflight.validation };
@@ -1167,7 +1175,8 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
         result = await executeDeploy({
             ...options,
             logger,
-            clientBuildRan: clientBuildRuns(projectRoot, options.skipCodegen === true ? false : options.frameworkBuild, options.env),
+            clientBuildRan: pluginBuildRuns(projectRoot, options.skipCodegen === true ? false : options.frameworkBuild, options.env),
+            openShardGatePassed: true,
         });
 
         if (result.code === 0 && options.emitBindings !== undefined) {

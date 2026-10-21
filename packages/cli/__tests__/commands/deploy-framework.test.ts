@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,8 +74,8 @@ describe("lunora deploy — client build before wrangler", () => {
         expect(calls.some((call) => call.descriptor.args.includes("--dry-run"))).toBe(true);
     });
 
-    it("runs the postcodegen script once, in the deploy after its codegen, and leaves the client build out of it", async () => {
-        expect.assertions(2);
+    it("leaves the postcodegen hook to the plugin's client build, which runs it before bundling, so it runs once", async () => {
+        expect.assertions(1);
 
         writeFileSync(
             join(workdir, "package.json"),
@@ -88,10 +88,8 @@ describe("lunora deploy — client build before wrangler", () => {
         await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: () => Promise.resolve({ names: [], ok: false }) });
 
         const hookRuns = calls.filter((call) => call.descriptor.args.join(" ").includes("postcodegen"));
-        const build = calls.find((call) => isClientBuild(call.descriptor));
 
-        expect(hookRuns).toHaveLength(1);
-        expect(build?.descriptor.env?.LUNORA_SKIP_POST_CODEGEN).toBe("1");
+        expect(hookRuns).toHaveLength(0);
     });
 
     it("refuses an unusable target before the client build writes anything", async () => {
@@ -112,14 +110,14 @@ describe("lunora deploy — client build before wrangler", () => {
         expect(calls.some((call) => isClientBuild(call.descriptor))).toBe(false);
     });
 
-    it("emits the API spec its client build selected, not the deploy default that would delete it", async () => {
+    it("leaves the API spec files a plugin build wrote as they are, rather than regenerating them", async () => {
         expect.assertions(2);
 
         const { calls, spawner: recorded } = createRecordingSpawner();
         const spawner = async (descriptor: Parameters<typeof recorded>[0]) => {
             if (isClientBuild(descriptor)) {
-                mkdirSync(join(workdir, ".lunora"), { recursive: true });
-                writeFileSync(join(workdir, ".lunora", "api-spec.json"), JSON.stringify({ apiSpec: "openrpc" }), "utf8");
+                mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                writeFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), "from the plugin build", "utf8");
             }
 
             return recorded(descriptor);
@@ -128,7 +126,7 @@ describe("lunora deploy — client build before wrangler", () => {
         await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: () => Promise.resolve({ names: [], ok: false }) });
 
         expect(calls.some((call) => isClientBuild(call.descriptor))).toBe(true);
-        expect(existsSync(join(workdir, "lunora", "_generated", "openrpc.json"))).toBe(true);
+        expect(readFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), "utf8")).toBe("from the plugin build");
     });
 
     it("tells the client build when advisories are opted out, so its plugin does not fail on them", async () => {

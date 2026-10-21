@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { detectFramework, LAZY_FUNCTIONS_ENV, POST_CODEGEN_SKIP_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
+import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -11,8 +11,10 @@ import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 
-/** The client-build tool a project's config file names. */
-/** `script` runs the project's own `build` script, for a framework (Astro, Nuxt) that has no Vite or rsbuild config to bundle through. */
+/**
+ * The client-build tool. `script` runs the project's own `build` script, for a framework (Astro, Nuxt) that has no Vite or
+ * rsbuild config to bundle through.
+ */
 type FrameworkTool = "rsbuild" | "script" | "vite";
 
 /** Set on a client build's child so a build script that runs `lunora` does not start another client build. */
@@ -43,16 +45,6 @@ const pickTool = (cwd: string): FrameworkTool | undefined => {
 /** A worker whose `main` is the Vite-generated composed entry is built by Vite, whatever else the project configures. */
 const pickComposedTool = (cwd: string): FrameworkTool | undefined => (hasConfigFile(cwd, "vite") ? "vite" : pickTool(cwd));
 
-/**
- * The client build `lunora build` has to run before wrangler, or `undefined`
- * when wrangler reads nothing a client build produces.
- *
- * The gate is what wrangler will read, not whether an output directory happens
- * to exist: a stale `dist/` or a `.wrangler/deploy/config.json` left by an older
- * build would otherwise ship old code. Runs when `main` is the Vite-generated
- * composed entry, when the framework is class A or B (its worker wraps the
- * framework's build output), or when `assets.directory` names a client build.
- */
 const hasBuildScript = (cwd: string): boolean => {
     try {
         const { scripts } = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as { scripts?: { build?: unknown } };
@@ -63,6 +55,16 @@ const hasBuildScript = (cwd: string): boolean => {
     }
 };
 
+/**
+ * The client build `lunora build` has to run before wrangler, or `undefined`
+ * when wrangler reads nothing a client build produces.
+ *
+ * The gate is what wrangler will read, not whether an output directory happens
+ * to exist: a stale `dist/` or a `.wrangler/deploy/config.json` left by an older
+ * build would otherwise ship old code. Runs when `main` is the Vite-generated
+ * composed entry, when the framework is class A or B (its worker wraps the
+ * framework's build output), or when `assets.directory` names a client build.
+ */
 const frameworkBuildFor = (cwd: string, environment?: string): FrameworkTool | undefined => {
     // A build script that runs `lunora` lands here from inside a client build: the outer build already owns the client output.
     if (process.env[CLIENT_BUILD_ENV] === "1") {
@@ -105,7 +107,7 @@ interface FrameworkBuildOptions {
  * `@lunora/vite` and `@lunora/rspack` run codegen inside the child, so it
  * receives the lazy-functions opt-in through the env var both plugins read.
  * Whatever the build writes to `wrangler.jsonc` is rolled back afterwards:
- * `lunora build` publishes nothing, and its own pre-deploy pipeline provisions
+ * `lunora build` and `lunora deploy --dry-run` publish nothing, and its own pre-deploy pipeline provisions
  * the same bindings again.
  */
 const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: FrameworkBuildOptions): Promise<string | undefined> => {
@@ -127,7 +129,6 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
                 ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
                 ...(options.strictAdvisories === false ? { [STRICT_ADVISORIES_ENV]: "0" } : {}),
                 [CLIENT_BUILD_ENV]: "1",
-                [POST_CODEGEN_SKIP_ENV]: "1",
             },
             stdoutToStderr: options.outputJson,
         });
@@ -160,6 +161,13 @@ interface ClientBuildOptions {
 /** Whether {@link runClientBuild} runs a framework build for `cwd`. */
 const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
     frameworkBuild !== false && frameworkBuildFor(cwd, environment) !== undefined;
+
+/**
+ * Whether the client build for `cwd` is a bundler plugin build. Only then did the plugin run codegen and the post-codegen hook,
+ * so the deploy's own run must not write the same outputs again.
+ */
+const pluginBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
+    clientBuildRuns(cwd, frameworkBuild, environment) && frameworkBuildFor(cwd, environment) !== "script";
 
 /**
  * The reason the client build cannot run with these options, or `undefined` when it can. A refusal is a usage error, so
@@ -221,5 +229,5 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     });
 };
 
-export { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, runClientBuild, runFrameworkBuild };
+export { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, pluginBuildRuns, runClientBuild, runFrameworkBuild };
 export type { FrameworkTool };
