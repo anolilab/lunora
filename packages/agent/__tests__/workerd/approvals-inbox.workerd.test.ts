@@ -173,12 +173,12 @@ describe("approvals inbox on real workerd storage", () => {
         const capped = await inbox("user-a", 1000);
         const floored = await inbox("user-a", 0);
 
-        expect(defaulted).toHaveLength(50);
-        expect(capped).toHaveLength(200);
-        expect(floored).toHaveLength(1);
+        // Thread i is seeded i-th, so the newest `count` are the last `count` keys, highest first.
+        const newest = (count: number): string[] => Array.from({ length: count }, (_, offset) => `t-${String(204 - offset).padStart(3, "0")}`);
+        const keys = (items: Approval[]): string[] => items.map((item) => item.threadKey);
 
-        const updatedAt = capped.map((item) => item.threadUpdatedAt);
-
-        expect(updatedAt).toStrictEqual([...updatedAt].toSorted((a, b) => b - a));
+        expect(keys(defaulted)).toStrictEqual(newest(50));
+        expect(keys(capped)).toStrictEqual(newest(200));
+        expect(keys(floored)).toStrictEqual(newest(1));
     }, 120_000); // seeding 205 threads over RPC takes ~25s, close to the 30s default
 });
