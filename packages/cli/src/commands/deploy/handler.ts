@@ -751,10 +751,6 @@ const buildService = async (
     return { built, error: await runClientBuild(serviceBuild) };
 };
 
-// The config a service deploys after its own client build: the one that build generated, or none when it generated nothing.
-const generatedServiceConfig = (wranglerPath: string, clientBuilt: boolean): string | undefined =>
-    clientBuilt ? generatedConfigPath(wranglerPath) : undefined;
-
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
@@ -811,7 +807,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
         };
 
         // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
-        const { built: clientBuilt, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
+        const { error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
 
         if (buildError !== undefined) {
             const message = `service ${service.name} (${service.worker}): ${buildError}`;
@@ -821,8 +817,9 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
             return message;
         }
 
-        // The build ran for the deploy's environment, so the config it generated is the one wrangler should deploy.
-        const generated = generatedServiceConfig(service.wranglerPath, clientBuilt);
+        // The redirect a build left: a build that ran cleared the old one first, so this is its output. A skipped build (a prebuilt
+        // deploy) keeps the redirect from the build that produced the artifact, so a composed service does not fall back to its source config.
+        const generated = generatedConfigPath(service.wranglerPath);
 
         let invocation: ReturnType<typeof planToolchainInvocation>;
 

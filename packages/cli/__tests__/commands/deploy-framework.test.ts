@@ -381,6 +381,24 @@ describe("lunora deploy — a service's client build", () => {
         expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
     });
 
+    it("deploys the redirect an earlier build left for a service when a --prebuilt deploy skips that build", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+
+        mkdirSync(join(serviceDirectory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(serviceDirectory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../generated.jsonc" }), "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), skipCodegen: true, spawner, secretLister: noSecretList });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+        expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
+    });
+
     it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
         expect.assertions(2);
 
