@@ -1070,6 +1070,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     const clientBuildError = await runClientBuild({
         apiSpec: options.apiSpec,
         cwd: projectRoot,
+        environment: options.env,
         frameworkBuild: options.frameworkBuild,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         logger,

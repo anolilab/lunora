@@ -151,7 +151,7 @@ describe("lunora build — client build", () => {
 
             await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: eager.spawner });
 
-            expect(frameworkCalls(eager.calls)[0]?.env).toBeUndefined();
+            expect(frameworkCalls(eager.calls)[0]?.env).toEqual({});
         });
 
         it("rolls back wrangler.jsonc edits the client build makes, so build leaves the committed config alone", async () => {

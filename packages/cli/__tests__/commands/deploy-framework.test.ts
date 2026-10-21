@@ -74,6 +74,43 @@ describe("lunora deploy — client build before wrangler", () => {
         expect(calls.some((call) => call.descriptor.args.includes("--dry-run"))).toBe(true);
     });
 
+    it("builds for the environment --env names, so the client output matches the environment wrangler deploys", async () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            wranglerWith({
+                d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                env: {
+                    staging: {
+                        d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        name: "lunora-app-staging",
+                    },
+                },
+                main: "virtual:lunora/worker",
+                migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
+            }),
+            "utf8",
+        );
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({
+            cwd: workdir,
+            dryRun: true,
+            env: "staging",
+            logger: silentLogger(),
+            spawner,
+            secretLister: () => Promise.resolve({ names: [], ok: false }),
+        });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor));
+
+        expect(build?.descriptor.env?.CLOUDFLARE_ENV).toBe("staging");
+    });
+
     it("keeps the client build out of a --prebuilt deploy, which trusts an artifact built earlier", async () => {
         expect.assertions(1);
 

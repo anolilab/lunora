@@ -54,6 +54,8 @@ const frameworkBuildFor = (cwd: string): FrameworkTool | undefined => {
 };
 
 interface FrameworkBuildOptions {
+    /** The deploy environment (`--env`); the child build gets it as `CLOUDFLARE_ENV`, so its output targets that environment. */
+    environment?: string;
     /** Opt the child's codegen into lazy imports, the same way `lunora build` itself does. */
     lazyFunctions: boolean;
     logger: Logger;
@@ -85,7 +87,10 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
             args: command.args,
             command: command.command,
             cwd,
-            env: options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : undefined,
+            env: {
+                ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
+                ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
+            },
             stdoutToStderr: options.outputJson,
         });
 
@@ -99,6 +104,8 @@ interface ClientBuildOptions {
     /** An explicit `--api-spec` is refused when a client build would run: the plugin config decides it. */
     apiSpec?: ApiSpec;
     cwd: string;
+    /** Forwarded to the client build, which must build for the environment the wrangler deploy names. */
+    environment?: string;
     /** `false` skips the client build (`--no-framework-build`, `--prebuilt`). */
     frameworkBuild?: boolean;
     lazyFunctions: boolean;
@@ -136,6 +143,7 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     }
 
     return runFrameworkBuild(options.cwd, tool, {
+        environment: options.environment,
         lazyFunctions: options.lazyFunctions,
         logger: options.logger,
         outputJson: options.outputJson,
