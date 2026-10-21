@@ -1273,11 +1273,13 @@ type ComponentFunctions = ReturnType<typeof agentComponent>["functions"];
 /** Insert a raw messages row shaped like the loop's approval marker (`status` is what the inbox filters on). */
 const insertMarker = async (
     ctx: { db: unknown },
-    marker: { instanceId: string; seq: number; status: "approved" | "awaiting_approval"; threadKey: string; toolCallId: string },
+    marker: { expiresAt?: number; instanceId: string; seq: number; status: "approved" | "awaiting_approval"; threadKey: string; toolCallId: string },
 ): Promise<void> => {
     await (ctx.db as { insert: (table: string, document: Record<string, unknown>) => Promise<string> }).insert("agent_messages", {
         content: `Awaiting approval to run tool "refund".`,
         createdAt: marker.seq,
+        // The loop stamps a deadline on every approval marker; the inbox refuses one past it.
+        expiresAt: marker.expiresAt ?? Date.now() + 60_000,
         messageKey: `${marker.instanceId}:approval:${marker.toolCallId}`,
         role: "tool",
         seq: marker.seq,
@@ -1376,6 +1378,25 @@ describe("approvals inbox", () => {
         const pending = await pendingFor(functions, ctx, "user-a");
 
         expect(pending.map((item) => item["toolCallId"])).toStrictEqual(["call_new"]);
+    });
+
+    it("hides a marker past its deadline while keeping one still open", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-1", owner: "user-a", threadInstanceId: "wf-1", toolCallId: "call_open" });
+        await insertMarker(ctx, {
+            expiresAt: Date.now() - 1000,
+            instanceId: "wf-1",
+            seq: 2,
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_lapsed",
+        });
+
+        const pending = await pendingFor(functions, ctx, "user-a");
+
+        expect(pending.map((item) => item["toolCallId"])).toStrictEqual(["call_open"]);
     });
 
     it("drops resolved markers and threads that are no longer paused", async () => {

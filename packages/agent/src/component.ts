@@ -1367,6 +1367,8 @@ export const agentComponent = (): AgentComponent => {
      * instance that does not own the thread), so surfacing it would hand the
      * client a triple that can only fail.
      *
+     * A marker past its `expiresAt` (or with none) is not listed: the grant path refuses it
+     * as timed out or as having no deadline, so offering it would advertise a dead action.
      * `limit` is clamped to `[1, MAX_APPROVALS_LIMIT]` and counts threads that hold an
      * approval. Paused threads are scanned newest first, up to `MAX_APPROVALS_SCAN`, so
      * threads paused for a secret do not consume the page. Each thread's message read
@@ -1385,6 +1387,8 @@ export const agentComponent = (): AgentComponent => {
             .withIndex("byOwnerStatus", (q) => q.eq("owner", userId).eq("status", "awaiting_input"))
             .order("desc")
             .take(MAX_APPROVALS_SCAN);
+        // Read once, so every marker is judged against the same instant.
+        const now = Date.now();
         const wanted = Math.min(MAX_APPROVALS_LIMIT, Math.max(1, Math.trunc(args.limit ?? DEFAULT_APPROVALS_LIMIT)));
         // One thread's pending approvals. Each thread's read is a prefix range on `byMessageKey`.
         const readApprovals = async (thread: Record<string, unknown>): Promise<Record<string, unknown>[]> => {
@@ -1403,21 +1407,25 @@ export const agentComponent = (): AgentComponent => {
                 .withIndex("byMessageKey", (q) => q.eq("threadKey", thread["key"]).gte("messageKey", markerPrefix).lt("messageKey", markerUpper))
                 .collect();
 
-            return rows
-                .filter((row) => row["status"] === "awaiting_approval")
-                .map((row) =>
-                    definedColumns({
-                        agent: thread["agent"],
-                        content: row["content"],
-                        instanceId,
-                        requestedAt: row["createdAt"],
-                        threadKey: thread["key"],
-                        threadTitle: thread["title"],
-                        threadUpdatedAt: thread["updatedAt"],
-                        toolCallId: row["toolCallId"],
-                        toolName: row["toolName"],
-                    }),
-                );
+            return (
+                rows
+                    // A marker past its deadline is still stored until the run's wait settles and deletes it,
+                    // and `agentResolveApproval` refuses it as timed out, so it is not offered.
+                    .filter((row) => row["status"] === "awaiting_approval" && typeof row["expiresAt"] === "number" && now < row["expiresAt"])
+                    .map((row) =>
+                        definedColumns({
+                            agent: thread["agent"],
+                            content: row["content"],
+                            instanceId,
+                            requestedAt: row["createdAt"],
+                            threadKey: thread["key"],
+                            threadTitle: thread["title"],
+                            threadUpdatedAt: thread["updatedAt"],
+                            toolCallId: row["toolCallId"],
+                            toolName: row["toolName"],
+                        }),
+                    )
+            );
         };
         // Chunks of `wanted` threads are read in parallel, stopping once `wanted` threads hold an approval.
         const approvals: Record<string, unknown>[] = [];

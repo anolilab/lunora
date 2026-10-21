@@ -40,6 +40,8 @@ const store = (name: string) => {
             });
             await call("agentAppendMessage", {
                 content: `Awaiting approval to run tool "refund".`,
+                // The loop always stamps a deadline on an approval marker; the inbox filters on it.
+                expiresAt: Date.now() + 60_000,
                 messageKey: `${instanceId}:approval:${toolCallId}`,
                 role: "tool",
                 status: "awaiting_approval",
@@ -134,6 +136,39 @@ describe("approvals inbox on real workerd storage", () => {
         const pending = await inbox("user-a");
 
         expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_approval"]);
+    });
+
+    it("hides a marker past its deadline and keeps one still open", async () => {
+        const { call, inbox } = store("expiry");
+        const markers = [
+            { expiresAt: Date.now() + 60_000, toolCallId: "call_open" },
+            { expiresAt: Date.now() - 1000, toolCallId: "call_lapsed" },
+        ];
+
+        for (const { expiresAt, toolCallId } of markers) {
+            const key = `t-${toolCallId}`;
+            const instanceId = `wf-${toolCallId}`;
+
+            // eslint-disable-next-line no-await-in-loop -- one thread per marker keeps the seeding order explicit
+            await call("agentEnsureThread", { agent: "support", instanceId, key, owner: "user-a" });
+            // eslint-disable-next-line no-await-in-loop -- the marker must exist before its thread is parked
+            await call("agentAppendMessage", {
+                content: "Awaiting approval.",
+                expiresAt,
+                messageKey: `${instanceId}:approval:${toolCallId}`,
+                role: "tool",
+                status: "awaiting_approval",
+                threadKey: key,
+                toolCallId,
+                toolName: "refund",
+            });
+            // eslint-disable-next-line no-await-in-loop -- the thread is paused only once its marker is written
+            await call("agentPatchThread", { key, status: "awaiting_input" });
+        }
+
+        const pending = await inbox("user-a");
+
+        expect(pending.map((item) => item.toolCallId)).toStrictEqual(["call_open"]);
     });
 
     it("clamps the limit to [1, 200] and returns threads newest first", async () => {
