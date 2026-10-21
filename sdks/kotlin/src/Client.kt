@@ -499,8 +499,14 @@ class Client(
      * open and every reconnect presents the session credential before any
      * subscription. The app must not send `connect` itself.
      */
-    fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
-        sender(buildConnectFrame(clientId = clientId, token = wsToken?.invoke()))
+    fun attachSocket(sender: (Map<String, Any?>) -> Unit) = attachSocket(null, sender)
+
+    /**
+     * [attachSocket] with a connection [context] on the `connect` frame. The server
+     * records it for the `onConnect` hooks, so it applies to every open and reconnect.
+     */
+    fun attachSocket(context: Map<String, Any?>?, sender: (Map<String, Any?>) -> Unit) {
+        sender(buildConnectFrame(clientId = clientId, context = context, token = wsToken?.invoke()))
         synchronized(lock) {
             send = sender
             wasEverConnected = true

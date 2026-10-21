@@ -46,6 +46,7 @@ public final class ConformanceTest {
         stringEscapingMatchesJsonStringify();
         emptyShardKeyIsOmitted();
         socketCredentialsStayOutOfTheUrl();
+        attachSocketSendsClientIdAndContext();
         rpcRequestBodies();
         rpcResponses();
         non2xxWithoutEnvelopeThrows();
@@ -410,6 +411,31 @@ public final class ConformanceTest {
         check(
                 client.wsUrl("room-1").contains("shard="),
                 "a real shard key still rides the socket URL");
+    }
+
+    /**
+     * {@code attachSocket} is the only place the connect frame is built for an app that uses it, so
+     * the client id and the connection context must reach that frame, not only the credential.
+     */
+    private static void attachSocketSendsClientIdAndContext() {
+        Client client = new Client("https://app.example", null);
+        Map<String, Object> context = new LinkedHashMap<>();
+
+        context.put("tenant", "acme");
+
+        List<Map<String, Object>> frames = new ArrayList<>();
+
+        client.attachSocket(frames::add, context);
+
+        Map<String, Object> connect = frames.get(0);
+
+        check("connect".equals(connect.get("type")), "attachSocket must send connect first");
+        check(
+                client.clientId.equals(connect.get("clientId")),
+                "attachSocket's connect must carry the client id");
+        check(
+                context.equals(connect.get("context")),
+                "attachSocket's connect must carry the connection context");
     }
 
     /**

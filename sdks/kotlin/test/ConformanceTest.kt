@@ -279,6 +279,12 @@ private fun socketCredentialsStayOutOfTheUrl() {
         "the session credential must not appear in the socket URL on a reconnect",
     )
 
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("tenant" to "acme")) { withContext.add(it) }
+
+    check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
+
     val bare = Client("https://app.example", null)
     val unset = mutableListOf<Map<String, Any?>>()
 

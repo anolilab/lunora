@@ -475,7 +475,16 @@ public final class Client {
      * surfaces on the first write instead of silently filling a queue that will never flush.
      */
     public void attachSocket(FrameSender sender) {
-        sender.send(buildConnectFrame(clientId, null, resolve(wsTokenProvider)));
+        attachSocket(sender, null);
+    }
+
+    /**
+     * {@link #attachSocket(FrameSender)} with a connection {@code context} on the {@code connect}
+     * frame. The server records it for the {@code onConnect} lifecycle hooks, so it applies to
+     * every open and reconnect, not only the first.
+     */
+    public void attachSocket(FrameSender sender, Map<String, Object> context) {
+        sender.send(buildConnectFrame(clientId, context, resolve(wsTokenProvider)));
 
         synchronized (lock) {
             this.sender = sender;
