@@ -2446,8 +2446,8 @@ class LunoraClient {
      * Subscribe to token-expiry events: invoked whenever the server drops a
      * shard socket because the connection's credential lapsed (close code
      * `4001`) or the server refused the session credential (close code `4003`,
-     * notified once per credential). The client already reconnects automatically (re-resolving
-     * identity from the cookie/token in effect); use this to refresh a
+     * notified once per credential). The client already reconnects automatically
+     * (re-resolving identity from the cookie/token in effect); use this to refresh a
      * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
      * with a freshly minted one. Returns an unsubscribe function.
      *
