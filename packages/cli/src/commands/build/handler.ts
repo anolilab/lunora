@@ -7,7 +7,6 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
@@ -16,7 +15,6 @@ import { runDeployCommand } from "../deploy/handler";
 import type { DeployCommandResult } from "../deploy/types";
 import type { BundleSize } from "./bundle-size";
 import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
-import { frameworkBuildFor, runFrameworkBuild } from "./framework-build";
 import type { BuildOptions } from "./index";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
@@ -123,47 +121,17 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     // the bundle measurement below is what a CI consumer runs this command for,
     // and the deploy result has no field to carry it.
     const { logger } = options;
-    const projectRoot = options.cwd ?? process.cwd();
-
-    // The client build comes first: wrangler bundles whatever it finds on disk,
-    // so a Vite-generated worker or an `assets` directory has to exist before
-    // the dry run below reads them.
-    const frameworkTool = options.frameworkBuild === false ? undefined : frameworkBuildFor(projectRoot);
-
-    // The Vite/Rsbuild plugin reads apiSpec and target from its own config, so a
-    // flag passed here would describe a bundle the client build never produces.
-    if (frameworkTool !== undefined && (options.apiSpec !== undefined || options.target !== undefined)) {
-        const error = `--api-spec and --target are read from the ${frameworkTool} plugin config when the client build runs; set them there, or pass --no-framework-build`;
-
-        logger.error(error);
-
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error, validation: { problems: [], wranglerPath: undefined } };
-    }
-
-    if (frameworkTool !== undefined) {
-        const failure = await runFrameworkBuild(projectRoot, frameworkTool, {
-            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-            logger,
-            outputJson: options.format === "json",
-            spawner: options.spawner,
-        });
-
-        if (failure !== undefined) {
-            logger.error(failure);
-
-            return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: failure, validation: { problems: [], wranglerPath: undefined } };
-        }
-    }
-
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift,
         apiSpec: options.apiSpec,
+        frameworkBuild: options.frameworkBuild,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         // So the drift gate names `build` and offers only the flags `build`
         // registers — it does NOT accept `--update-schema-baseline`, because it
         // publishes nothing and re-blessing a baseline for an artifact that never
         // shipped is what lets a breaking change through on the retry.
         commandName: "build",
+        clientBuildOutputJson: jsonMode,
         cwd: options.cwd,
         dryRun: true,
         // The requirements document has to describe the PROVISIONED config, so

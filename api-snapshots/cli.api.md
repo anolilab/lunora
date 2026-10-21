@@ -124,6 +124,8 @@ interface DeployCommandOptions {
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    frameworkBuild?: boolean;
+    clientBuildOutputJson?: boolean;
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;

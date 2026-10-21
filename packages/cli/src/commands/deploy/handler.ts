@@ -51,6 +51,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
+import { runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { provisionDeployHyperdrive } from "./hyperdrive";
@@ -1062,7 +1063,28 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     // and `--emit-bindings`'s requirements document right after it — so nothing
     // else needs to own a snapshot.
     const { logger } = options;
-    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
+    const projectRoot = options.cwd ?? process.cwd();
+
+    // The client build comes first: wrangler bundles whatever it finds on disk, so
+    // a Vite-generated worker or an `assets` directory must exist before it reads them.
+    const clientBuildError = await runClientBuild({
+        apiSpec: options.apiSpec,
+        cwd: projectRoot,
+        frameworkBuild: options.frameworkBuild,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner: options.spawner,
+        target: options.target,
+    });
+
+    if (clientBuildError !== undefined) {
+        logger.error(clientBuildError);
+
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(projectRoot) : undefined;
 
     let result: DeployCommandResult;
 
@@ -1116,6 +1138,8 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        // `--prebuilt` trusts an artifact built earlier, so it must not rebuild the client.
+        frameworkBuild: options.prebuilt === true ? false : options.frameworkBuild,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         dryRun: options.dryRun === true,

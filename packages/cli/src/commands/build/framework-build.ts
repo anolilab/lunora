@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { detectFramework, LAZY_FUNCTIONS_ENV } from "@lunora/config";
+import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
+import type { ApiSpec } from "../../util/api-spec";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
@@ -94,5 +95,53 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
     }
 };
 
-export { frameworkBuildFor, runFrameworkBuild };
+interface ClientBuildOptions {
+    /** An explicit `--api-spec` is refused when a client build would run: the plugin config decides it. */
+    apiSpec?: ApiSpec;
+    cwd: string;
+    /** `false` skips the client build (`--no-framework-build`, `--prebuilt`). */
+    frameworkBuild?: boolean;
+    lazyFunctions: boolean;
+    logger: Logger;
+    /** `true` when the caller's stdout is a JSON document, so the build's output goes to stderr. */
+    outputJson: boolean;
+    spawner?: Spawner;
+    /** An explicit `--target` is refused when it names a different target than the project resolves to. */
+    target?: string;
+}
+
+/**
+ * Run the client build wrangler depends on, if there is one, and return the
+ * message to report when it cannot run. `undefined` means there was nothing to
+ * build or the build passed.
+ *
+ * The two refusals exist because the plugin reads `apiSpec` and `target` from its
+ * own config, so a flag passed here would describe a bundle the build never makes.
+ */
+const runClientBuild = async (options: ClientBuildOptions): Promise<string | undefined> => {
+    const tool = options.frameworkBuild === false ? undefined : frameworkBuildFor(options.cwd);
+
+    if (tool === undefined) {
+        return undefined;
+    }
+
+    if (options.apiSpec !== undefined) {
+        return `--api-spec is read from the ${tool} plugin config when the client build runs; set it there, or pass --no-framework-build`;
+    }
+
+    const projectTarget = resolveTargetOrThrow(options.cwd);
+
+    if (options.target !== undefined && options.target !== projectTarget) {
+        return `--target ${options.target} differs from the project's target (${projectTarget}), which the ${tool} plugin reads; set it in the project config, or pass --no-framework-build`;
+    }
+
+    return runFrameworkBuild(options.cwd, tool, {
+        lazyFunctions: options.lazyFunctions,
+        logger: options.logger,
+        outputJson: options.outputJson,
+        spawner: options.spawner,
+    });
+};
+
+export { frameworkBuildFor, runClientBuild, runFrameworkBuild };
 export type { FrameworkTool };

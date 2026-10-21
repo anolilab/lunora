@@ -189,7 +189,7 @@ describe("lunora build — client build", () => {
             expect(frameworkCalls(pretty.calls)[0]?.stdoutToStderr).toBe(false);
         });
 
-        it("refuses --api-spec or --target when a client build would run, since the plugin config decides those", async () => {
+        it("refuses --api-spec when a client build would run, since the plugin config decides it", async () => {
             expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
@@ -199,8 +199,25 @@ describe("lunora build — client build", () => {
             const result = await runBuildCommand({ apiSpec: "openrpc", cwd: workdir, logger: silentLogger(), spawner });
 
             expect(result.code).not.toBe(0);
-            expect(result.error).toContain("--api-spec and --target are read from the vite plugin config");
+            expect(result.error).toContain("--api-spec is read from the vite plugin config");
             expect(calls).toHaveLength(0);
+        });
+
+        it("refuses a --target that differs from the project's target, but accepts the one it already has", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            const refused = await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: recordingSpawner().spawner, target: "celld" });
+
+            expect(refused.error).toContain("--target celld differs from the project's target (cloudflare)");
+
+            const accepted = recordingSpawner();
+            const result = await runBuildCommand({ cwd: workdir, logger: silentLogger(), spawner: accepted.spawner, target: "cloudflare" });
+
+            expect(result.code).toBe(0);
+            expect(frameworkCalls(accepted.calls)).toHaveLength(1);
         });
     });
 
