@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentComponent, agentExtension } from "../src/component";
+import approvalMarkerFields from "./approval-fixtures";
 import { assertNoExplicitUndefined } from "./loop-harness";
 
 const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
@@ -1276,17 +1277,11 @@ const insertMarker = async (
     marker: { expiresAt?: number; instanceId: string; seq: number; status: "approved" | "awaiting_approval"; threadKey: string; toolCallId: string },
 ): Promise<void> => {
     await (ctx.db as { insert: (table: string, document: Record<string, unknown>) => Promise<string> }).insert("agent_messages", {
-        content: `Awaiting approval to run tool "refund".`,
+        ...approvalMarkerFields({ expiresAt: marker.expiresAt, instanceId: marker.instanceId, toolCallId: marker.toolCallId }),
         createdAt: marker.seq,
-        // The loop stamps a deadline on every approval marker; the inbox refuses one past it.
-        expiresAt: marker.expiresAt ?? Date.now() + 60_000,
-        messageKey: `${marker.instanceId}:approval:${marker.toolCallId}`,
-        role: "tool",
         seq: marker.seq,
         status: marker.status,
         threadKey: marker.threadKey,
-        toolCallId: marker.toolCallId,
-        toolName: "refund",
     });
 };
 

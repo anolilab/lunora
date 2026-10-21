@@ -11,6 +11,8 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import approvalMarkerFields from "../approval-fixtures";
+
 interface Approval {
     agent: string;
     instanceId: string;
@@ -38,17 +40,7 @@ const store = (name: string) => {
                 ...(owner === undefined ? {} : { owner }),
                 ...(takeOver ? { onConcurrentRun: "replace" } : {}),
             });
-            await call("agentAppendMessage", {
-                content: `Awaiting approval to run tool "refund".`,
-                // The loop always stamps a deadline on an approval marker; the inbox filters on it.
-                expiresAt: Date.now() + 60_000,
-                messageKey: `${instanceId}:approval:${toolCallId}`,
-                role: "tool",
-                status: "awaiting_approval",
-                threadKey: key,
-                toolCallId,
-                toolName: "refund",
-            });
+            await call("agentAppendMessage", { ...approvalMarkerFields({ instanceId, toolCallId }), threadKey: key });
             await call("agentPatchThread", { key, status: "awaiting_input" });
         },
         /** Pause `key` on a secret request (`awaiting_secret`), which leaves the thread `awaiting_input` with no approval. */
@@ -111,8 +103,14 @@ describe("approvals inbox on real workerd storage", () => {
 
         await park("t-long", "user-a", "wf-1", "call_real");
         // Keys either side of the `<instanceId>:approval:` prefix, all still `awaiting_approval`.
-        await call("agentAppendMessage", { content: "x", messageKey: "wf-1:approval", role: "tool", status: "awaiting_approval", threadKey: "t-long" });
-        await call("agentAppendMessage", { content: "x", messageKey: "wf-1:approval;z", role: "tool", status: "awaiting_approval", threadKey: "t-long" });
+        await call("agentAppendMessage", {
+            ...approvalMarkerFields({ instanceId: "wf-1", messageKey: "wf-1:approval", toolCallId: "decoy_bare" }),
+            threadKey: "t-long",
+        });
+        await call("agentAppendMessage", {
+            ...approvalMarkerFields({ instanceId: "wf-1", messageKey: "wf-1:approval;z", toolCallId: "decoy_semicolon" }),
+            threadKey: "t-long",
+        });
         for (let index = 0; index < 30; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- seq is allocated in append order
             await call("agentAppendMessage", { content: `m${String(index)}`, messageKey: `m-${String(index)}`, role: "user", threadKey: "t-long" });
@@ -152,16 +150,7 @@ describe("approvals inbox on real workerd storage", () => {
             // eslint-disable-next-line no-await-in-loop -- one thread per marker keeps the seeding order explicit
             await call("agentEnsureThread", { agent: "support", instanceId, key, owner: "user-a" });
             // eslint-disable-next-line no-await-in-loop -- the marker must exist before its thread is parked
-            await call("agentAppendMessage", {
-                content: "Awaiting approval.",
-                expiresAt,
-                messageKey: `${instanceId}:approval:${toolCallId}`,
-                role: "tool",
-                status: "awaiting_approval",
-                threadKey: key,
-                toolCallId,
-                toolName: "refund",
-            });
+            await call("agentAppendMessage", { ...approvalMarkerFields({ expiresAt, instanceId, toolCallId }), threadKey: key });
             // eslint-disable-next-line no-await-in-loop -- the thread is paused only once its marker is written
             await call("agentPatchThread", { key, status: "awaiting_input" });
         }
