@@ -59,6 +59,10 @@ class GateShard extends ShardDO {
         return this.webSocketClose(ws as unknown as WebSocket, 1000, "", true);
     }
 
+    public admitPending(now: number): boolean {
+        return this.admitPendingSocket(now, false);
+    }
+
     // eslint-disable-next-line class-methods-use-this -- override stub: the manifest is a fixed list
     protected override lifecycleHookPaths(event: "connect" | "disconnect"): ReadonlyArray<string> {
         return event === "disconnect" ? ["hooks:onLeave"] : [];
@@ -204,5 +208,68 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
 
         expect(ws.closes).toStrictEqual([]);
         expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(true);
+    });
+
+    describe("pending sockets are capped and deadlined", () => {
+        const PENDING_CAP = 1024;
+        const DEADLINE_MS = 10_000;
+
+        it("refuses a new pending upgrade once the cap is full of live pending sockets", () => {
+            expect.assertions(2);
+
+            const shard = new GateShard(state, bearerEnv);
+            const now = 1_000_000;
+
+            for (let index = 0; index < PENDING_CAP; index += 1) {
+                shard.registerSocket(createFakeWebSocket(), { ...unauthenticated(), pendingSince: now });
+            }
+
+            expect(shard.admitPending(now)).toBe(false);
+            expect(sockets.every((ws) => ws.closes.length === 0)).toBe(true);
+        });
+
+        it("closes a pending socket past its connect deadline and frees its slot", () => {
+            expect.assertions(3);
+
+            const shard = new GateShard(state, bearerEnv);
+            const now = 1_000_000;
+            const stale = createFakeWebSocket();
+
+            for (let index = 0; index < PENDING_CAP - 1; index += 1) {
+                shard.registerSocket(createFakeWebSocket(), { ...unauthenticated(), pendingSince: now });
+            }
+
+            shard.registerSocket(stale, { ...unauthenticated(), pendingSince: now - DEADLINE_MS - 1 });
+
+            expect(shard.admitPending(now)).toBe(true);
+            expect(stale.closes).toStrictEqual([{ code: 4003, reason: "connect deadline" }]);
+            expect(sockets.filter((ws) => ws.closes.length > 0)).toHaveLength(1);
+        });
+
+        it("does not count an authenticated socket against the cap", () => {
+            expect.assertions(1);
+
+            const shard = new GateShard(state, bearerEnv);
+            const now = 1_000_000;
+
+            for (let index = 0; index < PENDING_CAP; index += 1) {
+                shard.registerSocket(createFakeWebSocket(), { connectionId: `conn-${String(index)}`, subs: {} });
+            }
+
+            expect(shard.admitPending(now)).toBe(true);
+        });
+
+        it("drops the deadline once connect proves the credential", async () => {
+            expect.assertions(2);
+
+            const shard = new GateShard(state, bearerEnv);
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws, { ...unauthenticated(), pendingSince: 1 });
+            await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
+
+            expect(ws.attachment?.authenticated).toBe(true);
+            expect(ws.attachment).not.toHaveProperty("pendingSince");
+        });
     });
 });

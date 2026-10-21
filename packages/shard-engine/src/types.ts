@@ -333,6 +333,13 @@ export interface SocketAttachment {
     pageDeltas?: boolean;
 
     /**
+     * Epoch ms the `authenticated: false` upgrade was accepted. The shard closes a
+     * pending socket that is still unauthenticated past its connect deadline; the
+     * field is dropped with the flag once `connect` proves the credential.
+     */
+    pendingSince?: number;
+
+    /**
      * Live shape subscriptions registered on this socket, keyed by the
      * client-supplied subscription id. The partial-replication parallel to
      * {@link SocketAttachment.subs}: the poke protocol fans membership diffs to

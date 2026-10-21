@@ -355,7 +355,36 @@ describe("shardDO admin-socket upgrade flagging", () => {
 
         const attachment = await upgradeAndCaptureAttachment({ LUNORA_WS_BEARER: "user-bearer" }, "https://shard.internal/");
 
-        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), subs: {} });
+        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), pendingSince: expect.any(Number), subs: {} });
+    });
+
+    it("refuses an unauthenticated upgrade with 503, accepting no socket, while the shard holds its full pending cap", async () => {
+        expect.assertions(2);
+
+        const pending = Array.from({ length: 1024 }, () => {
+            return {
+                close() {},
+                deserializeAttachment: () => {
+                    return { authenticated: false, connectionId: "pending", pendingSince: Date.now(), subs: {} };
+                },
+                send() {},
+                serializeAttachment() {},
+            };
+        });
+        let accepted = 0;
+        const state: ShardDOState = {
+            acceptWebSocket() {
+                accepted += 1;
+            },
+            getWebSockets: () => pending as unknown as WebSocket[],
+            storage: { sql: sql.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+        const shard = new UpgradeShard(state, { LUNORA_WS_BEARER: "user-bearer" });
+
+        const response = await shard.fetch(new Request("https://shard.internal/", { headers: new Headers({ Upgrade: "websocket" }) }));
+
+        expect(response.status).toBe(503);
+        expect(accepted).toBe(0);
     });
 
     it("stamps admin:false when no token is presented", async () => {
@@ -438,7 +467,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             `https://shard.internal/?token=${encodeURIComponent(minted.token)}`,
         );
 
-        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), subs: {} });
+        expect(attachment).toEqual({ admin: false, authenticated: false, connectionId: expect.any(String), pendingSince: expect.any(Number), subs: {} });
     });
 
     it("refuses the raw master token in ?token= when it also equals LUNORA_WS_BEARER", async () => {

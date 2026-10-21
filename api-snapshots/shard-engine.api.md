@@ -2950,6 +2950,7 @@ interface SocketAttachment {
     ip?: string;
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
+    pendingSince?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;

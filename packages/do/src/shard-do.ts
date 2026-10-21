@@ -548,8 +548,24 @@ const MAX_WS_FRAME_UNITS = 1024 * 1024;
 /** Abort can arrive from unsubscribe or socket close while a stream awaits its next chunk. */
 const isStreamCancelled = (controller: AbortController): boolean => controller.signal.aborted;
 
+/**
+ * Ceiling on sockets that upgraded without a credential and have not sent `connect`.
+ * Sized for a reconnect storm after a deploy, when every client on a gated shard is
+ * pending at once; past it an unauthenticated upgrade is refused with 503.
+ */
+const MAX_PENDING_SOCKETS = 1024;
+
+/**
+ * How long a pending socket may go without its `connect` frame. Enforced when the next
+ * unauthenticated upgrade arrives, not by a timer: a hibernating shard runs no timers,
+ * and a quiet shard has no capacity to relieve. ponytail: a pending socket on a quiet
+ * shard lingers until the next upgrade; it holds a slot, not work.
+ */
+const PENDING_CONNECT_DEADLINE_MS = 10_000;
+
 /** `authenticated: false` only on a pending socket, so the attachment budget is spent only when the flag matters. */
-const pendingAttachment = (authenticated: boolean): { authenticated?: false } => (authenticated ? {} : { authenticated: false });
+const pendingAttachment = (authenticated: boolean, now: number): { authenticated?: false; pendingSince?: number } =>
+    authenticated ? {} : { authenticated: false, pendingSince: now };
 
 /**
  * Close a socket that failed the credential gate: an `UNAUTHENTICATED` error
@@ -3692,6 +3708,38 @@ abstract class ShardDO {
         bookmarks?: DispatchBookmark,
         sensitive?: SensitiveScope,
     ): Promise<unknown>;
+
+    /**
+     * Whether an upgrade may take a pending slot; an authenticated one always may. Closes
+     * the pending sockets past their connect deadline first, so the count is of live ones.
+     * Reads every socket's attachment, O(sockets) per pending upgrade. ponytail: a counter
+     * kept beside the attachment would make this O(1), but it resets on hibernation.
+     */
+    protected admitPendingSocket(now: number, authenticated: boolean): boolean {
+        if (authenticated) {
+            return true;
+        }
+
+        let pending = 0;
+
+        for (const handle of this.socketHost.getSockets()) {
+            const attachment = handle.deserializeAttachment() as { authenticated?: boolean; pendingSince?: number } | undefined;
+
+            if (attachment?.authenticated !== false) {
+                continue;
+            }
+
+            if ((attachment.pendingSince ?? now) + PENDING_CONNECT_DEADLINE_MS <= now) {
+                handle.close(4003, "connect deadline");
+
+                continue;
+            }
+
+            pending += 1;
+        }
+
+        return pending < MAX_PENDING_SOCKETS;
+    }
 
     /**
      * The registered function paths to dispatch on a lifecycle moment —
@@ -7970,6 +8018,7 @@ abstract class ShardDO {
                 }
 
                 attachment.authenticated = true;
+                delete attachment.pendingSince;
 
                 // Persisted before the relay announce and the identity frame below: a subscribe
                 // handled during the announce await reads the stored flag, not this local copy.
@@ -16299,6 +16348,11 @@ abstract class ShardDO {
         // A socket the upgrade cannot authenticate waits for `connect.token`. A
         // route socket is refused by `isUpgradeAllowed` instead: it has no `connect` frame.
         const authenticated = await this.isUpgradeAuthenticated(request);
+        const acceptedAt = Date.now();
+
+        if (!this.admitPendingSocket(acceptedAt, authenticated)) {
+            return new Response("Service Unavailable", { status: 503 });
+        }
 
         // The pair and the 101 come from the socket host: Cloudflare's `WebSocketPair` and response, or a host without them.
         const { client, server } = this.socketHost.newPair();
@@ -16337,7 +16391,7 @@ abstract class ShardDO {
             admin,
             connectionId,
             subs: {},
-            ...pendingAttachment(authenticated),
+            ...pendingAttachment(authenticated, acceptedAt),
             ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),

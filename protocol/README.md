@@ -601,7 +601,8 @@ The `connect` frame is sent once per socket open, **before** resubscribing, so
 `Authorization` header (see §6). It is the only way a browser or SDK presents
 one: it never goes in the URL. A socket that needs it is refused — `error`
 frame with code `UNAUTHENTICATED`, then close `4003` — when `connect` is not its
-first frame, or when `token` does not match.
+first frame, or when `token` does not match. The deadline for a missing `connect`
+and the pending cap are in §6.
 
 #### 5.1.1 `connect.caps` — capability negotiation
 
@@ -796,7 +797,11 @@ Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
        other first frame, gets an `error` frame (`code: "UNAUTHENTICATED"`) and a
        close with code `4003`. The check runs before `identity` is sent and before
        `onConnect` fires. With `LUNORA_WS_BEARER` unset the token is ignored and
-       every socket is authenticated as before.
+       every socket is authenticated as before. A socket still awaiting `connect`
+       10 seconds after its upgrade is closed with `4003` (`connect deadline`) when
+       the shard next admits an unauthenticated upgrade. A shard holds at most 1024
+       such sockets; past that, an unauthenticated upgrade gets `503`. That is
+       transient: retry with backoff.
     3. **`?token=<ticket>`**, the only credential that may appear in a URL. A ticket
        is an ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
        (authenticated by the master admin token in the `Authorization` **header**):
