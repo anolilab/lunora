@@ -74,8 +74,8 @@ describe("lunora deploy — client build before wrangler", () => {
         expect(calls.some((call) => call.descriptor.args.includes("--dry-run"))).toBe(true);
     });
 
-    it("runs the postcodegen script once per build, inside the client build, not again in the deploy pipeline", async () => {
-        expect.assertions(1);
+    it("runs the postcodegen script once, in the deploy after its codegen, and leaves the client build out of it", async () => {
+        expect.assertions(2);
 
         writeFileSync(
             join(workdir, "package.json"),
@@ -88,8 +88,10 @@ describe("lunora deploy — client build before wrangler", () => {
         await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: () => Promise.resolve({ names: [], ok: false }) });
 
         const hookRuns = calls.filter((call) => call.descriptor.args.join(" ").includes("postcodegen"));
+        const build = calls.find((call) => isClientBuild(call.descriptor));
 
-        expect(hookRuns).toHaveLength(0);
+        expect(hookRuns).toHaveLength(1);
+        expect(build?.descriptor.env?.LUNORA_SKIP_POST_CODEGEN).toBe("1");
     });
 
     it("refuses an unusable target before the client build writes anything", async () => {

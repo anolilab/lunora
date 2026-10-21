@@ -27,12 +27,16 @@ interface DeployCommandOptions {
      */
     clientBuildOutputJson?: boolean;
 
+    /** Set when this run's client build ran, so the spec it recorded is the one to emit. */
+    clientBuildRan?: boolean;
+
     /**
      * The command the operator actually ran. `build` delegates here with
      * `dryRun: true`; without this the gate names the wrong command in its
      * blocked message and offers flags the real caller does not accept.
      */
     commandName?: PreDeployCommand;
+
     cwd?: string;
 
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
@@ -57,6 +61,7 @@ interface DeployCommandOptions {
      */
     emitBindings?: string;
     env?: string;
+
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
 
@@ -87,6 +92,7 @@ interface DeployCommandOptions {
     interactive?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
+
     logger: Logger;
 
     /**
@@ -128,12 +134,6 @@ interface DeployCommandOptions {
      * `<outDir>/bundle-meta.json`. When unset, no artifact is written.
      */
     outDir?: string;
-
-    /**
-     * Set when this run's client build already ran the project's postcodegen hook from inside the plugin's codegen, so the
-     * pipeline skips its own run and the script's side effects happen once.
-     */
-    postCodegenInChild?: boolean;
 
     /**
      * Upload a preview version (`wrangler versions upload`) instead of a live

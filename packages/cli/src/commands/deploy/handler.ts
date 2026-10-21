@@ -4,10 +4,12 @@ import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, DiscoveryCache, ToolchainCommand } from "@lunora/config";
 import {
+    clearApiSpecMarker,
     createDiscoveryCache,
     discoverContainerInfo,
     discoverSchemaInfo,
     inferLunoraBindings,
+    MissingBuildOutputError,
     planToolchainInvocation,
     readApiSpecMarker,
     resolveDeployDriver,
@@ -52,7 +54,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { clientBuildRuns, runClientBuild } from "../build/framework-build";
+import { clientBuildRefusal, clientBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { provisionDeployHyperdrive } from "./hyperdrive";
@@ -239,7 +241,6 @@ const runCodegenStep = async (
     spawner: Spawner | undefined,
     jsonOutput: boolean,
     strictAdvisories: boolean,
-    postCodegenInChild: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -293,10 +294,10 @@ const runCodegenStep = async (
         // script. Without this a deploy would ship output the project considers
         // unfinished, and the deploy pipeline has no reason to run that script
         // first, so nothing else would catch it.
-        const postCodegen = postCodegenInChild ? undefined : await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
 
         // Already logged by the hook — this only decides that it BLOCKS.
-        if (postCodegen?.error !== undefined) {
+        if (postCodegen.error !== undefined) {
             return { error: postCodegen.error };
         }
 
@@ -560,17 +561,18 @@ const preflightDeploy = (
     // An option the target refuses (celld has no `--env`, `--preview`, …) has to
     // stop the deploy HERE, before codegen rewrites `_generated/*` and
     // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
-    // A client build about to run creates the artifact this check looks for, so the check that needs one is left to the pipeline.
     try {
-        if (!clientBuildRuns(cwd, options.frameworkBuild)) {
-            planDeploy(cwd, options, resolveDeployDriver(resolvedTarget.target));
-        }
+        planDeploy(cwd, options, resolveDeployDriver(resolvedTarget.target));
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        // A client build this run is about to make creates the output a target needs, so that refusal waits for the
+        // pipeline, after the build. An option the target refuses stops the deploy here, before anything is written.
+        if (!(error instanceof MissingBuildOutputError && clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env))) {
+            const message = error instanceof Error ? error.message : String(error);
 
-        options.logger.error(message);
+            options.logger.error(message);
 
-        return { kind: "refused", error: message, validation: NO_VALIDATION };
+            return { kind: "refused", error: message, validation: NO_VALIDATION };
+        }
     }
 
     // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
@@ -587,7 +589,7 @@ const preflightDeploy = (
 // The spec to emit: the flag when given, else the one the client build's plugin emitted in this run (its codegen runs first and would
 // otherwise be overridden by this run's default, deleting the files the plugin wrote).
 const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undefined =>
-    options.apiSpec ?? (options.postCodegenInChild === true ? readApiSpecMarker(cwd) : undefined);
+    options.apiSpec ?? (options.clientBuildRan === true ? readApiSpecMarker(cwd) : undefined);
 
 /**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
@@ -640,7 +642,6 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             options.spawner,
             options.format === "json",
             strictAdvisories,
-            options.postCodegenInChild === true,
         );
 
         if (codegenStep.error !== undefined) {
@@ -1084,6 +1085,50 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
 };
 
 /**
+ * The client build a deploy runs before wrangler, or the failed result it returns. A refused option is a usage error, and it is
+ * reported before the build writes anything.
+ */
+const runDeployClientBuild = async (options: DeployCommandOptions): Promise<DeployCommandResult | undefined> => {
+    const { logger } = options;
+    const projectRoot = options.cwd ?? process.cwd();
+
+    const clientBuild = {
+        apiSpec: options.apiSpec,
+        cwd: projectRoot,
+        environment: options.env,
+        frameworkBuild: options.skipCodegen === true ? false : options.frameworkBuild,
+        strictAdvisories: resolveStrictAdvisories(options),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner: options.spawner,
+        target: options.target,
+    };
+
+    // A refused option is a usage error, and it is reported before the build writes anything.
+    const refusal = clientBuildRefusal(clientBuild);
+
+    if (refusal !== undefined) {
+        logger.error(refusal);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: refusal, validation: NO_VALIDATION };
+    }
+
+    // The spec a client build records is read after it runs, so a record left by an earlier run must not survive into this one.
+    clearApiSpecMarker(projectRoot);
+
+    const clientBuildError = await runClientBuild(clientBuild);
+
+    if (clientBuildError !== undefined) {
+        logger.error(clientBuildError);
+
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: NO_VALIDATION };
+    }
+
+    return undefined;
+};
+
+/**
  * Run a deploy. In `--format json` mode the human/progress channel is already on
  * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
  * stdout is left to the single result document `execute` returns.
@@ -1108,23 +1153,10 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 
     // The client build comes first: wrangler bundles whatever it finds on disk, so
     // a Vite-generated worker or an `assets` directory must exist before it reads them.
-    const clientBuildError = await runClientBuild({
-        apiSpec: options.apiSpec,
-        cwd: projectRoot,
-        environment: options.env,
-        frameworkBuild: options.frameworkBuild,
-        strictAdvisories: resolveStrictAdvisories(options),
-        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-        logger,
-        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
-        spawner: options.spawner,
-        target: options.target,
-    });
+    const clientBuildFailure = await runDeployClientBuild(options);
 
-    if (clientBuildError !== undefined) {
-        logger.error(clientBuildError);
-
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: NO_VALIDATION };
+    if (clientBuildFailure !== undefined) {
+        return clientBuildFailure;
     }
 
     const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(projectRoot) : undefined;
@@ -1132,7 +1164,11 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     let result: DeployCommandResult;
 
     try {
-        result = await executeDeploy({ ...options, logger, postCodegenInChild: clientBuildRuns(projectRoot, options.frameworkBuild) });
+        result = await executeDeploy({
+            ...options,
+            logger,
+            clientBuildRan: clientBuildRuns(projectRoot, options.skipCodegen === true ? false : options.frameworkBuild, options.env),
+        });
 
         if (result.code === 0 && options.emitBindings !== undefined) {
             const { error } = writeBindingManifestFile({ destination: options.emitBindings, logger, projectRoot: options.cwd ?? process.cwd() });

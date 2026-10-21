@@ -247,14 +247,53 @@ describe("lunora build — client build", () => {
             expect(frameworkBuildFor(workdir)).toBeUndefined();
         });
 
-        it("prefers rsbuild when both configs exist", () => {
+        it("prefers rsbuild when both configs exist for a worker that is not Vite-composed", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+            writeFileSync(join(workdir, "rsbuild.config.mjs"), "export default {};\n", "utf8");
+
+            expect(frameworkBuildFor(workdir)).toBe("rsbuild");
+        });
+
+        it("reads the assets directory of the --env block, so a staging-only client build still runs", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                wranglerWith({ env: { staging: { assets: { directory: "./dist" } } }, main: "src/server.ts" }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            expect(frameworkBuildFor(workdir)).toBeUndefined();
+            expect(frameworkBuildFor(workdir, "staging")).toBe("vite");
+        });
+
+        it("does not start a client build from inside one, so a build script that runs lunora cannot recurse", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ name: "app", scripts: { build: "lunora build" } }), "utf8");
+
+            process.env.LUNORA_CLIENT_BUILD = "1";
+
+            try {
+                expect(frameworkBuildFor(workdir)).toBeUndefined();
+            } finally {
+                Reflect.deleteProperty(process.env, "LUNORA_CLIENT_BUILD");
+            }
+        });
+
+        it("builds a Vite-composed worker with vite even when an rsbuild config also exists", () => {
             expect.assertions(1);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
             writeFileSync(join(workdir, "rsbuild.config.mjs"), "export default {};\n", "utf8");
 
-            expect(frameworkBuildFor(workdir)).toBe("rsbuild");
+            expect(frameworkBuildFor(workdir)).toBe("vite");
         });
 
         it("still builds when a stale dist and a framework redirect already exist", () => {

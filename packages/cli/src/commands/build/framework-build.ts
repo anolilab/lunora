@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { detectFramework, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
+import { detectFramework, LAZY_FUNCTIONS_ENV, POST_CODEGEN_SKIP_ENV, resolveTargetOrThrow, STRICT_ADVISORIES_ENV } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -14,6 +14,16 @@ import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 /** The client-build tool a project's config file names. */
 /** `script` runs the project's own `build` script, for a framework (Astro, Nuxt) that has no Vite or rsbuild config to bundle through. */
 type FrameworkTool = "rsbuild" | "script" | "vite";
+
+/** Set on a client build's child so a build script that runs `lunora` does not start another client build. */
+const CLIENT_BUILD_ENV = "LUNORA_CLIENT_BUILD";
+
+/** The wrangler fields the gate reads, top level and per environment. */
+interface WranglerShape {
+    assets?: { directory?: unknown };
+    env?: Record<string, { assets?: { directory?: unknown } } | undefined>;
+    main?: unknown;
+}
 
 /** The `main` `@lunora/vite` points wrangler at for a class-A framework; only the Vite build generates it. */
 const COMPOSED_MAIN = "virtual:lunora/worker";
@@ -29,6 +39,9 @@ const pickTool = (cwd: string): FrameworkTool | undefined => {
 
     return hasConfigFile(cwd, "vite") ? "vite" : undefined;
 };
+
+/** A worker whose `main` is the Vite-generated composed entry is built by Vite, whatever else the project configures. */
+const pickComposedTool = (cwd: string): FrameworkTool | undefined => (hasConfigFile(cwd, "vite") ? "vite" : pickTool(cwd));
 
 /**
  * The client build `lunora build` has to run before wrangler, or `undefined`
@@ -50,16 +63,24 @@ const hasBuildScript = (cwd: string): boolean => {
     }
 };
 
-const frameworkBuildFor = (cwd: string): FrameworkTool | undefined => {
-    const tool = pickTool(cwd) ?? (hasBuildScript(cwd) ? "script" : undefined);
+const frameworkBuildFor = (cwd: string, environment?: string): FrameworkTool | undefined => {
+    // A build script that runs `lunora` lands here from inside a client build: the outer build already owns the client output.
+    if (process.env[CLIENT_BUILD_ENV] === "1") {
+        return undefined;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+    const wrangler = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerShape>(wranglerPath).parsed;
+    const composed = wrangler?.main === COMPOSED_MAIN;
+    const tool = (composed ? pickComposedTool(cwd) : pickTool(cwd)) ?? (hasBuildScript(cwd) ? "script" : undefined);
 
     if (tool === undefined) {
         return undefined;
     }
 
-    const wranglerPath = findWranglerFile(cwd);
-    const wrangler = wranglerPath === undefined ? undefined : readWranglerJsonc<{ assets?: { directory?: unknown }; main?: unknown }>(wranglerPath).parsed;
-    const needed = wrangler?.main === COMPOSED_MAIN || detectFramework(cwd).class !== "C" || wrangler?.assets?.directory !== undefined;
+    const envAssets = environment === undefined ? undefined : wrangler?.env?.[environment]?.assets?.directory;
+    const assetsDirectory = wrangler?.assets?.directory ?? envAssets;
+    const needed = composed || detectFramework(cwd).class !== "C" || assetsDirectory !== undefined;
 
     return needed ? tool : undefined;
 };
@@ -105,6 +126,8 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
                 ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
                 ...(options.environment === undefined ? {} : { CLOUDFLARE_ENV: options.environment }),
                 ...(options.strictAdvisories === false ? { [STRICT_ADVISORIES_ENV]: "0" } : {}),
+                [CLIENT_BUILD_ENV]: "1",
+                [POST_CODEGEN_SKIP_ENV]: "1",
             },
             stdoutToStderr: options.outputJson,
         });
@@ -135,20 +158,18 @@ interface ClientBuildOptions {
 }
 
 /** Whether {@link runClientBuild} runs a framework build for `cwd`. */
-const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined): boolean => frameworkBuild !== false && frameworkBuildFor(cwd) !== undefined;
+const clientBuildRuns = (cwd: string, frameworkBuild: boolean | undefined, environment?: string): boolean =>
+    frameworkBuild !== false && frameworkBuildFor(cwd, environment) !== undefined;
 
 /**
- * Run the client build wrangler depends on, if there is one, and return the
- * message to report when it cannot run. `undefined` means there was nothing to
- * build or the build passed.
- *
- * The two refusals exist because the plugin reads `apiSpec` and `target` from its
- * own config, so a flag passed here would describe a bundle the build never makes.
+ * The reason the client build cannot run with these options, or `undefined` when it can. A refusal is a usage error, so
+ * callers report it before anything is written. A build script consumes none of the plugin's settings, so the parent's
+ * codegen honours `--api-spec` and `--target` for it instead of refusing them.
  */
-const runClientBuild = async (options: ClientBuildOptions): Promise<string | undefined> => {
-    const tool = options.frameworkBuild === false ? undefined : frameworkBuildFor(options.cwd);
+const clientBuildRefusal = (options: ClientBuildOptions): string | undefined => {
+    const tool = options.frameworkBuild === false ? undefined : frameworkBuildFor(options.cwd, options.environment);
 
-    if (tool === undefined) {
+    if (tool === undefined || tool === "script") {
         return undefined;
     }
 
@@ -156,10 +177,38 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
         return `--api-spec is read from the ${tool} plugin config when the client build runs; set it there, or pass --no-framework-build`;
     }
 
-    const projectTarget = resolveTargetOrThrow(options.cwd);
+    if (options.target !== undefined) {
+        try {
+            resolveTargetOrThrow(options.cwd, options.target);
+        } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+        }
+    }
+
+    let projectTarget: string;
+
+    try {
+        projectTarget = resolveTargetOrThrow(options.cwd);
+    } catch (error) {
+        return `the project's configured target cannot be used, and the ${tool} plugin reads it: ${error instanceof Error ? error.message : String(error)}`;
+    }
 
     if (options.target !== undefined && options.target !== projectTarget) {
         return `--target ${options.target} differs from the project's target (${projectTarget}), which the ${tool} plugin reads; set it in the project config, or pass --no-framework-build`;
+    }
+
+    return undefined;
+};
+
+/**
+ * Run the client build wrangler depends on, if there is one, and return the failure message when it does not pass.
+ * `undefined` means there was nothing to build or the build passed. Refusals are reported by {@link clientBuildRefusal}.
+ */
+const runClientBuild = async (options: ClientBuildOptions): Promise<string | undefined> => {
+    const tool = options.frameworkBuild === false ? undefined : frameworkBuildFor(options.cwd, options.environment);
+
+    if (tool === undefined) {
+        return undefined;
     }
 
     return runFrameworkBuild(options.cwd, tool, {
@@ -172,5 +221,5 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
     });
 };
 
-export { clientBuildRuns, frameworkBuildFor, runClientBuild, runFrameworkBuild };
+export { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, runClientBuild, runFrameworkBuild };
 export type { FrameworkTool };

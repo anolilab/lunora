@@ -759,13 +759,18 @@ lunora build --out-dir dist-worker
 ```
 
 `lunora deploy --prebuilt` skips codegen + the schema-drift gate (trusting the
-prior `build` / `prepare`); wrangler still bundles the Worker.
+prior `build`, which writes the client output; `prepare` builds no client output);
+wrangler still bundles the Worker.
 
 Before wrangler runs, `build` and `deploy` run the project's client build when wrangler would
 otherwise read a stale or missing output: `rsbuild build` or `vite build`, picked
-from the `rsbuild.config.*` or `vite.config.*` file. It runs when `main` is
-`virtual:lunora/worker` (the Vite-generated class-A entry), when the framework is
-class A or B, or when `assets.directory` is set. Pass `--no-framework-build` to skip
+from the `rsbuild.config.*` or `vite.config.*` file. A worker whose `main` is
+`virtual:lunora/worker` (the Vite-generated class-A entry) is always built with Vite, even
+when an rsbuild config also exists. A framework with neither config (Astro, Nuxt) runs its
+project `build` script through its package manager. It runs when `main` is
+`virtual:lunora/worker`, when the framework is class A or B, or when `assets.directory` is
+set, including in the `--env` block being deployed. A build script consumes none of the
+plugin's settings, so `--api-spec` and `--target` apply to the deploy's own codegen. Pass `--no-framework-build` to skip
 it and bundle what is already on disk. Edits the client build makes to
 `wrangler.jsonc` are rolled back, so `build` leaves the committed config alone.
 `deploy --prebuilt` never runs it, because that artifact was built earlier.
