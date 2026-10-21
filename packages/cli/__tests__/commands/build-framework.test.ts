@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { frameworkBuildFor, viteBundleMetaPath } from "../../src/commands/build/framework-build";
+import { frameworkBuildFor, runClientBuild, viteBundleMetaPath } from "../../src/commands/build/framework-build";
 import { runBuildCommand } from "../../src/commands/build/handler";
 import type { Logger } from "../../src/util/logger";
 import type { SpawnDescriptor, Spawner } from "../../src/util/spawn";
@@ -266,6 +266,58 @@ describe("lunora build — client build", () => {
 
             expect(result.code).toBe(0);
             expect(frameworkCalls(accepted.calls)).toHaveLength(1);
+        });
+    });
+
+    describe("runClientBuild", () => {
+        it("tells a build script the target the run asked for, even when the project default differs", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app", scripts: { build: "astro build" } }),
+                "utf8",
+            );
+
+            const { calls, spawner } = recordingSpawner();
+
+            await runClientBuild({
+                cwd: workdir,
+                keepBundleMeta: false,
+                lazyFunctions: false,
+                logger: silentLogger(),
+                outputJson: false,
+                spawner,
+                target: "celld",
+            });
+
+            expect(frameworkCalls(calls)[0]?.env?.LUNORA_BUILD_TARGET).toBe("celld");
+        });
+
+        it("returns a project target that cannot resolve as the build's failure, rather than throwing", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/server.ts" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app", scripts: { build: "astro build" } }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "no-such-target" };\n`, "utf8");
+
+            const { calls, spawner } = recordingSpawner();
+            const failure = await runClientBuild({
+                cwd: workdir,
+                keepBundleMeta: false,
+                lazyFunctions: false,
+                logger: silentLogger(),
+                outputJson: false,
+                spawner,
+            });
+
+            expect(failure).toEqual(expect.any(String));
+            expect(frameworkCalls(calls)).toHaveLength(0);
         });
     });
 

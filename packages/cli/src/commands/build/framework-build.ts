@@ -249,6 +249,16 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
         return undefined;
     }
 
+    // A script build skips the target comparison in clientBuildRefusal, so the run's own target is what the child is told, and a
+    // project whose default target cannot resolve reports that as a failed build rather than throwing past it.
+    let target: string;
+
+    try {
+        target = options.target ?? resolveTargetOrThrow(options.cwd);
+    } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+
     return runFrameworkBuild(options.cwd, tool, {
         keepBundleMeta: options.keepBundleMeta,
         environment: options.environment,
@@ -257,7 +267,7 @@ const runClientBuild = async (options: ClientBuildOptions): Promise<string | und
         logger: options.logger,
         outputJson: options.outputJson,
         spawner: options.spawner,
-        target: resolveTargetOrThrow(options.cwd),
+        target,
     });
 };
 
