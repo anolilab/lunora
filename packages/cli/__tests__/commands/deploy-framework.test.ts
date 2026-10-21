@@ -399,6 +399,27 @@ describe("lunora deploy — a service's client build", () => {
         expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
     });
 
+    it("deploys a plain service's source config on a normal deploy, even when an earlier build left a redirect for it", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+
+        // A plain worker: no Vite config and no assets, so a normal deploy runs no build for it.
+        rmSync(join(serviceDirectory, "vite.config.ts"), { force: true });
+        writeFileSync(join(serviceDirectory, "wrangler.jsonc"), wranglerWith({ main: "src/index.ts" }), "utf8");
+        mkdirSync(join(serviceDirectory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(serviceDirectory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../generated.jsonc" }), "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+        expect(deploy?.descriptor.args.join(" ")).not.toContain("generated.jsonc");
+    });
+
     it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
         expect.assertions(2);
 

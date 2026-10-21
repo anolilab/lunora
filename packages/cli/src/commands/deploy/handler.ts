@@ -751,6 +751,11 @@ const buildService = async (
     return { built, error: await runClientBuild(serviceBuild) };
 };
 
+// The redirect is this run's output when the build ran (it cleared the old one first), or the artifact an earlier build left
+// when the deploy is prebuilt or skips builds on purpose. A normal deploy whose service needed no build deploys the source config.
+const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuild: boolean | undefined): string | undefined =>
+    built || frameworkBuild === false ? generatedConfigPath(wranglerPath) : undefined;
+
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
@@ -807,7 +812,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
         };
 
         // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
-        const { error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
+        const { built, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
 
         if (buildError !== undefined) {
             const message = `service ${service.name} (${service.worker}): ${buildError}`;
@@ -817,9 +822,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
             return message;
         }
 
-        // The redirect a build left: a build that ran cleared the old one first, so this is its output. A skipped build (a prebuilt
-        // deploy) keeps the redirect from the build that produced the artifact, so a composed service does not fall back to its source config.
-        const generated = generatedConfigPath(service.wranglerPath);
+        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
 
         let invocation: ReturnType<typeof planToolchainInvocation>;
 
