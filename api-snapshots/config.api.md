@@ -911,6 +911,12 @@ class LunoraReporter {
 const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 ```
 
+### `MarkedApiSpec` (type)
+
+```ts
+type MarkedApiSpec = "both" | "none" | "openapi" | "openrpc";
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -1619,6 +1625,12 @@ const promptYesNo: (prompt: string, options?: {
 }) => Promise<boolean>;
 ```
 
+### `readApiSpecMarker` (const)
+
+```ts
+const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
+```
+
 ### `readDevServerState` (const)
 
 ```ts
@@ -1822,6 +1834,12 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 
 ```ts
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
+```
+
+### `writeApiSpecMarker` (const)
+
+```ts
+const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
 ```
 
 ### `writeDevServerState` (const)

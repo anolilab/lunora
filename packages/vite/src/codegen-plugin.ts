@@ -21,6 +21,7 @@ import {
     reportCodegenFindings,
     runPostCodegenHook,
     STRICT_ADVISORIES_ENV,
+    writeApiSpecMarker,
 } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
@@ -154,6 +155,8 @@ const runCodegenSafely = (
         });
 
         reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
+
+        writeApiSpecMarker(options.projectRoot, options.apiSpec);
 
         // Surface static schema advisories (unindexed FKs, …) and
         // platform-portability diagnostics (a `ctx.*` surface the target cannot
