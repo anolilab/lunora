@@ -35,6 +35,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import reportArchitectureDiff from "../../util/architecture-diff";
 import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
+import { buildMarkerRefusal } from "../../util/build-marker";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
@@ -1093,12 +1094,38 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
 };
 
 /**
+ * `--prebuilt` runs no client build, so it must not ship output that an earlier `lunora build` did not make for these sources,
+ * target and environment. The refusal is a usage error, reported before anything is written.
+ */
+const refusePrebuiltWithoutBuild = (options: DeployCommandOptions): DeployCommandResult | undefined => {
+    if (options.prebuilt !== true) {
+        return undefined;
+    }
+
+    const refusal = buildMarkerRefusal({ cwd: options.cwd ?? process.cwd(), env: options.env, target: options.target });
+
+    if (refusal === undefined) {
+        return undefined;
+    }
+
+    options.logger.error(refusal);
+
+    return { code: EXIT_CODE.USAGE, descriptor: undefined, error: refusal, validation: NO_VALIDATION };
+};
+
+/**
  * The client build a deploy runs before wrangler, or the failed result it returns. A refused option is a usage error, and it is
  * reported before the build writes anything.
  */
 const runDeployClientBuild = async (options: DeployCommandOptions): Promise<DeployCommandResult | undefined> => {
     const { logger } = options;
     const projectRoot = options.cwd ?? process.cwd();
+
+    const prebuiltRefusal = refusePrebuiltWithoutBuild(options);
+
+    if (prebuiltRefusal !== undefined) {
+        return prebuiltRefusal;
+    }
 
     const clientBuild = {
         apiSpec: options.apiSpec,
@@ -1236,6 +1263,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         apiSpec: parseApiSpec(options.apiSpec),
         // `--prebuilt` trusts an artifact built earlier, so it must not rebuild the client.
         frameworkBuild: options.prebuilt === true ? false : options.frameworkBuild,
+        prebuilt: options.prebuilt === true,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         dryRun: options.dryRun === true,
@@ -1253,8 +1281,8 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
-        // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
-        // thus the drift gate, which has no fresh snapshot to measure).
+        // `--prebuilt` trusts a prior `lunora build`: skip codegen (and thus the
+        // drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
         skipServices: options.skipServices === true,
         smokeLoad: options.smokeLoad,

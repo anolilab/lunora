@@ -456,7 +456,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const functionsFile = join(cwd, resolveSchemaDirectory(cwd), "_generated", "functions.ts");
 
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
-    // `build`/`prepare` wrote, and an eager registry has no lazy modules to check.
+    // `build` wrote, and an eager registry has no lazy modules to check.
     if (!existsSync(functionsFile) || !readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions")) {
         return undefined;
     }

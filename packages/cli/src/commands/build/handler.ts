@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
 
 import type { DevProcessSpawner } from "@lunora/config";
-import { resolveLazyFunctions } from "@lunora/config";
+import { resolveLazyFunctions, resolveTargetOrThrow } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { clearBuildMarker, writeBuildMarker } from "../../util/build-marker";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -15,6 +16,7 @@ import { runDeployCommand } from "../deploy/handler";
 import type { DeployCommandResult } from "../deploy/types";
 import type { BundleSize } from "./bundle-size";
 import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
+import { clientBuildRuns } from "./framework-build";
 import type { BuildOptions } from "./index";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
@@ -116,6 +118,12 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
 const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
     const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
     const jsonMode = options.format === "json";
+    const projectRoot = resolve(options.cwd ?? process.cwd());
+
+    // A marker from an earlier build describes output this run is about to replace; a run that fails must not leave it behind.
+    clearBuildMarker(projectRoot);
+    // Decided before the build runs, from the same inputs the build uses, so the marker says what the build actually did.
+    const clientBuild = clientBuildRuns(projectRoot, options.frameworkBuild);
 
     // `build` owns its `--format json` payload instead of delegating to deploy's:
     // the bundle measurement below is what a CI consumer runs this command for,
@@ -152,6 +160,14 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     if (result.code !== 0) {
         return result;
     }
+
+    // After the run above, so the wrangler rollback has happened and the fingerprint describes the sources as the build left them.
+    writeBuildMarker({
+        clientBuild,
+        cwd: projectRoot,
+        target: resolveTargetOrThrow(projectRoot, options.target),
+        written: [outDirectory, options.emitBindings],
+    });
 
     logger.success(`build complete — bundle written to ${outDirectory}`);
 

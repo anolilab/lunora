@@ -52,7 +52,7 @@ const deployCommand: Command = {
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         {
             description:
-                "Skip codegen + the schema-drift gate (assumes `lunora build`/`prepare` already ran in this CI run). Wrangler still bundles the worker.",
+                "Ship the output of an earlier `lunora build` in this CI run: skips codegen, the schema-drift gate and the client build. Refused unless that build used these sources, target and environment.",
             name: "prebuilt",
             type: Boolean,
         },

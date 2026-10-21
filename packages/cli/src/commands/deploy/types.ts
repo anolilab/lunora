@@ -145,6 +145,12 @@ interface DeployCommandOptions {
     outDir?: string;
 
     /**
+     * `--prebuilt`: ship the client output an earlier `lunora build` recorded. Refused unless that build matches this deploy
+     * (see `buildMarkerRefusal`). Separate from `skipCodegen` so library callers that skip codegen are not held to the marker.
+     */
+    prebuilt?: boolean;
+
+    /**
      * Upload a preview version (`wrangler versions upload`) instead of a live
      * `wrangler deploy`. Codegen + the drift gate + validation still run, but
      * the post-deploy finalize (migrations, baseline re-bless, auto-link, the

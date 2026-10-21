@@ -136,6 +136,7 @@ interface DeployCommandOptions {
     migrateYes?: boolean;
     openShardGatePassed?: boolean;
     outDir?: string;
+    prebuilt?: boolean;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
