@@ -117,6 +117,32 @@ describe("lunoraClient session credential (protocol §6)", () => {
         expect(firstFrame(second)).toMatchObject({ token: "session-secret", type: "connect" });
     });
 
+    it("re-arms the reconnect when the socket constructor throws, rather than leaving the shard connecting", async () => {
+        expect.assertions(1);
+
+        let constructions = 0;
+
+        class RefuseOnce extends MockSocket {
+            public constructor(url: string) {
+                constructions += 1;
+
+                if (constructions === 1) {
+                    throw new Error("socket constructor refused");
+                }
+
+                super(url);
+            }
+        }
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: RefuseOnce as unknown as typeof WebSocket, wsToken: "session-secret" });
+
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+
+        await openNextSocket(0);
+
+        expect(constructions).toBe(2);
+    });
+
     it("re-resolves a provider-shaped session on every connect and never puts the minted value in the URL", async () => {
         expect.assertions(4);
 

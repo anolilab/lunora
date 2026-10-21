@@ -2337,10 +2337,11 @@ class LunoraClient {
      *
      * The socket carries the browser's session cookie, and that cookie is the
      * only credential that establishes a user. A route declared `auth: true` on
-     * the server refuses a socket with no verified session. The `wsTicket`
-     * (`?token=`, see {@link setWsTicket}) authorises the admin surfaces only; it
-     * does not sign a user in to a route, so a private route needs the session
-     * cookie. Reconnects with the
+     * the server refuses a socket with no verified session. The `wsToken` is
+     * the session credential sent in the first `connect` frame; the `wsTicket`
+     * (`?token=`, see {@link setWsTicket}) is an ephemeral admin credential
+     * appended to the URL, and it does not sign a user in to a route, so a
+     * private route needs the session cookie. Reconnects with the
      * client's configured backoff. `onMessage` receives what the route's server
      * handler sent (via its `socket.send`/`socket.broadcast`), never the sender's
      * own raw frame — the handler is authoritative. Returns a handle with `send`
@@ -6821,7 +6822,12 @@ class LunoraClient {
         // short-lived one is re-minted on every reconnect, including the one after
         // a 4001 token-expired drop); static strings keep the fully synchronous
         // connect path callers and tests rely on.
-        this.startShardSocket(conn, shardKey).catch(() => undefined);
+        // A throw while opening (a refused URL, a socket constructor that throws) must fail the
+        // attempt the way a socket error does, or the connection stays `connecting` with no
+        // reconnect armed.
+        this.startShardSocket(conn, shardKey).catch(() => {
+            this.handleDisconnect(conn);
+        });
     }
 
     /** Supersede any in-flight credential mint, drop held sends, and bounce the shard sockets onto the new credentials. */
