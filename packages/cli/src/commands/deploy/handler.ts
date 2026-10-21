@@ -403,12 +403,14 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, driver: 
  * because the project or the invocation is wrong, never because the deploy
  * itself failed. A check that resolved a different bucket passes `code`.
  */
+const NO_VALIDATION: DeployCommandResult["validation"] = { problems: [], wranglerPath: undefined };
+
 const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
     return {
         code: EXIT_CODE.USAGE,
         descriptor: undefined,
         error,
-        validation: { problems: [], wranglerPath: undefined },
+        validation: NO_VALIDATION,
         ...extra,
     };
 };
@@ -552,7 +554,7 @@ const preflightDeploy = (
         // `--format json` mode, so a bare return exits 1 in silence.
         options.logger.error(message);
 
-        return { kind: "refused", error: message, validation: { problems: [], wranglerPath: undefined } };
+        return { kind: "refused", error: message, validation: NO_VALIDATION };
     }
 
     // An option the target refuses (celld has no `--env`, `--preview`, …) has to
@@ -568,7 +570,7 @@ const preflightDeploy = (
 
         options.logger.error(message);
 
-        return { kind: "refused", error: message, validation: { problems: [], wranglerPath: undefined } };
+        return { kind: "refused", error: message, validation: NO_VALIDATION };
     }
 
     // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
@@ -576,11 +578,16 @@ const preflightDeploy = (
     const gateError = runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
 
     if (gateError !== undefined) {
-        return { kind: "refused", code: gateError.code, error: gateError.error, validation: { problems: [], wranglerPath: undefined } };
+        return { kind: "refused", code: gateError.code, error: gateError.error, validation: NO_VALIDATION };
     }
 
     return { kind: "ok", target: resolvedTarget.target };
 };
+
+// The spec to emit: the flag when given, else the one the client build's plugin emitted in this run (its codegen runs first and would
+// otherwise be overridden by this run's default, deleting the files the plugin wrote).
+const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undefined =>
+    options.apiSpec ?? (options.postCodegenInChild === true ? readApiSpecMarker(cwd) : undefined);
 
 /**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
@@ -606,11 +613,6 @@ const preflightDeploy = (
  * the line between the two commands: `prepare` answers "would this deploy?"
  * without pushing an image or a bundle.
  */
-// The spec to emit: the flag when given, else the one the client build's plugin emitted in this run (its codegen runs first and would
-// otherwise be overridden by this run's default, deleting the files the plugin wrote).
-const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undefined =>
-    options.apiSpec ?? (options.postCodegenInChild === true ? readApiSpecMarker(cwd) : undefined);
-
 const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreDeployCommand): Promise<PreDeployPipelineResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -642,7 +644,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         );
 
         if (codegenStep.error !== undefined) {
-            return { error: codegenStep.error, target, validation: { problems: [], wranglerPath: undefined } };
+            return { error: codegenStep.error, target, validation: NO_VALIDATION };
         }
 
         codegen = codegenStep.result;
@@ -689,13 +691,13 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target, "check");
 
     if (hyperdriveError !== undefined) {
-        return { error: hyperdriveError, target, validation: { problems: [], wranglerPath: undefined } };
+        return { error: hyperdriveError, target, validation: NO_VALIDATION };
     }
 
     const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
-        return { code: checkError.code, error: checkError.error, target, validation: { problems: [], wranglerPath: undefined } };
+        return { code: checkError.code, error: checkError.error, target, validation: NO_VALIDATION };
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only at
@@ -1122,7 +1124,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     if (clientBuildError !== undefined) {
         logger.error(clientBuildError);
 
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: { problems: [], wranglerPath: undefined } };
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: NO_VALIDATION };
     }
 
     const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(projectRoot) : undefined;
