@@ -19,6 +19,9 @@
 /** Env var that turns codegen off when it spells `0` / `false`. Unset means on. */
 const CODEGEN_ENV = "LUNORA_CODEGEN";
 
+/** Env var the CLI sets to `0` when `--no-strict-advisories` opts out, so a framework build does not fail on ERROR-level advisories. */
+const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
+
 /** Env var that enables lazy function imports for codegen when it spells `1` / `true`. */
 const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
 
@@ -45,4 +48,4 @@ const isLazyFunctionsEnabled = (value: string | undefined): boolean => {
 /** Either opt-in enables lazy function imports: the explicit option or {@link LAZY_FUNCTIONS_ENV}. `false` does not veto the environment. */
 const resolveLazyFunctions = (flag?: boolean): boolean => flag === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]);
 
-export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions };
+export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions, STRICT_ADVISORIES_ENV };

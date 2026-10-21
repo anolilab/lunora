@@ -12,9 +12,12 @@ export {
     LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
+export type { MarkedApiSpec } from "./api-spec-marker";
+export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api-spec-marker";
+export { MissingBuildOutputError } from "./build-output-error";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
-export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions } from "./codegen-env";
+export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions, STRICT_ADVISORIES_ENV } from "./codegen-env";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
 export type {

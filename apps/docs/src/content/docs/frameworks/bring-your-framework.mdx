@@ -197,8 +197,7 @@ then `wrangler deploy --dry-run`:
    under `/_lunora/*`, and re-exports `ShardDO`.
 3. `lunora deploy` passes `src/worker.ts` as the **positional** deploy entry,
    which overrides `main`, so the single worker Cloudflare runs is the composed
-   one. (The template's `deploy` script runs `vite build` first so the adapter
-   output exists.)
+   one. (`lunora deploy` runs `vite build` first, so the adapter output exists.)
 
 The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
 (Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.

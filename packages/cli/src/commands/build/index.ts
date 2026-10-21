@@ -46,6 +46,13 @@ const buildCommand: Command = {
             type: Boolean,
         },
         { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
+        // Declared as `framework-build` + `no-framework-build`, like `smoke-load`: the handler reads `!== false`.
+        {
+            description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
+            name: "framework-build",
+            type: Boolean,
+        },
+        { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag
@@ -79,6 +86,7 @@ export type BuildOptions = CreateOptions<{
     "api-spec": string | undefined;
     "emit-bindings": string | undefined;
     format: string | undefined;
+    "framework-build": boolean | undefined;
     "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
     "smoke-load": boolean | undefined;
