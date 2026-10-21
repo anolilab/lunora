@@ -89,6 +89,13 @@ interface CodegenSafelyResult {
      * `buildStart` — that one must stay non-fatal.
      */
     failure?: string;
+
+    /**
+     * Set when codegen wrote its output but `.lunora/api-spec.json` could not be written. The output is still returned, so dev
+     * runs the post-codegen hook and invalidates the generated modules; only `vite build` escalates, because the CLI reads the
+     * marker to pick the API spec it deploys.
+     */
+    markerFailure?: string;
     /** Absolute directory codegen actually wrote to; `undefined` when codegen was skipped or failed. */
     outputDirectory?: string;
 }
@@ -156,7 +163,17 @@ const runCodegenSafely = (
 
         reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
 
-        writeApiSpecMarker(options.projectRoot, options.apiSpec);
+        // Outside the codegen failure path: the output is already on disk, so a marker that cannot be written must not
+        // hide it from dev's post-codegen and invalidation steps.
+        let markerFailure: string | undefined;
+
+        try {
+            writeApiSpecMarker(options.projectRoot, options.apiSpec);
+        } catch (error: unknown) {
+            markerFailure = `${LUNORA_TAG} could not write the API spec marker: ${error instanceof Error ? error.message : String(error)}`;
+
+            logger.error(markerFailure);
+        }
 
         // Surface static schema advisories (unindexed FKs, …) and
         // platform-portability diagnostics (a `ctx.*` surface the target cannot
@@ -179,6 +196,7 @@ const runCodegenSafely = (
         // advisory-outside-CI default.
         return {
             blockingMessage: blockingFindingsMessage(result, { strictAdvisories: process.env[STRICT_ADVISORIES_ENV] !== "0" }),
+            markerFailure,
             outputDirectory: resolve(result.outputDirectory),
         };
     } catch (error: unknown) {
@@ -382,7 +400,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // shipping against a surface its target cannot serve, CI green the whole
             // way, from a variable someone exported in a shell profile.
             const skipCodegen = command !== "build" && codegenDisabled;
-            const { blockingMessage, failure, outputDirectory } = primedCodegen ?? (skipCodegen ? {} : runCodegenSafely(options, consoleLogger));
+            const { blockingMessage, failure, markerFailure, outputDirectory } = primedCodegen ?? (skipCodegen ? {} : runCodegenSafely(options, consoleLogger));
 
             // One-shot: a `server.restart()` rebuilds the plugin container and
             // re-primes, but if a host ever reuses this instance for a second
@@ -398,6 +416,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // reported it) for the same reason it does there.
             if (command === "build" && failure !== undefined) {
                 this.error(failure);
+            }
+
+            // The CLI's deploy reads this marker to pick the API spec, so a build without it would ship the wrong one.
+            if (command === "build" && markerFailure !== undefined) {
+                this.error(markerFailure);
             }
 
             if (outputDirectory !== undefined) {
