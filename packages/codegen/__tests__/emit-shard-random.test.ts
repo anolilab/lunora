@@ -37,4 +37,14 @@ describe("emitShard — ctx.random", () => {
         expect(shard).toContain("random: createStableRandomFactory(stableKey, stableScope),");
         expect(shard).toContain("createStableRandomFactory, ");
     });
+
+    it("keeps a reactor run off the writer's replay key", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({ schema: discover(PLAIN) });
+
+        expect(shard).toContain(
+            "functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });",
+        );
+    });
 });

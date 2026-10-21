@@ -1,3 +1,4 @@
+import { cyrb53 } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
 import { createStableIdFactory, createStableRandomFactory } from "../src/stable-id";
@@ -82,13 +83,13 @@ describe("createStableRandomFactory", () => {
         expect(createStableRandomFactory("key-1", "user-b")()).not.toBe(createStableRandomFactory("key-1", "user-a")());
     });
 
-    it("does not reproduce the id sequence of the same key and scope", () => {
-        expect.assertions(1);
+    it("hashes a domain-tagged input, not the id's input for the same key and scope", () => {
+        expect.assertions(2);
 
-        const id = createStableIdFactory("key-1", "user-a")();
         const random = createStableRandomFactory("key-1", "user-a")();
 
-        expect(random.toString()).not.toBe(id);
+        expect(random).toBe(cyrb53("random\u0000user-a\u0000key-1\u00001") / 2 ** 53);
+        expect(random).not.toBe(cyrb53("user-a\u0000key-1\u00001") / 2 ** 53);
     });
 
     it("falls back to Math.random without a replay key", () => {

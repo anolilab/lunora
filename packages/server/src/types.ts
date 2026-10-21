@@ -2493,7 +2493,7 @@ interface QueryCtx {
      */
     readonly now: number;
 
-    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
     readonly random: () => number;
 
     /**
@@ -2579,7 +2579,7 @@ interface MutationCtx {
      */
     readonly origin?: string;
 
-    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
     readonly random: () => number;
 
     /**
@@ -2701,7 +2701,7 @@ interface ActionCtx {
      */
     readonly origin?: string;
 
-    /** `ctx.random()`: a number in `[0, 1)`, reproduced by a replay of the same call (see `createStableRandomFactory`). Not for secrets. */
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
     readonly random: () => number;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;

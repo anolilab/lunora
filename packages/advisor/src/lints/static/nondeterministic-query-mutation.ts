@@ -19,7 +19,7 @@ const remedyFor = (callee: string, exportName: string, kind: "query" | "mutation
     }
 
     if (callee === "Math.random" && kind === "mutation") {
-        return "Use `ctx.random()` instead: a replay of the same call reproduces its values. The values are derived, not random, so a token or secret keeps `crypto.getRandomValues`.";
+        return "Use `ctx.random()` instead: a replay of a keyed mutation reproduces its values; an unkeyed call draws `Math.random()`. The values are derived, not random, so a token or secret keeps `crypto.getRandomValues`.";
     }
 
     return kind === "query"
