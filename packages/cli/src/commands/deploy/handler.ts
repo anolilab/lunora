@@ -55,7 +55,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { clientBuildRefusal, clientBuildRuns, frameworkBuildFor, pluginBuildRuns, runClientBuild } from "../build/framework-build";
+import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
@@ -722,15 +722,33 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
 };
 
-// Clears the redirect a service build left behind, so one present after the build is this run's. Returns whether the build runs.
-const clearServiceRedirect = (directory: string, frameworkBuild: boolean | undefined): boolean => {
-    const clientBuilt = frameworkBuild !== false && frameworkBuildFor(directory) !== undefined;
+// Clears the redirect a service build left behind, so one present after the build is this run's.
+const clearServiceRedirect = (directory: string): void => {
+    rmSync(join(directory, ".wrangler", "deploy", "config.json"), { force: true });
+};
 
-    if (clientBuilt) {
-        rmSync(join(directory, ".wrangler", "deploy", "config.json"), { force: true });
+/**
+ * Refuses or runs one service's client build and reports whether it ran. A refused build keeps the redirect a previous deploy
+ * left; an allowed one clears it first, so a redirect present afterwards is this run's.
+ */
+const buildService = async (
+    serviceBuild: Parameters<typeof runClientBuild>[0],
+    frameworkBuild: boolean | undefined,
+    environment: string | undefined,
+): Promise<{ built: boolean; error: string | undefined }> => {
+    const refusal = clientBuildRefusal(serviceBuild);
+
+    if (refusal !== undefined) {
+        return { built: false, error: refusal };
     }
 
-    return clientBuilt;
+    const built = clientBuildRuns(serviceBuild.cwd, frameworkBuild, environment);
+
+    if (built) {
+        clearServiceRedirect(serviceBuild.cwd);
+    }
+
+    return { built, error: await runClientBuild(serviceBuild) };
 };
 
 // The config a service deploys after its own client build: the one that build generated, or none when it generated nothing.
@@ -772,30 +790,29 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
     const manager = detectPackageManager(cwd);
     // Two keys may bind two entrypoints of one Worker: it deploys once.
     const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+    // `--prebuilt` skips the app's client build, and a service's build is part of the same artifact, so it is skipped too.
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
 
     for (const service of workers) {
         const directory = dirname(service.wranglerPath);
 
         // A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it,
-        // so the build must target the same host.
-        const clientBuilt = clearServiceRedirect(directory, options.frameworkBuild);
-
+        // so the build must target the same host, and run for the environment wrangler deploys.
         const serviceBuild = {
             cwd: directory,
-            frameworkBuild: options.frameworkBuild,
+            environment: options.env,
+            frameworkBuild,
             keepBundleMeta: false,
             lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             logger: options.logger,
             outputJson: options.format === "json" || options.clientBuildOutputJson === true,
             spawner,
+            strictAdvisories: resolveStrictAdvisories(options),
             target: driver.id,
         };
 
-        // A service whose target differs from the parent's is refused before its build runs, not built for another host.
-        const refusal = clientBuildRefusal(serviceBuild);
-
         // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
-        const buildError = refusal ?? (await runClientBuild(serviceBuild));
+        const { built: clientBuilt, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
 
         if (buildError !== undefined) {
             const message = `service ${service.name} (${service.worker}): ${buildError}`;
@@ -805,8 +822,8 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
             return message;
         }
 
-        // A generated config covers only the environment its build named, and the service build names none. Under --env, deploy the source config.
-        const generated = generatedServiceConfig(service.wranglerPath, clientBuilt && options.env === undefined);
+        // The build ran for the deploy's environment, so the config it generated is the one wrangler should deploy.
+        const generated = generatedServiceConfig(service.wranglerPath, clientBuilt);
 
         let invocation: ReturnType<typeof planToolchainInvocation>;
 

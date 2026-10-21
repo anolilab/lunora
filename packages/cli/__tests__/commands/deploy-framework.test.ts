@@ -266,7 +266,7 @@ describe("lunora deploy — a service's client build", () => {
         expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
     });
 
-    it("deploys the source config under --env, since a generated config covers only the environment its build named", async () => {
+    it("deploys the config a service's build generated under --env too, since that build ran for the deployed environment", async () => {
         expect.assertions(1);
 
         writeFileSync(
@@ -302,7 +302,83 @@ describe("lunora deploy — a service's client build", () => {
 
         const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
 
-        expect(deploy?.descriptor.args.join(" ")).not.toContain("generated.jsonc");
+        expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
+    });
+
+    it("builds a service whose assets are configured only under the --env block, for that environment", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            wranglerWith({
+                env: {
+                    staging: {
+                        d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        name: "lunora-app-staging",
+                    },
+                },
+                main: "virtual:lunora/worker",
+            }),
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "services", "parser", "wrangler.jsonc"),
+            wranglerWith({ env: { staging: { assets: { directory: "./dist" } } }, main: "src/index.ts" }),
+            "utf8",
+        );
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner: recorded } = createRecordingSpawner();
+        const spawner = withGeneratedConfig(serviceDirectory, recorded);
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, env: "staging", logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory);
+
+        expect(build).toBeDefined();
+        expect(build?.descriptor.env?.CLOUDFLARE_ENV).toBe("staging");
+    });
+
+    it("keeps the redirect a previous deploy left when the service's build is refused", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const redirect = join(serviceDirectory, ".wrangler", "deploy", "config.json");
+
+        writeFileSync(join(serviceDirectory, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+        mkdirSync(dirname(redirect), { recursive: true });
+        writeFileSync(redirect, JSON.stringify({ configPath: "../../previous.jsonc" }), "utf8");
+
+        const { spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        expect(result.code).not.toBe(0);
+        expect(readFileSync(redirect, "utf8")).toContain("previous.jsonc");
+    });
+
+    it("tells a service's client build the advisory opt-out, as it does the app's", async () => {
+        expect.assertions(1);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList, strictAdvisories: false });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory);
+
+        expect(build?.descriptor.env?.LUNORA_STRICT_ADVISORIES).toBe("0");
+    });
+
+    it("keeps a service's client build out of a --prebuilt deploy, as it keeps the app's out", async () => {
+        expect.assertions(1);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), skipCodegen: true, spawner, secretLister: noSecretList });
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
     });
 
     it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
