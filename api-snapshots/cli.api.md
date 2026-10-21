@@ -111,6 +111,7 @@ interface DeployCommandOptions {
     allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    clientBuildEnvironment?: string;
     clientBuildOutputJson?: boolean;
     clientBuildRan?: boolean;
     commandName?: PreDeployCommand;

@@ -585,7 +585,7 @@ const blockTemporary = (cwd: string, options: Pick<DeployCommandOptions, "env" |
  */
 const provisionDeployHyperdrive = async (
     cwd: string,
-    options: Pick<DeployCommandOptions, "dryRun" | "env" | "logger" | "temporary">,
+    options: Pick<DeployCommandOptions, "clientBuildEnvironment" | "dryRun" | "env" | "logger" | "temporary">,
     command: PreDeployCommand,
     target: string,
     phase: "check" | "create" = "create",
@@ -604,8 +604,9 @@ const provisionDeployHyperdrive = async (
 
     // A dry run reports a missing connection string or token as a warning and creates nothing. The "check" phase of a real
     // deploy stops on them too, but defers the creation to the "create" phase, the last step before wrangler runs.
-    // The build this deploy runs is given the --env name as CLOUDFLARE_ENV, so the generated config it wrote is for that environment.
-    const environment = options.env === undefined ? undefined : { ...process.env, CLOUDFLARE_ENV: options.env };
+    // Only a client build this run gave the --env name as CLOUDFLARE_ENV has written a generated config for that environment. A build
+    // that did not run leaves whatever an earlier build wrote, so `built` must not claim the deployed environment for it.
+    const environment = options.clientBuildEnvironment === undefined ? undefined : { ...process.env, CLOUDFLARE_ENV: options.clientBuildEnvironment };
 
     return provisionHyperdrive({
         checkOnly: phase === "check",

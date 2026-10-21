@@ -22,6 +22,12 @@ interface DeployCommandOptions {
     apiSpec?: ApiSpec;
 
     /**
+     * The `--env` this run's client build was given as `CLOUDFLARE_ENV`. Set only when a client build ran, so the generated config
+     * it wrote is for that environment; without it the environment's Hyperdrive id is not written into that config.
+     */
+    clientBuildEnvironment?: string;
+
+    /**
      * Set when the caller's stdout must stay a single JSON document but `format` is
      * not `"json"`. `lunora build` sets it, since it hands deploy `format: undefined`.
      */

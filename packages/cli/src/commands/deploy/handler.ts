@@ -1136,6 +1136,13 @@ const runDeployClientBuild = async (options: DeployCommandOptions): Promise<Depl
     return undefined;
 };
 
+/** The `--env` a client build for this deploy runs with as `CLOUDFLARE_ENV`, or `undefined` when no client build runs for it. */
+const clientBuildEnvironmentFor = (projectRoot: string, options: DeployCommandOptions): string | undefined => {
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+
+    return clientBuildRuns(projectRoot, frameworkBuild, options.env) ? options.env : undefined;
+};
+
 /**
  * Run a deploy. In `--format json` mode the human/progress channel is already on
  * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
@@ -1174,8 +1181,9 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     try {
         result = await executeDeploy({
             ...options,
-            logger,
+            clientBuildEnvironment: clientBuildEnvironmentFor(projectRoot, options),
             clientBuildRan: pluginBuildRuns(projectRoot, options.skipCodegen === true ? false : options.frameworkBuild, options.env),
+            logger,
             openShardGatePassed: true,
         });
 
