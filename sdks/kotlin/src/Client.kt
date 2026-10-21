@@ -133,12 +133,14 @@ class Client(
      * Supplies the session credential, read on every socket open and sent as
      * `connect.token`. It never enters the socket URL. Null sends none.
      */
+    @Volatile
     var wsToken: (() -> String?)? = null
 
     /**
      * Supplies the ephemeral admin ticket, read on every [wsUrl] call and sent as
      * the `?token=` query parameter. Null sends none.
      */
+    @Volatile
     var wsTicket: (() -> String?)? = null
 
     /**
