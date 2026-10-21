@@ -15,7 +15,7 @@ import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
-import { bundleMetaPlugin } from "./bundle-meta-plugin";
+import bundleMetaPlugin from "./bundle-meta-plugin";
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
 import cloudflareCliConfigPlugin from "./cloudflare-cli-config-plugin";
 import codegenPlugin from "./codegen-plugin";

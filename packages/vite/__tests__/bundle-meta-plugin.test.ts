@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { BUNDLE_META_PATH_ENV, DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bundleMetaPlugin } from "../src/bundle-meta-plugin";
+import bundleMetaPlugin from "../src/bundle-meta-plugin";
 
 let projectRoot: string;
 
@@ -146,11 +146,51 @@ describe("bundleMetaPlugin", () => {
         const plugin = bundleMetaPlugin(projectRoot);
         const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
         const bundle = { "index.js": chunk({}) };
+        const warn = vi.fn<(message: string) => void>();
 
-        generateBundle.call({ environment: { name: "app" }, getModuleInfo: () => undefined }, {}, bundle);
-        generateBundle.call({ environment: { name: "service" }, getModuleInfo: () => undefined }, {}, bundle);
+        generateBundle.call({ environment: { name: "app" }, getModuleInfo: () => undefined, warn }, {}, bundle);
+        generateBundle.call({ environment: { name: "service" }, getModuleInfo: () => undefined, warn }, {}, bundle);
 
         expect(existsSync(join(projectRoot, DEFAULT_BUNDLE_META_PATH))).toBe(false);
+    });
+
+    it("warns, naming both environments, when a second server environment leaves no metafile", () => {
+        expect.assertions(2);
+
+        const plugin = bundleMetaPlugin(projectRoot);
+        const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
+        const bundle = { "index.js": chunk({}) };
+        const warn = vi.fn<(message: string) => void>();
+
+        generateBundle.call({ environment: { name: "app" }, getModuleInfo: () => undefined, warn }, {}, bundle);
+        generateBundle.call({ environment: { name: "service" }, getModuleInfo: () => undefined, warn }, {}, bundle);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toMatch(/"service"[\s\S]*"app"[\s\S]*no bundle-meta\.json is written/);
+    });
+
+    it("sizes a virtual module by its transformed code in UTF-8 bytes, since it has no file", () => {
+        expect.assertions(1);
+
+        const virtualId = "\0lunora:worker";
+        const code = "export default 'é€';\n";
+        const plugin = bundleMetaPlugin(projectRoot);
+        const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
+
+        generateBundle.call(
+            {
+                environment: { name: "ssr" },
+                getModuleInfo: () => {
+                    return { code, dynamicallyImportedIds: [], importedIds: [] };
+                },
+            },
+            {},
+            { "index.js": chunk({ modules: { [virtualId]: { renderedLength: 10 } } }) },
+        );
+
+        const meta = JSON.parse(readFileSync(join(projectRoot, DEFAULT_BUNDLE_META_PATH), "utf8")) as { inputs: Record<string, { bytes: number }> };
+
+        expect(meta.inputs[virtualId]?.bytes).toBe(Buffer.byteLength(code));
     });
 
     it("writes the default metafile when the path variable is set but empty", () => {

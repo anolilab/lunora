@@ -4,6 +4,8 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { BUNDLE_META_PATH_ENV, DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import type { Plugin } from "vite";
 
+import toPosixPath from "./to-posix-path";
+
 type ImportKind = "dynamic-import" | "import-statement";
 
 interface MetafileImport {
@@ -23,8 +25,8 @@ interface MetafileOutput {
     inputs: Record<string, { bytesInOutput: number }>;
 }
 
-/** Module ids are absolute paths, except virtual ones (`\0…`), which stay as given. */
-const toKey = (projectRoot: string, id: string): string => (isAbsolute(id) ? relative(projectRoot, id) : id);
+/** Module ids are absolute paths, except virtual ones (`\0…`), which stay as given. Keys use `/` on every OS, as chunk names do. */
+const toKey = (projectRoot: string, id: string): string => (isAbsolute(id) ? toPosixPath(relative(projectRoot, id)) : id);
 
 /** Tagged static or dynamic, as esbuild's metafile does: a lazy function's `import()` is a dynamic edge. */
 const importEdges = (projectRoot: string, ids: ReadonlyArray<string>, kind: ImportKind): MetafileImport[] =>
@@ -43,8 +45,12 @@ const statSize = (path: string): number | undefined => {
     }
 };
 
-/** Size of the source file behind a module id; zero for a virtual module that has none on disk. */
-const sourceBytes = (id: string): number => statSize(id) ?? statSize(id.split(QUERY_OR_FRAGMENT)[0] ?? id) ?? 0;
+/**
+ * Size of the source file behind a module id. A virtual module has no file, so its transformed code is measured instead;
+ * the bytes are UTF-8, since that is what the startup ceiling counts.
+ */
+const sourceBytes = (id: string, code: string | null | undefined): number =>
+    statSize(id) ?? statSize(id.split(QUERY_OR_FRAGMENT)[0] ?? id) ?? Buffer.byteLength(code ?? "");
 
 /**
  * Write the server bundle's module graph as an esbuild-shaped metafile
@@ -94,7 +100,7 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
                         const info = this.getModuleInfo(id);
 
                         inputs[key] = {
-                            bytes: sourceBytes(id),
+                            bytes: sourceBytes(id, info?.code),
                             imports: [
                                 ...importEdges(projectRoot, info?.importedIds ?? [], "import-statement"),
                                 ...importEdges(projectRoot, info?.dynamicallyImportedIds ?? [], "dynamic-import"),
@@ -111,9 +117,13 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
             const metaPath = resolve(projectRoot, override === undefined || override === "" ? DEFAULT_BUNDLE_META_PATH : override);
 
             // Only one server environment's graph can be the app's, and the CLI cannot tell which. A second one leaves no metafile:
-            // a missing file is honest, a wrong one is not.
+            // a missing file is honest, a wrong one is not. Named in a warning, since the missing file alone explains nothing.
             if (writtenBy !== undefined && writtenBy !== this.environment.name) {
                 rmSync(metaPath, { force: true });
+                this.warn(
+                    `bundle-meta: environment "${this.environment.name}" built a server bundle after "${writtenBy}" wrote one; ` +
+                        "no bundle-meta.json is written, because the app's own graph cannot be told apart from a service's",
+                );
 
                 return;
             }
@@ -126,5 +136,4 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
     };
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export by repo convention (no default exports)
-export { bundleMetaPlugin };
+export default bundleMetaPlugin;
