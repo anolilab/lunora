@@ -350,4 +350,44 @@ describe("createNodeShardHost transaction concurrency", () => {
             dispose();
         }
     }, 5000);
+
+    it("refuses a deferred cursor read while another task holds the shard's transaction", async () => {
+        expect.assertions(2);
+
+        const { dispose, host } = createNodeShardHost();
+
+        try {
+            host.sql.exec("CREATE TABLE rows_ (id TEXT PRIMARY KEY)");
+            host.sql.exec("INSERT INTO rows_ VALUES ('committed')");
+
+            // Created before the transaction opens, read only after it has.
+            const cursor = host.sql.exec<{ id: string }>("SELECT id FROM rows_ ORDER BY id");
+
+            let markOpen: () => void = () => undefined;
+            const open = new Promise<void>((resolve) => {
+                markOpen = resolve;
+            });
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            const held = host.transaction(async () => {
+                host.sql.exec("INSERT INTO rows_ VALUES ('uncommitted')");
+                markOpen();
+                await gate;
+            });
+
+            await open;
+
+            expect(() => cursor.toArray()).toThrow("cannot run SQL while another task holds this shard's transaction");
+
+            release();
+            await held;
+
+            expect(cursor.toArray()).toStrictEqual([{ id: "committed" }, { id: "uncommitted" }]);
+        } finally {
+            dispose();
+        }
+    });
 });
