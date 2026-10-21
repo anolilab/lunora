@@ -30,6 +30,31 @@ describe("bundleMetaPlugin", () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
+    it("counts a module's rendered bytes, so non-ASCII text is not undercounted", () => {
+        expect.assertions(1);
+
+        const plugin = bundleMetaPlugin(projectRoot);
+        const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
+
+        generateBundle.call(
+            { environment: { name: "ssr" }, getModuleInfo: () => undefined },
+            {},
+            {
+                "index.js": chunk({
+                    facadeModuleId: join(projectRoot, "src", "index.ts"),
+                    modules: { [join(projectRoot, "src", "index.ts")]: { code: "é".repeat(10), renderedLength: 10 } },
+                }),
+            },
+        );
+
+        const meta = JSON.parse(readFileSync(join(projectRoot, DEFAULT_BUNDLE_META_PATH), "utf8")) as {
+            outputs: Record<string, { inputs: Record<string, { bytesInOutput: number }> }>;
+        };
+
+        // Ten "é" are twenty UTF-8 bytes; the string length would say ten.
+        expect(meta.outputs["index.js"]?.inputs["src/index.ts"]).toStrictEqual({ bytesInOutput: 20 });
+    });
+
     it("writes the server bundle's modules and outputs in esbuild metafile shape, under .lunora", () => {
         expect.assertions(4);
 
@@ -49,7 +74,7 @@ describe("bundleMetaPlugin", () => {
                 "index.js": chunk({
                     facadeModuleId: join(projectRoot, "src", "index.ts"),
                     imports: ["chunk.js"],
-                    modules: { [join(projectRoot, "src", "index.ts")]: { renderedLength: 42 } },
+                    modules: { [join(projectRoot, "src", "index.ts")]: { code: "a".repeat(42), renderedLength: 42 } },
                 }),
                 "assets/style.css": { type: "asset" },
             },

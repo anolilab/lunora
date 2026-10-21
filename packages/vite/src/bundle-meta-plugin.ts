@@ -94,7 +94,8 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
                 for (const [id, module] of Object.entries(chunk.modules)) {
                     const key = toKey(projectRoot, id);
 
-                    output.inputs[key] = { bytesInOutput: module.renderedLength };
+                    // Bytes, not characters: a non-ASCII module renders more bytes than its string length.
+                    output.inputs[key] = { bytesInOutput: new TextEncoder().encode(module.code ?? "").byteLength };
 
                     if (!inputs[key]) {
                         const info = this.getModuleInfo(id);
