@@ -936,12 +936,6 @@ type MultiSelectOption<T extends string> = SelectOption<T>;
 const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntry>>>;
 ```
 
-### `POST_CODEGEN_SKIP_ENV` (const)
-
-```ts
-const POST_CODEGEN_SKIP_ENV = "LUNORA_SKIP_POST_CODEGEN";
-```
-
 ### `PackageManager` (type)
 
 ```ts
