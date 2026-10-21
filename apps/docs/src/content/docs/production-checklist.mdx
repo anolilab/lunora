@@ -81,10 +81,11 @@ data export/import, migrations, the Studio, scheduled-job admin.
       which lands in access logs and browser history. Instead of the raw
       master token, the worker mints a short-lived (60s) HMAC-signed sub-token
       via `POST /_lunora/admin/ws-token` (itself gated by the master token in
-      the `Authorization` header). The worker and Durable Objects both refuse
-      the raw master token, and the raw session bearer, in `?token=`; only
-      minted sub-tokens (or the master token in the `Authorization` header,
-      which never leaks via URLs) authorize. The Studio mints sub-tokens
+      the `Authorization` header). The worker accepts only a minted sub-token in
+      `?token=`, never the master token. It forwards the request as it arrived, and
+      the Durable Object refuses a raw master token or raw session bearer in
+      `?token=`. Only minted sub-tokens (or the master token in the `Authorization`
+      header, which never leaks via URLs) authorize. The Studio mints sub-tokens
       itself and never falls back to the master token. There is no opt-out.
       The sub-token itself still rides the URL for up to 60 seconds, so proxy
       and access logs can record it.
