@@ -9,6 +9,7 @@ import {
     discoverSchemaInfo,
     inferLunoraBindings,
     planToolchainInvocation,
+    readApiSpecMarker,
     resolveDeployDriver,
     resolveLazyFunctions,
     resolveSchemaDirectory,
@@ -51,7 +52,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import { runClientBuild } from "../build/framework-build";
+import { clientBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { provisionDeployHyperdrive } from "./hyperdrive";
@@ -238,6 +239,7 @@ const runCodegenStep = async (
     spawner: Spawner | undefined,
     jsonOutput: boolean,
     strictAdvisories: boolean,
+    postCodegenInChild: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -291,10 +293,10 @@ const runCodegenStep = async (
         // script. Without this a deploy would ship output the project considers
         // unfinished, and the deploy pipeline has no reason to run that script
         // first, so nothing else would catch it.
-        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+        const postCodegen = postCodegenInChild ? undefined : await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
 
         // Already logged by the hook — this only decides that it BLOCKS.
-        if (postCodegen.error !== undefined) {
+        if (postCodegen?.error !== undefined) {
             return { error: postCodegen.error };
         }
 
@@ -520,6 +522,67 @@ const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] 
     serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
 
 /**
+ * The refusals that stop a deploy before anything is written: an unusable target, an option the target refuses, and the
+ * open-shard gate. {@link runDeployCommand} runs them before the client build, so a refused deploy leaves the project as
+ * it found it; the pipeline runs them again, which is cheap and writes nothing.
+ */
+const preflightDeploy = (
+    options: DeployCommandOptions,
+    command: PreDeployCommand,
+): { code?: ExitCode; error: string; kind: "refused"; validation: DeployCommandResult["validation"] } | { kind: "ok"; target: string } => {
+    const cwd = options.cwd ?? process.cwd();
+
+    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
+    // and may mutate `wrangler.jsonc` well before the wrangler step, so
+    // validating at the point of driver use would leave those side effects behind
+    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
+    // reaches the driver, not just the `--target` flag.
+    //
+    // The `Runnable` form additionally rejects a registered-but-undeployable
+    // target (a driver with no toolchain). That has to happen here rather than at
+    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
+    // target's capability matrix, and failing after that leaves the app rewritten
+    // for a target it then refuses to ship.
+    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        const message = resolvedTarget.error ?? "unknown deploy target";
+
+        // Logged here, not just returned: the caller only prints `error` in
+        // `--format json` mode, so a bare return exits 1 in silence.
+        options.logger.error(message);
+
+        return { kind: "refused", error: message, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    // stop the deploy HERE, before codegen rewrites `_generated/*` and
+    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
+    // A client build about to run creates the artifact this check looks for, so the check that needs one is left to the pipeline.
+    try {
+        if (!clientBuildRuns(cwd, options.frameworkBuild)) {
+            planDeploy(cwd, options, resolveDeployDriver(resolvedTarget.target));
+        }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        options.logger.error(message);
+
+        return { kind: "refused", error: message, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
+    // provisioning writes anything. A service is published only when this run deploys services.
+    const gateError = runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
+
+    if (gateError !== undefined) {
+        return { kind: "refused", code: gateError.code, error: gateError.error, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    return { kind: "ok", target: resolvedTarget.target };
+};
+
+/**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
  * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
@@ -543,57 +606,24 @@ const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] 
  * the line between the two commands: `prepare` answers "would this deploy?"
  * without pushing an image or a bundle.
  */
+// The spec to emit: the flag when given, else the one the client build's plugin emitted in this run (its codegen runs first and would
+// otherwise be overridden by this run's default, deleting the files the plugin wrote).
+const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undefined =>
+    options.apiSpec ?? (options.postCodegenInChild === true ? readApiSpecMarker(cwd) : undefined);
+
 const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreDeployCommand): Promise<PreDeployPipelineResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
     const strictAdvisories = resolveStrictAdvisories(options);
     const empty = { problems: [], wranglerPath: undefined };
 
-    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
-    // and may mutate `wrangler.jsonc` well before the wrangler step, so
-    // validating at the point of driver use would leave those side effects behind
-    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
-    // reaches the driver, not just the `--target` flag.
-    //
-    // The `Runnable` form additionally rejects a registered-but-undeployable
-    // target (a driver with no toolchain). That has to happen here rather than at
-    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
-    // target's capability matrix, and failing after that leaves the app rewritten
-    // for a target it then refuses to ship.
-    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+    const preflight = preflightDeploy(options, command);
 
-    if (resolvedTarget.target === undefined) {
-        const message = resolvedTarget.error ?? "unknown deploy target";
-
-        // Logged here, not just returned: the caller only prints `error` in
-        // `--format json` mode, so a bare return exits 1 in silence.
-        options.logger.error(message);
-
-        return { error: message, validation: empty };
+    if (preflight.kind === "refused") {
+        return { code: preflight.code, error: preflight.error, validation: preflight.validation };
     }
 
-    const { target } = resolvedTarget;
-
-    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
-    // stop the deploy HERE, before codegen rewrites `_generated/*` and
-    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
-    try {
-        planDeploy(cwd, options, resolveDeployDriver(target));
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        options.logger.error(message);
-
-        return { error: message, target, validation: empty };
-    }
-
-    // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
-    // provisioning writes anything. A service is published only when this run deploys services.
-    const gateError = runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
-
-    if (gateError !== undefined) {
-        return { code: gateError.code, error: gateError.error, target, validation: empty };
-    }
+    const { target } = preflight;
 
     let codegen: CodegenResult | undefined;
 
@@ -602,16 +632,17 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             cwd,
             interactive,
             options.logger,
-            options.apiSpec,
+            apiSpecFor(options, cwd),
             resolveLazyFunctions(options.lazyFunctions),
             target,
             options.spawner,
             options.format === "json",
             strictAdvisories,
+            options.postCodegenInChild === true,
         );
 
         if (codegenStep.error !== undefined) {
-            return { error: codegenStep.error, target, validation: empty };
+            return { error: codegenStep.error, target, validation: { problems: [], wranglerPath: undefined } };
         }
 
         codegen = codegenStep.result;
@@ -658,13 +689,13 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target, "check");
 
     if (hyperdriveError !== undefined) {
-        return { error: hyperdriveError, target, validation: empty };
+        return { error: hyperdriveError, target, validation: { problems: [], wranglerPath: undefined } };
     }
 
     const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
-        return { code: checkError.code, error: checkError.error, target, validation: empty };
+        return { code: checkError.code, error: checkError.error, target, validation: { problems: [], wranglerPath: undefined } };
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only at
@@ -1065,6 +1096,14 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     const { logger } = options;
     const projectRoot = options.cwd ?? process.cwd();
 
+    // A refused deploy must not rewrite the project, and the client build rewrites `_generated/*` and `dist/`, so the refusals
+    // that need no writes run before it.
+    const preflight = preflightDeploy(options, options.commandName ?? "deploy");
+
+    if (preflight.kind === "refused") {
+        return { code: preflight.code ?? EXIT_CODE.USAGE, descriptor: undefined, error: preflight.error, validation: preflight.validation };
+    }
+
     // The client build comes first: wrangler bundles whatever it finds on disk, so
     // a Vite-generated worker or an `assets` directory must exist before it reads them.
     const clientBuildError = await runClientBuild({
@@ -1091,7 +1130,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     let result: DeployCommandResult;
 
     try {
-        result = await executeDeploy({ ...options, logger });
+        result = await executeDeploy({ ...options, logger, postCodegenInChild: clientBuildRuns(projectRoot, options.frameworkBuild) });
 
         if (result.code === 0 && options.emitBindings !== undefined) {
             const { error } = writeBindingManifestFile({ destination: options.emitBindings, logger, projectRoot: options.cwd ?? process.cwd() });

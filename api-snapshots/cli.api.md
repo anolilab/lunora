@@ -133,6 +133,7 @@ interface DeployCommandOptions {
     migrateUrl?: string;
     migrateYes?: boolean;
     outDir?: string;
+    postCodegenInChild?: boolean;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;

@@ -130,6 +130,12 @@ interface DeployCommandOptions {
     outDir?: string;
 
     /**
+     * Set when this run's client build already ran the project's postcodegen hook from inside the plugin's codegen, so the
+     * pipeline skips its own run and the script's side effects happen once.
+     */
+    postCodegenInChild?: boolean;
+
+    /**
      * Upload a preview version (`wrangler versions upload`) instead of a live
      * `wrangler deploy`. Codegen + the drift gate + validation still run, but
      * the post-deploy finalize (migrations, baseline re-bless, auto-link, the
