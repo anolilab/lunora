@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /** The API specs codegen can emit; `"openapi"` is codegen's own default. */
@@ -20,6 +20,11 @@ const writeApiSpecMarker = (projectRoot: string, apiSpec: MarkedApiSpec | undefi
     writeFileSync(path, `${JSON.stringify({ apiSpec: apiSpec ?? "openapi" })}\n`, "utf8");
 };
 
+/** Forget a recorded spec, so the next read sees only what a new client build writes. */
+const clearApiSpecMarker = (projectRoot: string): void => {
+    rmSync(join(projectRoot, MARKER_PATH), { force: true });
+};
+
 /** The spec the last plugin codegen recorded, or `undefined` when there is no readable record. */
 const readApiSpecMarker = (projectRoot: string): MarkedApiSpec | undefined => {
     try {
@@ -32,4 +37,4 @@ const readApiSpecMarker = (projectRoot: string): MarkedApiSpec | undefined => {
 };
 
 export type { MarkedApiSpec };
-export { readApiSpecMarker, writeApiSpecMarker };
+export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker };

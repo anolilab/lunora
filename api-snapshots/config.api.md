@@ -917,6 +917,13 @@ const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 type MarkedApiSpec = "both" | "none" | "openapi" | "openrpc";
 ```
 
+### `MissingBuildOutputError` (class)
+
+```ts
+class MissingBuildOutputError extends Error {
+}
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -927,6 +934,12 @@ type MultiSelectOption<T extends string> = SelectOption<T>;
 
 ```ts
 const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntry>>>;
+```
+
+### `POST_CODEGEN_SKIP_ENV` (const)
+
+```ts
+const POST_CODEGEN_SKIP_ENV = "LUNORA_SKIP_POST_CODEGEN";
 ```
 
 ### `PackageManager` (type)
@@ -1285,6 +1298,12 @@ const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
 
 ```ts
 const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
+```
+
+### `clearApiSpecMarker` (const)
+
+```ts
+const clearApiSpecMarker: (projectRoot: string) => void;
 ```
 
 ### `clearDevServerState` (const)

@@ -34,6 +34,7 @@
  */
 import { spawn } from "node:child_process";
 
+import { POST_CODEGEN_SKIP_ENV } from "./codegen-env";
 import { detectPackageManager, runScriptArgsFor } from "./package-manager";
 import { readProjectManifest } from "./project-manifest";
 
@@ -143,6 +144,12 @@ const runPostCodegenHook = async (options: {
     stdoutToStderr?: boolean;
 }): Promise<PostCodegenHookResult> => {
     const { cwd, logger } = options;
+
+    // The CLI's client build runs this hook from its own codegen. The deploy runs it again after its codegen, so its output
+    // is the one that is shipped, and the child leaves it alone.
+    if (process.env[POST_CODEGEN_SKIP_ENV] === "1") {
+        return { ran: false };
+    }
 
     if (!hasPostCodegenScript(cwd)) {
         return { ran: false };
