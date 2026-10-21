@@ -22,12 +22,29 @@ interface DeployCommandOptions {
     apiSpec?: ApiSpec;
 
     /**
+     * The `--env` this run's client build was given as `CLOUDFLARE_ENV`. Set only when a client build ran, so the generated config
+     * it wrote is for that environment; without it the environment's Hyperdrive id is not written into that config.
+     */
+    clientBuildEnvironment?: string;
+
+    /**
+     * Set when the caller's stdout must stay a single JSON document but `format` is
+     * not `"json"`. `lunora build` sets it, since it hands deploy `format: undefined`.
+     */
+    clientBuildOutputJson?: boolean;
+
+    /** Set when this run's client build ran, so the spec it recorded is the one to emit. */
+    clientBuildRan?: boolean;
+
+    /**
      * The command the operator actually ran. `build` delegates here with
      * `dryRun: true`; without this the gate names the wrong command in its
      * blocked message and offers flags the real caller does not accept.
      */
     commandName?: PreDeployCommand;
+
     cwd?: string;
+
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
     /** Memoises project discovery for this invocation; `executeDeploy` creates one, and codegen clears it. */
     discoveryCache?: DiscoveryCache;
@@ -50,10 +67,19 @@ interface DeployCommandOptions {
      */
     emitBindings?: string;
     env?: string;
+
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
+
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+
+    /**
+     * `false` (`--no-framework-build`) skips the vite/rsbuild client build that
+     * runs before wrangler when wrangler reads its output. `--prebuilt` skips it
+     * too: that artifact was built earlier.
+     */
+    frameworkBuild?: boolean;
 
     /**
      * After a successful live deploy, probe the new version's health route
@@ -64,7 +90,6 @@ interface DeployCommandOptions {
      * into a red build for an unrelated reason.
      */
     healthCheck?: boolean;
-
     /** Injectable fetch for `--health-check`; defaults to the global `fetch`. */
     healthFetch?: HealthFetch;
     /** Injectable inter-attempt delay for `--health-check`; injected in tests to skip the real wait. */
@@ -73,6 +98,7 @@ interface DeployCommandOptions {
     interactive?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
+
     logger: Logger;
 
     /**
@@ -107,6 +133,9 @@ interface DeployCommandOptions {
      * it a `--migrate --migrate-url <prod>` deploy refuses to run the migration.
      */
     migrateYes?: boolean;
+
+    /** Set once the open-shard gate has run for this deploy, so the pipeline does not run it again. */
+    openShardGatePassed?: boolean;
 
     /**
      * Emit the bundled worker to this directory via `wrangler deploy --outdir`

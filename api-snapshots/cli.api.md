@@ -111,6 +111,9 @@ interface DeployCommandOptions {
     allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    clientBuildEnvironment?: string;
+    clientBuildOutputJson?: boolean;
+    clientBuildRan?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -120,6 +123,7 @@ interface DeployCommandOptions {
     env?: string;
     fetchImpl?: FetchLike;
     format?: OutputFormat;
+    frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
@@ -130,6 +134,7 @@ interface DeployCommandOptions {
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
+    openShardGatePassed?: boolean;
     outDir?: string;
     preview?: boolean;
     railpackAvailable?: DockerProbe;

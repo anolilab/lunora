@@ -330,6 +330,54 @@ describe("codegen-plugin", () => {
             );
         });
 
+        // A directory where the marker file goes makes the write throw (EISDIR) after codegen has already written its output.
+        const blockMarker = (root: string): void => {
+            mkdirSync(join(root, ".lunora", "api-spec.json"), { recursive: true });
+        };
+
+        it("vite build fails when the API spec marker cannot be written, since the CLI reads it", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
+                /could not write the API spec marker/u,
+            );
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(true);
+        });
+
+        it("vite dev logs a marker that cannot be written and still runs the post-codegen hook", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).resolves.toBeUndefined();
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+
         it("vite dev only logs the same ERROR-level advisory (never throws)", async () => {
             expect.assertions(3);
 

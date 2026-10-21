@@ -911,6 +911,19 @@ class LunoraReporter {
 const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 ```
 
+### `MarkedApiSpec` (type)
+
+```ts
+type MarkedApiSpec = "both" | "none" | "openapi" | "openrpc";
+```
+
+### `MissingBuildOutputError` (class)
+
+```ts
+class MissingBuildOutputError extends Error {
+}
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -1000,6 +1013,12 @@ type RemotePreference = boolean | undefined;
 
 ```ts
 const STEP_BADGE_NAMES: ReadonlyArray<StepBadgeName>;
+```
+
+### `STRICT_ADVISORIES_ENV` (const)
+
+```ts
+const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
 ```
 
 ### `ScaffoldFileResult` (type)
@@ -1238,7 +1257,9 @@ const badgeWidth: (_spec: BadgeSpec) => number;
 ### `blockingFindingsMessage` (const)
 
 ```ts
-const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, options?: {
+    strictAdvisories?: boolean;
+}) => string | undefined;
 ```
 
 ### `buildPackageSecretsBlock` (const)
@@ -1271,6 +1292,12 @@ const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
 
 ```ts
 const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
+```
+
+### `clearApiSpecMarker` (const)
+
+```ts
+const clearApiSpecMarker: (projectRoot: string) => void;
 ```
 
 ### `clearDevServerState` (const)
@@ -1611,6 +1638,12 @@ const promptYesNo: (prompt: string, options?: {
 }) => Promise<boolean>;
 ```
 
+### `readApiSpecMarker` (const)
+
+```ts
+const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
+```
+
 ### `readDevServerState` (const)
 
 ```ts
@@ -1814,6 +1847,12 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 
 ```ts
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
+```
+
+### `writeApiSpecMarker` (const)
+
+```ts
+const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
 ```
 
 ### `writeDevServerState` (const)
