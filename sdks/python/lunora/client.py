@@ -767,16 +767,19 @@ class LunoraClient:
         return await self._resolve_ws_credential(self.ws_ticket)
 
     def ws_url_for(self, shard_key: Optional[str], ticket: Optional[str]) -> str:
-        params = []
+        # Only the ticket may ride the URL. A `token` already on the configured URL is a stale credential, so it is
+        # dropped, as the TS client does; a `shard` is replaced by the one this call names.
+        base, _, query = self.ws_url.partition("?")
+        drop = {"token"} | ({"shard"} if shard_key else set())
+        kept = [piece for piece in query.split("&") if piece and piece.split("=", 1)[0] not in drop]
         # Empty is absent, matching `build_rpc_body` — see its docstring.
         if shard_key:
-            params.append("shard=" + _percent(shard_key))
+            kept.append("shard=" + _percent(shard_key))
         if ticket is not None:
-            params.append("token=" + _percent(ticket))
-        if not params:
-            return self.ws_url
-        sep = "&" if "?" in self.ws_url else "?"
-        return self.ws_url + sep + "&".join(params)
+            kept.append("token=" + _percent(ticket))
+        if not kept:
+            return base
+        return base + "?" + "&".join(kept)
 
     # --- Subscriptions ------------------------------------------------------
 

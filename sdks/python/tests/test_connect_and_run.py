@@ -248,6 +248,19 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         for url in fake.urls:
             self.assertNotIn("SECRET", url)
 
+    def test_a_stale_token_on_the_configured_url_never_reaches_the_upgrade(self):
+        """A ``token`` already on ``ws_url`` is a stale credential; the upgrade carries only the ticket.
+
+        Proxies record the URL on every open, so a session bearer left in
+        ``ws_url`` must not ride the upgrade, with or without a ticket.
+        """
+
+        client = LunoraClient("http://example.invalid", ws_url="wss://app.example/_lunora/ws?token=old-session&x=1")
+
+        self.assertNotIn("old-session", client.ws_url_for(None, None))
+        self.assertNotIn("old-session", client.ws_url_for("room-1", "tkt-1"))
+        self.assertEqual(client.ws_url_for(None, None), "wss://app.example/_lunora/ws?x=1")
+
     async def test_connect_omits_token_when_no_session_credential_is_held(self):
         """With no session credential, ``connect`` carries no ``token`` key and the URL has no query."""
 
