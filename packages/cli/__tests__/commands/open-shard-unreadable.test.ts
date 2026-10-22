@@ -12,20 +12,21 @@ import { createRecordingSpawner } from "../../src/util/spawn";
 
 // The scan lists each source folder with readdirSync. This mock makes one folder fail with EACCES, the error a
 // folder without read permission raises, so the case runs the same on every runner (Windows and root included).
-vi.mock(import('node:fs'), async (importOriginal) => {
-    const actual = await importOriginal<typeof import("node:fs")>();
-    const listing = actual.readdirSync as (...args: unknown[]) => unknown;
+// The loosened signature + module cast are required: `readdirSync`'s overloads share no single assignable shape.
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+    const listing = actual.readdirSync as (...parameters: unknown[]) => unknown;
 
     return {
         ...actual,
-        readdirSync: (path: unknown, ...rest: unknown[]) => {
+        readdirSync: (path: unknown, ...rest: unknown[]): unknown => {
             if (String(path).replaceAll("\\", "/").endsWith("/src/locked")) {
                 throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
             }
 
             return listing(path, ...rest);
         },
-    };
+    } as unknown as typeof actual;
 });
 
 const here = dirname(fileURLToPath(import.meta.url));

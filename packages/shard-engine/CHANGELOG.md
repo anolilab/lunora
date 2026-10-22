@@ -1,3 +1,72 @@
+## @lunora/shard-engine [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.152...@lunora/shard-engine@1.0.0-alpha.153) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+## @lunora/shard-engine [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.151...@lunora/shard-engine@1.0.0-alpha.152) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+
+## @lunora/shard-engine [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.150...@lunora/shard-engine@1.0.0-alpha.151) (2026-10-22)
+
+### ⚠ BREAKING CHANGES
+
+* the drizzle surface re-exported by @lunora/server (and
+mirrored in lunorash) now reflects drizzle-orm v1: the sync/async database
+and dialect classes (`SQLiteSyncDialect`, `SQLiteAsyncDialect`,
+`BaseSQLiteDatabase`, transactions) and the builder `*Initial` types are
+gone; v1 codec helpers (`bufferFromHex`, `camelCase`, `snakeCase`,
+`dateFrom*`, …) and insert-selection validation types are new.
+`D1Client.drizzle` / `drizzleSession` and `ShardDO.db` now return the
+schema-less `DrizzleD1Database` / `DrizzleSqliteDODatabase`. The
+`drizzle-orm` peer range moves from ^0.45.3 to exact 1.0.0-rc.5.
+
+Verified: lint:types, api:check (snapshots updated), dist:check, eslint,
+prettier, package-json order, full `pnpm run test` (the 28 codegen emit
+failures and one node-profiler failure reproduce identically on the base
+commit — pre-existing, not from this bump), and `pnpm run test:workerd`
+(19/20 suites pass; @lunora/x402 failed once from workerd resource
+contention, has no drizzle dependency, and passed standalone on retry —
+every drizzle-touching suite incl. d1, do, shard-engine, sql-store, server
+is green).
+
+* docs(d1): correct the stmt-cache rationale
+
+D1 caches compiled statements server-side, keyed by the SQL text: the JS
+D1PreparedStatement is inert, and every execution carries the text and
+params over RPC regardless of which object it came from. The cache
+therefore buys no round trips — only the allocation of one statement
+object per distinct text — so say that instead of the round-trip claim.
+
+* chore(deps): drop the vite age-gate entry alpha superseded
+
+### deps
+
+* bump drizzle-orm to 1.0.0-rc.5 ([#1293](https://github.com/anolilab/lunora/issues/1293)) ([83cb460](https://github.com/anolilab/lunora/commit/83cb46079e44f52a3e94e9abda5c9be31ec5eddb)), closes [#1292](https://github.com/anolilab/lunora/issues/1292)
+
+
+### Dependencies
+
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/shard-engine [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.149...@lunora/shard-engine@1.0.0-alpha.150) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/shard-engine [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.148...@lunora/shard-engine@1.0.0-alpha.149) (2026-10-20)
 
 

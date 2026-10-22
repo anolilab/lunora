@@ -54,6 +54,7 @@ const useMailCapture = ({ limit }: { limit: number }): MailCapture => {
         error: readError,
         errorSource: readErrorSource,
         isLoading,
+        poll,
         refetch,
     } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
 
@@ -92,9 +93,7 @@ const useMailCapture = ({ limit }: { limit: number }): MailCapture => {
     };
 
     // Poll for newly-captured mail so the inbox stays live without a manual refresh.
-    useAutoRefresh(() => {
-        refetch();
-    }, true);
+    useAutoRefresh(poll, true);
 
     const onClear = (): void => {
         fireAndForget(clearInbox());

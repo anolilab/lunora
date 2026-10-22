@@ -68,7 +68,7 @@ loop do
   begin
     socket = connect # your socket library
     sender = ->(frame) { socket.send(JSON.generate(frame)) }
-    sender.call(Lunora.build_connect_frame) # connect first: the server's onConnect hook fires on it
+    sender.call(Lunora.build_connect_frame(nil, nil, token: session)) # connect first: the server's onConnect hook fires on it
     client.attach_socket(sender)
     client.resend_subscriptions
     report = client.flush_offline_queue # HTTP replay; transient failures stay queued
@@ -112,6 +112,8 @@ end
 ```
 
 A requeued or rate-limited replay must not stop the read loop: the retry runs on a thread that is killed when the socket run ends, so live updates keep flowing meanwhile.
+
+The `connect` frame carries the session credential as `token`; a deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The session credential never goes in the socket URL; the only `?token=` a client sends is an admin ticket.
 
 `handle_frame` never raises into your read loop: a frame that is not JSON, or
 JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not

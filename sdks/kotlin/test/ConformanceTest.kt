@@ -231,11 +231,101 @@ private fun emptyShardKeyIsOmitted() {
     val client = Client("https://app.example", null)
 
     for (absent in listOf(null, "")) {
-        check(!client.wsUrl(absent, null).contains("shard="), "shard key $absent must not name a shard on the socket")
+        check(!client.wsUrl(absent).contains("shard="), "shard key $absent must not name a shard on the socket")
     }
 
-    check(client.wsUrl("", null) == client.wsUrl(null, null), "an empty shard key is byte-identical to sending none")
-    check(client.wsUrl("room-1", null).contains("shard="), "a real shard key still rides the socket URL")
+    check(client.wsUrl("") == client.wsUrl(null), "an empty shard key is byte-identical to sending none")
+    check(client.wsUrl("room-1").contains("shard="), "a real shard key still rides the socket URL")
+}
+
+/**
+ * The session credential rides the `connect` frame and never the socket URL, which
+ * carries only the admin ticket. `connect` is what every open sends first, so a
+ * reconnect re-presents the credential resolved at that moment. Each assertion
+ * here fails if the session value is appended to the URL.
+ */
+private fun socketCredentialsStayOutOfTheUrl() {
+    var session = "session-one"
+    val client = Client("https://app.example", null)
+
+    client.wsToken = { session }
+    client.wsTicket = { "ticket-one" }
+
+    val first = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { first.add(it) }
+
+    check(first[0]["type"] == "connect", "connect must be the first frame an open sends")
+    check(first[0]["token"] == "session-one", "connect must carry the session credential as token")
+    check(first[0]["clientId"] == client.clientId, "attachSocket's connect must carry the client id")
+    check(
+        client.wsUrl("room-1") == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one",
+        "the ticket must be the only thing in the socket URL's token parameter",
+    )
+    check(!client.wsUrl("room-1").contains("session-one"), "the session credential must not appear in the socket URL on the first open")
+
+    session = "session-two"
+
+    val reconnect = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { reconnect.add(it) }
+
+    check(
+        reconnect[0]["type"] == "connect" && reconnect[0]["token"] == "session-two",
+        "a reconnect must send connect first, with the freshly resolved credential",
+    )
+    check(
+        !client.wsUrl("room-1").contains("session-two") && !client.wsUrl("room-1").contains("session-one"),
+        "the session credential must not appear in the socket URL on a reconnect",
+    )
+
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("tenant" to "acme")) { withContext.add(it) }
+
+    check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
+
+    // A detach made while a replacement socket's connect frame is going out must stand.
+    val detached = Client("https://app.example", null)
+
+    detached.attachSocket { }
+    detached.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            detached.detachSocket()
+        }
+    }
+
+    check(!detached.online(), "a detach during the replacement's connect must not be undone by that attach")
+
+    // A write made while a replacement socket's connect frame is going out must not reach the socket it replaces.
+    val replaced = mutableListOf<Map<String, Any?>>()
+    val racing = Client("https://app.example", null)
+
+    racing.attachSocket { replaced.add(it) }
+
+    val beforeReplacement = replaced.size
+
+    racing.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            racing.subscribe("messages:list", WireValue.Obj(emptyList()), null)
+        }
+    }
+
+    check(
+        replaced.size == beforeReplacement,
+        "a write during the replacement's connect must not reach the replaced socket",
+    )
+
+    val bare = Client("https://app.example", null)
+    val unset = mutableListOf<Map<String, Any?>>()
+
+    bare.attachSocket { unset.add(it) }
+
+    check(
+        unset[0]["type"] == "connect" && !unset[0].containsKey("token"),
+        "connect must omit token when no session credential is held",
+    )
+    check(bare.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the socket URL carries no token parameter")
 }
 
 private fun depthCapEnforced() {
@@ -580,6 +670,7 @@ private fun shapeSubscriptionsResendAfterReconnect() {
 
     client.attachSocket { resent.add(it) }
     client.resendSubscriptions()
+    check(resent.removeAt(0)["type"] == "connect", "connect opens the socket")
 
     check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
     check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
@@ -787,13 +878,13 @@ private fun concurrentSubscribeAndHandleFrame() {
     workers.forEach { it.join() }
     reader.join()
 
-    // Attached only now, so the count below sees resend frames alone.
+    // Attached only now; the count is the attach's connect frame plus one subscribe per call.
     val resent = java.util.concurrent.atomic.AtomicInteger()
 
     client.attachSocket { resent.incrementAndGet() }
     client.resendSubscriptions()
 
-    check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id")
+    check(resent.get() == threads * perThread + 1, "every concurrent subscribe survived with a distinct id")
 }
 
 /** A frame fixture delivered as the raw text a socket read loop hands [Client.handleFrame]. */
@@ -807,6 +898,7 @@ private fun resent(client: Client): List<Map<String, Any?>> {
 
     client.attachSocket { frames.add(it) }
     client.resendSubscriptions()
+    check(frames.removeAt(0)["type"] == "connect", "connect opens the socket")
 
     return frames
 }
@@ -1134,6 +1226,7 @@ fun main() {
     keyOrderMatchesUtf16()
     stringEscapingMatchesJsonStringify()
     emptyShardKeyIsOmitted()
+    socketCredentialsStayOutOfTheUrl()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()

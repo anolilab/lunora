@@ -1,3 +1,38 @@
+## @lunora/hyperdrive [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.198...@lunora/hyperdrive@1.0.0-alpha.199) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.202
+
+## @lunora/hyperdrive [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.197...@lunora/hyperdrive@1.0.0-alpha.198) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.201
+
+## @lunora/hyperdrive [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.196...@lunora/hyperdrive@1.0.0-alpha.197) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.200
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/hyperdrive [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.195...@lunora/hyperdrive@1.0.0-alpha.196) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.199
+
 ## @lunora/hyperdrive [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.194...@lunora/hyperdrive@1.0.0-alpha.195) (2026-10-20)
 
 

@@ -1043,6 +1043,15 @@ interface TableSnapshot {
 }
 ```
 
+### `TargetScope` (interface)
+
+```ts
+interface TargetScope {
+    readonly origins: Map<Project, Project>;
+    readonly projects: Map<Project, Project>;
+}
+```
+
 ### `TopicIR` (interface)
 
 ```ts
@@ -1170,6 +1179,12 @@ const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads"
 
 ```ts
 const createCodegenProject: (lunoraDirectory: string) => Project;
+```
+
+### `createTargetScope` (const)
+
+```ts
+const createTargetScope: () => TargetScope;
 ```
 
 ### `describeErrorLevelFindings` (const)
@@ -1695,13 +1710,19 @@ const sortedUniqueNames: (names: Iterable<string>) => ReadonlyArray<string>;
 ### `sourceCapabilitySignals` (const)
 
 ```ts
-const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySignals;
+const sourceCapabilitySignals: (sourceFile: SourceFile, scope?: TargetScope) => SourceCapabilitySignals;
 ```
 
 ### `toAdvisorContext` (const)
 
 ```ts
 const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
+```
+
+### `tsconfigFingerprint` (const)
+
+```ts
+const tsconfigFingerprint: (tsconfigPath: string) => string;
 ```
 
 ### `validatorIrToJsonSchema` (const)

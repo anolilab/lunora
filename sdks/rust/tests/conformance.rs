@@ -498,9 +498,9 @@ fn client_frame_builders() {
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None)), canonical(&frames["connect"]));
+    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None, None)), canonical(&frames["connect"]));
     assert_eq!(
-        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })))),
+        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
         canonical(&frames["connect-with-context"])
     );
     assert_eq!(
@@ -1404,4 +1404,64 @@ fn from_model_json_matches_whole_paths() {
 
     assert!(encoded.get("limit").is_none(), "the top-level path prunes");
     assert_eq!(encoded["outer"]["limit"], Value::Null, "the same key one level down is a different path");
+}
+
+// The session credential must never ride the socket URL: not on the first open,
+// not on a reconnect, and not when the value comes from a provider re-resolved
+// on every open. The URL is built from the ticket alone; the session is read only
+// into the connect frame.
+#[test]
+fn session_credential_never_rides_the_url() {
+    const SESSION: &str = "sess-secret-123";
+    // The URL percent-encodes the hyphens, so a leak can show up in either form.
+    const SESSION_ENCODED: &str = "sess%2Dsecret%2D123";
+
+    let client = Client::new("https://app.example", None);
+    let leaks = |url: &str| url.contains(SESSION) || url.contains(SESSION_ENCODED);
+    let mut resolved = 0;
+    // `provider` stands in for an app-supplied resolver, called fresh on every open.
+    let mut provider = || {
+        resolved += 1;
+        SESSION
+    };
+
+    for open in 0..3 {
+        let session = provider();
+
+        assert!(
+            !leaks(&client.ws_url(Some("tenant_a"), Some("ticket-abc"))),
+            "open {open}: the URL carries the session credential"
+        );
+        assert!(!leaks(&client.ws_url(None, None)), "open {open}: the bare URL carries the session credential");
+        assert_eq!(
+            build_connect_frame(Some("client-test"), None, Some(session))["token"],
+            json!(SESSION),
+            "open {open}: connect token"
+        );
+    }
+
+    assert_eq!(resolved, 3, "the provider resolves once per open");
+}
+
+// The connect envelope carries the session credential as `token`, and omits the
+// key when none is held (or it is empty).
+#[test]
+fn connect_frame_carries_session_token() {
+    assert_eq!(build_connect_frame(Some("client-test"), None, Some("sess-abc"))["token"], json!("sess-abc"));
+    assert!(build_connect_frame(Some("client-test"), None, None).get("token").is_none(), "absent when unset");
+    assert!(
+        build_connect_frame(Some("client-test"), None, Some("")).get("token").is_none(),
+        "absent when empty"
+    );
+}
+
+// The ticket is the only thing in `?token=`, and it is that ticket exactly.
+#[test]
+fn ws_url_ticket_is_the_only_token() {
+    let client = Client::new("https://app.example", None);
+    let url = client.ws_url(Some("tenant_a"), Some("ticket-abc"));
+
+    assert_eq!(url.matches("token=").count(), 1, "exactly one token parameter in {url}");
+    assert!(url.ends_with("&token=ticket%2Dabc"), "the ticket is the token, hyphen encoded: {url}");
+    assert!(!client.ws_url(None, None).contains("token="), "no ticket means no token parameter");
 }

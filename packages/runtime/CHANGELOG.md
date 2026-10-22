@@ -1,3 +1,48 @@
+## @lunora/runtime [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.230...@lunora/runtime@1.0.0-alpha.231) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.164
+* **@lunora/do:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/runtime [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.229...@lunora/runtime@1.0.0-alpha.230) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+* **@lunora/observability:** upgraded to 1.0.0-alpha.163
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/do:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/runtime [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.228...@lunora/runtime@1.0.0-alpha.229) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.162
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/runtime [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.227...@lunora/runtime@1.0.0-alpha.228) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/observability:** upgraded to 1.0.0-alpha.161
+* **@lunora/do:** upgraded to 1.0.0-alpha.237
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.92
+
 ## @lunora/runtime [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.226...@lunora/runtime@1.0.0-alpha.227) (2026-10-20)
 
 

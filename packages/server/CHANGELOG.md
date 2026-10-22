@@ -1,3 +1,46 @@
+## @lunora/server [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.230...@lunora/server@1.0.0-alpha.231) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+* **@lunora/observability:** upgraded to 1.0.0-alpha.164
+
+## @lunora/server [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.229...@lunora/server@1.0.0-alpha.230) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/observability:** upgraded to 1.0.0-alpha.163
+* **@lunora/storage:** upgraded to 1.0.0-alpha.150
+
+## @lunora/server [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.228...@lunora/server@1.0.0-alpha.229) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/observability:** upgraded to 1.0.0-alpha.162
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/server [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.227...@lunora/server@1.0.0-alpha.228) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.145
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/observability:** upgraded to 1.0.0-alpha.161
+* **@lunora/storage:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/server [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.226...@lunora/server@1.0.0-alpha.227) (2026-10-20)
 
 

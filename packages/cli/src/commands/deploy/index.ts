@@ -33,6 +33,13 @@ const deployCommand: Command = {
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
+        // Declared as `framework-build` + `no-framework-build`, like `build`: the handler reads `!== false`.
+        {
+            description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
+            name: "framework-build",
+            type: Boolean,
+        },
+        { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
         OUTPUT_FORMAT_OPTION,
@@ -48,6 +55,12 @@ const deployCommand: Command = {
                 "Skip codegen + the schema-drift gate (assumes `lunora build`/`prepare` already ran in this CI run). Wrangler still bundles the worker.",
             name: "prebuilt",
             type: Boolean,
+        },
+        {
+            description:
+                "Project directory to deploy (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
         },
         { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
         {
@@ -117,6 +130,7 @@ export type DeployOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     env: string | undefined;
     format: string | undefined;
+    "framework-build": boolean | undefined;
     "health-check": boolean | undefined;
     "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
@@ -125,6 +139,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    root: string | undefined;
     "skip-services": boolean | undefined;
     "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;

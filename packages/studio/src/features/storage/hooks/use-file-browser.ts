@@ -284,7 +284,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     }, [bucket, client]);
 
     const list = useCallback(
-        async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
+        async (searchPrefix: string, cursor: string | undefined, append: boolean, propagate = false): Promise<void> => {
             listSeq.current += 1;
             const seq = listSeq.current;
 
@@ -314,6 +314,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 }
 
                 setError(errorMessage(error_));
+
+                // The poll tick needs the failure to back off or stop; the page still shows it through `error`.
+                if (propagate) {
+                    throw error_;
+                }
             } finally {
                 // Leave `busy` for the superseding request to clear (it set it too).
                 if (seq === listSeq.current) {
@@ -336,9 +341,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // `useAutoRefresh` pauses while the tab is hidden.
     const onFirstPage = (objects?.length ?? 0) <= pageSize;
 
-    useAutoRefresh(() => {
-        fireAndForget(list(prefix, undefined, false));
-    }, onFirstPage);
+    useAutoRefresh(() => list(prefix, undefined, false, true), onFirstPage);
 
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = deriveEntries(objects ?? [], prefix);

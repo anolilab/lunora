@@ -522,16 +522,16 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                               |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open     |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`        |
-| `unsubscribe`                               | `{ type, id }`                                                                      |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`               |
-| `shape_unsubscribe`                         | `{ type, id }`                                                                      |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }` |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
-| `whisper`                                   | `{ type, topic, data? }`                                                            |
+| `type`                                      | Shape                                                                                   |
+| ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context?, token? }` — one-shot, first on open |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`            |
+| `unsubscribe`                               | `{ type, id }`                                                                          |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`                   |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                          |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }`     |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                       |
+| `whisper`                                   | `{ type, topic, data? }`                                                                |
 
 `subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
 the server re-executes; `table` addresses the legacy raw-delta fan-out
@@ -597,6 +597,13 @@ entirely, exactly as they ignore `sinceChunk`.
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
 
+`connect.token` is the session credential for a socket opened without an
+`Authorization` header (see §6). It is the only way a browser or SDK presents
+one: it never goes in the URL. A socket that needs it is refused — `error`
+frame with code `UNAUTHENTICATED`, then close `4003` — when `connect` is not its
+first frame, or when `token` does not match. The deadline for a missing `connect`
+and the pending cap are in §6.
+
 #### 5.1.1 `connect.caps` — capability negotiation
 
 `caps` is an optional array of string tokens naming wire behaviours the client
@@ -649,29 +656,30 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`               | Shape                                                            | Effect                                                                                                                                                     |
-| -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ack`                | `{ type, id }`                                                   | subscription acknowledged                                                                                                                                  |
-| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`   | deliver `decodeWire(data)` as the new value                                                                                                                |
-| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }`  | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
-| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                 | nothing changed; keep value, advance cursor                                                                                                                |
-| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                 | write touched tables, byte-identical result; advance only                                                                                                  |
-| `error`              | `{ type, id?, error: { code?, message? }, message? }`            | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
-| `complete`           | `{ type, id }`                                                   | subscription/stream closed server-side                                                                                                                     |
-| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                  | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
-| `whisper`            | `{ type, topic, data: <wire>, from? }`                           | ephemeral relay                                                                                                                                            |
-| `live`               | `{ type, stream, topic, data: <wire> }`                          | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
-| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }` | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
-| `whisper_subscribed` | `{ type, topic }`                                                | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
+| `type`               | Shape                                                                  | Effect                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ack`                | `{ type, id }`                                                         | subscription acknowledged                                                                                                                                  |
+| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`         | deliver `decodeWire(data)` as the new value                                                                                                                |
+| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
+| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | nothing changed; keep value, advance cursor                                                                                                                |
+| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | write touched tables, byte-identical result; advance only                                                                                                  |
+| `error`              | `{ type, id?, error: { code?, message? }, message? }`                  | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
+| `complete`           | `{ type, id }`                                                         | subscription/stream closed server-side                                                                                                                     |
+| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                        | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
+| `whisper`            | `{ type, topic, data: <wire>, from? }`                                 | ephemeral relay                                                                                                                                            |
+| `live`               | `{ type, stream, topic, data: <wire> }`                                | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
+| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }`       | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
+| `whisper_subscribed` | `{ type, topic }`                                                      | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
-one. `subject` is the resolved user id the socket was upgraded under, or `null`
-for an anonymous socket — never absent. It exists for a client whose credential
-it cannot see: under a browser cookie session nothing on the client changes when
-the user signs out or someone else signs in, and a socket keeps the identity it
-was upgraded with for its whole life. The reference client adopts it as its
-identity when the socket carried the cookie alone (no `?token=`, no bearer held),
-and retires every live query on a change between two known identities. A client
+one, and only after the socket has passed the §6 gate. `subject` is the resolved
+user id the socket was upgraded under, or `null` for an anonymous socket — never
+absent. It exists for a client whose credential it cannot see: under a browser
+cookie session nothing on the client changes when the user signs out or someone
+else signs in, and a socket keeps the identity it was upgraded with for its whole
+life. The reference client adopts it as its identity when it holds no credential
+at all (no `connect.token`, no ticket, no bearer), and retires every live query on
+a change between two known identities. A client
 that states its own credential — every `sdks/*` port — MAY ignore the frame, and
 all eight do: an unknown `type` is already a no-op in each of them.
 
@@ -761,9 +769,14 @@ counterweight `contiguousPokeSequence` pin both directions.
 ### 5.4 Delta runs and the resume cursor
 
 One value change can go out as a RUN of `delta` frames (one per changed row).
-Unlike a poke the run has no start/end envelope — the client applies each frame
-as it arrives — so `cursor`/`epoch` ride only the **last** frame of the run, and a
-client MUST NOT advance its resume position on a frame that omits them.
+Unlike a poke the run has no start/end envelope, so `cursor`/`epoch` ride only
+the **last** frame of the run, and a client MUST NOT advance its resume position on
+a frame that omits them. Every frame of a run except the last carries
+`more: true`; a client SHOULD hold those frames and commit the run once its last
+frame (which carries no `more`) arrives. A client that applies each frame as it
+arrives still converges, but subscribers see every intermediate state. A delta
+without `more` is a whole change on its own, which is how the legacy
+`broadcastDelta` fan-out is delivered, and is applied on arrival.
 `lastMutationId` is the opposite and rides every frame (it is idempotent and
 monotonic on the read side).
 
@@ -776,30 +789,62 @@ does the `data` snapshot.
 
 Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
 
-## 6. Auth & the ephemeral WS token (plan 095)
+## 6. WebSocket credentials and the upgrade gate
 
 - **HTTP RPC** auth is the `authorization: Bearer <token>` header.
-- **WebSocket** auth rides the `?token=` query param (browsers cannot set WS
-  headers). The server matches it against `LUNORA_WS_BEARER` (upgrade gate) and/or
-  `LUNORA_ADMIN_TOKEN` (admin subscriptions).
+- **WebSocket** credentials stay out of URLs. There are three channels:
+    1. **`Authorization: Bearer <LUNORA_WS_BEARER>` on the upgrade.** For clients
+       that can set headers. A match admits the socket authenticated.
+    2. **`connect.token`** (the session credential; browsers and every SDK). The
+       upgrade is accepted without a credential and the socket stays
+       unauthenticated until its first frame. That frame must be `connect` with a
+       `token` equal to `LUNORA_WS_BEARER`. A token that does not match, or any
+       other first frame, gets an `error` frame (`code: "UNAUTHENTICATED"`) and a
+       close with code `4003`. The check runs before `identity` is sent and before
+       `onConnect` fires. With `LUNORA_WS_BEARER` unset the token is ignored and
+       every socket is authenticated as before. A socket still awaiting `connect`
+       10 seconds after its upgrade is closed with `4003` (`connect deadline`) when
+       the shard next admits an unauthenticated upgrade. A shard holds at most 1024
+       such sockets; past that, an unauthenticated upgrade gets `503`. That is
+       transient: retry with backoff.
+    3. **`?token=<ticket>`**, the only credential that may appear in a URL. A ticket
+       is an ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
+       (authenticated by the master admin token in the `Authorization` **header**):
+       `{ token, expiresAtMs }`, where
 
-Because a URL token lands in logs/history, the studio path uses a short-lived
-**ephemeral sub-token**. `POST /_lunora/admin/ws-token` (authenticated by the
-master admin token in the `Authorization` **header**) returns
-`{ token, expiresAtMs }`, where:
+        ```
+        token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
+        ```
 
-```
-token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
-```
+        Default TTL 60s. Verification is stateless (worker and DO both hold the
+        master token in `env`); rotating the master token invalidates all
+        outstanding tickets. A lapsed ticket grants nothing: the socket is admitted
+        unauthenticated, like any other socket without a credential.
 
-Default TTL 60s. Verification is stateless (worker and DO both hold the master
-token in `env`); rotating the master token invalidates all outstanding
-sub-tokens.
+A raw `LUNORA_WS_BEARER` or `LUNORA_ADMIN_TOKEN` in `?token=` is refused with
+`403` at upgrade. The query string is where it leaks (access logs, history,
+`Referer`), so a client that still sends one fails at once instead of working
+quietly.
 
-A client SHOULD accept an **async token provider** (`() -> token`) resolved fresh
-on every (re)connect, so a short-lived credential is re-minted after a `4001`
-`token_expired` close. The TS contract is `WsTokenProvider`
-(`packages/client/src/types.ts`).
+Admin subscriptions (`__lunora_admin__:*`) are granted only at upgrade: by the
+master token in the `Authorization` header or by a valid ticket. A
+`connect.token` never grants admin, so a studio socket uses a ticket.
+
+A `defineWebSocket` route socket has no `connect` frame, so it cannot present
+`connect.token`. Under `LUNORA_WS_BEARER` it is admitted only with the
+`Authorization` header or an admin ticket; a route that a browser reaches with
+the session credential alone is refused (`403`).
+
+A client SHOULD accept an **async token provider** (`() -> token`) for both
+credentials, resolved fresh on every (re)connect. The TS contract is
+`WsTokenProvider` (`packages/client/src/types.ts`): `wsToken` takes the session
+credential, which is sent in `connect`, and `wsTicket` takes the ticket, which
+goes in `?token=`. A provider re-mints the ticket on every reconnect, so a lapsed
+ticket is replaced on the next attempt.
+
+**Ceiling:** while `LUNORA_WS_BEARER` is set, an unauthenticated socket is
+accepted and held until its first frame. An attacker can open such sockets
+without sending a credential. Gate them at the edge if this matters.
 
 ## 7. HTTP streaming routes (SSE)
 

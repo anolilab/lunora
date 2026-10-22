@@ -188,9 +188,9 @@ final class OptimisticOfflineTest {
         Client client = new Client("https://app.example", null);
 
         check(!empty.containsKey("shardKey"), "an empty shard key is omitted from the RPC body");
-        check(!client.wsUrl("", null).contains("shard="), "and from the socket URL");
+        check(!client.wsUrl("").contains("shard="), "and from the socket URL");
         check("room-1".equals(named.get("shardKey")), "while a real one still rides the body");
-        check(client.wsUrl("room-1", null).contains("shard=room-1"), "and the socket URL");
+        check(client.wsUrl("room-1").contains("shard=room-1"), "and the socket URL");
 
         // End to end, because the omission has to hold on the path a consumer actually takes.
         List<String> posted = new ArrayList<>();

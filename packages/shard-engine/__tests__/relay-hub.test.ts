@@ -24,8 +24,28 @@ const OPEN_SHAPE = { args: {}, name: "lobby-messages" };
 /** Reads a claim, so the gate refuses the cohort and the owner registers a per-socket proxy instead. */
 const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 
+/** An answer body the owner may cancel: `cancelled` flips and `settled` resolves at that moment, so a test awaits the cancel itself. */
+const trackedBody = (): { cancel: () => void; cancelled: boolean; settled: Promise<void> } => {
+    let markSettled: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+        markSettled = resolve;
+    });
+    const body = {
+        cancel: (): void => {
+            body.cancelled = true;
+            markSettled();
+        },
+        cancelled: false,
+        settled,
+    };
+
+    return body;
+};
+
 /** A relay whose control-channel POSTs are recorded, and optionally made to fail the way an unreachable sibling DO does. */
 interface RelayDouble {
+    /** When set, every answer carries a body stream, and this records whether the owner cancelled it. */
+    body?: ReturnType<typeof trackedBody>;
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
     /** The status this relay answers a forwarded whisper, live frame or shape poke with; `410` when it holds no sockets. Defaults to `204`. */
@@ -44,6 +64,10 @@ const ownerFor = (
     relays: Map<number, RelayDouble>,
     /** The op-log cursor the owner computes each seed at — mutable, so a test can move it between two subscribes the way an unrelated write does. */
     seed?: { cursor: number },
+    /** Shape name → table this build resolves it to. Unlisted shapes read `messages`; a test passes a different map to model a deploy that re-points one. */
+    tables: Record<string, string> = {},
+    /** The host's env, read on each call, so a test can lower `LUNORA_MAX_RELAYS` between two frames the way a deploy does. */
+    env: Record<string, string> = {},
 ): {
     owner: NonNullable<ReturnType<typeof createRelayLink>>;
     resolvedUnder: (undefined | SubscriptionIdentity)[];
@@ -82,7 +106,17 @@ const ownerFor = (
                     status = relay.frameStatus ?? 204;
                 }
 
-                return (relay.gate ?? Promise.resolve()).then(() => new Response(undefined, { status }));
+                const { body } = relay;
+                const stream =
+                    body === undefined
+                        ? undefined
+                        : new ReadableStream({
+                              cancel: () => {
+                                  body.cancel();
+                              },
+                          });
+
+                return (relay.gate ?? Promise.resolve()).then(() => new Response(stream, { status }));
             },
         };
     };
@@ -97,7 +131,7 @@ const ownerFor = (
         deliverWhisperLocal: () => 0,
         doName: () => OWNER_KEY,
         env: () => {
-            return { SHARD: { get: (id: string) => stubFor(id), getByName: (name: string) => stubFor(name), idFromName: (id: string) => id } };
+            return { ...env, SHARD: { get: (id: string) => stubFor(id), getByName: (name: string) => stubFor(name), idFromName: (id: string) => id } };
         },
         getWebSockets: () => [],
         maskMetadata: () => {
@@ -113,7 +147,7 @@ const ownerFor = (
 
             return shapeName === SCOPED_SHAPE.name
                 ? { columns: ["id"], effectiveWhere: { org: identity?.identity?.["org"] ?? "anonymous" }, global: false, table: "orders" }
-                : { columns: ["id"], effectiveWhere: { room: "lobby" }, global: false, table: "messages" };
+                : { columns: ["id"], effectiveWhere: { room: "lobby" }, global: false, table: tables[shapeName] ?? "messages" };
         },
         rlsMetadata: () => {
             return { policies: [] };
@@ -725,6 +759,56 @@ describe("relay hub", () => {
 
             expect(memoRows()).toBe(0);
         });
+
+        it("drains once the last admitted socket closes, even while a pending socket is still open", async () => {
+            expect.assertions(2);
+
+            // A pending socket has not proved its credential. Left open, it must not keep the relay attached.
+            // A dropped socket (server-side close, no release) leaves a memo row that only the drain clears.
+            const attachments = new Map<ShardSocketLike, SocketAttachment>();
+            const dropped = { send: () => 1 } as unknown as ShardSocketLike;
+            const admitted = { send: () => 1 } as unknown as ShardSocketLike;
+            const pending = { send: () => 1 } as unknown as ShardSocketLike;
+
+            attachments.set(dropped, { connectionId: "c-dropped", shapes: { s1: OPEN_SHAPE }, subs: {} });
+            attachments.set(admitted, { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} });
+            attachments.set(pending, { authenticated: false, connectionId: "c-pending", subs: {} });
+
+            const ownerStub = { fetch: () => Promise.resolve(Response.json({ cursor: 10, epoch: "e1", frames: ["seed"] })) };
+            const live = new Set([admitted, dropped, pending]);
+
+            const relay = createRelayLink({
+                currentCdcEpoch: () => "e1",
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => ownerStub, getByName: () => ownerStub, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [...live],
+                nextPokeId: () => "poke-1",
+                readAttachment: (ws: ShardSocketLike) => attachments.get(ws),
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
+            if (relay === undefined) {
+                throw new Error("expected a relay link for a `::relay::` DO name");
+            }
+
+            await relay.seedRelayShape(dropped, "s1", OPEN_SHAPE, {});
+            await relay.seedRelayShape(admitted, "s1", OPEN_SHAPE, {});
+
+            expect(memoRows()).toBe(2);
+
+            // The dropped socket leaves without a release. Alice closes; only the pending socket is left.
+            live.delete(dropped);
+            live.delete(admitted);
+            await relay.releaseRelayShapes(admitted);
+            await relay.announceDrain(admitted);
+
+            expect(memoRows()).toBe(0);
+        });
     });
 
     describe("owner seed reply", () => {
@@ -1004,6 +1088,139 @@ describe("relay hub", () => {
         });
     });
 
+    describe("flush short-circuit on the changed-table set", () => {
+        it("does not resolve any seeded shape when the flushed table is one none of them read", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const { owner, resolvedUnder } = ownerFor(database.sql, relays);
+
+            await subscribe(owner, OPEN_SHAPE, 0);
+            await subscribe(owner, { args: {}, name: "lobby-presence" }, 0, "c-bob");
+            await subscribe(owner, SCOPED_SHAPE, 0);
+
+            const seeded = resolvedUnder.length;
+
+            await owner.onFlush(new Set(["invoices"]), 20);
+
+            expect(resolvedUnder).toHaveLength(seeded);
+            expect(pokesIn(relayAt(relays, 0))).toHaveLength(0);
+        });
+
+        it("re-resolves a shape a deploy re-pointed to another table after the owner rehydrates", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+
+            // The first owner seeds `lobby-presence` on `messages`.
+            const { owner } = ownerFor(database.sql, relays);
+
+            await subscribe(owner, OPEN_SHAPE, 0);
+            await subscribe(owner, { args: {}, name: "lobby-presence" }, 0, "c-bob");
+
+            // The deploy re-points it to `presence`. A fresh owner rehydrates the registry from SQL, and a write to the new table must still reach
+            // the subscriber: the stored registry no longer carries the table, so the flush resolves it under the new code.
+            const { owner: deployed } = ownerFor(database.sql, relays, undefined, { "lobby-presence": "presence" });
+
+            await deployed.onFlush(new Set(["presence"]), 20);
+
+            expect(new Set(pokesIn(relayAt(relays, 0)).map((poke) => poke["name"]))).toStrictEqual(new Set(["lobby-presence"]));
+        });
+    });
+
+    describe("relay index validation", () => {
+        const relaysRows = (): number[] =>
+            database.sql
+                .exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relays ORDER BY idx")
+                .toArray()
+                .map((row) => Number(row.idx));
+
+        it("rejects an attach, detach, unsubscribe or room event that omits relayIndex", async () => {
+            expect.assertions(5);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const frames = [
+                { type: "relay_attach" },
+                { type: "relay_detach" },
+                { connectionId: "c1", type: "relay_shape_unsubscribe" },
+                { attachment: {}, connectionId: "c1", kind: "join", topic: "t", type: "relay_room_event" },
+            ];
+
+            for (const frame of frames) {
+                // eslint-disable-next-line no-await-in-loop -- each frame is checked in order against the same owner
+                const response = await deliver(owner, JSON.stringify(frame));
+
+                expect(response.status).toBe(400);
+            }
+
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it.each([1.5, -1, Number.NaN])("rejects a frame carrying relayIndex %s and leaves the relay set untouched", async (relayIndex) => {
+            expect.assertions(6);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const frames = [
+                { relayIndex, type: "relay_attach" },
+                { relayIndex, type: "relay_detach" },
+                { connectionId: "c1", relayIndex, type: "relay_shape_unsubscribe" },
+                { attachment: {}, connectionId: "c1", kind: "join", relayIndex, topic: "t", type: "relay_room_event" },
+                { ...OPEN_SHAPE, connectionId: "c1", relayIndex, subId: "s1", type: "relay_shape_subscribe" },
+            ];
+
+            for (const frame of frames) {
+                // eslint-disable-next-line no-await-in-loop -- each frame is checked in order against the same owner
+                const response = await deliver(owner, JSON.stringify(frame));
+
+                expect(response.status).toBe(400);
+            }
+
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it("rejects an attach or shape subscribe at or past LUNORA_MAX_RELAYS", async () => {
+            expect.assertions(2);
+
+            const { owner } = ownerFor(database.sql, new Map());
+
+            // The table is created by the first attach, so one relay is attached to make the set readable.
+            await deliver(owner, JSON.stringify({ relayIndex: 0, type: "relay_attach" }));
+
+            const attach = await deliver(owner, JSON.stringify({ relayIndex: 8, type: "relay_attach" }));
+            const subscribeAtCap = await deliver(
+                owner,
+                JSON.stringify({ ...OPEN_SHAPE, connectionId: "c1", relayIndex: 8, subId: "s1", type: "relay_shape_subscribe" }),
+            );
+
+            expect([attach.status, subscribeAtCap.status]).toStrictEqual([400, 400]);
+            expect(relaysRows()).toStrictEqual([0]);
+        });
+
+        it("still detaches and unsubscribes a relay that a lowered LUNORA_MAX_RELAYS no longer covers", async () => {
+            expect.assertions(2);
+
+            const env: Record<string, string> = {};
+            const { owner } = ownerFor(database.sql, new Map(), undefined, {}, env);
+
+            await deliver(owner, JSON.stringify({ relayIndex: 5, type: "relay_attach" }));
+
+            // A deploy lowers the cap below the relay's index; its sockets must still be able to tear down.
+            env["LUNORA_MAX_RELAYS"] = "2";
+
+            const unsubscribe = await deliver(owner, JSON.stringify({ connectionId: "c1", relayIndex: 5, type: "relay_shape_unsubscribe" }));
+            const detach = await deliver(owner, JSON.stringify({ relayIndex: 5, type: "relay_detach" }));
+
+            expect([unsubscribe.status, detach.status]).toStrictEqual([204, 204]);
+            expect(relaysRows()).toStrictEqual([]);
+        });
+    });
+
     describe("live publish and grant fan-out", () => {
         /** The owner side of the tier: `createRelayLink` is typed as either role, and only the owner forwards live frames. */
         const ownerOf = (relays: Map<number, RelayDouble>): OwnerRelay => {
@@ -1090,6 +1307,31 @@ describe("relay hub", () => {
 
             expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
             expect(relayAt(relays, 0).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+        });
+
+        it("cancels the bodies of every relay answer but the winner's", async () => {
+            expect.assertions(4);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { body: trackedBody(), down: false, liveStatus: 404, posts: [] }],
+                [1, { body: trackedBody(), down: false, liveStatus: 200, posts: [] }],
+                [2, { body: trackedBody(), down: false, liveStatus: 404, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+            await attach(owner, 2);
+
+            const winner = await owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+            // The loser bodies are released off the winner's path, so wait for each cancel rather than for a tick.
+            await Promise.all([relayAt(relays, 0).body?.settled, relayAt(relays, 2).body?.settled]);
+
+            expect([relayAt(relays, 0).body?.cancelled, relayAt(relays, 2).body?.cancelled]).toStrictEqual([true, true]);
+            expect(winner?.status).toBe(200);
+            expect(relayAt(relays, 1).body?.cancelled).toBe(false);
+            expect(winner?.bodyUsed).toBe(false);
         });
 
         it("resolves a grant on the first relay that answers, without waiting for a stalled one", async () => {

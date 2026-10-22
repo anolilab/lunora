@@ -1,3 +1,35 @@
+## @lunora/nuxt [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.261...@lunora/nuxt@1.0.0-alpha.262) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.231
+
+## @lunora/nuxt [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.260...@lunora/nuxt@1.0.0-alpha.261) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.230
+
+## @lunora/nuxt [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.259...@lunora/nuxt@1.0.0-alpha.260) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.240
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.229
+
+## @lunora/nuxt [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.258...@lunora/nuxt@1.0.0-alpha.259) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+
 ## @lunora/nuxt [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.257...@lunora/nuxt@1.0.0-alpha.258) (2026-10-20)
 
 

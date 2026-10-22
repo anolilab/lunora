@@ -263,10 +263,10 @@ Most apps don't call this directly; [`@lunora/db`](/docs/packages/db)'s
 
 `client.setAuthToken(jwt)` stamps an `Authorization: Bearer <jwt>` header on
 every HTTP RPC and clears the in-memory offline queue's writes from the
-previous identity. It does **not** touch the WebSocket: that token is fixed
-at upgrade time and lives in the URL. To rotate live WS auth call
-`client.setWsToken(token)`, which closes the open shard sockets so they
-reconnect with the new credential.
+previous identity. It does **not** touch the WebSocket: a socket keeps the
+session credential it connected with, which is sent in its `connect` frame, not
+the URL. To rotate live WS auth call `client.setWsToken(token)`, which closes
+the open shard sockets so they reconnect with the new credential.
 
 `getCurrentUser()` resolves the signed-in user from better-auth's
 `get-session` route (returns `null` when signed out), and `onAuthTokenChange`

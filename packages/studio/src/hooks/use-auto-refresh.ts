@@ -1,49 +1,131 @@
+import { useLunora } from "@lunora/react";
 import { useEffect, useRef } from "react";
+
+import { isTerminalPollError } from "../lib/internal";
+
+/** The longest a failing poll backs off to, in milliseconds. */
+const MAX_BACKOFF_MS = 60_000;
+
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+    (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
 
 /** Default polling cadence for auto-refresh, in milliseconds. */
 export const DEFAULT_AUTO_REFRESH_MS = 5000;
 
 /**
- * Call `onTick` on a fixed interval while `enabled`, for panels whose backend
- * has no live subscription channel (the scheduler, R2, D1, the SessionDO — all
- * HTTP-only). Polling is the honest "live" here: a timer-driven scheduler has no
+ * Call `onTick` on a timer while `enabled`, for panels whose backend has no live
+ * subscription channel (the scheduler, R2, D1, the SessionDO — all HTTP-only).
+ * Polling is the honest "live" here: a timer-driven scheduler has no
  * client-observable write event to push on, so the UI watches jobs count down
  * and disappear by re-asking.
  *
+ * Each tick is scheduled after the previous one settles (`setTimeout` chaining,
+ * not `setInterval`), so a slow request never overlaps the next. When `onTick`
+ * returns a promise that rejects (or throws), the delay doubles up to
+ * {@link MAX_BACKOFF_MS} and resets to `intervalMs` on the next success; an
+ * `UNAUTHORIZED` / `FORBIDDEN` rejection stops polling until `enabled` toggles,
+ * since re-asking cannot fix a missing credential. A sync `onTick` counts as a
+ * success, so `onTick` must return the promise of the request it starts: one that
+ * returns void is timed as if it had already finished.
+ *
  * Ticks are skipped while the tab is hidden (`document.hidden`) so a backgrounded
  * studio doesn't keep hammering the worker. `onTick` is held in a ref so a
- * fresh closure each render doesn't reset the interval; only `enabled`/`intervalMs`
- * do. The interval is cleared on disable and unmount.
+ * fresh closure each render doesn't reset the timer. The timer restarts when
+ * `enabled`/`intervalMs` change or the Lunora client is replaced (new credentials),
+ * so a panel stopped by a terminal error resumes once its client changes. The
+ * timer is cleared on disable and unmount.
  */
-export const useAutoRefresh = (onTick: () => void, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
+export const useAutoRefresh = (onTick: () => unknown, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
+    const client = useLunora();
     const tickRef = useRef(onTick);
 
     // Keep the latest `onTick` in a ref via an effect rather than a render-phase
     // write (which trips React Compiler's "no refs during render"). `onTick` is
-    // only read in the async interval below, so the post-commit update is always
+    // only read in the async timer below, so the post-commit update is always
     // current by the time it fires — a fresh closure each render still doesn't
-    // reset the interval.
+    // reset the timer.
     useEffect(() => {
         tickRef.current = onTick;
     });
 
+    // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup below clears `id`, the handle `schedule` reassigns on every tick; the rule cannot follow a timer set from a nested closure
     useEffect(() => {
         if (!enabled) {
             return undefined;
         }
 
-        const id = setInterval(() => {
-            const globalDocument = (globalThis as { document?: { hidden?: boolean } }).document;
+        let delay = intervalMs;
+        let stopped = false;
+        let id: ReturnType<typeof setTimeout> | undefined;
 
-            if (globalDocument?.hidden === true) {
+        const schedule = (): void => {
+            if (!stopped) {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `tick` reschedules itself through here
+                id = setTimeout(tick, delay);
+            }
+        };
+
+        const succeeded = (): void => {
+            delay = intervalMs;
+            schedule();
+        };
+
+        const failed = (error: unknown): void => {
+            if (isTerminalPollError(error)) {
                 return;
             }
 
-            tickRef.current();
-        }, intervalMs);
+            delay = Math.max(intervalMs, Math.min(delay * 2, MAX_BACKOFF_MS));
+            schedule();
+        };
+
+        const tick = (): void => {
+            const globalDocument = (globalThis as { document?: { hidden?: boolean } }).document;
+
+            if (globalDocument?.hidden === true) {
+                schedule();
+
+                return;
+            }
+
+            let result: unknown;
+
+            try {
+                result = tickRef.current();
+            } catch (error) {
+                failed(error);
+
+                return;
+            }
+
+            // A thenable from another realm (or any non-Promise thenable) must still be awaited: treating it as a
+            // success would schedule the next tick while the request is pending, and its rejection would skip backoff.
+            if (isThenable(result)) {
+                Promise.resolve(result).then(succeeded).catch(failed);
+            } else {
+                succeeded();
+            }
+        };
+
+        schedule();
 
         return () => {
-            clearInterval(id);
+            stopped = true;
+            clearTimeout(id);
         };
-    }, [enabled, intervalMs]);
+        // `client` is not read in the effect: a replaced client (new credentials) must restart a timer that a terminal error stopped.
+    }, [client, enabled, intervalMs]);
+};
+
+/**
+ * Wait for every poll to settle, then reject with the first failure. A failing read must not cut a sibling short, and the tick reports
+ * failure only once nothing it started is still in flight.
+ */
+export const settlePolls = async (polls: ReadonlyArray<Promise<unknown>>): Promise<void> => {
+    const settled = await Promise.allSettled(polls);
+    const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+
+    if (failure !== undefined) {
+        throw failure.reason;
+    }
 };

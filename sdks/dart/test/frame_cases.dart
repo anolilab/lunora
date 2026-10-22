@@ -18,6 +18,13 @@ void caseClientFrameBuilders() {
   final frames = fixture('ws-frames.json')['clientFrames'] as Map<String, Object?>;
 
   equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect']), 'connect frame');
+  // protocol/README.md 5.1: the session credential is sent in connect, and only when held.
+  equals(
+    LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'sess-SECRET-1')['token'],
+    'sess-SECRET-1',
+    'connect carries the session credential as token',
+  );
+  check(!LunoraClient.buildConnectFrame(clientId: 'client-test').containsKey('token'), 'connect omits token when no session credential is held');
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'})),
     canonical(frames['connect-with-context']),

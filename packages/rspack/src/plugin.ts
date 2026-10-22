@@ -479,7 +479,7 @@ class LunoraRspackPlugin {
             assertWranglerSatisfiesSchema(this.#options, consoleLogger.warn, "Update your wrangler.jsonc and rebuild.");
         }
 
-        const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+        const { blockingMessage, markerFailure } = runCodegenPass(this.#options, consoleLogger, this.#project.get());
 
         this.#generatedTarget = this.#options.target;
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });
@@ -494,6 +494,11 @@ class LunoraRspackPlugin {
         // what `vite dev` does either.
         if (!watching && blockingMessage !== undefined) {
             this.#findings.push(new Error(blockingMessage));
+        }
+
+        // The CLI's deploy reads this marker to pick the API spec, so a build without it would ship the wrong one.
+        if (!watching && markerFailure !== undefined) {
+            this.#findings.push(new Error(markerFailure));
         }
     }
 

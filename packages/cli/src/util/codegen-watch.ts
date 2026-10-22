@@ -24,13 +24,23 @@
  * regeneration.
  */
 import type { FSWatcher } from "node:fs";
-import { existsSync, watch } from "node:fs";
+import { existsSync, readFileSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { readServiceBindings, runCodegen } from "@lunora/codegen";
+import {
+    createCodegenProject,
+    findTsconfig,
+    PROJECT_CONFIG_FILENAMES,
+    projectConfigCandidatePaths,
+    readServiceBindings,
+    refreshCodegenProject,
+    runCodegen,
+} from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import type { Project } from "ts-morph";
+import { ts } from "ts-morph";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
@@ -70,6 +80,116 @@ const HOOK_SETTLE_MS = 300;
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
+/** A file's contents, or `""` when it is absent or unreadable. */
+const readFileOrEmpty = (path: string): string => {
+    try {
+        return readFileSync(path, "utf8");
+    } catch {
+        return "";
+    }
+};
+
+/** A file's modification time and size, or `""` when it is absent. */
+const statOrEmpty = (path: string): string => {
+    try {
+        const { mtimeMs, size } = statSync(path);
+
+        return `${String(mtimeMs)}:${String(size)}`;
+    } catch {
+        return "";
+    }
+};
+
+/**
+ * Lockfiles and install markers. A dependency update rewrites one of these, and a cached Project keeps the declarations it read from
+ * `node_modules`, which `refreshCodegenProject` never re-reads.
+ */
+const INSTALL_MARKERS = [
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "bun.lock",
+    "node_modules/.modules.yaml",
+    "node_modules/.package-lock.json",
+    "node_modules/.yarn-integrity",
+];
+
+/** `projectRoot` and every directory above it, nearest first: a workspace keeps its lockfile and `node_modules` above the project. */
+const directoriesAbove = (projectRoot: string): string[] => {
+    const parent = dirname(projectRoot);
+
+    return parent === projectRoot ? [projectRoot] : [projectRoot, ...directoriesAbove(parent)];
+};
+
+/**
+ * What a tsconfig resolves to once its `extends` chain is applied, without its file list. The `include` globs are the costly part of
+ * the watch's input check, and a file they newly match is not seen until the project is next rebuilt. This is the trade for not
+ * globbing the whole include tree on every save.
+ */
+const tsconfigSettings = (tsconfigPath: string): string => {
+    const host: ts.ParseConfigFileHost = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined, readDirectory: () => [] };
+    const parsed = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, host);
+
+    return parsed === undefined ? "" : JSON.stringify(parsed.options);
+};
+
+/**
+ * The tsconfig and its settings, `lunora.config.*` contents and install state a cached Project was built from. `refreshCodegenProject`
+ * only re-reads files the program already knows about, so a changed `paths`, `include` or `codegen.exclude`, and a dependency update, are
+ * invisible to it and need a fresh Project.
+ */
+const readProjectInputs = (projectRoot: string, absoluteLunoraDirectory: string): string => {
+    const tsconfigPath = findTsconfig(absoluteLunoraDirectory);
+    const configPaths = new Set([...projectConfigCandidatePaths(absoluteLunoraDirectory), ...PROJECT_CONFIG_FILENAMES.map((name) => join(projectRoot, name))]);
+    const configs = [...configPaths].map((path) => `${path}\n${readFileOrEmpty(path)}`);
+    const installs = directoriesAbove(projectRoot).flatMap((directory) =>
+        INSTALL_MARKERS.map((marker) => `${join(directory, marker)}\n${statOrEmpty(join(directory, marker))}`),
+    );
+
+    // The path matters too: a nearer tsconfig with identical bytes resolves paths against another directory. The bytes matter as well,
+    // since `include` and `files` are not in the settings.
+    const tsconfig = tsconfigPath === undefined ? "" : `${tsconfigPath}\n${readFileOrEmpty(tsconfigPath)}\n${tsconfigSettings(tsconfigPath)}`;
+
+    return [tsconfig, ...configs, ...installs].join("\0");
+};
+
+interface ReusableProject {
+    /** Forget the Project, so the next `get()` builds a fresh one. */
+    drop: () => void;
+    /** The cached Project refreshed from disk, or a new one on first use or after a project-input change. */
+    get: () => Project;
+}
+
+/**
+ * Holds the ts-morph Project across watch runs, as `@lunora/vite` and
+ * `@lunora/rspack` do: built on first use, then refreshed from disk, so a save
+ * costs a re-read of the changed files instead of a cold TypeScript program
+ * build. A changed tsconfig or `lunora.config.*` (see
+ * {@link readProjectInputs}) rebuilds it.
+ */
+const createReusableProject = (projectRoot: string, absoluteLunoraDirectory: string): ReusableProject => {
+    let project: Project | undefined;
+    let projectInputs: string | undefined;
+
+    return {
+        drop: (): void => {
+            project = undefined;
+        },
+        get: (): Project => {
+            const inputs = readProjectInputs(projectRoot, absoluteLunoraDirectory);
+
+            if (project === undefined || inputs !== projectInputs) {
+                projectInputs = inputs;
+                project = createCodegenProject(absoluteLunoraDirectory);
+            } else {
+                refreshCodegenProject(project, absoluteLunoraDirectory);
+            }
+
+            return project;
+        },
+    };
+};
+
 /**
  * Run codegen once, logging success or surfacing a parse/emit error without
  * throwing.
@@ -79,11 +199,15 @@ const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
  * to feed `setTimeout`'s trailing-argument passing — which a closure does just
  * as well, without leaving an argument order for the next parameter to get
  * wrong.
+ *
+ * A run that throws drops the reused Project: it may be left half-mutated, so
+ * the next run starts clean.
  */
 const runOnce = (
     options: Pick<CodegenWatcherOptions, "apiSpec" | "lazyFunctions" | "logger" | "projectRoot" | "target">,
     lunoraDirectory: string,
     reason: string,
+    project: ReusableProject,
 ): boolean => {
     const { apiSpec, lazyFunctions, logger, projectRoot, target } = options;
 
@@ -92,6 +216,7 @@ const runOnce = (
             apiSpec,
             lazyFunctions: resolveLazyFunctions(lazyFunctions),
             lunoraDirectory,
+            project: project.get(),
             projectRoot,
             target,
             ...wranglerCodegenInputs(projectRoot),
@@ -103,6 +228,7 @@ const runOnce = (
         // loop emits a gated surface and says nothing about it.
         reportPlatformDiagnostics(result.platformDiagnostics, logger);
     } catch (error: unknown) {
+        project.drop();
         logger.error(renderCodegenFailure(error, reason));
 
         return false;
@@ -140,6 +266,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     let pending: string | undefined;
     let settledAt = 0;
     let idle: Promise<void> = Promise.resolve();
+    const project = createReusableProject(options.projectRoot, watchDirectory);
 
     // Resolves when the STARTUP run — codegen plus the project's `postcodegen` —
     // has finished, so a caller can hold off work that reads generated output.
@@ -176,7 +303,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
                     // not write is the one way to make a bad state worse.
-                    if (!runOnce(options, lunoraDirectory, next)) {
+                    if (!runOnce(options, lunoraDirectory, next, project)) {
                         continue;
                     }
 

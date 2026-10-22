@@ -1,7 +1,9 @@
-import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import type { DevProcessSpawner } from "@lunora/config";
-import { resolveLazyFunctions } from "@lunora/config";
+import { DEFAULT_BUNDLE_META_PATH, resolveLazyFunctions } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -9,12 +11,14 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
+import projectRootFor from "../../util/project-root";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { runDeployCommand } from "../deploy/handler";
 import type { DeployCommandResult } from "../deploy/types";
 import type { BundleSize } from "./bundle-size";
 import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
+import { viteBundleMetaPath } from "./framework-build";
 import type { BuildOptions } from "./index";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
@@ -42,6 +46,8 @@ interface BuildCommandOptions {
     emitBindings?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+    /** `false` skips the vite/rsbuild client build even when wrangler reads its output. */
+    frameworkBuild?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
     logger: Logger;
@@ -105,6 +111,26 @@ const stderrOnlySpawner: Spawner = async (descriptor) => defaultSpawner({ ...des
 /** Bundle sizes are always kilobytes-and-up; one unit keeps the two halves comparable at a glance. */
 const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
 
+// What the out-dir holds, by name, size and mtime. Taken before and after a run, it shows whether the run rewrote anything, without reading the clock.
+const outDirectoryFingerprint = (directory: string): string => {
+    if (!existsSync(directory)) {
+        return "";
+    }
+
+    return readdirSync(directory, { encoding: "utf8", recursive: true })
+        .map((name) => {
+            try {
+                const stat = lstatSync(join(directory, name));
+
+                return `${name}:${String(stat.size)}:${String(stat.mtimeMs)}`;
+            } catch {
+                // Removed between listing and reading: its absence is part of what changed.
+                return `${name}:gone`;
+            }
+        })
+        .join("\n");
+};
+
 /**
  * Build the Worker without deploying: this is `deploy` in its dry-run +
  * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
@@ -119,32 +145,73 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     // the bundle measurement below is what a CI consumer runs this command for,
     // and the deploy result has no field to carry it.
     const { logger } = options;
+    const projectRoot = options.cwd ?? process.cwd();
 
-    const result = await runDeployCommand({
-        allowSchemaDrift: options.allowSchemaDrift,
-        apiSpec: options.apiSpec,
-        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-        // So the drift gate names `build` and offers only the flags `build`
-        // registers — it does NOT accept `--update-schema-baseline`, because it
-        // publishes nothing and re-blessing a baseline for an artifact that never
-        // shipped is what lets a breaking change through on the retry.
-        commandName: "build",
-        cwd: options.cwd,
-        dryRun: true,
-        // The requirements document has to describe the PROVISIONED config, so
-        // deploy writes it inside its own dry-run rollback window rather than
-        // handing it back here, where the committed config is already restored.
-        emitBindings: options.emitBindings,
-        format: undefined,
-        interactive: jsonMode ? false : undefined,
-        logger,
-        outDir: outDirectory,
-        smokeLauncher: options.smokeLauncher,
-        smokeLoad: options.smokeLoad,
-        spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
-        strictAdvisories: options.strictAdvisories,
-        target: options.target,
-    });
+    // The Vite child writes a per-run file, but the out-dir destination keeps its stable name. Both are cleared first, so a leftover
+    // from an earlier run cannot stand in for this run's output.
+    const destination = resolve(projectRoot, outDirectory, "bundle-meta.json");
+    const viteMeta = viteBundleMetaPath(projectRoot, randomUUID());
+
+    // Held in memory so a failed run can put back the metafile it did not replace.
+    const previous = existsSync(destination) ? readFileSync(destination) : undefined;
+
+    rmSync(destination, { force: true });
+    rmSync(viteMeta, { force: true });
+
+    const outDirectoryPath = resolve(projectRoot, outDirectory);
+    const outBefore = outDirectoryFingerprint(outDirectoryPath);
+    let result: DeployCommandResult | undefined;
+
+    try {
+        result = await runDeployCommand({
+            allowSchemaDrift: options.allowSchemaDrift,
+            apiSpec: options.apiSpec,
+            bundleMetaPath: viteMeta,
+            frameworkBuild: options.frameworkBuild,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            // So the drift gate names `build` and offers only the flags `build`
+            // registers — it does NOT accept `--update-schema-baseline`, because it
+            // publishes nothing and re-blessing a baseline for an artifact that never
+            // shipped is what lets a breaking change through on the retry.
+            commandName: "build",
+            clientBuildOutputJson: jsonMode,
+            cwd: options.cwd,
+            dryRun: true,
+            // The requirements document has to describe the PROVISIONED config, so
+            // deploy writes it inside its own dry-run rollback window rather than
+            // handing it back here, where the committed config is already restored.
+            emitBindings: options.emitBindings,
+            format: undefined,
+            interactive: jsonMode ? false : undefined,
+            logger,
+            outDir: outDirectory,
+            smokeLauncher: options.smokeLauncher,
+            smokeLoad: options.smokeLoad,
+            spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
+            strictAdvisories: options.strictAdvisories,
+            target: options.target,
+        });
+
+        // Wrangler writes its own metafile into the out-dir for a worker it bundles. A
+        // Vite-built worker is uploaded as Vite's output, so wrangler leaves that file
+        // absent and the Vite plugin's copy stands in, under the same name.
+        // A prebuilt worker has no per-run file; the plain `vite build` that produced it left its metafile at the default path.
+        const source = options.frameworkBuild === false ? join(projectRoot, DEFAULT_BUNDLE_META_PATH) : viteMeta;
+
+        if (result.code === 0 && !existsSync(destination) && existsSync(source)) {
+            mkdirSync(dirname(destination), { recursive: true });
+            copyFileSync(source, destination);
+        }
+    } finally {
+        rmSync(viteMeta, { force: true });
+
+        // `destination` is empty unless this run wrote it, so a failed run puts the previous file back only where nothing new landed
+        // and the out-dir was not rewritten.
+        if (previous !== undefined && !existsSync(destination) && outDirectoryFingerprint(outDirectoryPath) === outBefore && result?.code !== 0) {
+            mkdirSync(dirname(destination), { recursive: true });
+            writeFileSync(destination, previous);
+        }
+    }
 
     if (result.code !== 0) {
         return result;
@@ -177,7 +244,9 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
@@ -185,6 +254,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildC
         cwd,
         emitBindings: options.emitBindings,
         format,
+        frameworkBuild: options.frameworkBuild,
         logger,
         outDir: options.outDir,
         smokeLoad: options.smokeLoad,

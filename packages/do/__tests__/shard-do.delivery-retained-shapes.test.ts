@@ -75,7 +75,7 @@ const setup = async (withShapes = true) => {
                 body: JSON.stringify({ functionPath: "messages:write", args: {} }),
             }),
         );
-    return { authority, database, enable, getWebSockets, setAlarm, shard, socket: () => socket, write };
+    return { authority, database, enable, getWebSockets, setAlarm, shard, socket: () => socket, state, write };
 };
 
 const refresh = async (test: Awaited<ReturnType<typeof setup>>, shard: ShapeShard): Promise<void> => {
@@ -132,13 +132,17 @@ describe("retained shapes when delivery authorization is enabled", () => {
         const shard = test.enable(true);
         // Complete room cleanup first so the failure belongs to the shape sweep.
         await shard.webSocketMessage(test.socket() as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+        // A fresh instance over the same state starts with an empty attachment cache, so the
+        // sweep's read must reach storage to fail there.
+        const woken = new ShapeShard(test.state, {}, { deliveryAuthorization: test.authority });
+
         vi.spyOn(test.socket(), "deserializeAttachment").mockImplementationOnce(() => {
             throw new Error("attachment read unavailable");
         });
 
         test.setAlarm.mockClear();
 
-        await shard.alarm();
+        await woken.alarm();
 
         expect(Object.keys(test.socket().attachment.shapes ?? {})).toEqual(["local", "global"]);
         // The read failed before any shape was refused, so the failure belongs to the shape sweep.

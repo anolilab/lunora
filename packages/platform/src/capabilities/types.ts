@@ -82,6 +82,9 @@
  * primitive, and a key every target must rate `native` forever is paperwork, not
  * a control.
  *
+ * `ctx.random` and `ctx.newId` have no key for the same reason: each draws from
+ * JavaScript on every target, with no host primitive to rate.
+ *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,
  * and the rating is still consulted by nothing. Codegen already has the shape

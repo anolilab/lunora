@@ -8,7 +8,7 @@ const never = (): Promise<string> =>
         /* a mint endpoint that never answers */
     });
 
-describe("wsToken provider timeout", () => {
+describe("wsTicket provider timeout", () => {
     afterEach(() => {
         vi.useRealTimers();
     });
@@ -27,7 +27,7 @@ describe("wsToken provider timeout", () => {
             reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
             url: "http://app.test",
             WebSocket,
-            wsToken: async () => {
+            wsTicket: async () => {
                 mints += 1;
 
                 return mints === 1 ? never() : "eph-2";
@@ -62,7 +62,7 @@ describe("wsToken provider timeout", () => {
             reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
             url: "http://app.test",
             WebSocket,
-            wsToken: async () => {
+            wsTicket: async () => {
                 mints += 1;
 
                 if (mints === 1) {

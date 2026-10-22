@@ -200,6 +200,7 @@ import {
     minCdcReplayableSeq,
     minCdcSeq,
     minShapePokeCursor,
+    nextTtlExpiry,
     OwnerRelay,
     parkScheduleOutbox,
     parseExportShardArgs,
@@ -547,6 +548,45 @@ const MAX_WS_FRAME_UNITS = 1024 * 1024;
 
 /** Abort can arrive from unsubscribe or socket close while a stream awaits its next chunk. */
 const isStreamCancelled = (controller: AbortController): boolean => controller.signal.aborted;
+
+/**
+ * Ceiling on sockets that upgraded without a credential and have not sent `connect`.
+ * Sized for a reconnect storm after a deploy, when every client on a gated shard is
+ * pending at once; past it an unauthenticated upgrade is refused with 503.
+ */
+const MAX_PENDING_SOCKETS = 1024;
+
+/**
+ * How long a pending socket may go without its `connect` frame. Enforced when the next
+ * unauthenticated upgrade arrives, or when a late `connect` frame does, not by a timer: a
+ * hibernating shard runs no timers, and a quiet shard has no capacity to relieve.
+ * ponytail: a pending socket on a quiet shard lingers until the next upgrade; it holds a slot, not work.
+ */
+const PENDING_CONNECT_DEADLINE_MS = 10_000;
+
+/** `authenticated: false` only on a pending socket, so the attachment budget is spent only when the flag matters. */
+const pendingAttachment = (authenticated: boolean, now: number): { authenticated?: false; pendingSince?: number } =>
+    authenticated ? {} : { authenticated: false, pendingSince: now };
+
+/**
+ * Close a socket that failed the credential gate: an `UNAUTHENTICATED` error
+ * frame, then `4003`. The close is server-initiated, so the runtime runs no
+ * `webSocketClose`; the caller drops the socket's live-socket entry first
+ * (see `refusePendingSocket`).
+ */
+const refuseUnauthenticatedSocket = (ws: ShardSocketLike): void => {
+    try {
+        ws.send(
+            JSON.stringify({
+                error: { code: "UNAUTHENTICATED", message: "session token required in the connect frame" },
+                type: "error",
+            }),
+        );
+        ws.close?.(4003, "unauthenticated");
+    } catch {
+        /* socket already gone */
+    }
+};
 
 const reportStreamError = (ws: ShardSocketLike, id: string, error: unknown, logMessage: string): void => {
     // Keep developer-facing non-internal errors; redact unexpected errors.
@@ -1665,7 +1705,8 @@ const countLiveConnections = (
 };
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
-    return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
+    // A copy: the attachment is shared with the socket cache, and user code receives this object.
+    return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
 };
 
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
@@ -1687,7 +1728,7 @@ const SHARD_BULK_ROW_CAP = MAX_PAGE_SIZE;
 /** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
 const TTL_SWEEP_BATCH = 200;
 const TTL_SWEEP_MAX_BATCHES = 20;
-/** Cadence the TTL sweep re-arms its shared-alarm tier at while any `.ttl()` table exists — a coarse, bounded expiry window. */
+/** The soonest the TTL sweep re-arms its shared-alarm tier after a pass or a write — a coarse, bounded expiry window. */
 const TTL_SWEEP_INTERVAL_MS = 30_000;
 
 /**
@@ -1910,30 +1951,6 @@ const refuseLiveSubscribe = (
     }
 
     return undefined;
-};
-
-/**
- * Persist a WebSocket's live grants on its attachment. Refuses, rather than acknowledging, when
- * the runtime will not hold the attachment: an acknowledged grant that never persisted would
- * stop delivering silently after the next hibernation.
- */
-const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response => {
-    const next: SocketAttachment = { ...attachment, liveGrants: grants };
-
-    if (Object.keys(grants).length === 0) {
-        delete next.liveGrants;
-    }
-
-    try {
-        (ws as HibernatableWebSocket).serializeAttachment?.(next);
-    } catch {
-        return jsonResponse(
-            { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
-            429,
-        );
-    }
-
-    return jsonResponse({ ok: true });
 };
 
 /**
@@ -2351,7 +2368,7 @@ abstract class ShardDO {
      * DO driver only touches `storage.sql`, so test doubles only need to
      * supply that field — see {@link ShardDOState}.
      */
-    private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
+    private drizzleHandle: DrizzleSqliteDODatabase | undefined;
 
     /**
      * Tracks transaction nesting so we can reject nested transactions —
@@ -2717,6 +2734,19 @@ abstract class ShardDO {
      * memo simply forces one re-run and (at most) one redundant push.
      */
     private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+
+    /**
+     * Decoded socket attachments, so a write flush's two fan-out passes do not each
+     * `deserializeAttachment` (a structured-clone decode of up to 16 KiB) on every
+     * socket. Filled on first read and replaced by every write through
+     * {@link ShardDO.writeAttachment}. In memory only: after hibernation the new
+     * instance starts empty and decodes each socket once. Entries are shared, so a
+     * reader never mutates one; a writer edits {@link ShardDO.readAttachmentCopy}.
+     */
+    private readonly attachmentCache = new WeakMap<ShardSocketLike, SocketAttachment>();
+
+    /** Sockets whose `serializeAttachment` already reports into {@link ShardDO.attachmentCache}. */
+    private readonly cacheWiredSockets = new WeakSet<ShardSocketLike>();
 
     /**
      * Subscriptions whose refresh keeps throwing, so a deterministic failure is
@@ -3557,7 +3587,7 @@ abstract class ShardDO {
             }
 
             // Clear the attachment so a future reconnection starts clean.
-            (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+            this.writeAttachment(ws, undefined);
 
             // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
             // socket detaches from its owner, so the owner stops forwarding to it.
@@ -3670,6 +3700,62 @@ abstract class ShardDO {
         bookmarks?: DispatchBookmark,
         sensitive?: SensitiveScope,
     ): Promise<unknown>;
+
+    /**
+     * Whether an upgrade may take a pending slot; an authenticated one always may. Closes
+     * the pending sockets past their connect deadline first, so the count is of live ones.
+     * Reads every socket's attachment, O(sockets) per pending upgrade. ponytail: a counter
+     * kept beside the attachment would make this O(1), but it resets on hibernation.
+     */
+    protected admitPendingSocket(now: number, authenticated: boolean): boolean {
+        if (authenticated) {
+            return true;
+        }
+
+        let pending = 0;
+
+        for (const handle of this.socketHost.getSockets()) {
+            const attachment = handle.deserializeAttachment() as { authenticated?: boolean; connectionId?: string; pendingSince?: number } | undefined;
+
+            if (attachment?.authenticated !== false) {
+                continue;
+            }
+
+            if ((attachment.pendingSince ?? now) + PENDING_CONNECT_DEADLINE_MS <= now) {
+                this.dropLiveSocket(attachment.connectionId);
+
+                // A socket the peer has half-closed can still be listed and refuse a second close.
+                try {
+                    handle.close(4003, "connect deadline");
+                } catch {
+                    /* socket already gone */
+                }
+
+                continue;
+            }
+
+            pending += 1;
+        }
+
+        return pending < MAX_PENDING_SOCKETS;
+    }
+
+    /**
+     * Close a pending socket the shard refuses. The close is server-initiated, so the
+     * runtime does not run `webSocketClose` for it and the live-socket entry would
+     * outlive the socket; this drops that entry too.
+     */
+    protected refusePendingSocket(ws: ShardSocketLike): void {
+        this.dropLiveSocket(this.readAttachment(ws).connectionId);
+        refuseUnauthenticatedSocket(ws);
+    }
+
+    /** Forget a socket by its connection id. Keyed by id, not by object: a host may wrap the same socket in a different handle. */
+    protected dropLiveSocket(connectionId: string | undefined): void {
+        if (connectionId !== undefined) {
+            this.liveSocketsByConnection.delete(connectionId);
+        }
+    }
 
     /**
      * The registered function paths to dispatch on a lifecycle moment —
@@ -4070,7 +4156,7 @@ abstract class ShardDO {
      * subclasses; wrap your work in `runInTransaction` and use `this.db`
      * inside the handler instead.
      */
-    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>> {
+    protected get db(): DrizzleSqliteDODatabase {
         if (this.drizzleHandle) {
             return this.drizzleHandle;
         }
@@ -5992,7 +6078,7 @@ abstract class ShardDO {
             return "paid";
         }
 
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         // A `subscribe` for an id this socket already holds REPLACES it — the
         // client's re-snapshot request after a delta it could not merge is
         // exactly that. It adds nothing to the count, so it must not be refused
@@ -6017,7 +6103,7 @@ abstract class ShardDO {
         }
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             // The attachment can fail to serialize if the JSON body grows
             // past the runtime's per-socket limit. Roll back the in-memory
@@ -6051,7 +6137,7 @@ abstract class ShardDO {
     }
 
     protected unsubscribe(ws: ShardSocketLike, subId: string): void {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
 
         // Capture the current query so we can roll back on serialization failure.
         const captured = attachment.subs[subId];
@@ -6064,7 +6150,7 @@ abstract class ShardDO {
         delete attachment.subs[subId];
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             // Roll back the in-memory deletion so the subscription remains
             // intact — mirrors the subscribe() rollback path. We never throw
@@ -6094,7 +6180,7 @@ abstract class ShardDO {
      * `webSocketMessage` is a fatal-channel error under the hibernation API).
      */
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const shapes = attachment.shapes ?? {};
         // Re-subscribing a held shape id (the client's re-seed on a diverged
         // base) replaces it and adds nothing to the count — see `subscribe`.
@@ -6108,7 +6194,7 @@ abstract class ShardDO {
         attachment.shapes = shapes;
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             if (previous === undefined) {
                 // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended rollback
@@ -6125,7 +6211,7 @@ abstract class ShardDO {
 
     /** Remove a shape subscription and its poke baseline. Mirrors {@link ShardDO.unsubscribe}'s rollback-on-serialize-failure contract. */
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const { shapes } = attachment;
 
         if (!shapes) {
@@ -6138,7 +6224,7 @@ abstract class ShardDO {
         delete shapes[subId];
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             if (captured !== undefined) {
                 shapes[subId] = captured;
@@ -6440,10 +6526,11 @@ abstract class ShardDO {
      * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
      * drains across several alarms without stalling the shard.
      *
-     * Returns the next-due timestamp (a coarse {@link TTL_SWEEP_INTERVAL_MS}
-     * cadence, so freshly-written rows expire within a bounded window) while any
-     * TTL table exists, or `undefined` when there are none — so a DO with no TTL
-     * table never arms this tier.
+     * Returns the next-due timestamp from {@link ShardDO.nextTtlWake} — just past
+     * the earliest remaining expiry, never sooner than the coarse
+     * {@link TTL_SWEEP_INTERVAL_MS} cadence — or `undefined` when no row carries a
+     * TTL, so an idle TTL table does not wake the shard. A write that adds an
+     * expiring row re-arms through {@link ShardDO.armTtlSweepAfterWrite}.
      *
      * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
      * spec, every batch) — not per-row or per-spec — because the ceiling exists to
@@ -6488,7 +6575,7 @@ abstract class ShardDO {
             }
         }
 
-        return now + TTL_SWEEP_INTERVAL_MS;
+        return this.nextTtlWake(specs, now);
     }
 
     /**
@@ -7840,10 +7927,7 @@ abstract class ShardDO {
             return;
         }
 
-        //
-        // The attachment is read ONCE here and reused for the route check below,
-        // so a `defineWebSocket` route adds no second `deserializeAttachment` to
-        // the subscription hot path (`isSocketExpired` would have read it again).
+        // Read once here and reused for the route check below.
         const inboundAttachment = this.readAttachment(ws);
 
         if (isIdentityExpired(inboundAttachment.expiresAt)) {
@@ -7860,6 +7944,12 @@ abstract class ShardDO {
         const rawSize = typeof message === "string" ? message.length : message.byteLength;
 
         if (rawSize > MAX_WS_FRAME_UNITS) {
+            if (inboundAttachment.authenticated === false) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
             this.sendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }), "control");
 
             return;
@@ -7887,7 +7977,22 @@ abstract class ShardDO {
         try {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
+            if (inboundAttachment.authenticated === false) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
             this.sendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }), "control");
+
+            return;
+        }
+
+        // An unauthenticated socket (see `isUpgradeAuthenticated`) may send only
+        // `connect`, which is checked in its branch. Refusing every other frame here
+        // means nothing is dispatched on a socket that has not proved its credential.
+        if (inboundAttachment.authenticated === false && envelope.type !== "connect") {
+            this.refusePendingSocket(ws);
 
             return;
         }
@@ -7902,7 +8007,14 @@ abstract class ShardDO {
             return;
         }
 
-        if (envelope.type === "connect" || envelope.type === "whisper" || envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+        // A pending socket's connect runs this cleanup only after its credential is verified (see the connect
+        // branch): otherwise an unauthenticated peer could retire rooms for every socket on the shard.
+        if (
+            (envelope.type === "connect" && inboundAttachment.authenticated !== false) ||
+            envelope.type === "whisper" ||
+            envelope.type === "whisper_subscribe" ||
+            envelope.type === "whisper_unsubscribe"
+        ) {
             this.rejectRetainedRooms(ws);
         }
 
@@ -7925,7 +8037,48 @@ abstract class ShardDO {
             // opens: record its connection `context` on the attachment (so it
             // survives hibernation and can be replayed at close) and fire the
             // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachment(ws);
+            const attachment = this.readAttachmentCopy(ws);
+
+            // Verified before `identity` is sent, so a refused socket learns nothing
+            // about who it is. Only an unauthenticated socket reaches this check.
+            if (attachment.authenticated === false) {
+                // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
+                // would have closed this socket, and the client reads only the reason to tell them apart.
+                if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
+                    this.dropLiveSocket(attachment.connectionId);
+
+                    // A half-closed peer can make close throw; that must not escape as a socket error.
+                    try {
+                        ws.close?.(4003, "connect deadline");
+                    } catch {
+                        /* socket already gone */
+                    }
+
+                    return;
+                }
+
+                const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
+
+                if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
+                    this.refusePendingSocket(ws);
+
+                    return;
+                }
+
+                this.rejectRetainedRooms(ws);
+                attachment.authenticated = true;
+                delete attachment.pendingSince;
+
+                // Persisted before the relay announce and the identity frame below: a subscribe
+                // handled during the announce await reads the stored flag, not this local copy.
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+                } catch {
+                    this.refusePendingSocket(ws);
+
+                    return;
+                }
+            }
 
             // Tell the client which user this socket was authenticated as, and
             // "nobody" as an explicit `null`. A cookie-session client holds no
@@ -8005,14 +8158,14 @@ abstract class ShardDO {
             let persisted = true;
 
             try {
-                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+                this.writeAttachment(ws, attachment);
             } catch {
                 const withoutContext: SocketAttachment = { ...attachment };
 
                 delete withoutContext.context;
 
                 try {
-                    (ws as HibernatableWebSocket).serializeAttachment?.(withoutContext);
+                    this.writeAttachment(ws, withoutContext);
                 } catch {
                     // Neither attempt persisted. Roll back the in-memory flip so
                     // this local `attachment` object agrees with what's actually
@@ -9136,7 +9289,7 @@ abstract class ShardDO {
             const next = { ...attachment, deliveryPermits: { ...attachment.deliveryPermits, [subId]: permit } };
             try {
                 // The host's structured-clone budget includes the permit and decoded query arguments.
-                (ws as HibernatableWebSocket).serializeAttachment?.(next);
+                this.writeAttachment(ws, next);
                 const memo = this.subMemos.get(ws)?.get(subId);
                 if (memo !== undefined) {
                     memo.lastJson = UNDELIVERED_BASELINE;
@@ -9755,7 +9908,7 @@ abstract class ShardDO {
             shardKey: this.runner.shardKey ?? ROOT_SHARD_NAME,
             // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
             userId: attachment.userId ?? null,
-            ...(attachment.context === undefined ? {} : { context: attachment.context }),
+            ...(attachment.context === undefined ? {} : { context: structuredClone(attachment.context) }),
         };
 
         return { event, ...socketIdentity(attachment) };
@@ -13114,6 +13267,12 @@ abstract class ShardDO {
             return;
         }
 
+        // A failed arm must not fail a write that already committed; the next
+        // cold start's bootstrap sweep re-derives the alarm from the table.
+        await this.armTtlSweepAfterWrite(changed).catch((error: unknown) => {
+            this.recordShapeError("ttl:arm", error);
+        });
+
         // Past the response: the write is durable and nothing below depends on
         // the registry having heard about it. Checked here first so a shard with
         // no registry pays nothing on the write path.
@@ -13549,7 +13708,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
+                await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
             }
         };
 
@@ -13618,7 +13777,7 @@ abstract class ShardDO {
      * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
     private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
-        const seedArgs = query.args ?? {};
+        const seedArgs = structuredClone(query.args ?? {});
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
         // so even though a subscribe envelope can interleave with an in-flight RPC
@@ -13791,7 +13950,7 @@ abstract class ShardDO {
         let resolved: ResolvedShape | undefined;
 
         try {
-            resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+            resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
         } catch (error) {
             // A throwing `resolveShape` must not reject the whole `shape_subscribe`
             // (and with it the socket's message handling). Surface it for diagnosis
@@ -14192,7 +14351,7 @@ abstract class ShardDO {
 
         for (const [subId, shape] of Object.entries(shapes)) {
             try {
-                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+                const resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
 
                 // Unresolvable, or driven by the `.global()` poll loop rather than
                 // this flush: nothing this pass can say about it.
@@ -14626,22 +14785,23 @@ abstract class ShardDO {
      * sourced write, so counting those would spend the budget with no alarm armed.
      * `globalPollArmedAt` lives in memory, so an eviction-driven cold start still counts.
      */
-    private scheduleBootstrapPoll(): Promise<void> {
+    private scheduleBootstrapPoll(atMs?: number): Promise<void> {
         const pendingAt = this.globalPollArmedAt;
         const now = Date.now();
+        const target = atMs ?? now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
 
-        if (pendingAt !== undefined && pendingAt <= now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
-            return this.scheduleGlobalPoll();
+        if (pendingAt !== undefined && pendingAt <= target) {
+            return this.scheduleGlobalPoll(target);
         }
 
-        // This arm always targets the floor, so it is floor-paced: checked against the
-        // window, never recorded. A tripped window still refuses it, which is what stops
-        // an eviction-driven loop from re-arming through a fresh instance.
-        if (!this.admitAlarmRearm(now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS, now, false)) {
+        // Floor-paced: checked against the window, never recorded. A tripped window still
+        // refuses it, which is what stops an eviction-driven loop from re-arming through a
+        // fresh instance. A TTL re-arm passes its own target and is paced the same way.
+        if (!this.admitAlarmRearm(target, now, false)) {
             return this.armRecoveryWake();
         }
 
-        return this.scheduleGlobalPoll();
+        return this.scheduleGlobalPoll(target);
     }
 
     /**
@@ -14933,6 +15093,58 @@ abstract class ShardDO {
         } catch {
             // No table, no custody to resume.
         }
+    }
+
+    /**
+     * When the TTL tier should next wake for `specs`: 1 ms past the earliest live
+     * expiry (the sweep's `expiry < now` is strict), but never before `now +`
+     * {@link TTL_SWEEP_INTERVAL_MS}. The floor bounds wakes to one per interval, so a
+     * row is swept within one interval of expiring. It also covers a row already past
+     * due (a backlog the pass left, or one written expired) without a due-now loop.
+     * `undefined` when no row carries a TTL.
+     */
+    private nextTtlWake(specs: ReadonlyArray<TtlSweepSpec>, now: number): number | undefined {
+        const sql = this.sql as SqlExec;
+        let earliest: number | undefined;
+
+        for (const spec of specs) {
+            const expiry = nextTtlExpiry(sql, spec);
+
+            if (expiry !== undefined && (earliest === undefined || expiry < earliest)) {
+                earliest = expiry;
+            }
+        }
+
+        return earliest === undefined ? undefined : Math.max(earliest + 1, now + TTL_SWEEP_INTERVAL_MS);
+    }
+
+    /**
+     * Re-arm the TTL tier after a write to a `.ttl()` table. The sweep sleeps
+     * until the earliest expiry, or indefinitely when no row has one, so a write
+     * that adds an earlier-expiring row must pull the alarm in. Every user-table
+     * write reaches here: the ctx-db writer reports each one through
+     * `recordChangedTable`, and {@link ShardDO.flushChangedTables} drains them.
+     * Only ever moves the alarm earlier, and is a no-op (one index seek) when the
+     * pending alarm is already due first. A replica runs no background tiers.
+     */
+    private async armTtlSweepAfterWrite(changed: ReadonlySet<string>): Promise<void> {
+        if (this.replica !== undefined) {
+            return;
+        }
+
+        const specs = this.ttlSweeps().filter((spec) => changed.has(spec.table));
+
+        if (specs.length === 0) {
+            return;
+        }
+
+        const target = this.nextTtlWake(specs, Date.now());
+
+        if (target === undefined) {
+            return;
+        }
+
+        await this.scheduleBootstrapPoll(target);
     }
 
     /**
@@ -15439,7 +15651,7 @@ abstract class ShardDO {
             let resolved: ResolvedShape | undefined;
 
             try {
-                resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+                resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
             } catch (error) {
                 count += 1;
                 this.recordShapeError(`shape:poll:${subId}`, error, trace);
@@ -15551,9 +15763,8 @@ abstract class ShardDO {
      * `__shape_poke_cursor` table so it survives hibernation. Called only on
      * a delivered/advanced poke (never on a computed-but-unsent diff) — see
      * the call sites in {@link ShardDO.pokeShapeSubscribers}. Takes
-     * `connectionId` from the caller rather than re-deserializing the
-     * attachment (`deserializeAttachment()` is a structured-clone read) —
-     * every caller already holds it from resolving the socket's shapes.
+     * `connectionId` from the caller, which already holds the attachment from
+     * resolving the socket's shapes.
      */
     private recordShapeMemo(
         ws: ShardSocketLike,
@@ -15943,26 +16154,19 @@ abstract class ShardDO {
      * variable more strictly took every WebSocket upgrade down with a bare
      * 403 on a configuration the CORS side documents as supported, and a
      * browser sends its real `Origin`, never `*`, so nothing else matched.
-     * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
-     * must present a matching token. We accept either an
-     * `Authorization: Bearer <token>` header (preferred) or a
-     * `?token=<token>` query parameter (the only escape hatch for
-     * browsers, which can't customise headers on the WebSocket
-     * constructor). The match runs in constant time to avoid leaking
-     * the token via response-timing differences.
+     * 2. Bearer token via `env.LUNORA_WS_BEARER`. The upgrade is not refused for
+     * lacking it: a socket with no header bearer and no admin ticket is accepted
+     * UNAUTHENTICATED and must present `connect.token` as its first frame (see
+     * {@link isUpgradeAuthenticated} and the `connect` branch). The session
+     * credential never rides the URL, so a raw `LUNORA_WS_BEARER` or
+     * `LUNORA_ADMIN_TOKEN` in `?token=` is refused outright, valid or not — the
+     * query string is where it leaks. `?token=` carries only an ephemeral admin
+     * sub-token (`POST /_lunora/admin/ws-token`).
      *
-     * The `?token=` path is a real risk surface: the token ends up in
-     * server logs, browser history, and `Referer` headers on any
-     * subresource the upgrade page loads after the handshake. Use a
-     * short-lived rotating token in production rather than a long-lived
-     * secret — for the ADMIN credential specifically, the worker mints one
-     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
-     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
-     *
-     * Async because the admin fallback ({@link isAdminSocket}) verifies the
-     * ephemeral sub-token with WebCrypto HMAC.
+     * Takes the verdict of {@link isUpgradeAuthenticated} rather than re-reading the
+     * credential, so the route gate and the attachment stamp cannot disagree.
      */
-    private async isUpgradeAllowed(request: Request): Promise<boolean> {
+    private isUpgradeAllowed(request: Request, isRouteSocket: boolean, authenticated: boolean): boolean {
         const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -15985,50 +16189,40 @@ abstract class ShardDO {
             }
         }
 
-        const expectedBearer = env.LUNORA_WS_BEARER;
+        // Neither raw credential may ride the query string, even with no bearer gate
+        // configured: the URL is the leak this gate exists to close.
+        const queryTokens = new URL(request.url).searchParams.getAll("token");
+        const rawCredentials = [env.LUNORA_ADMIN_TOKEN, env.LUNORA_WS_BEARER];
+        const rawInQuery = queryTokens.some((queryToken) =>
+            rawCredentials.some((raw) => raw !== undefined && raw.length > 0 && constantTimeEqual(queryToken, raw)),
+        );
 
-        if (expectedBearer && expectedBearer.length > 0) {
-            const supplied = this.suppliedWsToken(request);
-            const adminToken = env.LUNORA_ADMIN_TOKEN;
-
-            // The master token in `?token=` is refused even when it matches the bearer:
-            // the query string is where it leaks (see `isAdminSocket`).
-            const masterInQuery =
-                supplied !== undefined &&
-                adminToken !== undefined &&
-                adminToken.length > 0 &&
-                extractBearerToken(request.headers.get("authorization")) === undefined &&
-                constantTimeEqual(supplied, adminToken);
-
-            // The admin credential is accepted as an alternate so a studio can open
-            // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
-            // minted ephemeral sub-token (header or `?token=`), or the master token
-            // in the `Authorization` header only. The socket is flagged admin
-            // separately (see `isAdminSocket`); matching the bearer alone never
-            // grants it.
-            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
-                return false;
-            }
-        }
-
-        return true;
+        // A route socket has no `connect` frame to present the session credential in,
+        // so the upgrade itself must authenticate it.
+        return !rawInQuery && (!isRouteSocket || authenticated);
     }
 
     /**
-     * Token presented on a WS upgrade: the `Authorization: Bearer` header when
-     * present, else the `?token=` query parameter (the only channel a browser
-     * `WebSocket` constructor can use). Returns `undefined` when neither is set.
-     * @returns the bearer token string, or `undefined` when no token was supplied
+     * Whether the upgrade itself proves the session credential. A header bearer
+     * matching `LUNORA_WS_BEARER`, or an admin credential, does; the socket is then
+     * authenticated without a `connect.token`. Anything else is accepted
+     * unauthenticated and held until its `connect` frame (see the `connect` branch).
+     * With no bearer gate configured, every socket is authenticated.
      */
-    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the upgrade-auth helpers; reads only the request
-    private suppliedWsToken(request: Request): string | undefined {
-        const fromHeader = extractBearerToken(request.headers.get("authorization"));
+    private async isUpgradeAuthenticated(request: Request): Promise<boolean> {
+        const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
 
-        if (fromHeader !== undefined) {
-            return fromHeader;
+        if (expectedBearer === undefined || expectedBearer.length === 0) {
+            return true;
         }
 
-        return new URL(request.url).searchParams.get("token") ?? undefined;
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
+
+        if (headerBearer !== undefined && constantTimeEqual(headerBearer, expectedBearer)) {
+            return true;
+        }
+
+        return this.isAdminSocket(request);
     }
 
     /**
@@ -16218,10 +16412,6 @@ abstract class ShardDO {
             return new Response("replica does not serve subscriptions", { status: 421 });
         }
 
-        if (!(await this.isUpgradeAllowed(request))) {
-            return new Response("Forbidden", { status: 403 });
-        }
-
         // A `defineWebSocket` route is an upgrade at a declared custom path; the
         // ordinary subscription socket upgrades at the reserved `/_lunora/ws`
         // path and resolves to no route. The route carries the registered
@@ -16229,6 +16419,15 @@ abstract class ShardDO {
         // through, and whether a verified session is required.
         const url = new URL(request.url);
         const route = this.socketRoute(url.pathname);
+
+        // One verdict for the whole upgrade. A ticket that lapses between two reads would pass the
+        // route gate and then be stamped unauthenticated. A socket the upgrade cannot authenticate
+        // waits for `connect.token`, except a route socket, which has no `connect` frame and is refused here.
+        const authenticated = await this.isUpgradeAuthenticated(request);
+
+        if (!this.isUpgradeAllowed(request, route !== undefined, authenticated)) {
+            return new Response("Forbidden", { status: 403 });
+        }
 
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
@@ -16259,6 +16458,12 @@ abstract class ShardDO {
         // sub-token HMAC verify must not sit between `acceptWebSocket` and the
         // attachment stamp, or an early frame could race an unstamped socket.
         const admin = await this.isAdminSocket(request);
+
+        const acceptedAt = Date.now();
+
+        if (!this.admitPendingSocket(acceptedAt, authenticated)) {
+            return new Response("Service Unavailable", { status: 503 });
+        }
 
         // The pair and the 101 come from the socket host: Cloudflare's `WebSocketPair` and response, or a host without them.
         const { client, server } = this.socketHost.newPair();
@@ -16297,6 +16502,7 @@ abstract class ShardDO {
             admin,
             connectionId,
             subs: {},
+            ...pendingAttachment(authenticated, acceptedAt),
             ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
@@ -16594,7 +16800,7 @@ abstract class ShardDO {
      * simply dropped (the join just doesn't take).
      */
     private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): boolean {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const topics = attachment.whispers ?? [];
         const has = topics.includes(topic);
 
@@ -16619,7 +16825,7 @@ abstract class ShardDO {
         }
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             /* over-large attachment — the membership change didn't persist, so report no change */
             return false;
@@ -16877,7 +17083,8 @@ abstract class ShardDO {
                 this.routeCloseSent.add(ws);
                 await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close");
             }
-        } else if (attachment.connectionId !== undefined) {
+        } else if (attachment.connectionId !== undefined && attachment.authenticated !== false) {
+            // A socket refused at the credential gate never ran `onConnect`, so there is nothing to disconnect from.
             await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
         }
     }
@@ -18005,32 +18212,131 @@ abstract class ShardDO {
      * index moves only when the write persisted, so it never claims a grant the attachment lacks.
      */
     private persistSocketGrants(ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response {
-        const response = persistLiveGrants(ws, attachment, grants);
+        const next: SocketAttachment = { ...attachment, liveGrants: grants };
 
-        if (response.ok) {
-            if (Object.keys(grants).length > 0) {
-                this.liveGrantSockets.add(ws);
-            } else {
-                this.liveGrantSockets.delete(ws);
-            }
+        if (Object.keys(grants).length === 0) {
+            delete next.liveGrants;
         }
 
-        return response;
+        // Refuse rather than acknowledge when the runtime will not hold the attachment: an
+        // acknowledged grant that never persisted would stop delivering silently after the
+        // next hibernation. The grant-holder index moves only once the write persisted.
+        try {
+            this.writeAttachment(ws, next);
+        } catch {
+            return jsonResponse(
+                { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
+                429,
+            );
+        }
+
+        if (Object.keys(grants).length > 0) {
+            this.liveGrantSockets.add(ws);
+        } else {
+            this.liveGrantSockets.delete(ws);
+        }
+
+        return jsonResponse({ ok: true });
     }
 
-    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
+    /**
+     * The socket's attachment, shared with the cache: read it, never mutate it. Every write
+     * goes through the socket's `serializeAttachment`, which {@link ShardDO.wireAttachmentCache}
+     * wraps, so a subclass that writes an attachment directly still keeps the cache current.
+     */
     private readAttachment(ws: ShardSocketLike): SocketAttachment {
-        const raw = (ws as HibernatableWebSocket).deserializeAttachment?.();
+        const cached = this.attachmentCache.get(ws);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const socket = ws as HibernatableWebSocket;
+        const raw = socket.deserializeAttachment?.();
 
         if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
+            // Only a socket whose writes can be seen can be cached.
+            if (this.wireAttachmentCache(ws, socket)) {
+                this.attachmentCache.set(ws, raw as SocketAttachment);
+            }
+
             return raw as SocketAttachment;
         }
 
         return { subs: {} };
     }
+
+    /**
+     * Route every `serializeAttachment` call on this socket into the cache, once per socket
+     * object. Returns `false` when the host does not let the method be replaced; that socket is
+     * then read from storage on every access rather than cached.
+     */
+    private wireAttachmentCache(ws: ShardSocketLike, socket: HibernatableWebSocket): boolean {
+        if (this.cacheWiredSockets.has(ws)) {
+            return true;
+        }
+
+        const serialize = socket.serializeAttachment;
+
+        if (serialize === undefined) {
+            return false;
+        }
+
+        try {
+            // eslint-disable-next-line no-param-reassign -- the host socket is the one object that reports its own writes
+            socket.serializeAttachment = (value: unknown): void => {
+                serialize.call(socket, value);
+
+                if (value === undefined) {
+                    this.attachmentCache.delete(ws);
+                } else {
+                    this.attachmentCache.set(ws, value as SocketAttachment);
+                }
+            };
+        } catch {
+            return false;
+        }
+
+        this.cacheWiredSockets.add(ws);
+
+        return true;
+    }
+
+    /** A private copy of the socket's attachment for a writer to edit and hand to {@link ShardDO.writeAttachment}. */
+    private readAttachmentCopy(ws: ShardSocketLike): SocketAttachment {
+        return structuredClone(this.readAttachment(ws));
+    }
+
+    /**
+     * Persist `value` as the socket's attachment and cache it; `undefined` clears
+     * both. The caller must not mutate `value` afterwards. A failed serialize
+     * drops the cache entry and rethrows, so the next read decodes what storage
+     * actually holds.
+     */
+    private writeAttachment(ws: ShardSocketLike, value: SocketAttachment | undefined): void {
+        const socket = ws as HibernatableWebSocket;
+
+        if (socket.serializeAttachment === undefined) {
+            return;
+        }
+
+        try {
+            socket.serializeAttachment(value);
+        } catch (error) {
+            this.attachmentCache.delete(ws);
+
+            throw error;
+        }
+
+        if (value === undefined) {
+            this.attachmentCache.delete(ws);
+        } else {
+            this.attachmentCache.set(ws, value);
+        }
+    }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, TTL_SWEEP_INTERVAL_MS };
 export type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,

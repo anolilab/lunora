@@ -1,3 +1,38 @@
+## @lunora/react [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.254...@lunora/react@1.0.0-alpha.255) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.162
+
+## @lunora/react [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.253...@lunora/react@1.0.0-alpha.254) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.161
+
+## @lunora/react [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.252...@lunora/react@1.0.0-alpha.253) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
+## @lunora/react [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.251...@lunora/react@1.0.0-alpha.252) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.159
+
 ## @lunora/react [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.250...@lunora/react@1.0.0-alpha.251) (2026-10-20)
 
 

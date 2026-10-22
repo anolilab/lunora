@@ -182,9 +182,7 @@ const SqlResultsPane = ({
                     <div data-testid="sql-result">
                         {pane === "chart" ? <SqlResultChart axes={chart} result={result} /> : <SqlResultTable result={result} />}
                         <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
-                            {result.truncated
-                                ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })
-                                : t("{count} rows", { count: result.rowCount })}
+                            {result.truncated ? t("Showing the first {max} rows.", { max: result.rows.length }) : t("{count} rows", { count: result.rowCount })}
                         </p>
                     </div>
                 )}

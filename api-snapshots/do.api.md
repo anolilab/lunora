@@ -436,6 +436,9 @@ abstract class ShardDO {
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown>;
+    protected admitPendingSocket(now: number, authenticated: boolean): boolean;
+    protected refusePendingSocket(ws: ShardSocketLike): void;
+    protected dropLiveSocket(connectionId: string | undefined): void;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected roomHandlerPath(_topic: string): string | undefined;
     protected socketRoute(_path: string): {
@@ -449,7 +452,7 @@ abstract class ShardDO {
     protected dispatchShardInit(): Promise<void>;
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown;
-    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
+    protected get db(): DrizzleSqliteDODatabase;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
@@ -859,6 +862,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 ```ts
 const createStableIdFactory: (mutationId: string | undefined, scope: string) => (() => string);
+```
+
+### `createStableRandomFactory` (const)
+
+```ts
+const createStableRandomFactory: (mutationId: string | undefined, scope: string) => (() => number);
 ```
 
 ### `createWorkerPlatform` (const)

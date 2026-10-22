@@ -1,3 +1,69 @@
+## @lunora/config [1.0.0-alpha.398](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.397...@lunora/config@1.0.0-alpha.398) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** skip lib loading in the validator syntax check ([#1303](https://github.com/anolilab/lunora/issues/1303)) ([ebb62f6](https://github.com/anolilab/lunora/commit/ebb62f61520c9b60ab79c9ba2a9389f609b76172))
+
+## @lunora/config [1.0.0-alpha.397](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.396...@lunora/config@1.0.0-alpha.397) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** reuse codegen project for studio edits ([#1301](https://github.com/anolilab/lunora/issues/1301)) ([a990bb3](https://github.com/anolilab/lunora/commit/a990bb3015c27921863d32a329faaa43f30601d7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.345
+
+## @lunora/config [1.0.0-alpha.396](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.395...@lunora/config@1.0.0-alpha.396) (2026-10-22)
+
+### Performance Improvements
+
+* **codegen:** resolve relative targets with TypeScript's resolver, without a program ([#1299](https://github.com/anolilab/lunora/issues/1299)) ([d360cd8](https://github.com/anolilab/lunora/commit/d360cd814241787e9647c5d2562988b35dbebf27))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.344
+
+## @lunora/config [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.394...@lunora/config@1.0.0-alpha.395) (2026-10-22)
+
+### Bug Fixes
+
+* **config:** parse a scan's candidate files in one project ([#1298](https://github.com/anolilab/lunora/issues/1298)) ([cf7113b](https://github.com/anolilab/lunora/commit/cf7113bbcc5be6281841df3adf45944ad1dcf8f1))
+
+## @lunora/config [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.393...@lunora/config@1.0.0-alpha.394) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.343
+* **@lunora/seed:** upgraded to 1.0.0-alpha.247
+* **@lunora/studio:** upgraded to 1.0.0-alpha.332
+
+## @lunora/config [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.392...@lunora/config@1.0.0-alpha.393) (2026-10-22)
+
+### Features
+
+* **vite:** write the server bundle's metafile for lunora build ([#1290](https://github.com/anolilab/lunora/issues/1290)) ([9f88e40](https://github.com/anolilab/lunora/commit/9f88e407777daaecec07363ddf733219327c7b73))
+
+## @lunora/config [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.391...@lunora/config@1.0.0-alpha.392) (2026-10-21)
+
+### Features
+
+* **cli:** run the vite or rsbuild build before lunora build ([#1289](https://github.com/anolilab/lunora/issues/1289)) ([5a93210](https://github.com/anolilab/lunora/commit/5a9321020df6c55a50805745177e903fa90a4570))
+
+## @lunora/config [1.0.0-alpha.391](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.390...@lunora/config@1.0.0-alpha.391) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.340
+* **@lunora/container:** upgraded to 1.0.0-alpha.89
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/seed:** upgraded to 1.0.0-alpha.246
+* **@lunora/studio:** upgraded to 1.0.0-alpha.331
+
 ## @lunora/config [1.0.0-alpha.390](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.389...@lunora/config@1.0.0-alpha.390) (2026-10-20)
 
 

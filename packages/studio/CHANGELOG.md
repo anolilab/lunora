@@ -1,3 +1,50 @@
+## @lunora/studio [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.332...@lunora/studio@1.0.0-alpha.333) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.250
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/react:** upgraded to 1.0.0-alpha.255
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/studio [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.331...@lunora/studio@1.0.0-alpha.332) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.249
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/react:** upgraded to 1.0.0-alpha.254
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/studio [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.330...@lunora/studio@1.0.0-alpha.331) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.247
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/react:** upgraded to 1.0.0-alpha.252
+* **@lunora/mail:** upgraded to 1.0.0-alpha.120
+* **@lunora/notify:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/studio [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.329...@lunora/studio@1.0.0-alpha.330) (2026-10-20)
 
 

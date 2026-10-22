@@ -272,8 +272,8 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
 /**
  * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
  * functions, so `api.agents.agentMessages` / `api.agents.agentState` /
- * `api.agents.agentThread` / `api.agents.agentResolveApproval` /
- * `api.agents.agentRun` exist as typed references
+ * `api.agents.agentThread` / `api.agents.agentPendingApprovals` /
+ * `api.agents.agentResolveApproval` / `api.agents.agentRun` exist as typed references
  * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
  * `useMutation(api.agents.agentResolveApproval)`). The thread-write mutations
@@ -305,6 +305,13 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
         {
             args: { key: { kind: "string" }, limit: { inner: { kind: "number" }, kind: "optional" } },
             exportName: "agentMessages",
+            filePath: "agents",
+            kind: "query",
+            returnType: "Record<string, unknown>[]",
+        },
+        {
+            args: { limit: { inner: { kind: "number" }, kind: "optional" } },
+            exportName: "agentPendingApprovals",
             filePath: "agents",
             kind: "query",
             returnType: "Record<string, unknown>[]",

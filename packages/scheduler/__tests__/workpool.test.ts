@@ -105,6 +105,14 @@ const enqueuePool = async (scheduler: SchedulerDO, pool: string, maxConcurrency:
     return ids;
 };
 
+/** `GET /pool?name=` → its `queued` count. */
+const queuedInPool = async (scheduler: SchedulerDO, pool: string): Promise<number> => {
+    const response = await scheduler.fetch(get(`/pool?name=${encodeURIComponent(pool)}`));
+    const status = await response.json<{ queued: number }>();
+
+    return status.queued;
+};
+
 describe("schedulerDO — workpool concurrency", () => {
     it("dispatches at most maxConcurrency jobs at once and queues the rest", async () => {
         expect.assertions(3);
@@ -272,6 +280,21 @@ describe("schedulerDO — workpool concurrency", () => {
         expect(status.queued).toBe(2);
     });
 
+    it("counts a pool whose name is not well-formed Unicode, as its own pool", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const lone = "\uD800";
+
+        await enqueuePool(scheduler, lone, 1, 2);
+
+        const response = await scheduler.fetch(get("/status"));
+        const status = await response.json<{ pools: { name: string; queued: number }[] }>();
+
+        expect(status.pools.find((pool) => pool.name === lone)?.queued).toBe(2);
+    });
+
     it("aggregates every pool's backlog via GET /status", async () => {
         expect.assertions(5);
 
@@ -312,6 +335,72 @@ describe("schedulerDO — workpool concurrency", () => {
         const poolB = await poolBResponse.json<{ inFlight: number }>();
 
         expect(poolB.inFlight).toBe(1);
+    });
+
+    it("counts one pool's queue across schedule, dispatch and cancel while other pools hold jobs", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const queuedIn = async (pool: string): Promise<number> => queuedInPool(scheduler, pool);
+
+        // `a:b` shares a textual prefix with `a`; a non-pooled job sits alongside both.
+        const idsA = await enqueuePool(scheduler, "a", 1, 3);
+
+        await enqueuePool(scheduler, "a:b", 5, 2);
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", scheduledFor: Date.now() + 60_000 }));
+
+        expect([await queuedIn("a"), await queuedIn("a:b")]).toEqual([3, 2]);
+
+        // Pool `a` (cap 1) dispatches one job; pool `a:b` (cap 5) dispatches both.
+        await scheduler.alarm();
+
+        expect([await queuedIn("a"), await queuedIn("a:b")]).toEqual([2, 0]);
+
+        const queuedId = idsA.find((id) => !scheduler.dispatched.some((record) => record.id === id)) ?? "";
+
+        await scheduler.fetch(post("/cancel", { id: queuedId }));
+
+        expect([await queuedIn("a"), await queuedIn("a:b")]).toEqual([1, 0]);
+    });
+
+    it("counts a pooled job out when it is dead-lettered and back in when it is retried", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "job", pool: "p", retry: { baseMs: 0, maxAttempts: 1 }, scheduledFor: Date.now() - 1000 }),
+        );
+        const id = await scheduledId(response);
+
+        // First failure re-arms (still queued), the second exhausts the budget.
+        await scheduler.alarm();
+
+        await expect(queuedInPool(scheduler, "p")).resolves.toBe(1);
+
+        await scheduler.alarm();
+
+        await expect(queuedInPool(scheduler, "p")).resolves.toBe(0);
+
+        await scheduler.fetch(post("/dead/retry", { id }));
+
+        await expect(queuedInPool(scheduler, "p")).resolves.toBe(1);
+    });
+
+    it("backfills the queue count for pooled jobs stored before it was tracked", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const legacy: ScheduleRecord = { args: {}, enqueuedAt: 1, functionPath: "job", id: "legacy1", pool: "p", scheduledFor: Date.now() + 60_000 };
+
+        state.storageMap.set("id:legacy1", legacy);
+        state.storageMap.set(`t:${String(legacy.scheduledFor).padStart(15, "0")}:legacy1`, "legacy1");
+        state.storageMap.set("pool:p", { inFlight: 0, inFlightIds: [], maxConcurrency: 1 });
+
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        await expect(queuedInPool(scheduler, "p")).resolves.toBe(1);
     });
 
     it("reports an empty backlog when no pools exist", async () => {

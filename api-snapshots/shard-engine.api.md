@@ -2936,6 +2936,7 @@ interface ShardSocketLike {
 interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
+    authenticated?: boolean;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
@@ -2949,6 +2950,7 @@ interface SocketAttachment {
     ip?: string;
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
+    pendingSince?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -3140,6 +3142,7 @@ interface SubscriptionEnvelope {
     sinceCheckpoint?: number;
     sinceChunk?: number;
     sinceEpoch?: string;
+    token?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
 }
@@ -4642,6 +4645,12 @@ const minShapePokeCursor: (sql: SqlExec) => number | undefined;
 const nextPromotionState: (current: PromotionState, subscribers: number, thresholds?: PromotionThresholds) => PromotionState;
 ```
 
+### `nextTtlExpiry` (const)
+
+```ts
+const nextTtlExpiry: (sql: SqlExec, spec: TtlSweepSpec) => number | undefined;
+```
+
 ### `normalizeCountArgument` (const)
 
 ```ts
@@ -5626,6 +5635,7 @@ type ExistsPushMode = "always" | "auto";
 
 ```ts
 interface FanoutAttachmentLike {
+    authenticated?: boolean;
     shapes?: Record<string, {
         name?: string;
     }>;
@@ -5767,6 +5777,7 @@ abstract class RelayLink {
     handleControl(request: Request): Promise<Response>;
     maxRelays(): number;
     protected canAddressSiblings(): boolean;
+    protected isAdmitted(ws: ShardSocketLike): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
     protected nextRelaySeq(): number;
@@ -5891,6 +5902,7 @@ interface SiblingStub {
 ```ts
 interface SocketAttachmentLike {
     admin?: boolean;
+    authenticated?: boolean;
     subs?: Record<string, SubscriptionInfo>;
 }
 ```

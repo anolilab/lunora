@@ -530,7 +530,7 @@ catalogs:
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.3
     tw-animate-css: ^1.4.0
-    vite: ^8.3.2
+    vite: ^8.3.3
   data:
     # EXACT-pinned, and not because of a patch. `@lunora/seed`'s public contract is
     # that `copycat.email("alice")` yields the same string forever -- re-seeding a
@@ -922,7 +922,11 @@ catalogs:
     "better-auth": 1.7.7
     jose: ^6.2.12
   drizzle:
-    drizzle-orm: ^0.45.3
+    # Exact-pinned to the `rc` dist-tag: caret ranges also match the suffixed
+    # rc.5 canary builds (e.g. 1.0.0-rc.5-ab785fc) that drizzle keeps moving,
+    # and peers inherit this string verbatim. Bump to the 1.0.0 stable tag on
+    # release.
+    drizzle-orm: 1.0.0-rc.5
   # BYO-database drivers exercised by @lunora/hyperdrive (all devDeps — the
   # shipped adapters take them as optional peers) plus the kysely dialect
   # @lunora/auth tests better-auth against. pglite / mysql-memory-server are the
@@ -1090,6 +1094,21 @@ minimumReleaseAgeExclude:
   - '@next/swc-win32-x64-msvc@16.2.9'
   - '@nuxt/devtools@3.3.1'
   - '@opentelemetry/core@2.8.0'
+  - '@rolldown/binding-android-arm-eabi@1.2.15'
+  - '@rolldown/binding-android-arm64@1.2.15'
+  - '@rolldown/binding-darwin-arm64@1.2.15'
+  - '@rolldown/binding-darwin-x64@1.2.15'
+  - '@rolldown/binding-freebsd-x64@1.2.15'
+  - '@rolldown/binding-linux-arm-gnueabihf@1.2.15'
+  - '@rolldown/binding-linux-arm64-gnu@1.2.15'
+  - '@rolldown/binding-linux-arm64-musl@1.2.15'
+  - '@rolldown/binding-linux-ppc64-gnu@1.2.15'
+  - '@rolldown/binding-linux-s390x-gnu@1.2.15'
+  - '@rolldown/binding-linux-x64-gnu@1.2.15'
+  - '@rolldown/binding-linux-x64-musl@1.2.15'
+  - '@rolldown/binding-openharmony-arm64@1.2.15'
+  - '@rolldown/binding-win32-arm64-msvc@1.2.15'
+  - '@rolldown/binding-win32-x64-msvc@1.2.15'
   - '@tanstack/eslint-plugin-query@5.101.0'
   - '@tanstack/query-core@5.101.0'
   - '@tanstack/react-query@5.101.0'
@@ -1141,6 +1160,8 @@ minimumReleaseAgeExclude:
   - 'deslop-js@0.0.21'
   # Renovate security update: dompurify@3.4.13
   - 'dompurify@3.4.11 || 3.4.13'
+  # Published 2026-10-21, inside the 24h window; drop this entry once it ages out.
+  - 'drizzle-orm@1.0.0-rc.5'
   - 'esbuild@0.28.1'
   - 'eslint-plugin-react-dom@5.8.17'
   - 'eslint-plugin-react-jsx@5.8.17'
@@ -1169,13 +1190,14 @@ minimumReleaseAgeExclude:
   - 'react@19.2.7'
   - 'react-doctor@0.5.1'
   - 'react-dom@19.2.7'
+  - 'rolldown@1.2.15'
   - 'sharp@0.35.0'
   - 'svgo@4.0.2'
   - 'tar@7.5.21'
   - 'tmp@0.2.4 || 0.2.6'
   - 'tsx@4.22.4'
   - 'undici@6.27.0 || 6.28.0 || 7.29.0'
-  - 'vite@8.0.16'
+  - 'vite@8.0.16 || 8.3.5'
   - 'wrangler@4.97.0'
   - '@visulima/tui-binding-darwin-arm64@4.0.8'
   - '@visulima/tui-binding-darwin-x64@4.0.8'

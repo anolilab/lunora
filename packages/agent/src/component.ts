@@ -25,6 +25,17 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
 const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_BARE_TABLE}`;
 const REQUESTS_TABLE: "agent_secret_requests" = `${AGENT_EXTENSION_KEY}_${REQUESTS_BARE_TABLE}`;
 
+/** Default and ceiling for the approvals inbox `limit`. The ceiling caps the per-thread fan-out, since `.take()` has none. */
+const DEFAULT_APPROVALS_LIMIT = 50;
+const MAX_APPROVALS_LIMIT = 200;
+
+/**
+ * Paused threads the inbox reads before giving up. Secret-paused threads share the
+ * `awaiting_input` index but carry no approval, so a page of them would otherwise
+ * hide an older approval. This bounds how far they can starve the inbox.
+ */
+const MAX_APPROVALS_SCAN = 500;
+
 /**
  * How many runs may park behind the one in flight under
  * `onConcurrentRun: "queue"` before further starts are rejected.
@@ -255,6 +266,10 @@ const agentExtension: SchemaExtension<
             // Targets a thread by the workflow instance that owns it — the
             // lookup `cancel` uses to mark the right thread cancelled.
             .index("byInstance", ["instanceId"])
+            // Drives the approvals inbox (`agentPendingApprovals`): the owner
+            // leads so the owner gate applies BEFORE the limit cap, and
+            // `updatedAt` gives newest-first order without a sort.
+            .index("byOwnerStatus", ["owner", "status", "updatedAt"])
             // RLS-exempt on purpose: under `.rls("required")` these tables are
             // written by the workflow's dispatched internal mutations and read
             // by the public queries, none of which can engage app RLS policies
@@ -751,6 +766,7 @@ export interface AgentComponent {
         agentMessages: AgentRegisteredFunction;
         agentOpenSecretRequest: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
+        agentPendingApprovals: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
         agentRevokeApprovalGrant: AgentRegisteredFunction;
         agentRun: AgentRegisteredFunction;
@@ -1266,11 +1282,12 @@ export const agentComponent = (): AgentComponent => {
         return thread;
     };
 
-    // KEEP IN SYNC: the arg/return TYPES of the two public queries below are
-    // mirrored by hand into codegen's `syntheticAgentApiFunctions` (emit/api.ts) —
-    // codegen cannot statically read this package's types, and only the arg
-    // key sets are drift-tested. Changing an input or return shape here means
-    // updating the emitted `api.agents.*` reference types there too.
+    // KEEP IN SYNC: the arg/return TYPES of the public queries (here and
+    // `agentPendingApprovals` above) are mirrored by hand into codegen's
+    // `syntheticAgentApiFunctions` (emit/api.ts) — codegen cannot statically
+    // read this package's types, and only the arg key sets are drift-tested.
+    // Changing an input or return shape here means updating the emitted
+    // `api.agents.*` reference types there too.
     const agentThread = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<Record<string, unknown> | undefined> => {
         const thread = await context.db
             .query(THREADS_TABLE)
@@ -1336,6 +1353,98 @@ export const agentComponent = (): AgentComponent => {
                 .withIndex("byThread", (q) => q.eq("threadKey", args.key))
                 .collect();
         });
+
+    /**
+     * The approvals inbox: every human-in-the-loop approval the caller's OWN
+     * paused threads are waiting on, newest thread first. PUBLIC and OWNER-SCOPED
+     * to the verified identity — an anonymous caller gets `[]`, and ownerless
+     * threads are never listed (their only protection is key secrecy, which a
+     * cross-thread listing would turn into enumeration). Each item carries the
+     * triple `agentResolveApproval` takes.
+     *
+     * Only a marker minted by the thread's CURRENT instance is returned: an older
+     * instance's marker is unresolvable (`agentResolveApproval` rejects any
+     * instance that does not own the thread), so surfacing it would hand the
+     * client a triple that can only fail.
+     *
+     * A marker past its `expiresAt` (or with none) is not listed: the grant path refuses it
+     * as timed out or as having no deadline, so offering it would advertise a dead action.
+     * `limit` is clamped to `[1, MAX_APPROVALS_LIMIT]` and counts threads that hold an
+     * approval. Paused threads are scanned newest first, up to `MAX_APPROVALS_SCAN`, so
+     * threads paused for a secret do not consume the page. Each thread's message read
+     * is a prefix range on `byMessageKey`, so it touches only that instance's
+     * markers and never the whole history.
+     */
+    const agentPendingApprovals = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx: context }): Promise<Record<string, unknown>[]> => {
+        const { userId } = context.auth;
+
+        if (!userId) {
+            return [];
+        }
+
+        const threads = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byOwnerStatus", (q) => q.eq("owner", userId).eq("status", "awaiting_input"))
+            .order("desc")
+            .take(MAX_APPROVALS_SCAN);
+        // Read once, so every marker is judged against the same instant.
+        const now = Date.now();
+        const wanted = Math.min(MAX_APPROVALS_LIMIT, Math.max(1, Math.trunc(args.limit ?? DEFAULT_APPROVALS_LIMIT)));
+        // One thread's pending approvals. Each thread's read is a prefix range on `byMessageKey`.
+        const readApprovals = async (thread: Record<string, unknown>): Promise<Record<string, unknown>[]> => {
+            const instanceId = thread["instanceId"] as string | undefined;
+
+            if (instanceId === undefined) {
+                return [];
+            }
+
+            // Markers are keyed `<instanceId>:approval:<toolCallId>`. `;` is the byte after `:`,
+            // so the range `[markerPrefix, markerUpper)` holds exactly this instance's markers.
+            const markerPrefix = `${instanceId}:approval:`;
+            const markerUpper = `${instanceId}:approval;`;
+            const rows = await context.db
+                .query(MESSAGES_TABLE)
+                .withIndex("byMessageKey", (q) => q.eq("threadKey", thread["key"]).gte("messageKey", markerPrefix).lt("messageKey", markerUpper))
+                .collect();
+
+            return (
+                rows
+                    // A marker past its deadline is still stored until the run's wait settles and deletes it,
+                    // and `agentResolveApproval` refuses it as timed out, so it is not offered.
+                    .filter((row) => row["status"] === "awaiting_approval" && typeof row["expiresAt"] === "number" && now < row["expiresAt"])
+                    .map((row) =>
+                        definedColumns({
+                            agent: thread["agent"],
+                            content: row["content"],
+                            instanceId,
+                            requestedAt: row["createdAt"],
+                            threadKey: thread["key"],
+                            threadTitle: thread["title"],
+                            threadUpdatedAt: thread["updatedAt"],
+                            toolCallId: row["toolCallId"],
+                            toolName: row["toolName"],
+                        }),
+                    )
+            );
+        };
+        // Chunks of `wanted` threads are read in parallel, stopping once `wanted` threads hold an approval.
+        const approvals: Record<string, unknown>[] = [];
+        let matched = 0;
+
+        for (let start = 0; start < threads.length && matched < wanted; start += wanted) {
+            // eslint-disable-next-line no-await-in-loop -- each chunk decides whether the next one is needed
+            const perThread = await Promise.all(threads.slice(start, start + wanted).map((thread) => readApprovals(thread)));
+
+            for (const items of perThread) {
+                if (items.length > 0 && matched < wanted) {
+                    approvals.push(...items);
+                    matched += 1;
+                }
+            }
+        }
+
+        return approvals;
+    });
 
     /**
      * Resolve a human-in-the-loop tool approval: deliver the client's
@@ -1985,6 +2094,7 @@ export const agentComponent = (): AgentComponent => {
             agentMessages,
             agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
+            agentPendingApprovals,
             agentResolveApproval,
             agentRevokeApprovalGrant,
             agentRun,

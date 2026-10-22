@@ -174,7 +174,7 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
         }
 
         // The admin token authorizes the WS upgrade too, but never rides the URL
-        // itself: the client's `wsToken` is a provider that mints a short-lived
+        // itself: the client's `wsTicket` is a provider that mints a short-lived
         // HMAC-signed sub-token from the worker (master token in the
         // Authorization HEADER) fresh on every (re)connect, so only the ephemeral
         // token appears in `?token=`. Against a worker without the mint endpoint
@@ -184,7 +184,7 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
         // still looks fresh.
         const origin = resolveOrigin(baseUrl);
         const provider = debouncedToken === "" ? undefined : createAdminWsTokenProvider({ adminToken: debouncedToken, baseUrl: origin });
-        const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsToken: provider.getToken }) });
+        const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsTicket: provider.getToken }) });
 
         if (provider !== undefined) {
             created.setAuthToken(debouncedToken);

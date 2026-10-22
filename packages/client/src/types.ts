@@ -400,12 +400,11 @@ export interface QueryCacheAdapter {
 }
 
 /**
- * Resolves the WS `?token=` credential fresh at every (re)connect — the channel
- * for short-lived tokens (e.g. the ephemeral admin sub-token the worker mints
- * at `POST /_lunora/admin/ws-token`) instead of a static secret in the URL.
- * May return the token synchronously or as a Promise; returning `undefined`
- * connects without a token. A thrown error / rejected Promise fails that
- * connect attempt, and the client retries with its normal reconnect backoff.
+ * Resolves a WebSocket credential (`wsToken` or `wsTicket`) fresh at every
+ * (re)connect, so a short-lived credential is re-minted rather than held.
+ * May return the value synchronously or as a Promise; returning `undefined`
+ * connects without one. A thrown error / rejected Promise fails that connect
+ * attempt, and the client retries with its normal reconnect backoff.
  */
 export type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
 
@@ -602,19 +601,25 @@ export interface LunoraClientOptions {
     WebSocket?: typeof WebSocket;
 
     /**
-     * Credential appended to the WebSocket URL as `?token=…`. The server matches
-     * it against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
-     * `LUNORA_ADMIN_TOKEN` (to authorize `__lunora_admin__:*` subscriptions —
-     * what the studio supplies). Browsers can't set headers on the `WebSocket`
-     * constructor, so the query parameter is the only channel; it ends up in
-     * server logs and history, so prefer a short-lived rotating token in
-     * production over a static secret.
+     * The short-lived ticket appended to the WebSocket URL as `?token=…`. Only
+     * an ephemeral admin sub-token belongs here, minted by
+     * `POST /_lunora/admin/ws-token`; the server authorizes `__lunora_admin__:*`
+     * subscriptions from it. A ticket lapses after its TTL, so a static master
+     * token must never be used here: the server refuses it in the URL.
      *
-     * Pass a {@link WsTokenProvider} function to resolve the token fresh at
-     * every (re)connect — the channel for short-lived credentials such as the
-     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`: the
-     * provider re-mints on each reconnect, including the one following a `4001`
-     * token-expired drop, so a static master token never has to ride the URL.
+     * Pass a {@link WsTokenProvider} to re-mint on every (re)connect, including
+     * the one that follows a lapsed ticket.
+     */
+    wsTicket?: string | WsTokenProvider;
+
+    /**
+     * The session credential. It is sent in the `connect` frame of every shard
+     * socket and never in the WebSocket URL, because a URL is logged by every
+     * proxy and edge on the way (protocol §6). The server matches it against
+     * `LUNORA_WS_BEARER`; a socket that does not present a match is closed.
+     *
+     * Pass a {@link WsTokenProvider} to resolve it fresh at every (re)connect, so
+     * a rotated session is picked up on the next connect.
      */
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
@@ -706,6 +711,13 @@ export interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+
+    /**
+     * The session credential (protocol §6). A gated server checks it against
+     * `LUNORA_WS_BEARER`. Set from the client's `wsToken` and never placed in the
+     * socket URL.
+     */
+    token?: string;
     type: "connect";
 }
 
@@ -827,6 +839,7 @@ export interface ServerDataMessage {
     delta?: unknown;
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
+
     id: string;
 
     /**
@@ -836,6 +849,9 @@ export interface ServerDataMessage {
      * the matching optimistic overlay. Absent on shards without custom mutators.
      */
     lastMutationId?: number;
+
+    /** Set on every frame of a delta run except its last; the client holds those until the run ends. */
+    more?: boolean;
     type: "data" | "delta";
 }
 

@@ -1,3 +1,48 @@
+## @lunora/agent [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.239...@lunora/agent@1.0.0-alpha.240) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/agent [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.238...@lunora/agent@1.0.0-alpha.239) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/agent [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.237...@lunora/agent@1.0.0-alpha.238) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.229
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/agent [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.236...@lunora/agent@1.0.0-alpha.237) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
+## @lunora/agent [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.235...@lunora/agent@1.0.0-alpha.236) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.143
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/mail:** upgraded to 1.0.0-alpha.120
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.92
+* **@lunora/container:** upgraded to 1.0.0-alpha.89
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/agent [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.234...@lunora/agent@1.0.0-alpha.235) (2026-10-20)
 
 

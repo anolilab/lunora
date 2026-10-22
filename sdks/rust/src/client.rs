@@ -254,7 +254,10 @@ pub(crate) fn envelopeless_error(status: u16) -> ApiError {
     }
 }
 
-pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> Value {
+/// The one-shot frame sent first on every socket open. `token` is the session
+/// credential: it rides here, never in the socket URL, and is omitted when
+/// absent or empty.
+pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>, token: Option<&str>) -> Value {
     let mut frame = Map::new();
 
     frame.insert("id".into(), json!("connect"));
@@ -266,6 +269,11 @@ pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> 
 
     if let Some(inner) = context {
         frame.insert("context".into(), inner.clone());
+    }
+
+    // Empty is absent, matching `ws_url` and `build_rpc_body`.
+    if let Some(value) = token.filter(|value| !value.is_empty()) {
+        frame.insert("token".into(), json!(value));
     }
 
     Value::Object(frame)
@@ -1282,8 +1290,10 @@ impl Client {
     }
 
     /// The socket URL: the origin with its scheme swapped, plus the shard and
-    /// credential query parameters when present.
-    pub fn ws_url(&self, shard_key: Option<&str>, token: Option<&str>) -> String {
+    /// admin-ticket query parameters when present. `ws_ticket` is the ephemeral
+    /// admin sub-token; the session credential never rides the URL —
+    /// [`build_connect_frame`] carries it.
+    pub fn ws_url(&self, shard_key: Option<&str>, ws_ticket: Option<&str>) -> String {
         let joined = self.join(WS_PATH);
         let endpoint = if let Some(rest) = joined.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -1300,7 +1310,7 @@ impl Client {
             params.push(format!("shard={}", percent_encode(key)));
         }
 
-        if let Some(value) = token {
+        if let Some(value) = ws_ticket {
             params.push(format!("token={}", percent_encode(value)));
         }
 

@@ -487,7 +487,11 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
         // watermark stays on every frame — it is idempotent and monotonic on the
         // read side, and a checkpoint gate reads whichever frame it observes.
         const isLast = index === framed.length - 1;
-        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${isLast ? suffix : watermarkSuffix}}`;
+        // A non-final frame says so, so the client holds it until the run's last frame arrives.
+        // The last frame carries no flag, which is why a shard that stops stamping cursors still
+        // commits its runs.
+        const runTail = isLast ? suffix : `${watermarkSuffix},"more":true`;
+        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${runTail}}`;
 
         total += delta.length;
 

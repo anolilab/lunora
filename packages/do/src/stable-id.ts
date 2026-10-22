@@ -1,5 +1,3 @@
-/* eslint-disable no-bitwise, import/prefer-default-export -- the hash is bit arithmetic; the one export is re-exported from the package index */
-
 /**
  * `ctx.newId()`: an id that a replay of the same mutation reproduces.
  *
@@ -28,6 +26,7 @@ const stableUuid = (text: string): string => {
     const hex = SEEDS.map((seed) => (cyrb53(text, seed) % 4_294_967_296).toString(16).padStart(8, "0")).join("");
     // Byte 6 carries the version in its high nibble; byte 8 carries the variant (10xx).
     const version = `8${hex.slice(13, 16)}`;
+    // eslint-disable-next-line no-bitwise -- the variant bits are masked from one nibble, which is bit arithmetic
     const variant = `${((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`;
     const body = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}-${hex.slice(20, 32)}`;
 
@@ -53,5 +52,34 @@ export const createStableIdFactory = (mutationId: string | undefined, scope: str
         sequence += 1;
 
         return stableUuid(`${scope}\u0000${mutationId}\u0000${sequence.toString()}`);
+    };
+};
+
+/**
+ * The `ctx.random` for one handler run: a number in `[0, 1)` for each call, in the
+ * run's sequence, like {@link createStableIdFactory}. The hashed text carries its own
+ * domain tag, so random value N is not a function of the id N that shares its input.
+ *
+ * The values are DERIVED, not random: anyone who knows the scope and the replay key
+ * can compute them. Use `crypto.getRandomValues` for anything an attacker must not
+ * guess. Without a replay key this is `Math.random`: queries, actions themselves and
+ * unkeyed calls are not replay-stable. A mutation composed from a keyed action or
+ * mutation draws from its caller's keyed sequence.
+ * @param mutationId the call's replay key, or `undefined` when there is none.
+ * @param scope the same scope string {@link createStableIdFactory} takes.
+ */
+export const createStableRandomFactory = (mutationId: string | undefined, scope: string): (() => number) => {
+    if (mutationId === undefined || mutationId.length === 0) {
+        // eslint-disable-next-line sonarjs/pseudo-random -- no replay key: this call is not replayed, so there is no sequence to reproduce
+        return () => Math.random();
+    }
+
+    let sequence = 0;
+
+    return () => {
+        sequence += 1;
+
+        // 2^53 is the range cyrb53 returns, so the quotient is in [0, 1).
+        return cyrb53(`random\u0000${scope}\u0000${mutationId}\u0000${sequence.toString()}`) / 2 ** 53;
     };
 };

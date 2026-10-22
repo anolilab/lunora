@@ -493,6 +493,7 @@ class LunoraClient {
     identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
+    setWsTicket(ticket: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
         shardKey?: string;
     }): void;
@@ -940,6 +941,7 @@ interface LunoraClientOptions {
     rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
+    wsTicket?: string | WsTokenProvider;
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }
@@ -1542,6 +1544,9 @@ interface SubscriptionState {
     lastMutationId?: number;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
     serverBase: unknown;
     serverCursor?: number;
     serverEpoch?: string;
@@ -2413,6 +2418,7 @@ interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+    token?: string;
     type: "connect";
 }
 ```
@@ -2576,6 +2582,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```

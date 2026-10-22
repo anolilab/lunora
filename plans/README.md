@@ -101,7 +101,6 @@ follow-on ships or is rejected.
 | [241](./241-inapp-inbox-design.md)                  | In-app inbox read half; D1 backend open                                 |
 | [247](./247-event-store-design.md)                  | `defineEventStore`; not ratified                                        |
 | [333](./333-query-snapshot-coherence.md)            | Snapshot coherence for query subscriptions                              |
-| [334](./334-mutation-determinism.md)                | Runtime determinism for query/mutation bodies                           |
+| [334](./334-mutation-determinism.md)                | Determinism: ctx.random, ctx.fetch refusal shipped; research open       |
 | [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
-| [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |

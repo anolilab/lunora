@@ -69,6 +69,11 @@ differs from the shape's — re-seeds instead: the view is emptied, its checkpoi
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint.
+Send `buildConnectFrame(clientID:context:token:)` as the first frame on every open,
+before `resendSubscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
+whose first frame is not that `connect` with a matching `token` (close code 4003). The
+session credential never goes in the socket URL; `wsURL(shardKey:wsTicket:)` carries only
+an admin ticket.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type). The sender cannot throw, so a failed write
@@ -85,7 +90,7 @@ while !Task.isCancelled {
     if let socket = try? await connect() { // your socket library
         var flushRetry: Task<Void, Never>?
         // connect goes out before the sender is attached, so a subscribe on another task cannot write ahead of it.
-        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame()))) != nil {
+        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame(clientID: client.clientID, token: session)))) != nil {
             // A failed write closes the socket: the receive below then throws, ending the run.
             client.attachSocket { frame in
                 do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }

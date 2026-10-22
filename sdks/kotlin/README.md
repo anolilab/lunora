@@ -30,6 +30,7 @@ retries and socket library:
 ```kotlin
 val client = Client("https://my-app.example.com", post = myPoster, authToken = "…")
 client.identity = currentUserId
+client.wsToken = { currentBearer } // the session credential, sent in the first connect frame
 // `clientId` is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -38,6 +39,7 @@ val messages = client.query("messages:list", args)
 client.mutation("messages:send", args)
 
 // Live subscription: attach your socket, then feed it frames.
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
 client.attachSocket { frame -> socket.send(Json.write(frame)) }
 val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```
@@ -75,8 +77,7 @@ while (isActive) {
             var retry: Job? = null
             try {
                 connect().use { socket -> // your socket library
-                    // connect goes out before the sender is attached, so a subscribe on another coroutine cannot write ahead of it
-                    socket.send(Json.write(Client.buildConnectFrame()))
+                    // attachSocket sends connect before it attaches the sender, so a subscribe on another coroutine cannot write ahead of it
                     client.attachSocket { frame -> socket.send(Json.write(frame)) }
                     client.resendSubscriptions()
                     // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it

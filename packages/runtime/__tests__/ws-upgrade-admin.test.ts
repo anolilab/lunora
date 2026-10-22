@@ -177,9 +177,10 @@ describe("createWorker — the app WS upgrade leaves the non-admin path untouche
         const { calls, namespace } = recordingShard();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: namespace });
 
-        // The client puts its auth token in `?token=` — the same slot the admin
-        // sub-token uses. An end user's token must not read as an admin
-        // credential, and must not be refused for failing to be one either.
+        // A query token that is not an admin credential is forwarded untouched:
+        // the worker does not read it as an admin credential, and does not refuse
+        // it either. The Durable Object decides what it may do (protocol §6), and
+        // a session credential is never meant to be in the URL in the first place.
         const response = await worker.fetch(
             new Request(`${WS_URL}?token=${encodeURIComponent("a-users-session-token")}`, { headers: { Upgrade: "websocket" } }),
             {},

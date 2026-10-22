@@ -18,6 +18,10 @@ const remedyFor = (callee: string, exportName: string, kind: "query" | "mutation
         return "Use `ctx.newId()` instead: a replay of the same call reproduces its ids. The ids are derived, not random, so a token or secret keeps `crypto.randomUUID()`.";
     }
 
+    if (callee === "Math.random" && kind === "mutation") {
+        return "Use `ctx.random()` instead: a replay of a keyed mutation reproduces its values; an unkeyed call draws `Math.random()`. The values are derived, not random, so a token or secret keeps `crypto.getRandomValues`.";
+    }
+
     return kind === "query"
         ? "Compute it in an `action` and pass the value in as an argument. The query then reads a fixed input, so a re-run with the same arguments returns the same result."
         : `No action needed unless \`${exportName}\` is invoked from a workflow step or queue consumer that can itself replay.`;

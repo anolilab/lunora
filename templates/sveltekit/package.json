@@ -11,7 +11,7 @@
         "build": "vite build",
         "preview": "vite preview",
         "codegen": "lunora codegen",
-        "deploy": "vite build && lunora deploy",
+        "deploy": "lunora deploy",
         "prepare": "svelte-kit sync"
     },
     "dependencies": {

@@ -145,18 +145,11 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     // The current bookmark advances on every shard write; poll it so it doesn't go
     // stale (there's no Refresh button). Lightweight — only updates the displayed
     // bookmark, never toggles `busy` or clobbers an in-flight preview/restore.
-    useAutoRefresh(() => {
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+    // A failed read rejects on purpose: useAutoRefresh backs off on it, and stops on a refused credential. The last-known bookmark stays.
+    useAutoRefresh(async (): Promise<void> => {
+        const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
 
-                    setCurrent(result.current);
-                } catch {
-                    // Leave the last-known bookmark on a transient read failure.
-                }
-            })(),
-        );
+        setCurrent(result.current);
     }, !unavailable);
 
     const onTimeChange = (event: ChangeEvent<HTMLInputElement>): void => {

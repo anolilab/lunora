@@ -763,6 +763,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -787,6 +790,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -843,6 +849,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 

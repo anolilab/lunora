@@ -53,7 +53,8 @@ describe("sql console on workerd SQLite", () => {
         );
 
         expect(result.rows).toHaveLength(MAX_SQL_ROWS);
-        expect(result.rowCount).toBe(MAX_SQL_ROWS + 5);
+        // `rowCount` is the rows returned, not the total the statement would produce: the rest is never read.
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
         expect(result.truncated).toBe(true);
     });
 

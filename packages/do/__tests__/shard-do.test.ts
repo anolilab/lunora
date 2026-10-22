@@ -940,22 +940,20 @@ describe("shardDO upgrade gating", () => {
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }));
     });
 
-    it("rejects upgrade with 403 when bearer required but missing", async () => {
-        expect.assertions(1);
+    it("accepts an upgrade with no bearer as unauthenticated, to be decided by connect.token", async () => {
+        expect.hasAssertions();
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
-        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
-        expect(response.status).toBe(403);
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/"));
     });
 
-    it("rejects upgrade with 403 when bearer token mismatches", async () => {
-        expect.assertions(1);
+    it("accepts an upgrade with a wrong bearer as unauthenticated, to be decided by connect.token", async () => {
+        expect.hasAssertions();
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
-        const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
 
-        expect(response.status).toBe(403);
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
     });
 
     it("accepts bearer via Authorization header", async () => {
@@ -966,12 +964,13 @@ describe("shardDO upgrade gating", () => {
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }));
     });
 
-    it("accepts bearer via ?token query parameter as a browser escape hatch", async () => {
-        expect.hasAssertions();
+    it("refuses the bearer in ?token= with 403, so the session credential never rides the URL", async () => {
+        expect.assertions(1);
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/?token=s3cret"));
 
-        await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
+        expect(response.status).toBe(403);
     });
 });
 
@@ -1977,7 +1976,10 @@ describe("shardDO subscription delta push", () => {
         // Derive the expected wire strings directly from subscriptionListDeltas,
         // encoding each delta the legacy way (JSON.stringify(delta)).
         const expectedDeltas = subscriptionListDeltas(JSON.stringify(prevResult), nextResult, "messages");
-        const expectedLines = (expectedDeltas ?? []).map((delta) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}}`);
+        // Every frame but the last of a run is marked `more`, which is how the client holds the run.
+        const expectedLines = (expectedDeltas ?? []).map(
+            (delta, index, all) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}${index === all.length - 1 ? "" : ',"more":true'}}`,
+        );
 
         expect(sentDeltaLines).toHaveLength(expectedLines.length);
         expect(sentDeltaLines).toEqual(expectedLines);

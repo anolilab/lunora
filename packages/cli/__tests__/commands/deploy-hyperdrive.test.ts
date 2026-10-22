@@ -165,6 +165,28 @@ describe("hyperdrive on deploy", () => {
                 expect(result).toBeUndefined();
                 expect(idIn(generated)).toBe("new-config-id");
             });
+
+            it("does not claim the deployed environment for a build that did not run for it", async () => {
+                expect.assertions(2);
+
+                writeWrangler(stagingConfig);
+                vi.stubEnv(URL_VARIABLE, "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                vi.stubGlobal("fetch", hyperdriveApi([]));
+
+                const generated = generatedBuild();
+                const { logger, messages } = recordingLogger();
+
+                // No client build ran for `staging`, so whatever the generated config holds was built for the default environment.
+                await provisionDeployHyperdrive(root, { clientBuildEnvironment: undefined, env: "staging", logger }, "deploy", "cloudflare");
+
+                expect(idIn(generated)).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+                expect(messages.join(" ")).toContain("was made for the default environment");
+
+                vi.unstubAllGlobals();
+                vi.unstubAllEnvs();
+            });
         });
 
         it("reuses a config of the same name instead of creating a second one", async () => {

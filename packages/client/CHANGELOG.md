@@ -1,3 +1,48 @@
+## @lunora/client [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.241...@lunora/client@1.0.0-alpha.242) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.240
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/client [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.240...@lunora/client@1.0.0-alpha.241) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.239
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/client [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.239...@lunora/client@1.0.0-alpha.240) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.229
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/client [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.238...@lunora/client@1.0.0-alpha.239) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** read body-less SSE stream responses via text() ([#1285](https://github.com/anolilab/lunora/issues/1285)) ([dc4979b](https://github.com/anolilab/lunora/commit/dc4979b52d3ea0290618955b2562b88ec81a5609))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/do:** upgraded to 1.0.0-alpha.237
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/client [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.237...@lunora/client@1.0.0-alpha.238) (2026-10-20)
 
 ### Bug Fixes
