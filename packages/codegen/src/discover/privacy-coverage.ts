@@ -441,18 +441,17 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
 };
 
 /**
- * A `v.id` of a user table, looking through `v.optional`, `v.array` and `v.union` wrappers. A nullable reference is
- * a union of the id and `v.null()`, so the members are read too.
+ * A `v.id` of a user table, looking through the wrappers that nest a validator: `v.optional`, `v.array`, `v.union`
+ * (a nullable reference is a union of the id and `v.null()`), `v.record` and `v.object`.
  */
 const referencesUser = (validator: ValidatorIR, userTables: ReadonlySet<string>): boolean => {
     if (validator.kind === "id") {
         return userTables.has(validator.tableName ?? "");
     }
 
-    return (
-        (validator.inner !== undefined && referencesUser(validator.inner, userTables)) ||
-        (validator.members?.some((member) => referencesUser(member, userTables)) ?? false)
-    );
+    const nested = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    return nested.some((child) => child !== undefined && referencesUser(child, userTables));
 };
 
 /**

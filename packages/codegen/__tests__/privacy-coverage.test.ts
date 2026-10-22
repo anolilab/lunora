@@ -237,6 +237,24 @@ export default defineSchema({
         }).toThrow(/privacy_table_unclassified: "notes"/u);
     });
 
+    it("classifies a table by a v.id of the users table nested in a v.object column", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), meta: v.object({ owner: v.id("users") }) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
     it("checks a table whose name starts with privacy_", () => {
         expect.assertions(1);
 
