@@ -94,10 +94,20 @@ describe("owner promotion probe (/_lunora/route)", () => {
         database.close();
     });
 
-    const probe = async (name: string, socketCount: number, env: Record<string, string>): Promise<number> => {
+    /** `pending` of the sockets are gated and have not yet proved their credential. */
+    const probe = async (name: string, socketCount: number, env: Record<string, string>, pending = 0): Promise<number> => {
         const state = {
             acceptWebSocket() {},
-            getWebSockets: () => Array.from({ length: socketCount }, () => ({}) as WebSocket),
+            getWebSockets: () =>
+                Array.from({ length: socketCount }, (_, index) =>
+                    index < socketCount - pending
+                        ? ({} as WebSocket)
+                        : ({
+                              deserializeAttachment: () => {
+                                  return { authenticated: false, subs: {} };
+                              },
+                          } as unknown as WebSocket),
+                ),
             id: { name },
             storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         } as unknown as ShardDOState;
@@ -116,6 +126,13 @@ describe("owner promotion probe (/_lunora/route)", () => {
         await expect(probe("room-1", 2, ENV)).resolves.toBe(0); // below threshold → owner-served
         await expect(probe("room-1", 3, ENV)).resolves.toBe(2); // at threshold → fan of 2
         await expect(probe("room-1", 9000, ENV)).resolves.toBe(2); // well above → still the configured fan
+    });
+
+    it("does not count a pending socket toward promotion, since a peer can open one with no credential", async () => {
+        expect.assertions(1);
+
+        // Two live sockets and one pending one, under a threshold of three: the pending one must not promote the owner.
+        await expect(probe("room-1", 3, ENV, 1)).resolves.toBe(0);
     });
 
     it("caps the fan at LUNORA_MAX_RELAYS", async () => {

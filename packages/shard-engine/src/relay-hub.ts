@@ -802,7 +802,8 @@ class OwnerRelay extends RelayLink {
      * threshold. Advances the promotion latch, so it is not a pure read.
      */
     public override relayCount(): number {
-        const subscribers = this.host.getWebSockets().length;
+        // A pending socket has not proved its credential, and a peer can open one freely, so it must not promote the owner.
+        const subscribers = this.host.getWebSockets().filter((ws) => this.host.readAttachment(ws).authenticated !== false).length;
         const tUp = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
         const tDownRaw = envPositiveInt(this.host.env(), "LUNORA_RELAY_COLLAPSE_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tDown);
 
