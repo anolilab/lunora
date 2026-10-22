@@ -555,23 +555,29 @@ class Client(
         // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
         // The credential generation is read with the attach generation: a rotation racing this attach
         // must not tag the socket with a generation newer than the credential it presents.
-        val (generation, credential) = synchronized(lock) {
+        // The provider is read with the generation, so a rotation racing this attach cannot tag the
+        // socket with a generation newer than the credential it presents.
+        val (generation, credential, provider) = synchronized(lock) {
             send = null
-            ++attachGeneration to credentialGeneration
+            Triple(++attachGeneration, credentialGeneration, wsToken)
         }
-        sender(buildConnectFrame(clientId = clientId, context = context, token = wsToken?.invoke()))
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke()))
         // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
-        // so it is not installed and its whisper joins are not sent.
-        // The topics are snapshotted in the same block that publishes the sender: a join registered after this
-        // block sees `send` and sends itself, so each topic is joined exactly once.
-        val topics = synchronized(lock) {
+        // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
+        // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
+        // the client offline, and the error propagates.
+        synchronized(lock) {
             if (generation != attachGeneration) return
             send = sender
             socketGeneration = credential
             wasEverConnected = true
-            whisperTopics.keys.toList()
+            try {
+                for (topic in whisperTopics.keys.toList()) sender(buildWhisperSubscribeFrame(topic))
+            } catch (failure: Throwable) {
+                if (send === sender) send = null
+                throw failure
+            }
         }
-        for (topic in topics) sender(buildWhisperSubscribeFrame(topic))
     }
 
     /**
