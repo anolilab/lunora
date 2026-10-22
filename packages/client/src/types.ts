@@ -850,11 +850,8 @@ export interface ServerDataMessage {
      */
     lastMutationId?: number;
 
-    /**
-     * Set on a legacy `broadcastDelta` frame, which is a whole change and never part of a
-     * multi-frame run, so it is committed on arrival even when its subscription has cursors.
-     */
-    standalone?: boolean;
+    /** Set on every frame of a delta run except its last; the client holds those until the run ends. */
+    more?: boolean;
     type: "data" | "delta";
 }
 

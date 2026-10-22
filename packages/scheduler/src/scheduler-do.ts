@@ -698,11 +698,16 @@ class SchedulerDO {
         // reindexOrphanedRecords), so the store stops vouching for itself for
         // exactly its duration: an instance that dies inside it leaves no
         // CLEAN_KEY behind, and its successor runs the full walk.
-        if (due.length > 0) {
-            await this.state.storage.delete(CLEAN_KEY);
-        }
+        // The marker delete sits inside the try: if it rejects, the drain is skipped (it must
+        // not run without the marker gone) and the finally still re-arms the clock.
+        let draining = false;
 
         try {
+            if (due.length > 0) {
+                await this.state.storage.delete(CLEAN_KEY);
+                draining = true;
+            }
+
             await this.drainDue(due);
         } finally {
             // Always re-arm the clock, even if a record threw above — otherwise a
@@ -710,7 +715,7 @@ class SchedulerDO {
             // strand every still-pending job.
             await this.rescheduleAlarm();
 
-            if (due.length > 0 && this.recovered && !this.dirty) {
+            if (draining && this.recovered && !this.dirty) {
                 await this.state.storage.put(CLEAN_KEY, true);
             }
         }

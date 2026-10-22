@@ -656,20 +656,20 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`               | Shape                                                                        | Effect                                                                                                                                                     |
-| -------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ack`                | `{ type, id }`                                                               | subscription acknowledged                                                                                                                                  |
-| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`               | deliver `decodeWire(data)` as the new value                                                                                                                |
-| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, standalone? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
-| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                             | nothing changed; keep value, advance cursor                                                                                                                |
-| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                             | write touched tables, byte-identical result; advance only                                                                                                  |
-| `error`              | `{ type, id?, error: { code?, message? }, message? }`                        | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
-| `complete`           | `{ type, id }`                                                               | subscription/stream closed server-side                                                                                                                     |
-| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                              | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
-| `whisper`            | `{ type, topic, data: <wire>, from? }`                                       | ephemeral relay                                                                                                                                            |
-| `live`               | `{ type, stream, topic, data: <wire> }`                                      | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
-| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }`             | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
-| `whisper_subscribed` | `{ type, topic }`                                                            | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
+| `type`               | Shape                                                                  | Effect                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ack`                | `{ type, id }`                                                         | subscription acknowledged                                                                                                                                  |
+| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`         | deliver `decodeWire(data)` as the new value                                                                                                                |
+| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
+| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | nothing changed; keep value, advance cursor                                                                                                                |
+| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | write touched tables, byte-identical result; advance only                                                                                                  |
+| `error`              | `{ type, id?, error: { code?, message? }, message? }`                  | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
+| `complete`           | `{ type, id }`                                                         | subscription/stream closed server-side                                                                                                                     |
+| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                        | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
+| `whisper`            | `{ type, topic, data: <wire>, from? }`                                 | ephemeral relay                                                                                                                                            |
+| `live`               | `{ type, stream, topic, data: <wire> }`                                | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
+| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }`       | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
+| `whisper_subscribed` | `{ type, topic }`                                                      | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
 one, and only after the socket has passed the §6 gate. `subject` is the resolved
@@ -771,11 +771,12 @@ counterweight `contiguousPokeSequence` pin both directions.
 One value change can go out as a RUN of `delta` frames (one per changed row).
 Unlike a poke the run has no start/end envelope, so `cursor`/`epoch` ride only
 the **last** frame of the run, and a client MUST NOT advance its resume position on
-a frame that omits them. A client on a cursor-carrying subscription SHOULD hold a
-cursorless delta until the cursor-bearing frame arrives, then commit the run once;
-a client that does not hold them still converges, but subscribers see every
-intermediate state. A delta marked `standalone: true` is a whole change on its own
-(the legacy `broadcastDelta` fan-out) and is applied on arrival.
+a frame that omits them. Every frame of a run except the last carries
+`more: true`; a client SHOULD hold those frames and commit the run once its last
+frame (which carries no `more`) arrives. A client that applies each frame as it
+arrives still converges, but subscribers see every intermediate state. A delta
+without `more` is a whole change on its own, which is how the legacy
+`broadcastDelta` fan-out is delivered, and is applied on arrival.
 `lastMutationId` is the opposite and rides every frame (it is idempotent and
 monotonic on the read side).
 

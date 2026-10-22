@@ -2745,6 +2745,9 @@ abstract class ShardDO {
      */
     private readonly attachmentCache = new WeakMap<ShardSocketLike, SocketAttachment>();
 
+    /** Sockets whose `serializeAttachment` already reports into {@link ShardDO.attachmentCache}. */
+    private readonly cacheWiredSockets = new WeakSet<ShardSocketLike>();
+
     /**
      * Subscriptions whose refresh keeps throwing, so a deterministic failure is
      * not re-run (and re-announced) on every write flush. In memory only, like
@@ -6381,7 +6384,7 @@ abstract class ShardDO {
 
                 // Delivery is best-effort here (legacy broadcast path has no diff
                 // baseline to protect), so the boolean is intentionally ignored.
-                this.sendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"standalone":true,"delta":${deltaJson}}`);
+                this.sendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
             }
         }
     }
@@ -18237,9 +18240,9 @@ abstract class ShardDO {
     }
 
     /**
-     * The socket's attachment, shared with the cache: read it, never mutate it. A subclass
-     * that stamps an attachment with `ws.serializeAttachment` directly, rather than through
-     * {@link ShardDO.writeAttachment}, leaves this cache stale.
+     * The socket's attachment, shared with the cache: read it, never mutate it. Every write
+     * goes through the socket's `serializeAttachment`, which {@link ShardDO.wireAttachmentCache}
+     * wraps, so a subclass that writes an attachment directly still keeps the cache current.
      */
     private readAttachment(ws: ShardSocketLike): SocketAttachment {
         const cached = this.attachmentCache.get(ws);
@@ -18252,8 +18255,8 @@ abstract class ShardDO {
         const raw = socket.deserializeAttachment?.();
 
         if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
-            // Only a socket whose writes pass through `writeAttachment` can be cached.
-            if (socket.serializeAttachment !== undefined) {
+            // Only a socket whose writes can be seen can be cached.
+            if (this.wireAttachmentCache(ws, socket)) {
                 this.attachmentCache.set(ws, raw as SocketAttachment);
             }
 
@@ -18261,6 +18264,42 @@ abstract class ShardDO {
         }
 
         return { subs: {} };
+    }
+
+    /**
+     * Route every `serializeAttachment` call on this socket into the cache, once per socket
+     * object. Returns `false` when the host does not let the method be replaced; that socket is
+     * then read from storage on every access rather than cached.
+     */
+    private wireAttachmentCache(ws: ShardSocketLike, socket: HibernatableWebSocket): boolean {
+        if (this.cacheWiredSockets.has(ws)) {
+            return true;
+        }
+
+        const serialize = socket.serializeAttachment;
+
+        if (serialize === undefined) {
+            return false;
+        }
+
+        try {
+            // eslint-disable-next-line no-param-reassign -- the host socket is the one object that reports its own writes
+            socket.serializeAttachment = (value: unknown): void => {
+                serialize.call(socket, value);
+
+                if (value === undefined) {
+                    this.attachmentCache.delete(ws);
+                } else {
+                    this.attachmentCache.set(ws, value as SocketAttachment);
+                }
+            };
+        } catch {
+            return false;
+        }
+
+        this.cacheWiredSockets.add(ws);
+
+        return true;
     }
 
     /** A private copy of the socket's attachment for a writer to edit and hand to {@link ShardDO.writeAttachment}. */

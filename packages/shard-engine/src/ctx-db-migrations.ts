@@ -345,8 +345,11 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
 const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, declared: Set<string>): void => {
     const indexName = `${tableName}${TTL_INDEX_SUFFIX}`;
 
-    // A declared index already holds the name; never replace a user's index.
-    if (definition.ttlPolicy === undefined || declared.has(indexName)) {
+    // A declared index already holds the name; never replace a user's index. SQLite folds
+    // ASCII case in identifiers, so a case variant of the name is the same index.
+    const declaredFolded = new Set([...declared].map((name) => foldIdentifier(name)));
+
+    if (definition.ttlPolicy === undefined || declaredFolded.has(foldIdentifier(indexName))) {
         return;
     }
 

@@ -123,8 +123,6 @@ describe("delivery authority caller context", () => {
 
         unguarded.broadcast();
 
-        expect(test.socket.frames).toEqual([
-            { type: "delta", id: "view", standalone: true, delta: { table: "messages", op: "insert", key: "one", row: { _id: "one" } } },
-        ]);
+        expect(test.socket.frames).toEqual([{ type: "delta", id: "view", delta: { table: "messages", op: "insert", key: "one", row: { _id: "one" } } }]);
     });
 });

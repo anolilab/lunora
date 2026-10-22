@@ -1547,7 +1547,6 @@ interface SubscriptionState {
     pendingDeltaRun?: {
         payload: unknown;
     };
-    runsCarryCursor?: boolean;
     serverBase: unknown;
     serverCursor?: number;
     serverEpoch?: string;
@@ -2583,7 +2582,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
-    standalone?: boolean;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```
