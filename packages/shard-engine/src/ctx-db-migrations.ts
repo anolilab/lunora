@@ -45,6 +45,7 @@ import { ftsCompanionDdl } from "./fts-companion";
 import { rankTableName, sortColumnName } from "./rank";
 import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
+import { ttlIndexColumns } from "./ttl-sweep";
 
 /**
  * Every filtered read this store emits ends `ORDER BY _creationTime ASC, id ASC`
@@ -81,6 +82,9 @@ const INDEX_SORT_KEYS = dsql`_creationTime, id`;
  * is why the exclusion is this exact name and not the whole `<table>__` prefix.
  */
 const BY_CREATION_INDEX_SUFFIX = "__by_creation";
+
+/** Suffix of the framework index behind a `.ttl()` table's expiry sweep. */
+const TTL_INDEX_SUFFIX = "__ttl";
 
 /** How a sort-keyed index's `CREATE INDEX` statement ends, rendered from {@link INDEX_SORT_KEYS}. */
 const INDEX_SORT_KEYS_TAIL = `, ${renderSql("sqlite", INDEX_SORT_KEYS).sql})`;
@@ -330,6 +334,36 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
 };
 
 /**
+ * Create the expression index behind a `.ttl()` table's sweep (see
+ * `ttlIndexColumns`). Without it the sweep's `field < cutoff` reads the whole
+ * table on every wake, since with nothing expired its LIMIT never stops the scan.
+ *
+ * Isolated like the `__cdc_log` indexes: the first build decodes every row's
+ * JSON on the request that opens the shard, and a failure leaves the sweep on
+ * its scan rather than failing the migration. The next cold start retries.
+ */
+const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, declared: Set<string>): void => {
+    const indexName = `${tableName}${TTL_INDEX_SUFFIX}`;
+
+    // A declared index already holds the name; never replace a user's index.
+    if (definition.ttlPolicy === undefined || declared.has(indexName)) {
+        return;
+    }
+
+    const expressions = ttlIndexColumns(definition.ttlPolicy.field, definition.softDeleteMode?.field);
+
+    declared.add(indexName);
+
+    try {
+        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, false, []);
+        runDrizzle(sql, createIndexSql(indexName, tableName, expressions, false));
+        recordFrameworkIndex(sql, indexName, tableName);
+    } catch {
+        /* degraded sweep path; the next cold start retries */
+    }
+};
+
+/**
  * Create the secondary + `.unique()` expression indexes declared on a table.
  *
  * A UNIQUE index does NOT get the sort keys appended: they would become part of
@@ -375,6 +409,7 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         });
     }
 
+    migrateTtlIndex(sql, tableName, definition, declared);
     dropUndeclaredIndexes(sql, tableName, declared);
 };
 

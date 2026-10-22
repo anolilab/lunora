@@ -4645,6 +4645,12 @@ const minShapePokeCursor: (sql: SqlExec) => number | undefined;
 const nextPromotionState: (current: PromotionState, subscribers: number, thresholds?: PromotionThresholds) => PromotionState;
 ```
 
+### `nextTtlExpiry` (const)
+
+```ts
+const nextTtlExpiry: (sql: SqlExec, spec: TtlSweepSpec) => number | undefined;
+```
+
 ### `normalizeCountArgument` (const)
 
 ```ts

@@ -200,6 +200,7 @@ import {
     minCdcReplayableSeq,
     minCdcSeq,
     minShapePokeCursor,
+    nextTtlExpiry,
     OwnerRelay,
     parkScheduleOutbox,
     parseExportShardArgs,
@@ -1726,7 +1727,7 @@ const SHARD_BULK_ROW_CAP = MAX_PAGE_SIZE;
 /** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
 const TTL_SWEEP_BATCH = 200;
 const TTL_SWEEP_MAX_BATCHES = 20;
-/** Cadence the TTL sweep re-arms its shared-alarm tier at while any `.ttl()` table exists — a coarse, bounded expiry window. */
+/** The soonest the TTL sweep re-arms its shared-alarm tier after a pass or a write — a coarse, bounded expiry window. */
 const TTL_SWEEP_INTERVAL_MS = 30_000;
 
 /**
@@ -6535,10 +6536,11 @@ abstract class ShardDO {
      * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
      * drains across several alarms without stalling the shard.
      *
-     * Returns the next-due timestamp (a coarse {@link TTL_SWEEP_INTERVAL_MS}
-     * cadence, so freshly-written rows expire within a bounded window) while any
-     * TTL table exists, or `undefined` when there are none — so a DO with no TTL
-     * table never arms this tier.
+     * Returns the next-due timestamp from {@link ShardDO.nextTtlWake} — just past
+     * the earliest remaining expiry, never sooner than the coarse
+     * {@link TTL_SWEEP_INTERVAL_MS} cadence — or `undefined` when no row carries a
+     * TTL, so an idle TTL table does not wake the shard. A write that adds an
+     * expiring row re-arms through {@link ShardDO.armTtlSweepAfterWrite}.
      *
      * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
      * spec, every batch) — not per-row or per-spec — because the ceiling exists to
@@ -6583,7 +6585,7 @@ abstract class ShardDO {
             }
         }
 
-        return now + TTL_SWEEP_INTERVAL_MS;
+        return this.nextTtlWake(specs, now);
     }
 
     /**
@@ -13278,6 +13280,12 @@ abstract class ShardDO {
             return;
         }
 
+        // A failed arm must not fail a write that already committed; the next
+        // cold start's bootstrap sweep re-derives the alarm from the table.
+        await this.armTtlSweepAfterWrite(changed).catch((error: unknown) => {
+            this.recordShapeError("ttl:arm", error);
+        });
+
         // Past the response: the write is durable and nothing below depends on
         // the registry having heard about it. Checked here first so a shard with
         // no registry pays nothing on the write path.
@@ -15097,6 +15105,62 @@ abstract class ShardDO {
         } catch {
             // No table, no custody to resume.
         }
+    }
+
+    /**
+     * When the TTL tier should next wake for `specs`: 1 ms past the earliest live
+     * expiry (the sweep's `expiry < now` is strict), but never before `now +`
+     * {@link TTL_SWEEP_INTERVAL_MS}. The floor keeps the old bounds — at most one
+     * wake per interval, and a row is swept within one interval of expiring — and
+     * covers a row already past due (a backlog the pass left, or one written
+     * expired) without a due-now loop. `undefined` when no row carries a TTL.
+     */
+    private nextTtlWake(specs: ReadonlyArray<TtlSweepSpec>, now: number): number | undefined {
+        const sql = this.sql as SqlExec;
+        let earliest: number | undefined;
+
+        for (const spec of specs) {
+            const expiry = nextTtlExpiry(sql, spec);
+
+            if (expiry !== undefined && (earliest === undefined || expiry < earliest)) {
+                earliest = expiry;
+            }
+        }
+
+        return earliest === undefined ? undefined : Math.max(earliest + 1, now + TTL_SWEEP_INTERVAL_MS);
+    }
+
+    /**
+     * Re-arm the TTL tier after a write to a `.ttl()` table. The sweep sleeps
+     * until the earliest expiry, or indefinitely when no row has one, so a write
+     * that adds an earlier-expiring row must pull the alarm in. Every user-table
+     * write reaches here: the ctx-db writer reports each one through
+     * `recordChangedTable`, and {@link ShardDO.flushChangedTables} drains them.
+     * Only ever moves the alarm earlier, and is a no-op (one index seek) when the
+     * pending alarm is already due first. A replica runs no background tiers.
+     */
+    private async armTtlSweepAfterWrite(changed: ReadonlySet<string>): Promise<void> {
+        if (this.replica !== undefined) {
+            return;
+        }
+
+        const specs = this.ttlSweeps().filter((spec) => changed.has(spec.table));
+
+        if (specs.length === 0) {
+            return;
+        }
+
+        const now = Date.now();
+        const target = this.nextTtlWake(specs, now);
+        const pendingAt = this.globalPollArmedAt;
+
+        if (target === undefined || (pendingAt !== undefined && pendingAt <= target)) {
+            return;
+        }
+
+        // Floor-paced (at least TTL_SWEEP_INTERVAL_MS out), so the breaker only
+        // reads its window here — the same gate `scheduleBootstrapPoll` applies.
+        await (this.admitAlarmRearm(target, now, false) ? this.scheduleGlobalPoll(target) : this.armRecoveryWake());
     }
 
     /**
