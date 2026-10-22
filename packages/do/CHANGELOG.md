@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.238...@lunora/do@1.0.0-alpha.239) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.163
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+
 ## @lunora/do [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.237...@lunora/do@1.0.0-alpha.238) (2026-10-22)
 
 ### ⚠ BREAKING CHANGES
