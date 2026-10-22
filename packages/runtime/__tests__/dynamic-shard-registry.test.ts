@@ -330,7 +330,7 @@ describe("createDynamicShardRegistry", () => {
         const results = await Promise.all(Array.from({ length: 20 }, async () => registry.listShardKeys("messages")));
 
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(1);
-        expect(results.every((keys) => [...keys].toSorted((a, b) => a.localeCompare(b)).join(",") === "a,b")).toBe(true);
+        expect(results.map((keys) => [...keys].toSorted((a, b) => a.localeCompare(b)))).toStrictEqual(Array.from({ length: 20 }, () => ["a", "b"]));
     });
 
     it("clears the in-flight request on failure, so the next call retries", async () => {
@@ -363,7 +363,7 @@ describe("createDynamicShardRegistry", () => {
     });
 
     it("does not join a list that started before a register on the same worker", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         let listAttempts = 0;
@@ -399,11 +399,15 @@ describe("createDynamicShardRegistry", () => {
 
         const afterRegister = registry.listShardKeys("messages");
 
+        // Checked before the held list is released: a call that joined it would never get a reply.
+        expect(listAttempts).toBe(2);
+        expect([...(await afterRegister)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+
         releaseFirst();
 
         expect([...(await beforeRegister)]).toStrictEqual(["a"]);
-        expect([...(await afterRegister)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
-        expect(listAttempts).toBe(2);
+        // The held list finished after the fresh one; its stale reply must not replace the fresh cache entry.
+        expect([...(await registry.listShardKeys("messages"))].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
     });
 
     it("does not share a request when caching is off, so every call reaches the DO", async () => {

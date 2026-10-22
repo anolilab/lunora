@@ -180,22 +180,25 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
 
                 const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
 
-                if (cacheTtlMs > 0) {
-                    cache.set(table, { expiresAt: now + cacheTtlMs, shardKeys });
-                }
-
                 return shardKeys;
             })();
 
-            // With caching off, every call is meant to reach the DO, so nothing is shared. A failed request
-            // is dropped here too, so the next call retries rather than replaying the rejection.
+            // With caching off, every call is meant to reach the DO, so nothing is shared.
             if (cacheTtlMs > 0) {
                 pending.set(table, request);
             }
 
             try {
-                return await request;
+                const shardKeys = await request;
+
+                // A register that landed while this list was in flight has already dropped it, so its reply is stale.
+                if (cacheTtlMs > 0 && pending.get(table) === request) {
+                    cache.set(table, { expiresAt: now + cacheTtlMs, shardKeys });
+                }
+
+                return shardKeys;
             } finally {
+                // Cleared on settle, success or failure, so the next call after a failed list retries.
                 if (pending.get(table) === request) {
                     pending.delete(table);
                 }
