@@ -149,6 +149,24 @@ const BADGES: Record<BadgeName, BadgeSpec>;
 const BADGE_COLUMN_WIDTH: number;
 ```
 
+### `BUILD_ROOT_ENV` (const)
+
+```ts
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+```
+
+### `BUILD_TARGET_ENV` (const)
+
+```ts
+const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
+```
+
+### `BUNDLE_META_PATH_ENV` (const)
+
+```ts
+const BUNDLE_META_PATH_ENV = "LUNORA_BUNDLE_META_PATH";
+```
+
 ### `BadgeName` (type)
 
 ```ts
@@ -262,6 +280,12 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `DEFAULT_BUNDLE_META_PATH` (const)
+
+```ts
+const DEFAULT_BUNDLE_META_PATH: string;
 ```
 
 ### `DEFAULT_DEPLOY_TARGET` (const)
@@ -1242,6 +1266,12 @@ const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
 ```
 
+### `assertBuildTargetMatches` (const)
+
+```ts
+const assertBuildTargetMatches: (target: string, projectRoot: string) => void;
+```
+
 ### `badgeLead` (const)
 
 ```ts
@@ -1266,6 +1296,12 @@ const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "plat
 
 ```ts
 const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
+```
+
+### `canonicalPath` (const)
+
+```ts
+const canonicalPath: (path: string) => string;
 ```
 
 ### `claimAgentRulesHint` (const)

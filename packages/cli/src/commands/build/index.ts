@@ -54,6 +54,12 @@ const buildCommand: Command = {
         },
         { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
+        {
+            description:
+                "Project directory to build (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
+        },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag
         // — which `build` rejected as an unknown option, so half its own advice
@@ -89,6 +95,7 @@ export type BuildOptions = CreateOptions<{
     "framework-build": boolean | undefined;
     "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
+    root: string | undefined;
     "smoke-load": boolean | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is

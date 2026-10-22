@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 /**
  * The environment switch that turns codegen off — the other spelling of
  * `lunora dev --no-codegen`.
@@ -25,6 +27,25 @@ const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
 /** Env var that enables lazy function imports for codegen when it spells `1` / `true`. */
 const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
 
+/** The project root the CLI started a client build for. Only that root's plugin checks {@link BUILD_TARGET_ENV} against itself. */
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+
+/**
+ * Env var the CLI sets on the client build it spawns (`lunora build` and `lunora deploy`): the target it resolved for this run.
+ * A plugin whose own `target` option names another one refuses to build, so the artifact cannot
+ * describe a target the deploy will not ship to.
+ */
+const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
+
+/** Env var the CLI sets to the path the Vite plugin writes its server metafile to. Unset means the default under `.lunora/`. */
+const BUNDLE_META_PATH_ENV = "LUNORA_BUNDLE_META_PATH";
+
+/**
+ * Where a plain `vite build` (no {@link BUNDLE_META_PATH_ENV}) writes the server metafile. Only a prebuilt worker
+ * (`frameworkBuild: false`) reads it back, so the CLI clears it before its own client build.
+ */
+const DEFAULT_BUNDLE_META_PATH: string = join(".lunora", "vite-bundle-meta.json");
+
 /**
  * Whether a {@link CODEGEN_ENV} value spells an explicit "off".
  *
@@ -48,4 +69,15 @@ const isLazyFunctionsEnabled = (value: string | undefined): boolean => {
 /** Either opt-in enables lazy function imports: the explicit option or {@link LAZY_FUNCTIONS_ENV}. `false` does not veto the environment. */
 const resolveLazyFunctions = (flag?: boolean): boolean => flag === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]);
 
-export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV, resolveLazyFunctions, STRICT_ADVISORIES_ENV };
+export {
+    BUILD_ROOT_ENV,
+    BUILD_TARGET_ENV,
+    BUNDLE_META_PATH_ENV,
+    CODEGEN_ENV,
+    DEFAULT_BUNDLE_META_PATH,
+    isCodegenDisabled,
+    isLazyFunctionsEnabled,
+    LAZY_FUNCTIONS_ENV,
+    resolveLazyFunctions,
+    STRICT_ADVISORIES_ENV,
+};

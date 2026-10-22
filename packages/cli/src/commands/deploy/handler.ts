@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
@@ -47,6 +48,7 @@ import runLazySmokeLoad from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
+import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -57,7 +59,7 @@ import { validateWrangler } from "../../util/wrangler-validator";
 import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
-import { provisionDeployHyperdrive } from "./hyperdrive";
+import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -526,6 +528,94 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
 const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
     serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
 
+// A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
+// target the same host, and run for the environment wrangler deploys.
+const serviceBuildOptions = (
+    directory: string,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+    frameworkBuild: boolean | undefined,
+    spawner: Spawner,
+): Parameters<typeof runClientBuild>[0] => {
+    return {
+        cwd: directory,
+        environment: options.env,
+        frameworkBuild,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger: options.logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner,
+        strictAdvisories: resolveStrictAdvisories(options),
+        target: driver.id,
+    };
+};
+
+/**
+ * The driver's toolchain when its services deploy from here. Otherwise the reason is logged, with the services it leaves undeployed,
+ * and `undefined` is returned.
+ */
+const serviceToolchain = (
+    services: ReadonlyArray<{ worker: string }>,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): NonNullable<DeployDriver["toolchain"]> | undefined => {
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+
+    if (skipped !== undefined || toolchain === undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    return toolchain;
+};
+
+/**
+ * The first service whose client build the target refuses, named, so the deploy stops before any service is deployed. A refusal found
+ * after an earlier service deployed would leave a partial set.
+ */
+const firstServiceRefusal = (
+    services: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
+    buildFor: (directory: string) => Parameters<typeof runClientBuild>[0],
+): string | undefined => {
+    for (const service of services) {
+        const refusal = clientBuildRefusal(buildFor(dirname(service.wranglerPath)));
+
+        if (refusal !== undefined) {
+            return `service ${service.name} (${service.worker}): ${refusal}`;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The service refusal a deploy would hit, found before the app's client build writes anything. Read-only: it reads the service
+ * bindings and runs the same refusal check the service loop runs. Services the deploy skips are not checked, as in the loop.
+ */
+const serviceRefusalBeforeWrites = (cwd: string, options: DeployCommandOptions, target: string): string | undefined => {
+    const { error, services } = readServiceBindings(cwd);
+
+    // A read error is reported by the deploy itself; there is nothing to refuse here.
+    if (error !== undefined || services.length === 0) {
+        return undefined;
+    }
+
+    const driver = resolveDeployDriver(target);
+
+    if (driver.toolchain === undefined || serviceDeploySkipReason(options) !== undefined) {
+        return undefined;
+    }
+
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+
+    return firstServiceRefusal(workers, (directory) => serviceBuildOptions(directory, options, driver, frameworkBuild, defaultSpawner));
+};
+
 /**
  * The refusals that stop a deploy before anything is written: an unusable target, an option the target refuses, and the
  * open-shard gate. {@link runDeployCommand} runs them before the client build, so a refused deploy leaves the project as
@@ -588,6 +678,16 @@ const preflightDeploy = (
 
     if (gateError !== undefined) {
         return { kind: "refused", code: gateError.code, error: gateError.error, validation: NO_VALIDATION };
+    }
+
+    // A service the target refuses stops the deploy here too: after the app's client build, a refused service would have left the
+    // app's build output behind for nothing.
+    const serviceRefusal = serviceRefusalBeforeWrites(cwd, options, resolvedTarget.target);
+
+    if (serviceRefusal !== undefined) {
+        options.logger.error(serviceRefusal);
+
+        return { kind: "refused", code: EXIT_CODE.USAGE, error: serviceRefusal, validation: NO_VALIDATION };
     }
 
     return { kind: "ok", target: resolvedTarget.target };
@@ -721,6 +821,40 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
 };
 
+// Clears the redirect a service build left behind, so one present after the build is this run's.
+const clearServiceRedirect = (directory: string): void => {
+    rmSync(join(directory, ".wrangler", "deploy", "config.json"), { force: true });
+};
+
+/**
+ * Refuses or runs one service's client build and reports whether it ran. A refused build keeps the redirect a previous deploy
+ * left; an allowed one clears it first, so a redirect present afterwards is this run's.
+ */
+const buildService = async (
+    serviceBuild: Parameters<typeof runClientBuild>[0],
+    frameworkBuild: boolean | undefined,
+    environment: string | undefined,
+): Promise<{ built: boolean; error: string | undefined }> => {
+    const refusal = clientBuildRefusal(serviceBuild);
+
+    if (refusal !== undefined) {
+        return { built: false, error: refusal };
+    }
+
+    const built = clientBuildRuns(serviceBuild.cwd, frameworkBuild, environment);
+
+    if (built) {
+        clearServiceRedirect(serviceBuild.cwd);
+    }
+
+    return { built, error: await runClientBuild(serviceBuild) };
+};
+
+// The redirect is this run's output when the build ran (it cleared the old one first), or the artifact an earlier build left
+// when the deploy is prebuilt or skips builds on purpose. A normal deploy whose service needed no build deploys the source config.
+const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuild: boolean | undefined): string | undefined =>
+    built || frameworkBuild === false ? generatedConfigPath(wranglerPath) : undefined;
+
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
@@ -731,34 +865,56 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
  * `--dry-run` pass through; a target refusing one says so here. Returns the
  * error that stops the deploy, if any.
  */
-const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
     const { error, services } = readServiceBindings(cwd);
 
     if (error !== undefined) {
-        return error;
+        return { code: EXIT_CODE.FAILURE, error };
     }
 
     if (services.length === 0) {
         return undefined;
     }
 
-    const { toolchain } = driver;
-    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+    const toolchain = serviceToolchain(services, options, driver);
 
-    if (skipped !== undefined || toolchain === undefined) {
-        const names = services.map((service) => service.worker).join(", ");
-
-        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
-
+    if (toolchain === undefined) {
         return undefined;
     }
 
     const manager = detectPackageManager(cwd);
     // Two keys may bind two entrypoints of one Worker: it deploys once.
     const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+    // `--prebuilt` skips the app's client build, and a service's build is part of the same artifact, so it is skipped too.
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+    const serviceBuildFor = (directory: string): Parameters<typeof runClientBuild>[0] =>
+        serviceBuildOptions(directory, options, driver, frameworkBuild, spawner);
+
+    const refused = firstServiceRefusal(workers, serviceBuildFor);
+
+    if (refused !== undefined) {
+        options.logger.error(refused);
+
+        return { code: EXIT_CODE.USAGE, error: refused };
+    }
 
     for (const service of workers) {
         const directory = dirname(service.wranglerPath);
+        const serviceBuild = serviceBuildFor(directory);
+
+        // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
+        const { built, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
+
+        if (buildError !== undefined) {
+            const message = `service ${service.name} (${service.worker}): ${buildError}`;
+
+            options.logger.error(message);
+
+            return { code: EXIT_CODE.FAILURE, error: message };
+        }
+
+        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
+
         let invocation: ReturnType<typeof planToolchainInvocation>;
 
         try {
@@ -766,10 +922,13 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
                 // Always an explicit config: wrangler left to discover one walks up
                 // from the service folder and can find the app's `wrangler.json`
                 // or a Vite build's `.wrangler/deploy/config.json` first.
-                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+                toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
             );
         } catch (error_: unknown) {
-            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`,
+            };
         }
 
         invocation.commit();
@@ -778,11 +937,14 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
         options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
 
-        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
         const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
-            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`,
+            };
         }
     }
 
@@ -929,6 +1091,12 @@ const checkArtifactsNamespaces = async (
     return failures.length === 0 ? undefined : failures.join("\n");
 };
 
+/** A before-spawn step's failure: the exit code it maps to, and the message. */
+interface BeforeSpawnFailure {
+    code: number;
+    error: string;
+}
+
 /**
  * The steps that change the account or the sibling Workers, run last, in the order of how little a
  * failure leaves behind: the Artifacts namespaces, then the Hyperdrive config (both are reused on a
@@ -941,12 +1109,23 @@ const runBeforeSpawnSteps = async (
     spawner: Spawner,
     target: string,
     wranglerPath: string | undefined,
-): Promise<string | undefined> =>
-    (createsAccountResources(options)
+): Promise<BeforeSpawnFailure | undefined> => {
+    const artifacts = createsAccountResources(options)
         ? await checkArtifactsNamespaces(cwd, wranglerPath, target, options.env, options.logger, options.discoveryCache, "create")
-        : undefined) ??
-    (await provisionDeployHyperdrive(cwd, options, "deploy", target)) ??
-    (await deployServices(cwd, options, driver, spawner));
+        : undefined;
+
+    if (artifacts !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: artifacts };
+    }
+
+    const hyperdrive = await provisionDeployHyperdrive(cwd, options, "deploy", target);
+
+    if (hyperdrive !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: hyperdrive };
+    }
+
+    return deployServices(cwd, options, driver, spawner);
+};
 
 /**
  * A lazy registry defers a broken module's error to its first call, where an eager one fails the
@@ -1067,7 +1246,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target, validation.wranglerPath);
 
     if (beforeSpawnError !== undefined) {
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: beforeSpawnError, mintedSecretsFile, validation };
+        return { code: beforeSpawnError.code, descriptor: undefined, error: beforeSpawnError.error, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, driver);
@@ -1104,6 +1283,7 @@ const runDeployClientBuild = async (options: DeployCommandOptions): Promise<Depl
         apiSpec: options.apiSpec,
         cwd: projectRoot,
         environment: options.env,
+        bundleMetaPath: options.bundleMetaPath,
         frameworkBuild: options.skipCodegen === true ? false : options.frameworkBuild,
         strictAdvisories: resolveStrictAdvisories(options),
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
@@ -1229,7 +1409,9 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runDeployCommand({
         allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,

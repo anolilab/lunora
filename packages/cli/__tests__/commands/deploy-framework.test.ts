@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute, runDeployCommand } from "../../src/commands/deploy/handler";
 import type { DeployOptions } from "../../src/commands/deploy/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { SpawnDescriptor } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -48,6 +49,19 @@ const wranglerWith = (extra: Record<string, unknown>): string =>
 
 const isClientBuild = (descriptor: SpawnDescriptor): boolean => descriptor.args.includes("vite") && descriptor.args.includes("build");
 
+const noSecretList = () => Promise.resolve({ names: [], ok: false });
+
+/** Records like the given spawner, and writes the redirect a composed service's build leaves behind. */
+const withGeneratedConfig =
+    (serviceDirectory: string, recorded: ReturnType<typeof createRecordingSpawner>["spawner"]) => async (descriptor: Parameters<typeof recorded>[0]) => {
+        if (isClientBuild(descriptor) && descriptor.cwd === serviceDirectory) {
+            mkdirSync(join(serviceDirectory, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(serviceDirectory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../generated.jsonc" }), "utf8");
+        }
+
+        return recorded(descriptor);
+    };
+
 let workdir: string;
 
 describe("lunora deploy — client build before wrangler", () => {
@@ -68,7 +82,7 @@ describe("lunora deploy — client build before wrangler", () => {
 
         const { calls, spawner } = createRecordingSpawner();
 
-        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: () => Promise.resolve({ names: [], ok: false }) });
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
 
         expect(calls.findIndex((call) => isClientBuild(call.descriptor))).toBe(0);
         expect(calls.some((call) => call.descriptor.args.includes("--dry-run"))).toBe(true);
@@ -219,5 +233,250 @@ describe("lunora deploy — client build before wrangler", () => {
         });
 
         expect(executeSpawns.some((descriptor) => isClientBuild(descriptor))).toBe(true);
+    });
+});
+
+describe("lunora deploy — a service's client build", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-deploy-service-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWith({ main: "virtual:lunora/worker" }), "utf8");
+        writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+        mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+        writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/index.ts" }), "utf8");
+        writeFileSync(join(workdir, "services", "parser", "vite.config.ts"), "export default {};\n", "utf8");
+        executeSpawns.length = 0;
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("deploys the config a service's own build generated, not its source config", async () => {
+        expect.assertions(1);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner: recorded } = createRecordingSpawner();
+        const spawner = withGeneratedConfig(serviceDirectory, recorded);
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
+    });
+
+    it("deploys the config a service's build generated under --env too, since that build ran for the deployed environment", async () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            wranglerWith({
+                d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                env: {
+                    staging: {
+                        d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        name: "lunora-app-staging",
+                    },
+                },
+                main: "virtual:lunora/worker",
+                migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
+            }),
+            "utf8",
+        );
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner: recorded } = createRecordingSpawner();
+        const spawner = withGeneratedConfig(serviceDirectory, recorded);
+
+        await runDeployCommand({
+            cwd: workdir,
+            dryRun: true,
+            env: "staging",
+            logger: silentLogger(),
+            spawner,
+            secretLister: noSecretList,
+        });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
+    });
+
+    it("builds a service whose assets are configured only under the --env block, for that environment", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            wranglerWith({
+                env: {
+                    staging: {
+                        d1_databases: [{ binding: "DB", database_id: "real-db-id-abc123", database_name: "x" }],
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        name: "lunora-app-staging",
+                    },
+                },
+                main: "virtual:lunora/worker",
+            }),
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "services", "parser", "wrangler.jsonc"),
+            wranglerWith({ env: { staging: { assets: { directory: "./dist" } } }, main: "src/index.ts" }),
+            "utf8",
+        );
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner: recorded } = createRecordingSpawner();
+        const spawner = withGeneratedConfig(serviceDirectory, recorded);
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, env: "staging", logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory);
+
+        expect(build).toBeDefined();
+        expect(build?.descriptor.env?.CLOUDFLARE_ENV).toBe("staging");
+    });
+
+    it("keeps the redirect a previous deploy left when the service's build is refused", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const redirect = join(serviceDirectory, ".wrangler", "deploy", "config.json");
+
+        writeFileSync(join(serviceDirectory, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+        mkdirSync(dirname(redirect), { recursive: true });
+        writeFileSync(redirect, JSON.stringify({ configPath: "../../previous.jsonc" }), "utf8");
+
+        const { spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        expect(result.code).not.toBe(0);
+        expect(readFileSync(redirect, "utf8")).toContain("previous.jsonc");
+    });
+
+    it("tells a service's client build the advisory opt-out, as it does the app's", async () => {
+        expect.assertions(1);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList, strictAdvisories: false });
+
+        const build = calls.find((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory);
+
+        expect(build?.descriptor.env?.LUNORA_STRICT_ADVISORIES).toBe("0");
+    });
+
+    it("keeps a service's client build out of a --prebuilt deploy, as it keeps the app's out", async () => {
+        expect.assertions(1);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), skipCodegen: true, spawner, secretLister: noSecretList });
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+    });
+
+    it("deploys the redirect an earlier build left for a service when a --prebuilt deploy skips that build", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+
+        mkdirSync(join(serviceDirectory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(serviceDirectory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../generated.jsonc" }), "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), skipCodegen: true, spawner, secretLister: noSecretList });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+        expect(deploy?.descriptor.args.join(" ")).toContain("generated.jsonc");
+    });
+
+    it("deploys a plain service's source config on a normal deploy, even when an earlier build left a redirect for it", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+
+        // A plain worker: no Vite config and no assets, so a normal deploy runs no build for it.
+        rmSync(join(serviceDirectory, "vite.config.ts"), { force: true });
+        writeFileSync(join(serviceDirectory, "wrangler.jsonc"), wranglerWith({ main: "src/index.ts" }), "utf8");
+        mkdirSync(join(serviceDirectory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(serviceDirectory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../generated.jsonc" }), "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const deploy = calls.find((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+        expect(deploy?.descriptor.args.join(" ")).not.toContain("generated.jsonc");
+    });
+
+    it("refuses before any service deploys when a later service's target differs, so no earlier service is left deployed alone", async () => {
+        expect.assertions(3);
+
+        // A second service that names another host: refused. It sorts after parser, so parser would deploy first if nothing checked ahead.
+        writeFileSync(
+            join(workdir, "lunora.config.ts"),
+            `export default { services: { parser: { dir: "./services/parser" }, zed: { dir: "./services/zed" } } };\n`,
+            "utf8",
+        );
+        mkdirSync(join(workdir, "services", "zed"), { recursive: true });
+        writeFileSync(join(workdir, "services", "zed", "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/index.ts" }), "utf8");
+        writeFileSync(join(workdir, "services", "zed", "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+        writeFileSync(join(workdir, "services", "zed", "vite.config.ts"), "export default {};\n", "utf8");
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls.some((call) => call.descriptor.cwd === serviceDirectory)).toBe(false);
+        // The app's own client build waits for the refusal too: a refused service must not leave the app's output behind.
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === workdir)).toBe(false);
+    });
+
+    it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+
+        writeFileSync(join(serviceDirectory, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({
+            cwd: workdir,
+            dryRun: true,
+            logger: silentLogger(),
+            spawner,
+            secretLister: noSecretList,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory)).toBe(false);
+    });
+
+    it("runs the service's client build from its folder, before that service's wrangler deploy", async () => {
+        expect.assertions(2);
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+
+        await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        const build = calls.findIndex((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === serviceDirectory);
+        const deploy = calls.findIndex((call) => call.descriptor.cwd === serviceDirectory && !isClientBuild(call.descriptor));
+
+        expect(build).toBeGreaterThanOrEqual(0);
+        expect(build).toBeLessThan(deploy);
     });
 });

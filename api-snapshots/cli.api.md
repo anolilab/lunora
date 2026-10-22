@@ -111,6 +111,7 @@ interface DeployCommandOptions {
     allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    bundleMetaPath?: string;
     clientBuildEnvironment?: string;
     clientBuildOutputJson?: boolean;
     clientBuildRan?: boolean;
@@ -653,7 +654,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)

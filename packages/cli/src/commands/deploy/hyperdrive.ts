@@ -619,4 +619,4 @@ const provisionDeployHyperdrive = async (
 };
 
 export type { ProvisionHyperdriveOptions };
-export { connectionStringVariable, provisionDeployHyperdrive, provisionHyperdrive };
+export { connectionStringVariable, generatedConfigPath, provisionDeployHyperdrive, provisionHyperdrive };
