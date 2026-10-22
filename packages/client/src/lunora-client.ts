@@ -7050,11 +7050,6 @@ class LunoraClient {
                 conn.connectionId = undefined;
                 conn.roomsRejoined = false;
 
-                // A socket opened, so whatever was refusing the upgrade is gone:
-                // stop polling and let the resubscribe handshake below take the
-                // subscriptions back onto the live channel.
-                conn.polling.noteOpen();
-
                 // See `ShardConnection.stableTimer` for why `open` is not proof.
                 clearTimeout(conn.stableTimer);
                 conn.stableTimer = setTimeout(() => {
@@ -7084,6 +7079,11 @@ class LunoraClient {
                 // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
                 // also be told the previous socket's answers still stand.
                 this.markShardPendingAck(shardKey, true);
+
+                // A socket opened, so whatever was refusing the upgrade is gone: stop polling and
+                // let the resubscribe handshake below take the subscriptions back onto the live
+                // channel. Stopping reports status, so it runs after the un-answer above.
+                conn.polling.noteOpen();
                 this.emitConnectionStatus();
 
                 // Resubscribe everyone bound to this shard, a bounded few frames
