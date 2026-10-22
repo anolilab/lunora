@@ -422,7 +422,8 @@ export const tsconfigFingerprint = (tsconfigPath: string): string => {
         return "";
     }
 
-    return JSON.stringify({ fileNames: parsed.fileNames.toSorted((left, right) => left.localeCompare(right)), options: parsed.options });
+    // The file list keeps TypeScript's order: a reordered list merges declarations differently, so it must change the fingerprint.
+    return JSON.stringify({ fileNames: parsed.fileNames, options: parsed.options });
 };
 
 /**

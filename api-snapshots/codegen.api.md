@@ -1704,6 +1704,12 @@ const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySigna
 const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
 ```
 
+### `tsconfigFingerprint` (const)
+
+```ts
+const tsconfigFingerprint: (tsconfigPath: string) => string;
+```
+
 ### `validatorIrToJsonSchema` (const)
 
 ```ts

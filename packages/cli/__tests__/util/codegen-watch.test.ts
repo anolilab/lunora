@@ -61,7 +61,6 @@ describe("startCodegenWatch", () => {
         vi.unstubAllEnvs();
     });
 
-    /** Stub codegen to a clean run, so a test can reach the hook without a real project. */
     /** Counts the watcher's codegen runs, and resolves once the Nth has happened: the test waits on the run, not a poll. */
     const runCounter = (): { reached: (count: number) => Promise<void>; report: () => void } => {
         let runs = 0;
@@ -83,6 +82,7 @@ describe("startCodegenWatch", () => {
         };
     };
 
+    /** Stub codegen to a clean run, so a test can reach the hook without a real project. */
     const codegenSucceeds = (): void => {
         vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
     };
