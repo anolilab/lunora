@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -197,6 +197,149 @@ describe("startCodegenWatch", () => {
 
             expect(projectOf(1)).toBeDefined();
             expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the dependencies are installed again", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-install-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({}), "utf8");
+        mkdirSync(join(workdir, "node_modules"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules", ".modules.yaml"), "layoutVersion: 5\n", "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // `pnpm install` rewrites its marker; the next schema save must not reuse declarations read before it.
+            writeFileSync(join(workdir, "node_modules", ".modules.yaml"), "layoutVersion: 5\nupdated: true\n", "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the workspace above it is installed again", async () => {
+        expect.assertions(2);
+
+        // A pnpm workspace keeps its lockfile and `node_modules` at the root, above the project that `lunora dev` runs in.
+        const workspace = mkdtempSync(join(tmpdir(), "lunora-cw-workspace-"));
+        const projectRoot = join(workspace, "app");
+
+        mkdirSync(projectRoot, { recursive: true });
+        writeFileSync(join(workspace, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
+        mkdirSync(join(workspace, "node_modules"), { recursive: true });
+        writeFileSync(join(workspace, "node_modules", ".modules.yaml"), "layoutVersion: 5\n", "utf8");
+        writeFileSync(join(projectRoot, "tsconfig.json"), JSON.stringify({}), "utf8");
+        writeFileSync(join(projectRoot, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workspace, "node_modules", ".modules.yaml"), "layoutVersion: 5\nupdated: true\n", "utf8");
+            writeFileSync(join(projectRoot, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workspace, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the include globs of its tsconfig change", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-include-edit-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["src"] }), "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["lib"] }), "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("keeps the project when a file the include globs newly match is added, until the next rebuild", async () => {
+        expect.assertions(1);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-include-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["src", "schema.ts"] }), "utf8");
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "src", "a.ts"), "export const a = 1;\n", "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // A new file under `src/` is matched by the include glob, but the settings-only check does not glob the tree on a save.
+            writeFileSync(join(workdir, "src", "globals.d.ts"), "declare const x: number;", "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBe(projectOf(0));
         } finally {
             await handle.close();
             rmSync(workdir, { force: true, recursive: true });

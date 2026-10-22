@@ -24,7 +24,7 @@
  * regeneration.
  */
 import type { FSWatcher } from "node:fs";
-import { existsSync, readFileSync, watch } from "node:fs";
+import { existsSync, readFileSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
@@ -36,11 +36,11 @@ import {
     readServiceBindings,
     refreshCodegenProject,
     runCodegen,
-    tsconfigFingerprint,
 } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
+import { ts } from "ts-morph";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
@@ -89,22 +89,68 @@ const readFileOrEmpty = (path: string): string => {
     }
 };
 
+/** A file's modification time and size, or `""` when it is absent. */
+const statOrEmpty = (path: string): string => {
+    try {
+        const { mtimeMs, size } = statSync(path);
+
+        return `${String(mtimeMs)}:${String(size)}`;
+    } catch {
+        return "";
+    }
+};
+
 /**
- * The tsconfig and `lunora.config.*` contents a cached Project was built from,
- * the same inputs `@lunora/rspack` keys its cache on. `refreshCodegenProject`
- * only re-reads files the program already knows about, so a changed
- * `paths`/`include` or `codegen.exclude` is invisible to it and needs a fresh
- * Project.
+ * Lockfiles and install markers. A dependency update rewrites one of these, and a cached Project keeps the declarations it read from
+ * `node_modules`, which `refreshCodegenProject` never re-reads.
+ */
+const INSTALL_MARKERS = [
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "bun.lock",
+    "node_modules/.modules.yaml",
+    "node_modules/.package-lock.json",
+    "node_modules/.yarn-integrity",
+];
+
+/** `projectRoot` and every directory above it, nearest first: a workspace keeps its lockfile and `node_modules` above the project. */
+const directoriesAbove = (projectRoot: string): string[] => {
+    const parent = dirname(projectRoot);
+
+    return parent === projectRoot ? [projectRoot] : [projectRoot, ...directoriesAbove(parent)];
+};
+
+/**
+ * What a tsconfig resolves to once its `extends` chain is applied, without its file list. The `include` globs are the costly part of
+ * the watch's input check, and a file they newly match is not seen until the project is next rebuilt. This is the trade for not
+ * globbing the whole include tree on every save.
+ */
+const tsconfigSettings = (tsconfigPath: string): string => {
+    const host: ts.ParseConfigFileHost = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined, readDirectory: () => [] };
+    const parsed = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, host);
+
+    return parsed === undefined ? "" : JSON.stringify(parsed.options);
+};
+
+/**
+ * The tsconfig and its settings, `lunora.config.*` contents and install state a cached Project was built from. `refreshCodegenProject`
+ * only re-reads files the program already knows about, so a changed `paths`, `include` or `codegen.exclude`, and a dependency update, are
+ * invisible to it and need a fresh Project.
  */
 const readProjectInputs = (projectRoot: string, absoluteLunoraDirectory: string): string => {
     const tsconfigPath = findTsconfig(absoluteLunoraDirectory);
     const configPaths = new Set([...projectConfigCandidatePaths(absoluteLunoraDirectory), ...PROJECT_CONFIG_FILENAMES.map((name) => join(projectRoot, name))]);
     const configs = [...configPaths].map((path) => `${path}\n${readFileOrEmpty(path)}`);
+    const installs = directoriesAbove(projectRoot).flatMap((directory) =>
+        INSTALL_MARKERS.map((marker) => `${join(directory, marker)}\n${statOrEmpty(join(directory, marker))}`),
+    );
 
-    // The path matters too: a nearer tsconfig with identical bytes resolves paths against another directory.
-    const tsconfig = tsconfigPath === undefined ? "" : `${tsconfigPath}\n${tsconfigFingerprint(tsconfigPath)}`;
+    // The path matters too: a nearer tsconfig with identical bytes resolves paths against another directory. The bytes matter as well,
+    // since `include` and `files` are not in the settings.
+    const tsconfig = tsconfigPath === undefined ? "" : `${tsconfigPath}\n${readFileOrEmpty(tsconfigPath)}\n${tsconfigSettings(tsconfigPath)}`;
 
-    return [tsconfig, ...configs].join("\0");
+    return [tsconfig, ...configs, ...installs].join("\0");
 };
 
 interface ReusableProject {
