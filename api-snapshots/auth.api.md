@@ -1070,6 +1070,12 @@ const handleAuthDiscoveryRequest: (auth: LunoraAuth, request: Request) => Promis
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
+### `isDevEnvironment` (const)
+
+```ts
+const isDevEnvironment: (env: Record<string, unknown>) => boolean;
+```
+
 ### `legacyIssuerCleanupStatements` (const)
 
 ```ts

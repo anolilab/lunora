@@ -95,9 +95,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     }, [livePush, client]);
 
     // Polling fallback for the custom-loader case (no WS to subscribe to).
-    useAutoRefresh(() => {
-        jobsQuery.refetch();
-    }, !livePush);
+    useAutoRefresh(() => jobsQuery.poll(), !livePush);
 
     // Cancelling is available when the host supplies a canceller, or when the
     // panel is sourcing jobs from the client (then the client can cancel too).

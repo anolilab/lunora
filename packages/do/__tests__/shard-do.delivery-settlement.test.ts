@@ -45,6 +45,7 @@ const clientState = (): SubscriptionState => {
         lastValue: ["before"],
         optimisticLayers: [],
         serverBase: ["before"],
+        valueReceived: false,
         wireArgs: {},
     };
 };

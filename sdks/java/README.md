@@ -31,6 +31,7 @@ retries and socket library:
 Client client = new Client("https://my-app.example.com", myPoster);
 client.identity(currentUserId);
 client.authToken(currentBearer);
+client.wsToken(() -> currentBearer); // the session credential, sent in the first connect frame
 // The client id is minted per instance. Pin a stable per-device one only when
 // the offline queue is durable — a replayed write is namespaced server-side
 // under the id that issued it.
@@ -39,9 +40,15 @@ Object messages = client.query("messages:list", Map.of("channel", "general"), nu
 client.mutation("messages:send", Map.of("channel", "general", "text", "hi"), null, null);
 
 // Live subscription: attach your socket, then feed it frames.
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
 client.attachSocket(frame -> socket.send(Json.write(frame)));
 Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, null);
 ```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `java.net.http.HttpClient`
+already refuses them (`HttpClient.Redirect.NEVER` is its default); keep it that way
+and do not set `followRedirects(...)` on the builder.
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 no frame makes it throw — one that is not JSON, not an object, or not shaped
@@ -56,6 +63,73 @@ whose epoch differs from the view's, is not spliced on: unless it is a `reset`,
 the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
 and a cold `shape_subscribe` sent at once so the server re-seeds it.
 `client.close()` also ends every open `stream`.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type):
+
+```java
+int attempt = 0;
+String shard = null; // this socket's shard key; null is the default shard
+while (!Thread.currentThread().isInterrupted()) {
+    Thread retry = null;
+    try (Socket socket = connect()) { // your socket library
+        // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
+        client.attachSocket(frame -> socket.send(Json.write(frame)));
+        client.resendSubscriptions();
+        var report = client.flushOfflineQueue(shard);
+        if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
+            // Requeued writes never stop the read loop: retry on a daemon thread, stopped below.
+            Long first = report.retryAfterMs;
+            retry = new Thread(() -> {
+                Long wait = first;
+                long backoff = 1_000L;
+                try {
+                    while (true) {
+                        Thread.sleep(wait != null ? wait : backoff / 2 + ThreadLocalRandom.current().nextLong(backoff / 2 + 1));
+                        var again = client.flushOfflineQueue(shard);
+                        if (again.requeued.isEmpty() && again.retryAfterMs == null) return;
+                        // a persistent transient failure backs off instead of replaying every second
+                        backoff = Math.min(30_000L, backoff * 2);
+                        wait = again.retryAfterMs;
+                    }
+                } catch (InterruptedException e) {
+                    // the socket run ended
+                }
+            });
+            retry.setDaemon(true);
+            retry.start();
+        }
+        for (String raw; (raw = socket.receive()) != null; ) {
+            if ("ack".equals(client.handleFrame(raw))) attempt = 0;
+        }
+    } catch (Exception e) {
+        if (e instanceof InterruptedException) { // a socket call may throw it
+            Thread.currentThread().interrupt();
+            break;
+        }
+    } finally {
+        if (retry != null) {
+            retry.interrupt();
+            // Wait out an in-flight flush: if it requeues a write, the next run's flush must see it.
+            try {
+                retry.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        client.detachSocket();
+    }
+    long ms = Math.min(30_000L, 1_000L << Math.min(attempt++, 5));
+    try {
+        Thread.sleep(ms / 2 + ThreadLocalRandom.current().nextLong(ms / 2 + 1));
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+    }
+}
+```
+
+A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a background timer retries the flush, and that timer is stopped when the socket run ends.
 
 ## Optimistic updates and offline writes
 
@@ -101,6 +175,16 @@ has no caller left to tell — reaches `client.onMutationSettled`. A persisted
 record whose args no longer decode is purged and settled
 `OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute args, which
 would commit a different write than the caller made.
+
+A write that must never sit on disk — a credential, a one-time token — is built
+with `.onlineOnly(true)` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws an
+`OfflineException` coded `Offline.OFFLINE_NOT_QUEUED` before any optimistic layer
+is installed, and its arguments never reach the persistence adapter. It does not
+wait for a flush or queue behind pending writes, so it may land before an older
+queued write to the same document. A transport failure on such a write, sent
+directly while the connection is down, is refused the same way, with the
+transport error as its `cause`.
 
 The durable record holds the **wire** form of a write's args, so a store that
 serialises — a file, a SQLite column, a preferences store — round-trips a

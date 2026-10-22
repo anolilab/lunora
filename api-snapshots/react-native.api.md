@@ -19,6 +19,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `AgentApprovalGrant` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `AgentChatMessage` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
@@ -179,6 +183,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PendingApproval` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `Preloaded` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -224,6 +232,18 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseAgentApi` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsApi` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsOptions` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsResult` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -484,6 +504,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useAgent` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useAgentApprovals` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 

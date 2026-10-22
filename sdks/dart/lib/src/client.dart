@@ -195,7 +195,7 @@ class LunoraClient {
   String? identityFingerprint() => transport.identityFingerprint();
 
   /// The socket URL — see [LunoraTransport.wsUrl].
-  String wsUrl({String? shardKey, String? token}) => transport.wsUrl(shardKey: shardKey, token: token);
+  String wsUrl({String? shardKey, String? ticket}) => transport.wsUrl(shardKey: shardKey, ticket: ticket);
 
   LunoraFrameSender? _send;
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
@@ -215,6 +215,13 @@ class LunoraClient {
   /// open.
   void attachSocket(LunoraFrameSender sender) {
     _send = sender;
+  }
+
+  /// Forgets the sender, so a subscription made while the socket is down is
+  /// held for [resendSubscriptions] instead of written to the dead socket.
+  /// Unlike [close], the client stays usable and keeps its subscriptions.
+  void detachSocket() {
+    _send = null;
   }
 
   // ─── Connectivity ─────────────────────────────────────────────────────────
@@ -367,6 +374,13 @@ class LunoraClient {
   /// it replays — see [setConnected]. [precondition] is evaluated just before
   /// that replay: returning false discards the write rather than sending it
   /// against state it no longer suits.
+  ///
+  /// [onlineOnly] is never queued, persisted or replayed. Where this write would
+  /// be queued, the Future fails at once with `LunoraApiException` coded
+  /// [offlineNotQueued], before any optimistic layer is applied, so [args] never
+  /// reach the queue or the persistence adapter. It does not wait for a flush or
+  /// queue behind pending writes, so it may overtake them. For a credential or a
+  /// one-time token.
   Future<Object?> mutation(
     String functionPath, {
     Object? args,
@@ -375,6 +389,7 @@ class LunoraClient {
     LunoraOptimistic? optimistic,
     LunoraOptimisticUpdate? optimisticUpdate,
     bool Function()? precondition,
+    bool onlineOnly = false,
   }) async {
     _assertOpen();
 
@@ -382,12 +397,28 @@ class LunoraClient {
     // and any replay of it, so the server can deduplicate a write it already
     // committed rather than applying it twice.
     final id = mutationId ?? nextMutationId();
-    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
     // Per SHARD: a write for a shard whose socket is down queues even while
     // another shard is connected, because the connection that is up cannot
     // reach it.
-    if (!connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
+    final queues = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queues && onlineOnly) {
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
+
+    // The optimistic callbacks are user code and may drop this shard's socket, so the decision above can
+    // be stale. The write is decided again now, and an online-only one that would queue is refused.
+    final queuesNow = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queuesNow && onlineOnly) {
+      rollbackOptimistic(handles);
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    if (queuesNow) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 
@@ -401,8 +432,22 @@ class LunoraClient {
       }
 
       return outcome.result;
-    } on Object {
+    } on Object catch (error) {
       rollbackOptimistic(handles);
+
+      // An uncoded throw is the transport, not a verdict (the replay reads it the same
+      // way), so an online-only write that never reached the server while the shard has
+      // no socket is refused rather than surfacing the raw throw. An argument the codec
+      // refuses never left the process, so it surfaces as itself.
+      if (onlineOnly && error is! LunoraApiException && error is! WireFormatException && !connectedTo(shardKey)) {
+        throw LunoraApiException(
+          offlineNotQueued,
+          "'$functionPath' is online-only and the connection is not live, so it was not queued",
+          null,
+          false,
+          error,
+        );
+      }
 
       rethrow;
     }
@@ -446,7 +491,7 @@ class LunoraClient {
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
-  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context}) {
+  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context, String? token}) {
     final frame = <String, Object?>{'id': 'connect', 'type': 'connect'};
 
     if (clientId != null) {
@@ -454,6 +499,10 @@ class LunoraClient {
     }
     if (context != null) {
       frame['context'] = context;
+    }
+    // The session credential (protocol/README.md 5.1, 6): it never rides the URL.
+    if (token != null) {
+      frame['token'] = token;
     }
 
     return frame;

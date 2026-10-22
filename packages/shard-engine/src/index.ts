@@ -334,7 +334,7 @@ export {
 export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo } from "./relation-writes";
 export { describeRelationWrites } from "./relation-writes";
 export type { ApplyOnDeleteOptions } from "./relations";
-export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+export { applyInsertDefaults, applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
     LiveSocketControlCall,
     OwnerRelayFrame,
@@ -480,7 +480,7 @@ export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transa
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
-export { selectExpiredIds } from "./ttl-sweep";
+export { nextTtlExpiry, selectExpiredIds } from "./ttl-sweep";
 export type {
     LifecycleDispatchInfo,
     LifecycleEvent,

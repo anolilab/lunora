@@ -131,8 +131,15 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
  * `lunora deploy` do, and a watch rebuild logs it and carries on.
  */
 class LunoraRspackPlugin {
-    /** Resolved options, fixed at construction. */
+    /** Resolved options. The `target` is re-resolved on each pass. */
     #options: ResolvedLunoraRspackOptions;
+
+    /**
+     * The target the last codegen pass that actually ran generated for. Unset until
+     * one has run. Kept apart from `#options.target`, which moves at the start of a
+     * pass whether or not that pass gets as far as generating anything.
+     */
+    #generatedTarget: string | undefined;
 
     /** Absolute schema directory — the codegen input, and the watched context. */
     readonly #schemaDirectory: string;
@@ -208,9 +215,16 @@ class LunoraRspackPlugin {
      * this pass writes. Spawned first, wrangler dies on an unresolvable import
      * before the first compilation ever generates it. The first compilation then
      * finds the fingerprint unchanged and skips its own pass.
+     *
+     * Returns the target that pass generated for, so the Worker started next is the
+     * one its output matches. Reading `target` again after this resolves would leave
+     * a window in which an edit to `lunora.config.*` starts a Worker against output
+     * for the other target.
      */
-    public async generateForDev(): Promise<void> {
+    public async generateForDev(): Promise<string> {
         await this.#run(true);
+
+        return this.#generatedTarget ?? this.#options.target;
     }
 
     /** Rspack's plugin entry point. */
@@ -465,7 +479,9 @@ class LunoraRspackPlugin {
             assertWranglerSatisfiesSchema(this.#options, consoleLogger.warn, "Update your wrangler.jsonc and rebuild.");
         }
 
-        const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+        const { blockingMessage, markerFailure } = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+
+        this.#generatedTarget = this.#options.target;
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });
 
         if (hook.error !== undefined) {
@@ -478,6 +494,11 @@ class LunoraRspackPlugin {
         // what `vite dev` does either.
         if (!watching && blockingMessage !== undefined) {
             this.#findings.push(new Error(blockingMessage));
+        }
+
+        // The CLI's deploy reads this marker to pick the API spec, so a build without it would ship the wrong one.
+        if (!watching && markerFailure !== undefined) {
+            this.#findings.push(new Error(markerFailure));
         }
     }
 

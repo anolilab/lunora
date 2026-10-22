@@ -45,6 +45,10 @@ public final class ConformanceTest {
         keyOrderMatchesUtf16();
         stringEscapingMatchesJsonStringify();
         emptyShardKeyIsOmitted();
+        socketCredentialsStayOutOfTheUrl();
+        writeDuringAttachStaysOffTheReplacedSocket();
+        detachDuringAttachStaysDetached();
+        attachSocketSendsClientIdAndContext();
         rpcRequestBodies();
         rpcResponses();
         non2xxWithoutEnvelopeThrows();
@@ -399,16 +403,145 @@ public final class ConformanceTest {
 
         for (String absent : new String[] {null, ""}) {
             check(
-                    !client.wsUrl(absent, null).contains("shard="),
+                    !client.wsUrl(absent).contains("shard="),
                     "an empty or absent shard key must not name a shard on the socket");
         }
 
         check(
-                client.wsUrl("", null).equals(client.wsUrl(null, null)),
+                client.wsUrl("").equals(client.wsUrl(null)),
                 "an empty shard key is byte-identical to sending none");
         check(
-                client.wsUrl("room-1", null).contains("shard="),
+                client.wsUrl("room-1").contains("shard="),
                 "a real shard key still rides the socket URL");
+    }
+
+    /**
+     * {@code attachSocket} is the only place the connect frame is built for an app that uses it, so
+     * the client id and the connection context must reach that frame, not only the credential.
+     */
+    private static void attachSocketSendsClientIdAndContext() {
+        Client client = new Client("https://app.example", null);
+        Map<String, Object> context = new LinkedHashMap<>();
+
+        context.put("tenant", "acme");
+
+        List<Map<String, Object>> frames = new ArrayList<>();
+
+        client.attachSocket(frames::add, context);
+
+        Map<String, Object> connect = frames.get(0);
+
+        check("connect".equals(connect.get("type")), "attachSocket must send connect first");
+        check(
+                client.clientId.equals(connect.get("clientId")),
+                "attachSocket's connect must carry the client id");
+        check(
+                context.equals(connect.get("context")),
+                "attachSocket's connect must carry the connection context");
+    }
+
+    /**
+     * A detach made while a replacement socket's {@code connect} frame is going out must stand: the
+     * attach that is still sending must not install its sender afterwards.
+     */
+    private static void detachDuringAttachStaysDetached() {
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+        client.attachSocket(
+                frame -> {
+                    if ("connect".equals(frame.get("type"))) {
+                        client.detachSocket();
+                    }
+                });
+
+        check(
+                !client.online(),
+                "a detach during the replacement's connect must not be undone by that attach");
+    }
+
+    /**
+     * A write made while a replacement socket's {@code connect} frame is going out must not reach
+     * the socket it replaces. The replacement's connect frame triggers a subscribe here, as a
+     * concurrent caller would.
+     */
+    private static void writeDuringAttachStaysOffTheReplacedSocket() {
+        Client client = new Client("https://app.example", null);
+        List<Map<String, Object>> replaced = new ArrayList<>();
+
+        client.attachSocket(replaced::add);
+
+        int beforeAttach = replaced.size();
+
+        client.attachSocket(
+                frame -> {
+                    if ("connect".equals(frame.get("type"))) {
+                        client.subscribe("messages:list", Map.of(), data -> {}, error -> {}, null);
+                    }
+                });
+
+        check(
+                replaced.size() == beforeAttach,
+                "a write during the replacement's connect must not reach the replaced socket");
+    }
+
+    /**
+     * The session credential rides the {@code connect} frame and never the socket URL, which
+     * carries only the admin ticket. {@code connect} is what every open sends first, so a reconnect
+     * re-presents the credential resolved at that moment. Each assertion here fails if the session
+     * value is appended to the URL.
+     */
+    private static void socketCredentialsStayOutOfTheUrl() {
+        String[] session = {"session-one"};
+        Client client = new Client("https://app.example", null);
+
+        client.wsToken(() -> session[0]);
+        client.wsTicket(() -> "ticket-one");
+
+        List<Map<String, Object>> first = new ArrayList<>();
+
+        client.attachSocket(first::add);
+
+        check(
+                "connect".equals(first.get(0).get("type")),
+                "connect must be the first frame an open sends");
+        check(
+                "session-one".equals(first.get(0).get("token")),
+                "connect must carry the session credential as token");
+        check(
+                client.wsUrl("room-1")
+                        .equals("wss://app.example/_lunora/ws?shard=room-1&token=ticket-one"),
+                "the ticket must be the only thing in the socket URL's token parameter");
+        check(
+                !client.wsUrl("room-1").contains("session-one"),
+                "the session credential must not appear in the socket URL on the first open");
+
+        session[0] = "session-two";
+
+        List<Map<String, Object>> reconnect = new ArrayList<>();
+
+        client.attachSocket(reconnect::add);
+
+        check(
+                "connect".equals(reconnect.get(0).get("type"))
+                        && "session-two".equals(reconnect.get(0).get("token")),
+                "a reconnect must send connect first, with the freshly resolved credential");
+        check(
+                !client.wsUrl("room-1").contains("session-two")
+                        && !client.wsUrl("room-1").contains("session-one"),
+                "the session credential must not appear in the socket URL on a reconnect");
+
+        Client bare = new Client("https://app.example", null);
+        List<Map<String, Object>> unset = new ArrayList<>();
+
+        bare.attachSocket(unset::add);
+
+        check(
+                "connect".equals(unset.get(0).get("type")) && !unset.get(0).containsKey("token"),
+                "connect must omit token when no session credential is held");
+        check(
+                bare.wsUrl(null).equals("wss://app.example/_lunora/ws"),
+                "with no ticket the socket URL carries no token parameter");
     }
 
     private static void depthCapEnforced() {
@@ -690,11 +823,11 @@ public final class ConformanceTest {
         context.put("roomId", "general");
 
         check(
-                canonical(Client.buildConnectFrame("client-test", null))
+                canonical(Client.buildConnectFrame("client-test", null, null))
                         .equals(canonical(frames.get("connect"))),
                 "connect");
         check(
-                canonical(Client.buildConnectFrame("client-test", context))
+                canonical(Client.buildConnectFrame("client-test", context, null))
                         .equals(canonical(frames.get("connect-with-context"))),
                 "connect-with-context");
         check(
@@ -882,6 +1015,7 @@ public final class ConformanceTest {
 
         client.attachSocket(resent::add);
         client.resendSubscriptions();
+        check("connect".equals(resent.remove(0).get("type")), "connect opens the socket");
 
         check(resent.size() == 2, "both registries are walked");
         check("subscribe".equals(resent.get(0).get("type")), "the query frame goes out first");
@@ -1098,14 +1232,14 @@ public final class ConformanceTest {
 
         reader.join();
 
-        // Attached only now, so the count below sees resend frames alone.
+        // Attached only now; the count is the attach's connect frame plus one subscribe per call.
         AtomicInteger resent = new AtomicInteger();
 
         client.attachSocket(frame -> resent.incrementAndGet());
         client.resendSubscriptions();
 
         check(
-                resent.get() == threads * perThread,
+                resent.get() == threads * perThread + 1,
                 "every concurrent subscribe survived with a distinct id");
     }
 

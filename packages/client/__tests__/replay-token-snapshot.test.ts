@@ -197,7 +197,8 @@ describe("offline flush pins the bearer it gated on", () => {
                 client.setAuthToken("token-b", "user-b");
 
                 // Slot 0 of the first chunk never comes back, so it is re-queued
-                // for the next pass.
+                // for the next pass — and the chunk behind it waits there too, so it
+                // cannot commit ahead of the write it was issued after.
                 return batchResponse(init, new Set([0]));
             }
 
@@ -212,13 +213,13 @@ describe("offline flush pins the bearer it gated on", () => {
 
         const bearers = replayCalls(fetchMock).map(([, init]) => bearerOf(init));
 
-        expect(bearers).toStrictEqual(["Bearer token-a", "Bearer token-a"]);
+        expect(bearers).toStrictEqual(["Bearer token-a"]);
 
         const results = await Promise.all(outcomes);
 
-        expect(results.filter((result) => result === "committed")).toHaveLength(500);
-        expect(results.filter((result) => result === "OFFLINE_IDENTITY_CHANGED")).toHaveLength(1);
-        expect(settled.filter((event) => event.code === "OFFLINE_IDENTITY_CHANGED")).toHaveLength(1);
+        expect(results.filter((result) => result === "committed")).toHaveLength(499);
+        expect(results.filter((result) => result === "OFFLINE_IDENTITY_CHANGED")).toHaveLength(2);
+        expect(settled.filter((event) => event.code === "OFFLINE_IDENTITY_CHANGED")).toHaveLength(2);
 
         client.close();
     });

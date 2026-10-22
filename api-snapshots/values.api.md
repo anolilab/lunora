@@ -207,6 +207,7 @@ interface SchemaNodeReader<TNode> {
     kind: (node: TNode) => ValidatorKind;
     literalSchema: (node: TNode) => JsonSchema;
     members: (node: TNode) => ReadonlyArray<TNode>;
+    sensitive: (node: TNode) => boolean;
     shape: (node: TNode) => Record<string, TNode>;
     tableName: (node: TNode) => unknown;
     valueChild: (node: TNode) => TNode | undefined;
@@ -317,6 +318,12 @@ const acceptsAbsent: <TNode>(node: TNode, reader: SchemaNodeReader<TNode>) => bo
 const argsToJsonSchema: (args: Record<string, Validator>) => JsonSchema;
 ```
 
+### `containsSensitive` (const)
+
+```ts
+const containsSensitive: (validator: Validator) => boolean;
+```
+
 ### `cyrb53` (const)
 
 ```ts
@@ -379,6 +386,12 @@ const optionalInner: (validator: Validator) => Validator | undefined;
 const parseValidatorMap: (validators: ValidatorMap, source: Record<string, unknown>, label: string) => Record<string, unknown>;
 ```
 
+### `sensitiveArgumentNames` (const)
+
+```ts
+const sensitiveArgumentNames: (args: Readonly<Record<string, unknown>>) => ReadonlySet<string>;
+```
+
 ### `toJsonSchema` (const)
 
 ```ts
@@ -405,6 +418,7 @@ const v: {
     optional: typeof optional;
     partial: typeof partial;
     record: typeof record;
+    sensitive: typeof sensitive;
     storage: typeof storage;
     string: typeof string;
     timestamp: typeof timestamp;
@@ -544,6 +558,12 @@ const partial: <S extends ObjectShape>(shape: S) => PartialShape<S>;
 
 ```ts
 const record: <K extends Validator<string>, V extends Validator>(keyValidator: K, valueValidator: V) => ColumnValidator<Record<Infer<K>, Infer<V>>, Record<Infer<K>, Infer<V>>>;
+```
+
+### `sensitive` (const)
+
+```ts
+const sensitive: <V extends Validator>(validator: V) => V;
 ```
 
 ### `storage` (const)

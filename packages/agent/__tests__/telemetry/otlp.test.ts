@@ -1,11 +1,28 @@
+import { estimateModelCost } from "@lunora/ai/create";
 import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defineAgent } from "../../src/define-agent";
+import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { OtlpTelemetryOptions } from "../../src/telemetry/otlp";
 import { otlpTelemetry as createOtlpTelemetry } from "../../src/telemetry/otlp";
 import type { GenerateResult } from "./model-fixtures";
-import { drain, generatingModel, settle as settleFixture, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
+import {
+    drain,
+    failedGenerateModel,
+    failedStreamModel,
+    generatingModel,
+    reportedUsage,
+    settle as settleFixture,
+    STOP,
+    streamingModel,
+    usageOf,
+    withTelemetry,
+} from "./model-fixtures";
+
+/** A model the price table covers, so a cost assertion can fail rather than pass vacuously. */
+const PRICED_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 /** Every integration the test built, so `settle` can export what each still buffers. */
 const created: ReturnType<typeof createOtlpTelemetry>[] = [];
@@ -221,6 +238,39 @@ describe(otlpTelemetry, () => {
         expect(spanOf(calls[0] as CapturedPost).status.code).toBe(2);
     });
 
+    it("meters the usage a non-streamed attempt was billed before it failed, on an errored span", async () => {
+        const calls = captureFetch();
+        const agent = defineAgent({ model: failedGenerateModel(), telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+
+        await expect(createAgentGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("model finished with an error reason");
+
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(span.status.code).toBe(2);
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("2");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("1");
+        expect(attribute(span, "lunora.usage.status")).toBe("complete");
+    });
+
+    it("meters the usage a streamed attempt that fails in-band was billed, on an errored span", async () => {
+        const calls = captureFetch();
+        const agent = defineAgent({ model: failedStreamModel(), telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+
+        await expect(createStreamGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] }, () => undefined)).rejects.toThrow(
+            "model finished with an error reason",
+        );
+
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(span.status.code).toBe(2);
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("2");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("1");
+    });
+
     it("tags the generation span with gen_ai.conversation.id when a conversation id is set", async () => {
         const calls = captureFetch();
 
@@ -369,6 +419,138 @@ describe(otlpTelemetry, () => {
 
         expect(attribute(span, "gen_ai.usage.cost")).toBe(0.5);
         expect(attribute(span, "lunora.usage.cost.source")).toBe("provider");
+    });
+
+    it("carries every reported usage bucket, each inside its total", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        usage: reportedUsage({ input: 12, output: 3, cacheRead: 4, cacheWrite: 2, reasoning: 2 }),
+                        warnings: [],
+                    }),
+                modelId: PRICED_MODEL,
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "lunora.usage.status")).toBe("complete");
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("12");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("3");
+        expect(attribute(span, "gen_ai.usage.cache_read.input_tokens")).toBe("4");
+        expect(attribute(span, "gen_ai.usage.cache_creation.input_tokens")).toBe("2");
+        expect(attribute(span, "gen_ai.usage.reasoning.output_tokens")).toBe("2");
+    });
+
+    it("reports only the totals when no breakdown was reported, with no bucket attributes", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        // The provider sends the breakdowns as explicit zeros, which the SDK keeps.
+                        usage: usageOf(12, 3),
+                        warnings: [],
+                    }),
+                modelId: PRICED_MODEL,
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "lunora.usage.status")).toBe("complete");
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("12");
+        // A zero breakdown is absence, never a counted zero.
+        expect(attribute(span, "gen_ai.usage.cache_read.input_tokens")).toBeUndefined();
+        expect(attribute(span, "gen_ai.usage.cache_creation.input_tokens")).toBeUndefined();
+        expect(attribute(span, "gen_ai.usage.reasoning.output_tokens")).toBeUndefined();
+        expect(attribute(span, "lunora.usage.cost.source")).toBe("estimated");
+    });
+
+    it("does not estimate a cost from a partial report", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        usage: reportedUsage({ input: 1_000_000 }),
+                        warnings: [],
+                    }),
+                modelId: PRICED_MODEL,
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // Input only: the output side is unknown, so a price would understate the call.
+        expect(attribute(span, "lunora.usage.status")).toBe("partial");
+        expect(attribute(span, "gen_ai.usage.cost")).toBeUndefined();
+        expect(attribute(span, "lunora.usage.cost.source")).toBeUndefined();
+    });
+
+    it("reports unavailable and no cost when the provider reported no usage", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({ content: [{ text: "answer", type: "text" }], finishReason: STOP, usage: reportedUsage({}), warnings: [] }),
+                modelId: PRICED_MODEL,
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "lunora.usage.status")).toBe("unavailable");
+        expect(attribute(span, "gen_ai.usage.cost")).toBeUndefined();
+    });
+
+    it("does not add reasoning into the output total when pricing", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        usage: reportedUsage({ input: 1_000_000, output: 1_000_000, reasoning: 500_000 }),
+                        warnings: [],
+                    }),
+                modelId: PRICED_MODEL,
+            }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // Reasoning is a subset of the output total: priced once, inside the output rate.
+        expect(attribute(span, "gen_ai.usage.cost")).toBe(estimateModelCost(PRICED_MODEL, { inputTokens: 1_000_000, outputTokens: 1_000_000 }));
     });
 
     it("emits no gateway attributes when the call did not route through a gateway", async () => {

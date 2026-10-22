@@ -102,7 +102,7 @@ export default function App() {
 
 `pnpm dev` boots workerd, generates the client types, starts the Vite dev server, and reloads on every save. Click the button and the list updates in every open tab; the query re-runs on the server and pushes the new result.
 
-`lunora init` asks which framework to use and defaults to a React SPA. Pass `-t` to pick one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `react-router`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and a few more (`lunora init --help` lists them). Use `--vite <framework>` for a plain React, Vue, Solid, or Svelte SPA, and `lunora init --here` to add Lunora to an app you already have.
+`lunora init` asks which framework to use and defaults to a React SPA. Pass `-t` to pick one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and a few more (`lunora init --help` lists them). Use `--vite <framework>` for a plain React, Vue, Solid, or Svelte SPA, and `lunora init --here` to add Lunora to an app you already have.
 
 ## Why Lunora
 

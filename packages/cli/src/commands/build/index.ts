@@ -46,7 +46,20 @@ const buildCommand: Command = {
             type: Boolean,
         },
         { description: "Skip evaluating lazy function modules before shipping", name: "no-smoke-load", type: Boolean },
+        // Declared as `framework-build` + `no-framework-build`, like `smoke-load`: the handler reads `!== false`.
+        {
+            description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
+            name: "framework-build",
+            type: Boolean,
+        },
+        { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
+        {
+            description:
+                "Project directory to build (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
+        },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag
         // — which `build` rejected as an unknown option, so half its own advice
@@ -79,8 +92,10 @@ export type BuildOptions = CreateOptions<{
     "api-spec": string | undefined;
     "emit-bindings": string | undefined;
     format: string | undefined;
+    "framework-build": boolean | undefined;
     "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
+    root: string | undefined;
     "smoke-load": boolean | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is

@@ -208,9 +208,18 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Too many subscriptions";
     };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
+    };
+    readonly OFFLINE_NOT_QUEUED: {
+        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
+        readonly status: 503;
+        readonly title: "Offline, write not queued";
     };
     readonly IDENTITY_MISMATCH: {
         readonly hint: readonly [
@@ -715,10 +724,6 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
     };
-    readonly LIVE_CONTROL_SUPERSEDED: {
-        readonly status: 409;
-        readonly title: "A later live control call already applied";
-    };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global table import not configured";
@@ -837,6 +842,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Stream id already in use";
     };
+    readonly STREAM_IDLE: {
+        readonly status: 504;
+        readonly title: "Stream went idle";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";
@@ -934,6 +943,10 @@ const ERROR_CATALOG: {
         readonly title: "HTTP stream missing path parameter";
     };
     readonly HTTP_STREAM_NO_BODY: {
+        readonly hint: readonly [
+            "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
+            "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call."
+        ];
         readonly status: 502;
         readonly title: "HTTP stream response has no body";
     };
@@ -982,6 +995,7 @@ interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    why?: string;
 }
 ```
 
@@ -1026,6 +1040,8 @@ class LunoraError extends Error {
     readonly status: number;
     readonly docsUrl: string | undefined;
     readonly data: unknown;
+    readonly why: string | undefined;
+    readonly internal: Record<string, unknown> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1052,6 +1068,7 @@ interface LunoraErrorLike extends Error {
     hint?: ErrorHint;
     status: number;
     type: "VisulimaError";
+    why?: string;
 }
 ```
 
@@ -1063,10 +1080,12 @@ interface LunoraErrorOptions {
     data?: unknown;
     docsUrl?: string;
     hint?: ErrorHint;
+    internal?: Record<string, unknown>;
     location?: ErrorLocation;
     name?: string;
     status?: number;
     title?: string;
+    why?: string;
 }
 ```
 

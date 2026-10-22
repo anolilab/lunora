@@ -17,6 +17,7 @@ import dev.lunora.Submit.MutationStatus;
 import dev.lunora.Submit.SubmitOptions;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -58,6 +59,11 @@ final class OptimisticOfflineTest {
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
         batchEntryCapMatchesProtocol();
+        onlineOnlyWriteIsRefusedWhenDisconnected();
+        onlineOnlyWriteIsSentWhenConnected();
+        onlineOnlyTransportFailureIsRefused();
+        onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused();
+        normalWriteStillQueuesBesideAnOnlineOnlyOne();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
@@ -182,9 +188,9 @@ final class OptimisticOfflineTest {
         Client client = new Client("https://app.example", null);
 
         check(!empty.containsKey("shardKey"), "an empty shard key is omitted from the RPC body");
-        check(!client.wsUrl("", null).contains("shard="), "and from the socket URL");
+        check(!client.wsUrl("").contains("shard="), "and from the socket URL");
         check("room-1".equals(named.get("shardKey")), "while a real one still rides the body");
-        check(client.wsUrl("room-1", null).contains("shard=room-1"), "and the socket URL");
+        check(client.wsUrl("room-1").contains("shard=room-1"), "and the socket URL");
 
         // End to end, because the omission has to hold on the path a consumer actually takes.
         List<String> posted = new ArrayList<>();
@@ -688,6 +694,256 @@ final class OptimisticOfflineTest {
         check(
                 live.layers() == count(testCase.get("layersAfterConfirm")),
                 "so the confirm at that cursor drops the overlay instead of stranding it");
+    }
+
+    /** The credential-shaped argument an online-only write carries; it must never reach storage. */
+    private static final String ONLINE_ONLY_SECRET = "sentinel-secret-7731";
+
+    private static SubmitOptions onlineOnlyWrite() {
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+
+        return new SubmitOptions("auth:setPassword", args).onlineOnly(true);
+    }
+
+    /** With the socket down, an online-only write is refused before anything is queued or sent. */
+    private static void onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused() {
+        covers("offline_online_only_refused_when_disconnected_in_callback");
+        int[] posts = {0};
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(
+                new OfflineQueue().persistence(new MemoryStore()).queueBeforeFirstConnect(true));
+
+        // The subscriber sees the overlay, and the connection goes down inside its notification.
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {});
+        client.subscribe(
+                "auth:setPassword",
+                args,
+                value -> {
+                    if (value instanceof List && ((List<?>) value).contains("c")) {
+                        client.detachSocket();
+                    }
+                },
+                null,
+                null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write whose callback drops the socket is refused with"
+                        + " OFFLINE_NOT_QUEUED");
+        check(posts[0] == 0, "a refused write never reaches the wire");
+    }
+
+    private static void onlineOnlyWriteIsRefusedWhenDisconnected() {
+        covers("offline_online_only_refused_when_disconnected");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        // A subscription on the write's own path and args, primed with a server value, so an
+        // overlay the write applied would be displayed.
+        Map<String, Object> args = new LinkedHashMap<>();
+        List<Object> seen = new ArrayList<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {});
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.detachSocket();
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write is refused with OFFLINE_NOT_QUEUED");
+        check(client.pendingMutationCount() == 0, "and nothing is queued");
+        check(store.appended.isEmpty(), "the persistence adapter never sees the write");
+        check(
+                !Json.write(store.records).contains(ONLINE_ONLY_SECRET),
+                "the arguments never reach storage");
+        check(posts[0] == 0, "and a refused write never reaches the wire");
+        check(
+                !seen.contains(List.of("a", "c")),
+                "and a refused write's overlay is never displayed");
+    }
+
+    /** With the socket up, an online-only write is sent normally and commits. */
+    private static void onlineOnlyWriteIsSentWhenConnected() {
+        covers("offline_online_only_sends_when_connected");
+        List<String> bodies = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            bodies.add(new String(body, StandardCharsets.UTF_8));
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+        client.attachSocket(frame -> {});
+
+        MutationOutcome outcome = client.submit(onlineOnlyWrite());
+
+        check(
+                outcome.status() == MutationStatus.COMMITTED,
+                "a connected online-only write commits");
+        check(bodies.size() == 1, "and goes out once");
+        check(bodies.get(0).contains(ONLINE_ONLY_SECRET), "with its arguments on the wire");
+        check(store.appended.isEmpty(), "and is never persisted");
+    }
+
+    /**
+     * A client that never connected sends an online-only write directly, and the transport fails
+     * before any reply. That is refused as OFFLINE_NOT_QUEUED with the transport error as its
+     * cause, with the overlay rolled back. A coded reply to the same write surfaces as itself.
+     */
+    private static void onlineOnlyTransportFailureIsRefused() {
+        covers("offline_online_only_transport_failure_refused");
+        UncheckedIOException transport =
+                new UncheckedIOException(new IOException("connection refused"));
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        List<Object> seen = new ArrayList<>();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            throw transport;
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        // No socket is ever attached, so the shard never connected and the write goes direct.
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+
+        RuntimeException thrown = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (RuntimeException error) {
+            thrown = error;
+        }
+
+        OfflineException refused = thrown instanceof OfflineException offline ? offline : null;
+
+        check(posts[0] == 1, "the write reaches the wire once, on the direct path");
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "a transport failure is refused with OFFLINE_NOT_QUEUED");
+        check(
+                refused != null && refused.getCause() == transport,
+                "and the transport error rides along as its cause");
+        check(client.pendingMutationCount() == 0, "and nothing is queued");
+        check(store.appended.isEmpty(), "the persistence adapter never sees the write");
+        check(
+                seen.get(seen.size() - 1).equals(List.of("a")),
+                "the overlay is rolled back to the server value");
+        check(client.subscriptionState("sub_1").layers.isEmpty(), "and no layer survives");
+
+        // A coded reply is the server's verdict, so it is not a transport failure, even for a
+        // transient code.
+        Client rejecting =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) ->
+                                new Response(
+                                        503,
+                                        "{\"error\":{\"code\":\"SHARD_UNAVAILABLE\",\"message\":\"busy\"}}"));
+
+        rejecting.offlineQueue(new OfflineQueue().persistence(new MemoryStore()));
+
+        RuntimeException verdict = null;
+
+        try {
+            rejecting.submit(new SubmitOptions("auth:setPassword", args).onlineOnly(true));
+        } catch (RuntimeException error) {
+            verdict = error;
+        }
+
+        check(
+                verdict instanceof Client.ApiException api && "SHARD_UNAVAILABLE".equals(api.code),
+                "a coded server rejection surfaces as itself, not as OFFLINE_NOT_QUEUED");
+    }
+
+    /** A normal write made with the socket down still queues beside an online-only one. */
+    private static void normalWriteStillQueuesBesideAnOnlineOnlyOne() {
+        covers("offline_online_only_leaves_normal_writes_queued");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        MutationOutcome outcome =
+                client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+
+        check(outcome.status() == MutationStatus.QUEUED, "a normal write still queues offline");
+        check(client.pendingMutationCount() == 1, "and the queue holds it");
+        check(store.appended.size() == 1, "and it is persisted");
+        check(posts[0] == 0, "and nothing is sent");
     }
 
     /**

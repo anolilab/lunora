@@ -24,7 +24,7 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
         importFragment: "serveRelationFanout, ",
         override: `
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-            this.ensureMigrated();
+            this.ensureServable();
 
             const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
 

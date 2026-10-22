@@ -1,3 +1,27 @@
+## @lunora/platform [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.73...@lunora/platform@1.0.0-alpha.74) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+## @lunora/platform [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.72...@lunora/platform@1.0.0-alpha.73) (2026-10-20)
+
+### Bug Fixes
+
+* review findings on alpha: tool-error disclosure, Python transport TypeError, dev-port collisions, harness run instance ([#1280](https://github.com/anolilab/lunora/issues/1280)) ([58842c8](https://github.com/anolilab/lunora/commit/58842c85f2bcdc0e9586e7bf928de01ee6ed85a0))
+
+## @lunora/platform [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.71...@lunora/platform@1.0.0-alpha.72) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+## @lunora/platform [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.70...@lunora/platform@1.0.0-alpha.71) (2026-10-20)
+
+### Features
+
+* **platform:** enforce socket tag budget on every host ([#1254](https://github.com/anolilab/lunora/issues/1254)) ([867cead](https://github.com/anolilab/lunora/commit/867ceadbe10778d8acbdd9389f51cbfbcd4e8216))
+
 ## @lunora/platform [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.69...@lunora/platform@1.0.0-alpha.70) (2026-10-19)
 
 ### Features

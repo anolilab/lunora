@@ -618,6 +618,45 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
     });
 });
 
+describe("lunoraClient — a follower's online-only write that fails on the network", () => {
+    it("is refused with OFFLINE_NOT_QUEUED even while the mirrored leader status reads connected", async () => {
+        expect.assertions(3);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            throw new TypeError("fetch failed");
+        });
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: "https://app.example" });
+        const rogue = new BroadcastChannel(clientChannel(client));
+
+        try {
+            // The mirrored leader status is applied when the broadcast is handled, so the status listener is the
+            // milestone to wait on rather than a clock.
+            const mirroredConnected = new Promise<void>((resolve) => {
+                const stop = client.onConnectionStatus((status) => {
+                    if (status === "connected") {
+                        stop();
+                        resolve();
+                    }
+                });
+            });
+
+            // The stand-in leader reports an open connection. That is the leader's socket, not this tab's request.
+            rogue.postMessage({ identity: null, status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+
+            await mirroredConnected;
+
+            const failure = await client.mutation(fnRef("notes:add"), { text: "offline" }, { onlineOnly: true }).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(Error);
+            expect((failure as { code?: unknown }).code).toBe("OFFLINE_NOT_QUEUED");
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+});
+
 describe("lunoraClient — cross-tab follower drops confirmed optimistic layers (CLIENT-01)", () => {
     it("a follower drops a per-call optimistic layer once a leader-broadcast cursor reaches its commit cursor", async () => {
         expect.assertions(2);
@@ -888,9 +927,10 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                         heartbeatTimer?: unknown;
                         polling?: { stop: () => void };
                         reconnectTimer?: unknown;
-                        resubscribePending?: Map<string, unknown>;
                         resubscribeQueue?: unknown[];
+                        resubscribeSlots?: Set<string>;
                         socket?: { close: () => void };
+                        unackedWatchdogs?: Map<string, unknown>;
                         wsState?: string;
                     }
                 >;
@@ -905,9 +945,10 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                 reconnectTimer: undefined,
                 // Same reason as `polling`: teardown clears the paced-resubscribe
                 // queue unconditionally, so the double carries both halves of it.
-                resubscribePending: new Map(),
                 resubscribeQueue: [],
+                resubscribeSlots: new Set(),
                 socket: { close: socketClose },
+                unackedWatchdogs: new Map(),
                 wsState: "open",
             });
 

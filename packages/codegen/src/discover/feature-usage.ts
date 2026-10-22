@@ -1,5 +1,5 @@
-import type { ExportDeclaration, ImportDeclaration, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
@@ -225,6 +225,13 @@ interface SourceCapabilitySignals {
      * counts them, since a lazily loaded package needs its binding just the same.
      */
     dynamicImports: ReadonlySet<string>;
+
+    /**
+     * Whether the file value-imports `requestSecretTool` from `@lunora/agent` — the
+     * signal that wires the secret store ({@link fileWiresRequestSecretTool}).
+     */
+    requestSecretTool: boolean;
+
     /** The `@lunora/agent` sandbox tools the file value-imports — the same reading as `discoverSandboxUsage`. */
     sandboxTools: Readonly<SandboxUsage>;
 
@@ -236,6 +243,363 @@ interface SourceCapabilitySignals {
     valueImports: ReadonlySet<string>;
 }
 
+/** The package the agent tools are imported from. */
+const AGENT_MODULE_SPECIFIER = "@lunora/agent";
+
+/** The agent tool that asks a human for a secret value. */
+const REQUEST_SECRET_TOOL = "requestSecretTool";
+
+/** Whether a module specifier is a relative path, so a file of this app rather than a package. */
+const isRelativeSpecifier = (specifier: string): boolean => specifier.startsWith("./") || specifier.startsWith("../");
+
+/** The name an import or export specifier makes visible: its alias when it has one. */
+const visibleNameOf = (entry: ImportSpecifier | ExportSpecifier): string => entry.getAliasNode()?.getText() ?? entry.getNameNode().getText();
+
+/** Whether an expression is the tool itself, or a call of it, under one of the `bound` local names. */
+const isToolReference = (expression: Expression | undefined, bound: ReadonlySet<string>): boolean => {
+    const callee = expression !== undefined && Node.isCallExpression(expression) ? expression.getExpression() : expression;
+
+    return callee !== undefined && Node.isIdentifier(callee) && bound.has(callee.getText());
+};
+
+/** The local names a file binds to the agent's `requestSecretTool` by a value import, under any alias. */
+const boundToolNames = (file: SourceFile): Set<string> => {
+    const bound = new Set<string>();
+
+    for (const declaration of file.getImportDeclarations()) {
+        if (declaration.getModuleSpecifierValue() !== AGENT_MODULE_SPECIFIER || declaration.isTypeOnly()) {
+            continue;
+        }
+
+        for (const named of declaration.getNamedImports()) {
+            if (!named.isTypeOnly() && named.getNameNode().getText() === REQUEST_SECRET_TOOL) {
+                bound.add(visibleNameOf(named));
+            }
+        }
+    }
+
+    return bound;
+};
+
+/**
+ * What a module makes of `requestSecretTool`: the names it exports the tool under (`names`), and the
+ * namespace bindings it exports (`export * as agent from …`) mapped to the tool names those carry
+ * (`namespaces`), so `agent.requestSecretTool(…)` reads through them.
+ */
+interface SecretToolExports {
+    names: Set<string>;
+    namespaces: Map<string, Set<string>>;
+}
+
+const toolExports = (names: Iterable<string>): SecretToolExports => {
+    return { names: new Set(names), namespaces: new Map() };
+};
+
+/**
+ * The targets one scan follows. A target is parsed at most once per scope, into a project per declaring project: adding it
+ * to the declaring project would throw that program away. A target's own relative specifiers resolve with the declaring
+ * project's options, so a barrel's next hop keeps its `rootDirs` and `moduleSuffixes`. A scope is made per scan, so an
+ * edit between scans is seen and no file is re-read within one.
+ */
+interface TargetScope {
+    /** Each target project's declaring project, so a target's own hop can still see the declaring project's files. */
+    readonly origins: Map<Project, Project>;
+    /** The target project each declaring project resolves into. */
+    readonly projects: Map<Project, Project>;
+}
+
+/** A fresh scope for one scan: the targets it follows are parsed once and kept for that scan only. */
+const createTargetScope = (): TargetScope => {
+    return { projects: new Map(), origins: new Map() };
+};
+
+const targetProjectOf = (scope: TargetScope, project: Project): Project => {
+    if (scope.origins.has(project)) {
+        return project;
+    }
+
+    let targets = scope.projects.get(project);
+
+    if (targets === undefined) {
+        targets = new Project({
+            compilerOptions: { ...project.getCompilerOptions(), allowJs: true },
+            fileSystem: project.getFileSystem(),
+            skipAddingFilesFromTsConfig: true,
+            skipFileDependencyResolution: true,
+            skipLoadingLibFiles: true,
+        });
+        scope.projects.set(project, targets);
+        scope.origins.set(targets, project);
+    }
+
+    return targets;
+};
+
+/**
+ * The file a relative specifier names, resolved the way TypeScript resolves it for the declaring project: its options
+ * (`rootDirs`, `moduleSuffixes`, the `.js` to `.ts` mapping) and its file system. TypeScript's resolver is a pure function
+ * over that host, so no program is built.
+ */
+const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
+    const file = declaration.getSourceFile();
+    const project = file.getProject();
+    // Every hop resolves with the declaring project's options. A target project forces `allowJs` so it can parse a JS
+    // file; that must not change which modules a hop finds.
+    const declaring = scope.origins.get(project) ?? project;
+    const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), declaring.getCompilerOptions(), declaring.getModuleResolutionHost());
+    const path = resolvedModule?.resolvedFileName;
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    // A hop from a target looks in the declaring project first, so an edit made there is seen rather than the disk copy.
+    const known = declaring.getSourceFile(path) ?? project.getSourceFile(path);
+
+    if (known !== undefined) {
+        return known;
+    }
+
+    const targets = targetProjectOf(scope, project);
+
+    return targets.getSourceFile(path) ?? targets.addSourceFileAtPath(path);
+};
+
+/**
+ * Accumulate into `exported` what a re-export makes visible, given what `forwarded` carries through it:
+ * every name for `export *`, the listed ones under their aliases otherwise. A namespace export binds the
+ * forwarded names as one object, so its members are read off the binding rather than imported directly.
+ */
+const reexportedBy = (declaration: ExportDeclaration, forwarded: SecretToolExports, exported: SecretToolExports): void => {
+    const namespaceExport = declaration.getNamespaceExport();
+
+    if (namespaceExport !== undefined) {
+        // A nested namespace keeps its path: `agent.requestSecretTool` is what a reader of `tools` reaches through it.
+        const members = new Set(forwarded.names);
+
+        forwarded.namespaces.forEach((inner, member) => {
+            inner.forEach((name) => {
+                members.add(`${member}.${name}`);
+            });
+        });
+
+        if (members.size > 0) {
+            exported.namespaces.set(namespaceExport.getName(), members);
+        }
+
+        return;
+    }
+
+    if (!declaration.hasNamedExports()) {
+        forwarded.names.forEach((name) => exported.names.add(name));
+        forwarded.namespaces.forEach((members, name) => exported.namespaces.set(name, members));
+
+        return;
+    }
+
+    for (const entry of declaration.getNamedExports()) {
+        if (entry.isTypeOnly()) {
+            continue;
+        }
+
+        const original = entry.getNameNode().getText();
+        const visible = visibleNameOf(entry);
+
+        if (forwarded.names.has(original)) {
+            exported.names.add(visible);
+        }
+
+        const members = forwarded.namespaces.get(original);
+
+        if (members !== undefined) {
+            exported.namespaces.set(visible, members);
+        }
+    }
+};
+
+/**
+ * What a re-export carries through it. A local `export { ask }` carries the bound names;
+ * the agent carries the tool; a relative module carries what `resolve` finds in it.
+ */
+const forwardedThrough = (
+    scope: TargetScope,
+    declaration: ExportDeclaration,
+    bound: ReadonlySet<string>,
+    resolve: (target: SourceFile) => SecretToolExports,
+): SecretToolExports => {
+    const specifier = declaration.getModuleSpecifierValue();
+
+    if (specifier === undefined) {
+        return toolExports(bound);
+    }
+
+    if (specifier === AGENT_MODULE_SPECIFIER) {
+        return toolExports([REQUEST_SECRET_TOOL]);
+    }
+
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(scope, declaration, specifier) : undefined;
+
+    return target === undefined ? toolExports([]) : resolve(target);
+};
+
+/**
+ * What `file` exports of `requestSecretTool` from `@lunora/agent`: under its own name or an alias, or as a
+ * value it binds to the tool (`export const x = requestSecretTool({...})`), and as namespace bindings.
+ * A relative re-export is followed, so a barrel that only forwards the tool counts. `onPath` holds the
+ * modules being visited: a module is cut only while it is its own ancestor, so a second re-export of the
+ * same module (a sibling alias) still resolves.
+ */
+const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<string>, scope: TargetScope): SecretToolExports => {
+    const exported = toolExports([]);
+    const path = file.getFilePath();
+
+    if (onPath.has(path)) {
+        return exported;
+    }
+
+    onPath.add(path);
+
+    const bound = boundToolNames(file);
+
+    for (const declaration of file.getExportDeclarations()) {
+        if (declaration.isTypeOnly()) {
+            continue;
+        }
+
+        reexportedBy(
+            declaration,
+            forwardedThrough(scope, declaration, bound, (target) => requestSecretToolExportsOf(target, onPath, scope)),
+            exported,
+        );
+    }
+
+    for (const statement of file.getVariableStatements()) {
+        if (!statement.isExported()) {
+            continue;
+        }
+
+        for (const declared of statement.getDeclarations()) {
+            if (isToolReference(declared.getInitializer(), bound)) {
+                exported.names.add(declared.getName());
+            }
+        }
+    }
+
+    onPath.delete(path);
+
+    return exported;
+};
+
+/** What an import declaration brings in from the secret tool: the agent's, or a relative module's exports of it. */
+const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile, scope: TargetScope): SecretToolExports => {
+    const specifier = declaration.getModuleSpecifierValue();
+
+    if (specifier === AGENT_MODULE_SPECIFIER) {
+        return toolExports([REQUEST_SECRET_TOOL]);
+    }
+
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(scope, declaration, specifier) : undefined;
+
+    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer.getFilePath()]), scope);
+};
+
+/** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
+/** The member a destructured binding reads: `{ name }` and `{ name: local }` both read `name`. */
+const boundMemberName = (element: BindingElement): string => {
+    const key = element.getPropertyNameNode();
+
+    if (key === undefined) {
+        return element.getName();
+    }
+
+    return Node.isStringLiteral(key) ? key.getLiteralValue() : key.getText();
+};
+
+const readsNamespaceMember = (file: SourceFile, namespace: string, names: ReadonlySet<string>): boolean => {
+    // `ns.name`, or `ns.inner.name` through a nested namespace, which `names` records as `inner.name`.
+    const readsMember = (expression: string, name: string): boolean => {
+        if (expression === namespace) {
+            return names.has(name);
+        }
+
+        return expression.startsWith(`${namespace}.`) && names.has(`${expression.slice(namespace.length + 1)}.${name}`);
+    };
+
+    const viaAccess = file
+        .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
+        .some((access) => readsMember(access.getExpression().getText(), access.getName()));
+
+    // `ns["name"]` reads the same member as `ns.name`; a computed key that is not a literal cannot be resolved.
+    const viaElement = file.getDescendantsOfKind(SyntaxKind.ElementAccessExpression).some((access) => {
+        const key = access.getArgumentExpression();
+
+        return Node.isStringLiteral(key) && readsMember(access.getExpression().getText(), key.getLiteralValue());
+    });
+
+    // `const { name } = ns` and `const { name: local } = ns` bind the member off the namespace.
+    const viaDestructuring = file.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+        const initializer = declaration.getInitializer();
+        const binding = declaration.getNameNode();
+
+        return (
+            initializer !== undefined &&
+            Node.isObjectBindingPattern(binding) &&
+            binding.getElements().some((element) => readsMember(initializer.getText(), boundMemberName(element)))
+        );
+    });
+
+    return viaAccess || viaElement || viaDestructuring;
+};
+
+/**
+ * Whether a named import wires the tool: it imports a name the module exports the tool under, or a namespace
+ * binding (`export * as agent`) whose local name reads the tool off it.
+ */
+const namedImportWiresTool = (file: SourceFile, named: ImportSpecifier, exported: SecretToolExports): boolean => {
+    if (exported.names.has(named.getNameNode().getText())) {
+        return true;
+    }
+
+    const members = exported.namespaces.get(named.getNameNode().getText());
+
+    return members !== undefined && readsNamespaceMember(file, visibleNameOf(named), members);
+};
+
+/**
+ * Whether a source file value-imports `requestSecretTool` from `@lunora/agent`, by a
+ * named import, a namespace import that reads it, or an import of a relative module that
+ * exports it (a barrel, or a tool defined in another module of the app). A type-only
+ * import does not count: only a value import wires the tool into an agent. The one rule
+ * codegen's secret-store gate and `@lunora/config`'s binding inference both read.
+ */
+const fileWiresRequestSecretTool = (file: SourceFile, scope: TargetScope = createTargetScope()): boolean =>
+    file.getImportDeclarations().some((declaration) => {
+        if (declaration.isTypeOnly()) {
+            return false;
+        }
+
+        const exported = importedToolNames(declaration, file, scope);
+
+        if (exported.names.size === 0 && exported.namespaces.size === 0) {
+            return false;
+        }
+
+        const defaultImport = declaration.getDefaultImport();
+        const namespace = declaration.getNamespaceImport();
+
+        // A default import binds the module's `default` export. That is the tool itself when a barrel re-exports it as
+        // `default`, or a namespace when it re-exports the agent package with `export * as default`, read for the tool.
+        const defaultWiresTool =
+            defaultImport !== undefined &&
+            (exported.names.has("default") || readsNamespaceMember(file, defaultImport.getText(), exported.namespaces.get("default") ?? new Set<string>()));
+
+        return (
+            defaultWiresTool ||
+            declaration.getNamedImports().some((named) => !named.isTypeOnly() && namedImportWiresTool(file, named, exported)) ||
+            (namespace !== undefined && readsNamespaceMember(file, namespace.getText(), exported.names))
+        );
+    });
+
 /**
  * The capability signals of one source file: its value-import and re-export
  * specifiers, its dynamic-import specifiers, its sandbox-tool imports and its
@@ -243,7 +607,7 @@ interface SourceCapabilitySignals {
  * exported so `@lunora/config`'s binding inference reads the same signals and
  * judges them with the same {@link capabilitiesUsedBy}.
  */
-const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignals => {
+const sourceCapabilitySignals = (sourceFile: SourceFile, scope: TargetScope = createTargetScope()): SourceCapabilitySignals => {
     const imports = sourceFile.getImportDeclarations();
     const sandboxTools = noSandboxUsage();
 
@@ -258,6 +622,7 @@ const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignal
     return {
         contextReads: contextPropertiesRead(sourceFile),
         dynamicImports: dynamicImportSpecifiers(sourceFile),
+        requestSecretTool: fileWiresRequestSecretTool(sourceFile, scope),
         sandboxTools,
         valueImports: new Set(
             [...imports, ...sourceFile.getExportDeclarations()].flatMap((declaration) => {
@@ -275,8 +640,11 @@ const foldCapabilitySignals = (signals: Iterable<SourceCapabilitySignals>): Sour
     const dynamicImports = new Set<string>();
     const sandboxTools = noSandboxUsage();
     const valueImports = new Set<string>();
+    let requestSecretTool = false;
 
     for (const file of signals) {
+        requestSecretTool ||= file.requestSecretTool;
+
         for (const name of file.contextReads) {
             contextReads.add(name);
         }
@@ -294,7 +662,7 @@ const foldCapabilitySignals = (signals: Iterable<SourceCapabilitySignals>): Sour
         }
     }
 
-    return { contextReads, dynamicImports, sandboxTools, valueImports };
+    return { contextReads, dynamicImports, requestSecretTool, sandboxTools, valueImports };
 };
 
 /**
@@ -333,9 +701,10 @@ const mayReadCapabilityContext = (code: string): boolean => CONTEXT_PATTERN.test
  * `payments`) and — via `buildStudioFeatures` — the studio nav.
  */
 const discoverFeatureUsage = (project: Project, lunoraDirectory: string): FeatureUsage => {
+    const scope = createTargetScope();
     const signals = foldCapabilitySignals(
         listLunoraSourceFiles(lunoraDirectory).map((filePath) =>
-            sourceCapabilitySignals(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath)),
+            sourceCapabilitySignals(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath), scope),
         ),
     );
     const used = capabilitiesUsedBy(signals);
@@ -344,5 +713,14 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
     return Object.fromEntries(CAPABILITIES.map(({ key }) => [key, used.has(key)] as const)) as FeatureUsage;
 };
 
-export { capabilitiesUsedBy, contextPropertiesRead, discoverFeatureUsage, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals };
-export type { FeatureUsage, SourceCapabilitySignals };
+export {
+    capabilitiesUsedBy,
+    contextPropertiesRead,
+    createTargetScope,
+    discoverFeatureUsage,
+    fileWiresRequestSecretTool,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    sourceCapabilitySignals,
+};
+export type { FeatureUsage, SourceCapabilitySignals, TargetScope };

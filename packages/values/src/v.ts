@@ -346,6 +346,15 @@ interface ParseContext {
     probe?: boolean;
 
     /**
+     * Set by {@link sensitive} for the duration of its child parse. While it is
+     * `true`, every error built from the value withholds it: the literal, the
+     * constructor name and any issue text a third-party Standard Schema produced
+     * from it. Restored in a `finally`, so a union probe that catches a miss
+     * cannot leave it set for a sibling branch.
+     */
+    redact?: boolean;
+
+    /**
      * Reject keys an object shape does not declare, instead of dropping them.
      *
      * Off for input, where stripping is what stops an over-posted field reaching
@@ -459,6 +468,24 @@ const isValidUrl = (value: string): boolean => {
  */
 const PROBE_MISS = new ValidationError("union branch probe miss (internal)", { expected: "", path: [], received: "" });
 
+/**
+ * The `received` tag for a value under {@link ParseContext.redact}: the bare type
+ * tag, with a non-plain object reduced to `"object"`. Its constructor name is
+ * client-controlled, so the redacted path cannot surface it the way
+ * {@link describeValue} does for ordinary failures.
+ */
+const describeRedacted = (value: unknown): string =>
+    typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof ArrayBuffer)
+        ? "object"
+        : describeValue(value, { literal: false });
+
+/**
+ * The context a container reports its own value through. A value at a container's
+ * position can be a secret misplaced one level up from its field, so a container
+ * whose subtree holds a sensitive field describes that value by bare type tag.
+ */
+const containerContext = (context: ParseContext, sensitiveSubtree: boolean): ParseContext => (sensitiveSubtree ? { ...context, redact: true } : context);
+
 // Declared as a function (not an arrow expression) so TypeScript treats its
 // `: never` return as a control-flow assertion — callers rely on this to narrow
 // `value` after `if (!check) fail(...)`. `func-style` is disabled here because
@@ -476,7 +503,7 @@ function fail(context: ParseContext, expected: string, received: unknown, option
     // message. Set only on `.check()` refinement failures (the value already
     // passed its type check) so a secret-bearing field never leaks its value to
     // the wire/logs; type-mismatch failures keep the literal for diagnostics.
-    const receivedDescription = describeValue(received, { literal: !options?.redactValue });
+    const receivedDescription = context.redact === true ? describeRedacted(received) : describeValue(received, { literal: !options?.redactValue });
 
     throw new ValidationError(`Expected ${expected} at ${formatPath(path)}, received ${receivedDescription}`, {
         expected,
@@ -586,7 +613,9 @@ const createValidator = <T>(
             const parsed = parser(value, context);
 
             if (!predicate(parsed)) {
-                fail(context, message ?? "value matching refinement", parsed, { redactValue: true });
+                // A marker's parse restores `context.redact` before this refinement runs, so a
+                // refinement chained after `sensitive` must re-assert it to keep its failure withheld.
+                fail(containerContext(context, meta?.sensitive === true), message ?? "value matching refinement", parsed, { redactValue: true });
             }
 
             return parsed;
@@ -900,7 +929,9 @@ const literal = <T extends bigint | boolean | number | string | null>(literalVal
             "literal",
             (value, context) => {
                 if (value !== literalValue) {
-                    fail(context, `literal(${String(literalValue)})`, value);
+                    // The literal is what a caller must guess: under a sensitive marker the expectation names
+                    // only the kind, so neither the message nor `expected` (nor a union summary) carries it.
+                    fail(context, context.redact === true ? "literal" : `literal(${String(literalValue)})`, value);
                 }
 
                 return value as T;
@@ -909,15 +940,49 @@ const literal = <T extends bigint | boolean | number | string | null>(literalVal
         ),
     );
 
+/**
+ * The validators nested directly inside `validator` (`inner`, key/value
+ * children, union members, object shape members), read from the internal `_meta`.
+ */
+const childValidatorsOf = (validator: Validator): Validator[] => {
+    const meta = (validator as { _meta?: Record<string, unknown> })._meta;
+
+    if (!meta) {
+        return [];
+    }
+
+    const children: unknown[] = [meta.inner, meta.keyValidator, meta.valueValidator];
+
+    if (Array.isArray(meta.members)) {
+        children.push(...(meta.members as unknown[]));
+    }
+
+    if (meta.shape !== null && typeof meta.shape === "object") {
+        children.push(...(Object.values(meta.shape) as unknown[]));
+    }
+
+    return children.filter((child): child is Validator => child !== null && typeof child === "object" && "kind" in child);
+};
+
+/**
+ * True when `validator` is marked with {@link sensitive} or wraps a marked
+ * validator anywhere in its tree. Coarse on purpose: an argument whose tree holds
+ * any secret is treated as a secret as a whole, which fails closed where a
+ * per-field walk over wire-encoded values would not.
+ */
+const containsSensitive = (validator: Validator): boolean =>
+    (validator as { _meta?: Record<string, unknown> })._meta?.sensitive === true || childValidatorsOf(validator).some((child) => containsSensitive(child));
+
 const array = <V extends Validator>(inner: V): ArrayColumnValidator<Infer<V>> => {
     const innerInternal = toInternal(inner as Validator<Infer<V>>);
+    const sensitiveItems = containsSensitive(inner);
 
     return asArrayColumn(
         createValidator<Infer<V>[]>(
             "array",
             (value, context) => {
                 if (!Array.isArray(value)) {
-                    fail(context, "array", value);
+                    fail(containerContext(context, sensitiveItems), "array", value);
                 }
 
                 const { length } = value;
@@ -994,12 +1059,17 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
         throw new LunoraError("INTERNAL", 'v.object: "__proto__" cannot be a declared field name — it collides with the Object.prototype accessor');
     }
 
+    // Computed once, not per parse: the undeclared-key check below runs before the
+    // marked child has parsed, so `context.redact` cannot tell it that a secret sits
+    // in this shape.
+    const sensitiveShape = Object.values(shape).some((child) => containsSensitive(child));
+
     const validator = asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
             (value, context) => {
                 if (typeof value !== "object" || value === null || Array.isArray(value)) {
-                    fail(context, "object", value);
+                    fail(containerContext(context, sensitiveShape), "object", value);
                 }
 
                 const input = value as Record<string, unknown>;
@@ -1015,13 +1085,17 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                     const undeclared = Object.keys(input).filter((key) => !declared.has(key));
 
                     if (undeclared.length > 0) {
+                        // Under `sensitive`, or beside a sensitive field, the undeclared key names
+                        // are withheld too: they are caller-chosen text that can carry the secret.
+                        const listed = context.redact === true || sensitiveShape ? "[redacted]" : undeclared.join(", ");
+
                         throw new ValidationError(
-                            `object has ${String(undeclared.length)} undeclared key(s): ${undeclared.join(", ")}. ` +
+                            `object has ${String(undeclared.length)} undeclared key(s): ${listed}. ` +
                                 `Add them to the validator, or call .strip() on it to drop them on purpose.`,
                             {
                                 expected: `only the declared keys (${entries.map(({ key }) => key).join(", ")})`,
                                 path: [...path],
-                                received: undeclared.join(", "),
+                                received: listed,
                             },
                         );
                     }
@@ -1065,11 +1139,64 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
     return validator;
 };
 
+/**
+ * Mark a validator's value as sensitive. Parsing and the accepted set are
+ * unchanged. A failed parse withholds the value from `received` and the message
+ * (see {@link ParseContext.redact}); the JSON Schema node is `writeOnly`, with
+ * `format: "password"` on a plain string; and the request log, the MCP proposal
+ * and the offline queue treat the argument as a secret (see
+ * {@link containsSensitive}). In a recorded string the value is masked wherever it
+ * appears if it is four or more characters, as a whole word or number if it is
+ * three, and only as the whole string if it is shorter. A string of four or more
+ * characters is also matched in its JSON-escaped spelling, since a handler that
+ * serializes its arguments writes that form.
+ *
+ * A marker is a meta flag on the same kind rather than a kind of its own, so
+ * every `switch (kind)` and `kind === "optional"` test keeps its meaning and
+ * `v.sensitive(v.optional(x))` stays optional.
+ */
+const sensitive = <V extends Validator>(validator: V): V => {
+    const inner = toInternal(validator as Validator);
+
+    const marked = createValidator<unknown>(
+        inner.kind,
+        (value, context) => {
+            const previous = context.redact;
+
+            context.redact = true;
+
+            try {
+                return inner._parse(value, context);
+            } finally {
+                context.redact = previous;
+            }
+        },
+        { ...inner._meta, sensitive: true },
+    );
+
+    // `.strip()` is the one method only an object validator carries; the rebuild above would drop it.
+    const { strip } = inner as unknown as { strip?: () => Validator };
+
+    if (typeof strip === "function") {
+        (marked as unknown as { strip: () => Validator }).strip = () => sensitive(strip());
+    }
+
+    return marked as unknown as V;
+};
+
+/** Path segment standing in for a record key that may be a secret (see `record`). */
+const RECORD_KEY_PLACEHOLDER = "<key>";
+
 const record = <K extends Validator<string>, V extends Validator>(
     keyValidator: K,
     valueValidator: V,
 ): ColumnValidator<Record<Infer<K>, Infer<V>>, Record<Infer<K>, Infer<V>>> => {
-    const keyInternal = toInternal(keyValidator as unknown as Validator<Infer<K>>);
+    // A record whose key or value tree holds a sensitive field: its keys are caller
+    // text that can carry the secret, so they are kept out of the path and out of the
+    // key's own diagnostic. Parsing the key through `sensitive` withholds its literal
+    // the same way a marked value's is withheld.
+    const sensitiveRecord = containsSensitive(keyValidator) || containsSensitive(valueValidator);
+    const keyInternal = toInternal((sensitiveRecord ? sensitive(keyValidator) : keyValidator) as unknown as Validator<Infer<K>>);
     const valueInternal = toInternal(valueValidator as Validator<Infer<V>>);
 
     return asColumn(
@@ -1077,7 +1204,7 @@ const record = <K extends Validator<string>, V extends Validator>(
             "record",
             (value, context) => {
                 if (typeof value !== "object" || value === null || Array.isArray(value)) {
-                    fail(context, "record", value);
+                    fail(containerContext(context, sensitiveRecord), "record", value);
                 }
 
                 const input = value as Record<string, unknown>;
@@ -1091,7 +1218,7 @@ const record = <K extends Validator<string>, V extends Validator>(
                 const { path } = context;
 
                 for (const key of Object.keys(input)) {
-                    path.push(key);
+                    path.push(sensitiveRecord ? RECORD_KEY_PLACEHOLDER : key);
                     const parsedKey = keyInternal._parse(key, context);
                     const parsedValue = valueInternal._parse(input[key], context);
 
@@ -1116,7 +1243,13 @@ const record = <K extends Validator<string>, V extends Validator>(
  * Split out of the parser rather than inlined so the hot path stays a single
  * loop. Always throws; the return type only documents that.
  */
-const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, value: unknown, context: ParseContext, baseDepth: number): never => {
+const failUnion = (
+    memberInternals: ReadonlyArray<InternalValidator<unknown>>,
+    value: unknown,
+    context: ParseContext,
+    baseDepth: number,
+    sensitiveMembers: boolean,
+): never => {
     const { path } = context;
     // Keep the deepest (longest-path) branch failure — the most specific detail.
     let deepestError: ValidationError | undefined;
@@ -1152,7 +1285,7 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
 
     const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
 
-    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
+    return fail(containerContext(context, sensitiveMembers), `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
 };
 
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {
@@ -1161,6 +1294,7 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
     }
 
     const memberInternals = members.map((member) => toInternal(member));
+    const sensitiveMembers = members.some((member) => containsSensitive(member));
 
     return asColumn(
         createValidator<Infer<Vs[number]>>(
@@ -1206,7 +1340,7 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
 
                 // `failUnion` is `: never`; returning it makes every path of this
                 // arrow explicitly terminal (consistent-return doesn't track those).
-                return failUnion(memberInternals, value, context, baseDepth);
+                return failUnion(memberInternals, value, context, baseDepth, sensitiveMembers);
             },
             { members },
         ),
@@ -1360,7 +1494,23 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
 
     return asColumn(
         createValidator<InferStandardOutput<S>>("from", (value, context) => {
-            const result = validate(value);
+            // A third-party validator may throw an error that quotes the value it was given. Under `sensitive` that
+            // error is replaced by the generic wording, as a returned issue's message is; otherwise it propagates.
+            const result = (() => {
+                try {
+                    return validate(value);
+                } catch (error: unknown) {
+                    if (context.redact === true) {
+                        throw new ValidationError("Standard Schema validation failed", {
+                            expected: "valid value",
+                            path: [...context.path],
+                            received: describeRedacted(value),
+                        });
+                    }
+
+                    throw error;
+                }
+            })();
 
             // Sync-only. Reject native Promises AND non-native thenables — a
             // thenable slips past `instanceof Promise` and would otherwise fall
@@ -1388,7 +1538,8 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 throw new ValidationError("v.from(): Standard Schema validator returned a non-object result", {
                     expected: "Standard Schema result object",
                     path: [...context.path],
-                    received: describeValue(looseResult),
+                    // A marked value's primitive result is the value itself, so it is described by its type under `sensitive`.
+                    received: context.redact === true ? describeRedacted(looseResult) : describeValue(looseResult),
                 });
             }
 
@@ -1408,12 +1559,21 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
             // `undefined` as though it had validated.
             if (syncResult.issues !== undefined) {
                 const first = syncResult.issues[0];
-                const message = first?.message ?? "Standard Schema validation failed";
+                // A third-party issue message may quote the value it rejected; under
+                // `sensitive` only the framework's generic wording is kept.
+                const message = context.redact === true ? "Standard Schema validation failed" : (first?.message ?? "Standard Schema validation failed");
 
                 throw new ValidationError(message, {
                     expected: "valid value",
-                    path: [...context.path, ...standardIssuePath(first?.path)],
-                    received: describeValue(value),
+                    // Under `sensitive` a string segment is a key the third-party schema read
+                    // from the caller's input, which can be the secret itself.
+                    path: [
+                        ...context.path,
+                        ...standardIssuePath(first?.path).map((segment) =>
+                            context.redact === true && typeof segment === "string" ? RECORD_KEY_PLACEHOLDER : segment,
+                        ),
+                    ],
+                    received: context.redact === true ? describeRedacted(value) : describeValue(value),
                 });
             }
 
@@ -1439,30 +1599,30 @@ const isOrWrapsFromValidator = (validator: Validator): boolean => {
         return true;
     }
 
-    const meta = (validator as { _meta?: Record<string, unknown> })._meta;
+    return childValidatorsOf(validator).some((child) => isOrWrapsFromValidator(child));
+};
 
-    if (!meta) {
-        return false;
+/** Per-map memo of {@link sensitiveArgumentNames}, keyed on the args object so a map is walked once. */
+const SENSITIVE_ARG_NAMES = new WeakMap<object, ReadonlySet<string>>();
+
+/**
+ * The names of a function's arguments that carry a {@link sensitive} marker.
+ * Memoised per args object: the request log asks on every dispatch.
+ */
+const sensitiveArgumentNames = (args: Readonly<Record<string, unknown>>): ReadonlySet<string> => {
+    const cached = SENSITIVE_ARG_NAMES.get(args);
+
+    if (cached !== undefined) {
+        return cached;
     }
 
-    // Gather candidate nested validators from the structural meta, then recurse.
-    const children: unknown[] = [meta.inner, meta.keyValidator, meta.valueValidator];
+    const names = new Set(
+        Object.keys(args).filter((name) => typeof args[name] === "object" && args[name] !== null && containsSensitive(args[name] as Validator)),
+    );
 
-    if (Array.isArray(meta.members)) {
-        children.push(...(meta.members as unknown[]));
-    }
+    SENSITIVE_ARG_NAMES.set(args, names);
 
-    if (meta.shape !== null && typeof meta.shape === "object") {
-        children.push(...(Object.values(meta.shape) as unknown[]));
-    }
-
-    for (const child of children) {
-        if (child !== null && typeof child === "object" && "kind" in child && isOrWrapsFromValidator(child as Validator)) {
-            return true;
-        }
-    }
-
-    return false;
+    return names;
 };
 
 /**
@@ -1532,6 +1692,7 @@ const v: {
     optional: typeof optional;
     partial: typeof partial;
     record: typeof record;
+    sensitive: typeof sensitive;
     storage: typeof storage;
     string: typeof string;
     timestamp: typeof timestamp;
@@ -1553,6 +1714,7 @@ const v: {
     optional,
     partial,
     record,
+    sensitive,
     storage,
     string,
     timestamp,
@@ -1587,4 +1749,4 @@ export type {
     Validator,
     ValidatorKind,
 };
-export { isOrWrapsFromValidator, isStringValidator, optionalInner, v };
+export { containsSensitive, isOrWrapsFromValidator, isStringValidator, optionalInner, sensitiveArgumentNames, v };

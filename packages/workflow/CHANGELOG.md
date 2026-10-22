@@ -1,3 +1,47 @@
+## @lunora/workflow [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.91...@lunora/workflow@1.0.0-alpha.92) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+
+## @lunora/workflow [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.90...@lunora/workflow@1.0.0-alpha.91) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+
+## @lunora/workflow [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.89...@lunora/workflow@1.0.0-alpha.90) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+
+## @lunora/workflow [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.88...@lunora/workflow@1.0.0-alpha.89) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+
+## @lunora/workflow [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.87...@lunora/workflow@1.0.0-alpha.88) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+
 ## @lunora/workflow [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.86...@lunora/workflow@1.0.0-alpha.87) (2026-10-19)
 
 

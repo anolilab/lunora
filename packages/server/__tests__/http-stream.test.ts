@@ -90,6 +90,20 @@ describe("httpRoute stream() terminal", () => {
         ]);
     });
 
+    it("carries a thrown LunoraError's why on its event:error frame", async () => {
+        expect.assertions(1);
+
+        const route = httpRoute.get("/api/conflict").stream(async function* conflictGen() {
+            yield { status: "pending" };
+            throw new LunoraError("CONFLICT", "stale", { why: "row moved" });
+        });
+
+        const response = await dispatch(route, "GET", "/api/conflict", new Request("https://x/api/conflict"));
+        const { events } = await readSse(response);
+
+        expect(events.find((event) => event.event === "error")?.data).toMatchObject({ code: "CONFLICT", why: "row moved" });
+    });
+
     it("surfaces a thrown LunoraError as an event:error frame", async () => {
         expect.assertions(2);
 

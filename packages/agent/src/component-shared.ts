@@ -63,5 +63,23 @@ const definedColumns = (columns: Record<string, unknown>): Record<string, unknow
     return result;
 };
 
+/**
+ * The shortest time a supplied secret value stays takeable. It covers the gap until
+ * the model's next turn calls the consuming tool, and the consumer's `discard`
+ * removes the value sooner on the success path; this bound is the backstop for a
+ * crash in between. A supply that may need to outlast its wake-up is given its
+ * deadline instead (see `secretValueTtlMs` in component.ts).
+ */
+const AGENT_SECRET_TTL_MS: number = 15 * 60 * 1000;
+
+/**
+ * Slack past a secret request's deadline before the loop's wait gives up. The
+ * request row fixes `expiresAt` inside a durable step, and the wait is armed a
+ * moment later, so a timeout measured from the wait alone could fire before the
+ * deadline. The grace keeps the host timeout after `expiresAt`, so a supply
+ * accepted at the last instant still finds the wait open.
+ */
+const SECRET_WAIT_GRACE_MS: number = 60 * 1000;
+
 export type { AgentRegisteredFunction };
-export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns };
+export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns, SECRET_WAIT_GRACE_MS };

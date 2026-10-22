@@ -181,7 +181,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
               })
             : await callTool(client, name, input, allowWrites, allowObservability, allowDataReads);
 
-        return result as CallToolResult;
+        return result;
     });
 
     return server;

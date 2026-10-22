@@ -112,7 +112,7 @@ module Lunora
   # write path reads the same in every port.
   SubmitOptions = Struct.new(
     :function_path, :args, :shard_key, :mutation_id, :optimistic,
-    :optimistic_update, :precondition, :on_settled,
+    :optimistic_update, :precondition, :on_settled, :online_only,
     keyword_init: true
   )
 
@@ -224,10 +224,13 @@ module Lunora
     cursor.is_a?(Integer) ? cursor : nil
   end
 
-  def build_connect_frame(client_id = nil, context = nil)
+  # +token+ is the session credential (protocol/README.md 5.1, 6). It is sent
+  # here, in the first frame, and never in the socket URL.
+  def build_connect_frame(client_id = nil, context = nil, token: nil)
     frame = { "id" => "connect", "type" => "connect" }
     frame["clientId"] = client_id unless client_id.nil?
     frame["context"] = context unless context.nil?
+    frame["token"] = token unless token.nil?
     frame
   end
 
@@ -590,13 +593,19 @@ module Lunora
     # verdict drops it (the row it edited was deleted meanwhile) rather than
     # replaying a write that can only fail.
     #
+    # +online_only+ is never queued, persisted or replayed. Where a normal write
+    # would be queued it raises OfflineError coded OFFLINE_NOT_QUEUED before any
+    # optimistic layer is installed, so its arguments never reach the queue or the
+    # persistence adapter. It does not wait for a flush or queue behind pending
+    # writes, so it may overtake them. For a credential or a one-time token.
+    #
     # Returns as soon as the write is either committed or durably queued.
     def submit(function_path, args = nil, shard_key: nil, mutation_id: nil, optimistic: nil,
-               optimistic_update: nil, precondition: nil, on_settled: nil)
+               optimistic_update: nil, precondition: nil, on_settled: nil, online_only: false)
       options = SubmitOptions.new(
         args: args, function_path: function_path, mutation_id: mutation_id || Lunora.random_id,
         on_settled: on_settled, optimistic: optimistic, optimistic_update: optimistic_update,
-        precondition: precondition, shard_key: shard_key
+        precondition: precondition, shard_key: shard_key, online_only: online_only
       )
 
       # The consumer's transforms run with the lock RELEASED. Mutex is not
@@ -613,15 +622,22 @@ module Lunora
         # emptied.
         raise OfflineError.new(CLIENT_CLOSED, "client is closed") if @closed
 
-        handles = Optimistic.install(planned, deferred)
-        confirmers = handles.map { |handle| handle.method(:confirm) }
-        rollbackers = handles.map { |handle| handle.method(:rollback) }
-
         # ONE critical section for the offline decision AND the enqueue: a socket
         # that attaches between the two carries its flush past this write, which
         # then sits in a queue nothing will drain until the next disconnect —
         # after +submit+ has already answered "queued".
-        next [confirmers, rollbackers, []] unless @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect)
+        queues_it = @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect)
+
+        # Refused before anything is installed, so no overlay outlives the call.
+        if queues_it && options.online_only
+          raise OfflineError.new(OFFLINE_NOT_QUEUED, "'#{options.function_path}' is online-only and the connection is not live, so it was not queued")
+        end
+
+        handles = Optimistic.install(planned, deferred)
+        confirmers = handles.map { |handle| handle.method(:confirm) }
+        rollbackers = handles.map { |handle| handle.method(:rollback) }
+
+        next [confirmers, rollbackers, []] unless queues_it
 
         entry = queued_write(options, confirmers, rollbackers)
         [confirmers, rollbackers, @offline_queue.enqueue(entry)]
@@ -632,10 +648,26 @@ module Lunora
 
       return MutationOutcome.new(mutation_id: options.mutation_id, status: :queued) unless entry.nil?
 
+      # The notifications above are subscriber callbacks, and one may drop the socket. An online-only write that
+      # would now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+      if options.online_only && @mutex.synchronize { @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect) }
+        settle_layers([], rollbacks, nil)
+        raise OfflineError.new(OFFLINE_NOT_QUEUED, "'#{options.function_path}' is online-only and the connection is not live, so it was not queued")
+      end
+
       begin
         value, commit_cursor = rpc_full(options.function_path, options.args, options.shard_key, options.mutation_id)
-      rescue StandardError
+      rescue StandardError => e
         settle_layers([], rollbacks, nil)
+        # A raw error from the poster is the transport, not a verdict (the replay reads it
+        # the same way), so an online-only write that never reached the server while no
+        # socket is open is refused rather than surfacing the raw error. An argument the
+        # codec refuses never left the process, so it surfaces as itself.
+        if options.online_only && !e.is_a?(ApiError) && !e.is_a?(WireFormatError) && !online?
+          message = "'#{options.function_path}' is online-only and the connection is not live, so it was not queued"
+          raise(OfflineError.new(OFFLINE_NOT_QUEUED, message), cause: e)
+        end
+
         raise
       end
 
@@ -1070,17 +1102,18 @@ module Lunora
       @http_post.call(join_url(RPC_PATH), headers, JSON.generate(Lunora.build_rpc_body(function_path, args, shard_key)))
     end
 
-    # The socket URL: the origin with its scheme swapped, plus the shard and
-    # credential query parameters when present.
+    # The socket URL: the origin with its scheme swapped, plus the shard and,
+    # when given, the admin +ticket+ as +?token=+. The session credential is
+    # never a URL parameter: it goes in +build_connect_frame+'s +token:+.
     #
     # An empty shard key is omitted, for the reason +build_rpc_body+ gives: to
     # the runtime it names its own shard, to this client it is the default one.
-    def ws_url(shard_key = nil, token = nil)
+    def ws_url(shard_key = nil, ticket = nil)
       endpoint = join_url(WS_PATH).sub(%r{\Ahttps://}, "wss://").sub(%r{\Ahttp://}, "ws://")
       params = []
       shard_key = Lunora.normalize_shard_key(shard_key)
       params << "shard=#{URI.encode_www_form_component(shard_key)}" unless shard_key.nil?
-      params << "token=#{URI.encode_www_form_component(token)}" unless token.nil?
+      params << "token=#{URI.encode_www_form_component(ticket)}" unless ticket.nil?
       return endpoint if params.empty?
 
       "#{endpoint}#{endpoint.include?("?") ? "&" : "?"}#{params.join("&")}"

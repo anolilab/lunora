@@ -159,7 +159,8 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
     const found: NondeterministicCallIR[] = [];
 
     for (const callNode of procedure.handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const callee = nondeterministicCalleeOf(callNode);
+        // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
+        const callee = procedure.kind === "query" && callNode.getExpression().getText() === "ctx.random" ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
         if (callee !== undefined) {
             found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: callNode.getStartLineNumber() });

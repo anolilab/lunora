@@ -1,3 +1,114 @@
+## @lunora/server [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.230...@lunora/server@1.0.0-alpha.231) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+* **@lunora/observability:** upgraded to 1.0.0-alpha.164
+
+## @lunora/server [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.229...@lunora/server@1.0.0-alpha.230) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/observability:** upgraded to 1.0.0-alpha.163
+* **@lunora/storage:** upgraded to 1.0.0-alpha.150
+
+## @lunora/server [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.228...@lunora/server@1.0.0-alpha.229) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/observability:** upgraded to 1.0.0-alpha.162
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/server [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.227...@lunora/server@1.0.0-alpha.228) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.145
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/observability:** upgraded to 1.0.0-alpha.161
+* **@lunora/storage:** upgraded to 1.0.0-alpha.149
+
+## @lunora/server [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.226...@lunora/server@1.0.0-alpha.227) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.144
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+* **@lunora/observability:** upgraded to 1.0.0-alpha.160
+* **@lunora/storage:** upgraded to 1.0.0-alpha.148
+
+## @lunora/server [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.225...@lunora/server@1.0.0-alpha.226) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.143
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/observability:** upgraded to 1.0.0-alpha.159
+
+## @lunora/server [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.224...@lunora/server@1.0.0-alpha.225) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.142
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/observability:** upgraded to 1.0.0-alpha.158
+* **@lunora/storage:** upgraded to 1.0.0-alpha.147
+
+## @lunora/server [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.223...@lunora/server@1.0.0-alpha.224) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.141
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/observability:** upgraded to 1.0.0-alpha.157
+* **@lunora/storage:** upgraded to 1.0.0-alpha.146
+
+## @lunora/server [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.222...@lunora/server@1.0.0-alpha.223) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.140
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/observability:** upgraded to 1.0.0-alpha.156
+* **@lunora/storage:** upgraded to 1.0.0-alpha.145
+
 ## @lunora/server [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.221...@lunora/server@1.0.0-alpha.222) (2026-10-19)
 
 

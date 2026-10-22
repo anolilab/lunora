@@ -1,7 +1,7 @@
 import { ShardDO } from "@lunora/do";
 import { createSocketHost } from "@lunora/platform-cloudflare";
 import { createWorker } from "@lunora/runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createNodeShardNamespace } from "../src/node-shard-namespace";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
@@ -64,6 +64,48 @@ describe("shardDO on a Node-backed shard", () => {
         });
     });
 
+    it("keeps a quiet live stream alive with the same keepalive comment the client's idle watchdog counts on", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        try {
+            await withShardDo(async (shardDo) => {
+                const response = await shardDo.fetch(new Request("http://shard.test/_lunora/live/connect"));
+                const reader = response.body?.getReader();
+                const decoder = new TextDecoder();
+
+                // The stream's first chunk flushes the headers; nothing is published after it.
+                const opening = await reader?.read();
+
+                expect(opening?.value).toStrictEqual(new TextEncoder().encode(":ok\n\n"));
+
+                // The client treats 75s of silence as a dead connection; the host must speak well inside that.
+                const quiet = reader?.read();
+
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                const chunk = await quiet;
+
+                expect(decoder.decode(chunk?.value)).toBe(":ka\n\n");
+
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                const second = await reader?.read();
+
+                expect(decoder.decode(second?.value)).toBe(":ka\n\n");
+
+                // The last stream going away stops the timer, so it cannot keep the process alive.
+                await reader?.cancel();
+                await vi.advanceTimersByTimeAsync(25_000);
+
+                expect(vi.getTimerCount()).toBe(0);
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("round-trips a socket attachment through accept and enumeration", async () => {
         expect.assertions(2);
 
@@ -89,6 +131,55 @@ describe("shardDO on a Node-backed shard", () => {
             // no subscriptions at all.
             expect(listed[0]?.deserializeAttachment?.()).toStrictEqual(attachment);
         });
+    });
+});
+
+const SECRET = "hunter2-the-real-secret";
+
+/**
+ * The same `ShardDO` the Cloudflare host runs, with one argument `value` marked as
+ * `v.sensitive` by the function registry the generated subclass would consult.
+ */
+class SensitiveNodeShardDO extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- a dispatch stub has no instance state to reach for
+    public override handleRpc(functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> {
+        return Promise.resolve({ functionPath, label: args["label"] });
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: the marked names are fixed per path
+    protected override sensitiveArgNames(functionPath: string): ReadonlySet<string> {
+        return functionPath.startsWith("vault:") ? new Set(["value"]) : new Set();
+    }
+}
+
+describe("a v.sensitive argument on a Node-backed shard", () => {
+    it("masks the marked value in the request log row of a shard that targets node", async () => {
+        expect.assertions(3);
+
+        const registry = createNodeShardRegistry();
+
+        try {
+            const state = createNodeShardState(registry.shardFor("tenant-42"));
+            const shardDo = new SensitiveNodeShardDO(state as never, {});
+
+            const response = await shardDo.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: { label: "primary", value: SECRET }, functionPath: "vault:store" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            const rows = (state.storage.sql as unknown as { exec: (query: string) => { toArray: () => { args: string | null }[] } })
+                .exec("SELECT args FROM __lunora_reqlog__")
+                .toArray();
+
+            expect(response.status).toBe(200);
+            expect(rows).toHaveLength(1);
+            expect(JSON.stringify(rows)).not.toContain(SECRET);
+        } finally {
+            registry.close();
+        }
     });
 });
 

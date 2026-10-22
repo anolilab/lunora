@@ -26,7 +26,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -749,11 +749,14 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         expect(subFrames(ws, "sub-A")).toHaveLength(1); // seeded
 
-        // Credential lapses, then a write triggers a refresh.
-        ws.serializeAttachment({ expiresAt: Date.now() - 1, subs: { "sub-A": { args: {}, functionPath: "messages:list" } } });
+        // Credential lapses as time passes, then a write triggers a refresh.
+        const lapsed = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+
         shard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
-        await shard.writeRpc();
+        await shard.writeRpc().finally(() => {
+            lapsed.mockRestore();
+        });
 
         // No new data/delta frame after the seed — the expired socket was dropped.
         expect(subFrames(ws, "sub-A")).toHaveLength(1);

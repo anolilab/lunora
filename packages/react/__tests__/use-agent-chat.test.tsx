@@ -1,5 +1,6 @@
 import type { FunctionReference, LunoraClient, StreamHandle, StreamIterable } from "@lunora/client";
 import { createStream } from "@lunora/client";
+import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
@@ -67,6 +68,11 @@ const buildClient = (): {
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
+const SUPPLY_REF = "agents:agentSupplySecret";
+const DECLINE_REF = "agents:agentDeclineSecret";
+const SECRET = "sk-live-4242-do-not-log";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:tokens";
@@ -74,8 +80,12 @@ const STREAM_REF = "chat:tokens";
 const buildOptions = (overrides: Partial<UseAgentChatOptions> = {}): UseAgentChatOptions => {
     const api = {
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentDeclineSecret: makeRef(DECLINE_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
+            agentSupplySecret: makeRef(SUPPLY_REF),
             agentThread: makeRef(THREAD_REF),
         },
     } as unknown as UseAgentChatApi;
@@ -468,6 +478,85 @@ describe("useAgentChat", () => {
         );
     });
 
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+        });
+
+        await act(async () => {
+            await latest?.approveForThread("call-1", "ok for this thread");
+        });
+
+        expect(mutation).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
+            { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            undefined,
+        );
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        expect(latest?.approvalGrants).toStrictEqual([]);
+
+        await act(async () => {
+            emit(GRANTS_REF, [
+                { createdAt: 1, toolName: "sendEmail" },
+                { createdAt: 2, toolName: "refund" },
+            ]);
+        });
+
+        expect(latest?.approvalGrants).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await act(async () => {
+            await latest?.revokeGrant("sendEmail");
+        });
+
+        expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: REVOKE_REF }), { threadKey: "t1", toolName: "sendEmail" }, undefined);
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        await act(async () => {
+            emit(GRANTS_REF, [{ createdAt: 2, toolName: "refund" }]);
+        });
+
+        expect(latest?.approvalGrants).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
+    });
+
     it("cancel terminates the in-flight run via the cancel mutation", async () => {
         expect.hasAssertions();
 
@@ -495,6 +584,119 @@ describe("useAgentChat", () => {
         });
 
         expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: CANCEL_REF }), { instanceId: "wf-1", threadKey: "t1" }, undefined);
+    });
+
+    it("supplySecret sends the value through agentSupplySecret with onlineOnly, and nothing else keeps it", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        const queryClient = new QueryClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client} queryClient={queryClient}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+        });
+
+        await act(async () => {
+            await latest?.supplySecret("call-1", SECRET);
+        });
+
+        // The secret rides in the args only; the options are exactly the online-only flag.
+        expect(mutation).toHaveBeenCalledTimes(1);
+        expect(mutation).toHaveBeenCalledWith(
+            expect.objectContaining({ __lunoraRef: SUPPLY_REF }),
+            { secret: SECRET, threadKey: "t1", toolCallId: "call-1" },
+            { onlineOnly: true },
+        );
+
+        // The write never enters TanStack's mutation cache, where a variables copy would outlive the call.
+        expect(
+            JSON.stringify(
+                queryClient
+                    .getMutationCache()
+                    .getAll()
+                    .map((entry) => entry.state.variables),
+            ),
+        ).not.toContain(SECRET);
+        expect(document.body.textContent).not.toContain(SECRET);
+    });
+
+    it("supplySecret rethrows the original failure without echoing the value", async () => {
+        expect.hasAssertions();
+
+        const { client, emit, mutation } = buildClient();
+        const failure = new Error("connection is not live");
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+        });
+
+        mutation.mockRejectedValueOnce(failure);
+
+        let caught: unknown;
+
+        await act(async () => {
+            try {
+                await latest?.supplySecret("call-1", SECRET);
+            } catch (error) {
+                caught = error;
+            }
+        });
+
+        expect(caught).toBe(failure);
+        expect((caught as Error).message).not.toContain(SECRET);
+        expect(latest?.error).toBeUndefined();
+        expect(document.body.textContent).not.toContain(SECRET);
+    });
+
+    it("declineSecret sends agentDeclineSecret for the tool call, carrying no value", async () => {
+        expect.hasAssertions();
+
+        const { client, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            await latest?.declineSecret("call-1");
+        });
+
+        expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: DECLINE_REF }), { threadKey: "t1", toolCallId: "call-1" }, undefined);
     });
 
     it("approve rejects when there is no in-flight run to resolve", async () => {

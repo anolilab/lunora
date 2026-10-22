@@ -21,6 +21,7 @@
  * own SQLite, alarms and hibernation API rather than a double.
  */
 import { ShardDO } from "@lunora/do";
+import { CELLD_CAPABILITIES } from "@lunora/platform";
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { createShardDirectory } from "@lunora/platform-cloudflare";
 import type { ShardNamespaceLike } from "@lunora/runtime";
@@ -106,6 +107,7 @@ const createPlatformHost = (): ConformanceHost => {
     const platform = createCelldShardPlatform(state);
 
     return {
+        capabilities: CELLD_CAPABILITIES,
         cleanup: () => {
             // eslint-disable-next-line no-void -- `cleanup` is synchronous by contract; disarming is fire-and-forget
             void state.storage.deleteAlarm();

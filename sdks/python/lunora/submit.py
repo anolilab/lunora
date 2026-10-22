@@ -34,6 +34,7 @@ from .errors import PAYLOAD_TOO_LARGE, LunoraError, decode_failed, envelope_erro
 from .offline import (
     CLIENT_CLOSED,
     OFFLINE_IDENTITY_CHANGED,
+    OFFLINE_NOT_QUEUED,
     OFFLINE_WRITE_UNENCODABLE,
     OfflineError,
     QueuedMutation,
@@ -219,6 +220,13 @@ class SubmitOptions:
     #: Re-evaluated just before a QUEUED write replays; ``False`` drops it rather
     #: than replaying a write that can only fail.
     precondition: Optional[Callable[[], bool]] = None
+    #: Never queued, persisted or replayed. Where a normal write would be queued,
+    #: this raises ``OfflineError`` with ``OFFLINE_NOT_QUEUED`` before any
+    #: optimistic layer is installed, so the arguments never reach the queue, the
+    #: persistence adapter or disk. It does not wait for a queue flush or queue
+    #: behind pending writes, so it may overtake them. For a credential or a
+    #: one-time token.
+    online_only: bool = False
     #: Reports the eventual verdict on a queued write.
     on_settled: Optional[Callable[[MutationSettled], None]] = None
 
@@ -318,8 +326,13 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
         if client._closed:
             raise OfflineError(CLIENT_CLOSED, "client is closed")
 
-        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
         queue_it = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+        # Refused before anything is installed, so no overlay outlives the call.
+        if queue_it and options.online_only:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
+        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
 
         if queue_it:
             entry = _build_entry(client, options, write_id, confirms, rollbacks)
@@ -329,18 +342,55 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
 
     run_deferred(deferred)
 
+    # The notifications above are subscriber callbacks, and one may drop the socket. An online-only write that would
+    # now queue is refused here, with its overlays rolled back, rather than sent while the shard is disconnected.
+    if entry is None and options.online_only:
+        settle_now: list = []
+        with client._lock:
+            would_queue = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+            if would_queue:
+                rollback_all(rollbacks, settle_now)
+
+        if would_queue:
+            run_deferred(settle_now)
+
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
     if entry is not None:
         report_discarded(client, evicted)
 
         return MutationOutcome("queued", write_id)
 
+    # Encoded and serialized before any transport attempt. An argument the codec or the JSON
+    # encoder refuses (a cycle, or a stack too shallow to encode it) never leaves the process, so
+    # it surfaces as its own error. Inside the transport `try` it would read as an unreached send
+    # and be refused as offline. The overlays this call installed are rolled back first.
     try:
-        value, commit_cursor, decode_error = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
+        json.dumps(encode_wire(options.args if options.args is not None else {}))
     except Exception:
         settle: list = []
         with client._lock:
             rollback_all(rollbacks, settle)
         run_deferred(settle)
+        raise
+
+    try:
+        value, commit_cursor, decode_error = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
+    except Exception as error:
+        settle: list = []
+        with client._lock:
+            rollback_all(rollbacks, settle)
+            # A raw exception is the transport, not a verdict (the replay reads it the
+            # same way), so an online-only write that never reached the server while
+            # the shard has no socket is refused rather than surfacing the raw error.
+            # A `TypeError` is not a refusal the transport can vouch for: a transport may send the
+            # request and then raise one, so its fate is unknown and the original exception stays.
+            # An argument the codec refuses never reaches this handler; the preflight above catches it.
+            unreached = options.online_only and not isinstance(error, (LunoraError, WireFormatError, TypeError)) and client._send is None
+        run_deferred(settle)
+        if unreached:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued") from error
         raise
 
     settle = []

@@ -44,8 +44,8 @@ import type { RateLimitConfigMap } from "lunorash/ratelimit";
  * \`lunora/messages.ts\`).
  */
 export const limits = {
-    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
-    send: { kind: "token bucket", period: 60_000, rate: 30 },
+    /** Chat writes: 10 per caller per minute, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
 export type LimitName = keyof typeof limits;
@@ -362,7 +362,7 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     parsed.imports = { ...parsed.imports, "#lunora/*": "./lunora/*" };
     parsed.dependencies = restampLunora(dependencies, distTag, versions);
     parsed.devDependencies = restampLunora(devDependencies, distTag, versions);
-    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "vite build && lunora deploy" };
+    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "lunora deploy" };
 
     writeFileSync(path, `${JSON.stringify(parsed, undefined, 4)}\n`, "utf8");
 };

@@ -51,6 +51,7 @@ export type { EmailGateHookConfig } from "./email-gate";
 export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
 export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";
 export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomainLists } from "./email-guard";
+export { default as isDevEnvironment } from "./environment";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { createSignUpInvitation, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation } from "./invite-only";

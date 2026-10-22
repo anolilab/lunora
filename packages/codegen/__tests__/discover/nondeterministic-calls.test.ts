@@ -65,6 +65,23 @@ const MUTATION_NEW_DATE = `
     });
 `;
 
+/** A query drawing `ctx.random()` (unkeyed, so `Math.random()`) and a mutation drawing it (replay-stable). */
+const QUERY_CTX_RANDOM = `
+    import { mutation, query } from "@lunora/server";
+
+    export const drawQuery = query({
+        args: {},
+        handler: async (ctx) => ctx.random(),
+    });
+
+    export const drawMutation = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insert("draws", { value: ctx.random() });
+        },
+    });
+`;
+
 /** A deterministic mutation — no non-deterministic calls to record. */
 const CLEAN_MUTATION = `
     import { mutation } from "@lunora/server";
@@ -139,6 +156,16 @@ describe("discoverNondeterministicCalls", () => {
         const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         expect(calls.map((call) => call.callee).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["crypto.randomUUID", "new Date"]);
+    });
+
+    it("records ctx.random() in a query but not in a mutation", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "draws.ts"), QUERY_CTX_RANDOM, "utf8");
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
     });
 
     it("records nothing for a deterministic mutation", () => {

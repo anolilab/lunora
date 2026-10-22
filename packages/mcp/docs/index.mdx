@@ -171,7 +171,9 @@ The two **write** tools take three more fields — `confirmed`, `actionDigest` a
 Results are returned as MCP `content` text: the function's return value JSON,
 or the JSON `null` literal for a void-returning mutation/action. Unknown tools
 and thrown errors come back as `isError` tool results (not rejections), so the
-calling model sees the failure as tool output.
+calling model sees the failure as tool output. An error result carries
+`{ code, message }` both as `structuredContent` and as one text block that begins
+with the code, for example `NOT_FOUND: unknown tool: x`.
 
 ### Write confirmation
 
@@ -744,6 +746,8 @@ outlasts the budget, the tool returns a **pending** result (`{ status:
 "running", threadKey, runId, hint }`) instead of hanging. Feed that `threadKey`
 to the generic `lunora_agent_status` tool to poll for the final answer once the
 run finishes.
+
+**Limit:** a run paused for a tool approval or a secret request (`requestSecretTool`) cannot be resumed through MCP. MCP has no operation to approve, reject, supply or decline it, so the run waits for its owner to answer it in the app and otherwise expires. The status reports the run as `awaiting_input`, and that result's `hint` says the decision belongs in the app.
 
 <Callout type="warn">
     Agent runs are **owner-scoped** to the identity the configured `token` resolves to — the deployment's **admin** identity, since that is the only token every

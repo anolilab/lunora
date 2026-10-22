@@ -95,10 +95,12 @@ function subscription<F extends FunctionReference>(
                     onError: (subscriptionError) => {
                         // Preserve the server-supplied `code` (matching Vue/Solid's
                         // subscription primitives) so consumers can branch on it.
-                        const error =
+                        const error = Object.assign(
                             subscriptionError.code === undefined
                                 ? new Error(subscriptionError.message)
-                                : new LunoraError(subscriptionError.code, subscriptionError.message);
+                                : new LunoraError(subscriptionError.code, subscriptionError.message),
+                            subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                        );
 
                         errorStore.set(error);
                         onError?.(error);

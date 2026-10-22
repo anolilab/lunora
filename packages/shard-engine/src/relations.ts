@@ -35,6 +35,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { tableColumns } from "./do-sql";
 import { applySelect } from "./query-args";
 import type {
     FanOutBudget,
@@ -43,8 +44,10 @@ import type {
     QueryArgs,
     RelationDefinitionLike,
     ResolveWithOptions,
+    ServerDefaultContextLike,
     TableDefinitionLike,
     ThroughRelationDefinitionLike,
+    ValidatorLike,
 } from "./schema-types";
 import { FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -734,6 +737,279 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
     }
 };
 
+const transformCache = new WeakMap<ValidatorLike, boolean>();
+
+/**
+ * Whether a column holds a `v.from(schema)` anywhere inside it — bare, or under
+ * `v.optional` / `v.array` / `v.object` / `v.record` / `v.union` (a nullable keeps the
+ * inner kind). Those are the only columns whose `parse()` is not idempotent: a
+ * transform (`z.string().transform(Number)`) changes the value, so its output may
+ * not be valid input to the same schema (or is transformed a second time). A write
+ * therefore parses such a column only when it carries a NEW value — see
+ * `RowValidatorOptions.previous` for how stored output handed back is told apart.
+ */
+const hasTransform = (validator: ValidatorLike): boolean => {
+    const cached = transformCache.get(validator);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    // `v.record`'s key and value validators are not on the structural `_meta` type.
+    const meta: (NonNullable<ValidatorLike["_meta"]> & { readonly keyValidator?: ValidatorLike; readonly valueValidator?: ValidatorLike }) | undefined =
+        validator._meta;
+    const children = [meta?.inner, meta?.keyValidator, meta?.valueValidator, ...(meta?.members ?? []), ...Object.values(meta?.shape ?? {})];
+    const result = validator.kind === "from" || children.some((child) => child !== undefined && hasTransform(child));
+
+    transformCache.set(validator, result);
+
+    return result;
+};
+
+const isPlain = (value: object): boolean => {
+    const prototype: unknown = Object.getPrototypeOf(value);
+
+    return prototype === Object.prototype || prototype === null;
+};
+
+const bytesOf = (value: unknown): Uint8Array | undefined => {
+    if (value instanceof ArrayBuffer) {
+        return new Uint8Array(value);
+    }
+
+    return ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : undefined;
+};
+
+/**
+ * Structural equality over what a column stores: primitives, dates, byte buffers (by content),
+ * arrays and plain objects. Any other object (a `Map`, a class instance) is never equal to
+ * another, so a value of that kind is parsed rather than trusted as stored output.
+ */
+const sameValue = (a: unknown, b: unknown): boolean => {
+    if (Object.is(a, b)) {
+        return true;
+    }
+
+    if (a instanceof Date && b instanceof Date) {
+        return a.getTime() === b.getTime();
+    }
+
+    const leftBytes = bytesOf(a);
+    const rightBytes = bytesOf(b);
+
+    if (leftBytes !== undefined || rightBytes !== undefined) {
+        return (
+            leftBytes !== undefined &&
+            rightBytes !== undefined &&
+            Object.getPrototypeOf(a) === Object.getPrototypeOf(b) &&
+            leftBytes.length === rightBytes.length &&
+            leftBytes.every((byte, index) => byte === rightBytes[index])
+        );
+    }
+
+    if (Array.isArray(a) || Array.isArray(b)) {
+        return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => sameValue(item, b[index]));
+    }
+
+    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+        return false;
+    }
+
+    if (!isPlain(a) || !isPlain(b)) {
+        return false;
+    }
+
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+
+    return keys.length === Object.keys(right).length && keys.every((key) => key in right && sameValue(left[key], right[key]));
+};
+
+const transformShapeCache = new WeakMap<TableDefinitionLike, TableDefinitionLike | undefined>();
+
+/**
+ * The table narrowed to its transform columns (see {@link hasTransform}), or `undefined` when it has none.
+ * Running `runRowValidators` over it adopts the parsed output of those columns without validating the
+ * rest — the shape `insertManyUnsafe` needs. Computed once per table.
+ */
+const transformOnlyDefinition = (definition: TableDefinitionLike): TableDefinitionLike | undefined => {
+    if (transformShapeCache.has(definition)) {
+        return transformShapeCache.get(definition);
+    }
+
+    const shape = Object.fromEntries(Object.entries(definition.shape).filter(([, validator]) => hasTransform(validator)));
+    const narrowed = Object.keys(shape).length > 0 ? { ...definition, shape } : undefined;
+
+    transformShapeCache.set(definition, narrowed);
+
+    return narrowed;
+};
+
+interface RowValidatorOptions {
+    /**
+     * Parse transform columns only for these fields; the rest are skipped. A patch
+     * passes the keys it sets, because the others in the merged row are already
+     * stored output and must not be fed through their transform again. A field an
+     * update hook assigned is not among them: a hook returns the stored form.
+     */
+    only?: ReadonlySet<string>;
+
+    /**
+     * The row being overwritten (`patch` and `replace`), read lazily. A transform
+     * column whose value deep-equals the stored one is that stored OUTPUT handed
+     * back — `{ ...(await db.get(id)), x: 1 }` — so it is passed through unparsed;
+     * only a value that differs from what is stored is treated as new input. That cannot tell
+     * a read-back spread from an explicit re-entry of the same value, so for a non-idempotent
+     * transform an explicit write equal to the stored output is kept as is, not re-parsed.
+     */
+    previous?: () => Readonly<Record<string, unknown>> | undefined;
+
+    /**
+     * The document as the caller wrote it, before defaults and update hooks filled in
+     * the rest (`insert`, `replace`). Only the transform columns it carries are INPUT
+     * and parsed; a value from `.default()`, `.$defaultFn()`, `.$onUpdateFn()` or a
+     * `.serverDefault()` is declared as the stored form and kept as is. Ignored when
+     * `only` is set.
+     */
+    supplied?: Readonly<Record<string, unknown>>;
+
+    /**
+     * Skip a `null` on an optional field (see below). Set on the patch path only.
+     */
+    tolerateStoredNull?: boolean;
+
+    /**
+     * The document is a replay of an already-stored row (an import, a CDC apply, a
+     * data-migration rewrite — the writes made under `allowExplicitId`), so its
+     * transform columns hold output, not input, and are neither parsed nor adopted.
+     */
+    trusted?: boolean;
+}
+
+/** A check for "this value is what the row already stores", reading the stored row once and only if asked. */
+const storedValueCheck = (previous: RowValidatorOptions["previous"]): ((field: string, value: unknown) => boolean) => {
+    let row: Readonly<Record<string, unknown>> | undefined;
+
+    return (field, value) => {
+        if (previous === undefined) {
+            return false;
+        }
+
+        row ??= previous() ?? {};
+
+        return field in row && sameValue(value, row[field]);
+    };
+};
+
+/**
+ * The fields of `supplied` the caller really wrote: not an `undefined` (which defaults fill) and
+ * not a `.serverDefault()` column (which is stamped over whatever was sent).
+ */
+const callerFields = (definition: TableDefinitionLike, supplied: Readonly<Record<string, unknown>>): Set<string> => {
+    const fields = new Set(Object.keys(supplied).filter((field) => supplied[field] !== undefined));
+
+    for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            fields.delete(field);
+        }
+    }
+
+    return fields;
+};
+
+/**
+ * Whether a transform column's value is already stored output rather than input: the write
+ * replays a stored row, the column is one the caller did not write (`only`), or it equals what is stored.
+ */
+const holdsStoredOutput = (
+    field: string,
+    value: unknown,
+    options: RowValidatorOptions,
+    only: ReadonlySet<string> | undefined,
+    isStored: (field: string, value: unknown) => boolean,
+): boolean => options.trusted === true || (only !== undefined && !only.has(field)) || isStored(field, value);
+
+/**
+ * A copy of a declared default that no write can alias: plain objects, arrays, dates, byte
+ * buffers, maps and sets are copied deeply; any other object (a `URL`, a class instance) is
+ * handed out as is, because `structuredClone` throws on it or flattens it to a plain object.
+ */
+const cloneDefault = (value: unknown): unknown => {
+    if (typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    if (value instanceof Date) {
+        return new Date(value);
+    }
+
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return structuredClone(value);
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => cloneDefault(item));
+    }
+
+    if (value instanceof Map) {
+        return new Map([...value].map(([key, item]) => [cloneDefault(key), cloneDefault(item)]));
+    }
+
+    if (value instanceof Set) {
+        return new Set([...value].map((item) => cloneDefault(item)));
+    }
+
+    if (!isPlain(value)) {
+        return value;
+    }
+
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDefault(item)]));
+};
+
+/**
+ * Fill any field absent from `document` that declares a `.default()` literal or
+ * `.$defaultFn()` factory. The factory wins when both are present; a literal is
+ * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
+ * defaults survive.
+ *
+ * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
+ * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
+ * be set by the client.
+ */
+const applyInsertDefaults = (
+    definition: TableDefinitionLike,
+    document: Record<string, unknown>,
+    auth: ServerDefaultContextLike["auth"],
+): Record<string, unknown> => {
+    const result = { ...document };
+
+    for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            result[field] = column.serverDefault({ auth });
+
+            continue;
+        }
+
+        if (result[field] !== undefined) {
+            continue;
+        }
+
+        if (column.defaultFn) {
+            result[field] = column.defaultFn();
+        } else if ("defaultValue" in column) {
+            // The literal is declared once in the schema. An object or array handed out by
+            // reference lets a hook that mutates one inserted row rewrite the default of
+            // every insert after it.
+            const { defaultValue } = column;
+
+            result[field] = cloneDefault(defaultValue);
+        }
+    }
+
+    return result;
+};
+
 /**
  * Run each declared column's `validator.parse()` against the matching field on
  * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
@@ -742,23 +1018,43 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
  *
  * Skips fields the validator doesn't declare a `parse` for (the structural
  * fakes used in DO/D1 unit tests omit it), fields absent from the document, and
- * — only when `tolerateStoredNull` is set, i.e. on the patch path — a `null` on
+ * — only when `options.tolerateStoredNull` is set, i.e. on the patch path — a `null` on
  * an optional field (see below). The shape is iterated, not the document, so
  * unknown fields pass through untouched — they're part of the JSON-blob shape
  * but not part of the schema's declared columns.
+ *
+ * Returns the document to store. It is the argument itself unless a transform
+ * column was parsed, in which case it is a copy carrying that column's parsed
+ * OUTPUT — reads are typed as the output, so that is what must be stored. Only
+ * a value the caller wrote is parsed (see `supplied` / `only`): a default or an
+ * update hook already yields the output type and is stored as declared. A column
+ * counts as one when a `v.from` sits anywhere inside it (an array element, an
+ * object field, a doubly-wrapped optional). Every other column keeps storing what the caller supplied: their parsers are
+ * idempotent, and adopting a normalised result (`v.bytes()` turning a view into
+ * an `ArrayBuffer`) would change how a column is stored, not just validate it.
  *
  * Lives here (alongside `applyOnDelete`) rather than in each backend's
  * `ctx-db.ts` so DO + D1 share one implementation instead of two drift-prone
  * copies. The signature is intentionally `validator.parse?` so the unit-test
  * fakes (which never carry a runtime parser) keep working.
  */
-const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull = false): void => {
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, options: RowValidatorOptions = {}): Record<string, unknown> => {
+    let parsed: Record<string, unknown> | undefined;
+    const isStored = storedValueCheck(options.previous);
+    const only = options.only ?? (options.supplied === undefined ? undefined : callerFields(definition, options.supplied));
+
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
             continue;
         }
 
         if (typeof validator.parse !== "function") {
+            continue;
+        }
+
+        const fromColumn = hasTransform(validator);
+
+        if (fromColumn && holdsStoredOutput(field, document[field], options, only, isStored)) {
             continue;
         }
 
@@ -779,15 +1075,32 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
         //
         // Required fields are unaffected on every path: a null there is a genuine
         // violation and still throws.
-        if (tolerateStoredNull && document[field] === null && validator.kind === "optional") {
+        if (options.tolerateStoredNull === true && document[field] === null && validator.kind === "optional") {
             continue;
         }
 
         // Re-parse the field; the validator's own ValidationError carries the
         // refinement message and propagates up to the caller unchanged.
-        validator.parse(document[field]);
+        const result = validator.parse(document[field]);
+
+        if (fromColumn) {
+            parsed ??= { ...document };
+            parsed[field] = result;
+        }
     }
+
+    return parsed ?? document;
 };
 
-export { applyOnDelete, distinctValues, fanOutScalarCounts, MAX_LINK_ROWS, relationHooks, resolveWith, runRowValidators };
+export {
+    applyInsertDefaults,
+    applyOnDelete,
+    distinctValues,
+    fanOutScalarCounts,
+    MAX_LINK_ROWS,
+    relationHooks,
+    resolveWith,
+    runRowValidators,
+    transformOnlyDefinition,
+};
 export type { ApplyOnDeleteOptions };

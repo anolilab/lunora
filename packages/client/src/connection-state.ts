@@ -61,10 +61,12 @@ interface ShardConnection {
 
     /**
      * The `LunoraClient.identityQuestions` id this connection's CURRENT
-     * socket was upgraded under, when the cookie was its only credential (no
-     * bearer token held, no `?token=`). `undefined` otherwise: the `identity`
-     * frame such a socket gets answers for the token, not for the cookie session
-     * this client's identity tracks, and is ignored.
+     * socket was upgraded under, when the cookie was its only subject (no ticket
+     * or auth token held). The server takes the subject from the upgrade, and a
+     * session credential sent in `connect` only clears the shared gate, so the
+     * `identity` frame still describes the cookie session this client tracks.
+     * `undefined` otherwise: the frame answers for the ticket or the auth token,
+     * not for that cookie session, and is ignored.
      */
     identityQuestion?: number;
 
@@ -95,19 +97,27 @@ interface ShardConnection {
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see `polling-fallback.ts`). */
     readonly polling: PollingFallback;
+
+    /**
+     * Names the connect attempt currently waiting on a credential provider. An
+     * answer that arrives after its attempt timed out (or was superseded) no longer
+     * holds this value and is dropped, instead of opening a socket on top of the
+     * retry that replaced it.
+     */
+    providerAttempt?: symbol;
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-    /**
-     * Subscriptions whose `subscribe` frame is on the wire but unanswered,
-     * keyed by subscription id, each holding the watchdog that frees its slot
-     * if the server never replies. Its size is the live concurrency the drain
-     * meters against `RESUBSCRIBE_CONCURRENCY`.
-     */
-    resubscribePending: Map<string, ReturnType<typeof setTimeout>>;
-
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
     resubscribeQueue: SubscriptionState[];
+
+    /**
+     * Subscription ids holding a pacing slot: their `subscribe` frame went out through the paced
+     * resubscribe drain and nothing bearing the id has come back. Its size is the live concurrency
+     * the drain meters against `RESUBSCRIBE_CONCURRENCY`. Each id's slot is freed by its watchdog in
+     * `unackedWatchdogs`.
+     */
+    resubscribeSlots: Set<string>;
 
     /**
      * Set when the client's bounce-shard-sockets sweep retires this
@@ -134,6 +144,12 @@ interface ShardConnection {
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
      */
     roomsRejoined?: boolean;
+
+    /**
+     * The session credential this socket opened under, sent in its `connect` frame
+     * (protocol §6) and never in the upgrade URL. Absent when the client holds none.
+     */
+    sessionToken?: string;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
@@ -154,6 +170,15 @@ interface ShardConnection {
      * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Per subscription id, the one watchdog armed when its `subscribe` frame goes out. If the server
+     * answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS` it frees the id's pacing slot (if it holds one)
+     * and re-sends the frame once, recovering a frame the server silently dropped. Cleared by the
+     * first frame bearing the id and by every teardown of the socket.
+     */
+    unackedWatchdogs: Map<string, ReturnType<typeof setTimeout>>;
+
     wasEverConnected: boolean;
 
     /**

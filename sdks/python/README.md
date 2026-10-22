@@ -41,7 +41,8 @@ async def main():
     client = LunoraClient(
         url="https://my-app.example.com",
         auth_token="…",  # bearer for HTTP RPC (optional)
-        ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
+        ws_token=lambda: session_token(),  # session credential, sent in `connect`; never in the URL
+        ws_ticket=lambda: mint_ticket(),  # admin ticket for `?token=` (POST /_lunora/admin/ws-token)
         timeout=30,  # seconds; the default transport's `urlopen` timeout, raise for slow actions
         # client_id is minted per instance when omitted. Pin a stable per-device
         # one only when the offline queue is durable — a replayed write is
@@ -68,7 +69,9 @@ frame is written the moment it is produced, by a writer task running alongside
 the read loop, so a `subscribe` / `unsubscribe` / `subscribe_shape` issued from
 another coroutine — or another thread — goes out immediately whether or not the
 server has anything to say. `connect_and_run` returns when the socket closes and
-re-raises a failed write, so the caller reconnects; `resend_subscriptions` (which
+re-raises a failed write, so the caller reconnects — `await client.reconnect_forever()`
+does that for you, with exponential, jittered backoff (1 s doubling to a 60 s cap, reset
+once a run received a frame), until `close()` or cancellation; `resend_subscriptions` (which
 it calls for you) puts the subscriptions back with their resume cursors.
 
 **Keepalive is the `websockets` library's, not an application frame.** This
@@ -132,6 +135,16 @@ A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — is reported to `client.on_mutation_settled`.
+
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only=True`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `OfflineError` with code
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `__cause__`.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

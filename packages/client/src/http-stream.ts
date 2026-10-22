@@ -12,6 +12,12 @@
  * the supplied signal) aborts the fetch, which reaches the server handler as
  * `request.signal`.
  *
+ * A runtime whose `fetch` resolves with no `body` stream — React Native, whose
+ * `whatwg-fetch` polyfill defines no `body` on `Response` — is read whole
+ * through `response.text()` instead: the same frames, dispatched to the
+ * consumer one per task, so every chunk of the route arrives when the response
+ * lands rather than as the handler yields it.
+ *
  * A frame may also carry an SSE `id:` (the server emits one for a chunk a
  * handler wrapped in `sseEvent`) and a `retry:` (an integer reconnect delay in
  * ms). The last `id:` seen is tracked and replayed as the request's
@@ -28,6 +34,7 @@ import { decodeWire } from "@lunora/wire";
 import { createReconnect } from "./reconnect";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
+import readOrIdle from "./stream-idle";
 import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types";
 
 /** One optional space after an SSE field's colon (`data: x` vs `data:x`) — spec-stripped. */
@@ -49,6 +56,9 @@ const MAX_RETRY_MS = 2_147_483_647;
  */
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 
+/** How long a non-2xx response's error body may take to arrive before the status error is reported without it. */
+const ERROR_BODY_WAIT_MS = 1000;
+
 /**
  * Options accepted by {@link httpStream}.
  */
@@ -63,6 +73,23 @@ interface HttpStreamOptions {
     fetch?: typeof fetch;
     /** Extra request headers (e.g. `authorization`). `accept: text/event-stream` is always sent. */
     headers?: Record<string, string>;
+
+    /**
+     * Treat a connection that delivers nothing — no chunk, no keepalive comment —
+     * for this many milliseconds as dead: it is cancelled, then reconnected with
+     * {@link HttpStreamOptions.reconnect} or failed with `STREAM_IDLE`. Off by
+     * default, because a route may be silent for as long as its handler works
+     * (a model thinking); set it to a few multiples of the route's keepalive
+     * interval when the route sends one.
+     *
+     * Measured per streamed read, so it needs a `fetch` that exposes
+     * `response.body`. A runtime whose `fetch` delivers no body stream (React
+     * Native) reads the whole payload with one `text()` call that resolves only
+     * at the end — no per-frame progress exists to measure silence against, so
+     * this bound does not apply there and a stalled read waits for
+     * `.cancel()` or {@link HttpStreamOptions.signal} instead.
+     */
+    idleTimeoutMs?: number;
 
     /**
      * Seed the first request's `Last-Event-ID` header, resuming a stream from a
@@ -207,18 +234,23 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     }
 
     if (frame.event === "error") {
-        let payload: { code?: unknown; message?: unknown } = {};
+        let payload: { code?: unknown; message?: unknown; why?: unknown } = {};
 
         try {
-            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown };
+            payload = JSON.parse(frame.data) as { code?: unknown; message?: unknown; why?: unknown };
         } catch {
             /* fall through to the generic error below */
         }
 
         const message = typeof payload.message === "string" ? payload.message : "stream error";
         const code = typeof payload.code === "string" ? payload.code : "HTTP_STREAM_ERROR";
+        const error: LunoraError & { why?: string } = new LunoraError(code, message);
 
-        handle.fail(new LunoraError(code, message));
+        if (typeof payload.why === "string") {
+            error.why = payload.why;
+        }
+
+        handle.fail(error);
 
         return true;
     }
@@ -255,16 +287,17 @@ interface SseFrameObservers {
 }
 
 /**
- * Read the SSE response body, pushing parsed chunks into `handle` until a
- * terminal frame (`complete` / `error`) or EOF. Returns `true` when a terminal
- * frame finished the stream and `false` on a bare EOF — a transport
- * interruption the caller may retry. Runs inside the async pump — all thrown
- * read errors are routed to the consumer by the caller's catch.
+ * The frame buffer both body paths share: `append` folds decoded text in with
+ * `\r\n` normalised (across read boundaries too), `next` dispatches one
+ * complete frame, and `drain` dispatches every complete frame currently
+ * buffered. `next` returns `"terminal"` once a terminal frame (`complete` /
+ * `error` / a malformed chunk) ended the stream — the signal its caller stops
+ * reading the body.
  */
-const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHandle, observers: SseFrameObservers): Promise<boolean> => {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-
+const createSseFrameBuffer = (
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+): { append: (text: string) => void; drain: () => boolean; next: () => "dispatched" | "empty" | "terminal" } => {
     let buffer = "";
     // A `\r` that ended the previous chunk may be the first half of a `\r\n`
     // split across two reads, so it waits for the next chunk before normalising.
@@ -283,37 +316,73 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
         buffer += chunk.replaceAll("\r\n", "\n");
     };
 
-    /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
-    const drainFrames = (): boolean => {
-        let separatorIndex = buffer.indexOf("\n\n");
+    /**
+     * Dispatch the next complete frame: `"terminal"` when the frame ended the
+     * stream, `"dispatched"` when it did not, `"empty"` when no complete frame
+     * remains buffered.
+     */
+    const next = (): "dispatched" | "empty" | "terminal" => {
+        const separatorIndex = buffer.indexOf("\n\n");
 
-        while (separatorIndex !== -1) {
-            const frame = parseSseFrame(buffer.slice(0, separatorIndex));
-
-            buffer = buffer.slice(separatorIndex + 2);
-
-            // Report the frame before dispatching it: even a keepalive with no
-            // data proves the transport works, and an `id:` sets the resume point
-            // before the dispatch that may end the stream.
-            observers.onFrame?.();
-
-            if (frame.id !== undefined) {
-                observers.onId?.(frame.id);
-            }
-
-            if (frame.retry !== undefined) {
-                observers.onRetry?.(frame.retry);
-            }
-
-            if (handleSseFrame(frame, handle)) {
-                return true;
-            }
-
-            separatorIndex = buffer.indexOf("\n\n");
+        if (separatorIndex === -1) {
+            return "empty";
         }
 
-        return false;
+        const frame = parseSseFrame(buffer.slice(0, separatorIndex));
+
+        buffer = buffer.slice(separatorIndex + 2);
+
+        // Report the frame before dispatching it: even a keepalive with no
+        // data proves the transport works, and an `id:` sets the resume point
+        // before the dispatch that may end the stream.
+        observers.onFrame?.();
+
+        if (frame.id !== undefined) {
+            observers.onId?.(frame.id);
+        }
+
+        if (frame.retry !== undefined) {
+            observers.onRetry?.(frame.retry);
+        }
+
+        return handleSseFrame(frame, handle) ? "terminal" : "dispatched";
     };
+
+    /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
+    const drain = (): boolean => {
+        for (;;) {
+            const outcome = next();
+
+            if (outcome === "empty") {
+                return false;
+            }
+
+            if (outcome === "terminal") {
+                return true;
+            }
+        }
+    };
+
+    return { append, drain, next };
+};
+
+/**
+ * Read the SSE response body, pushing parsed chunks into `handle` until a
+ * terminal frame (`complete` / `error`) or EOF. Returns `true` when a terminal
+ * frame finished the stream and `false` on a bare EOF — a transport
+ * interruption the caller may retry. Runs inside the async pump — all thrown
+ * read errors are routed to the consumer by the caller's catch.
+ */
+const pumpSseBody = async (
+    body: ReadableStream<Uint8Array>,
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+    attemptAbort: AbortController,
+    idleTimeoutMs = 0,
+): Promise<boolean> => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const frames = createSseFrameBuffer(handle, observers);
 
     const releaseReader = (): Promise<void> =>
         reader.cancel().then(
@@ -324,7 +393,7 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
     try {
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-            const { done, value } = await reader.read();
+            const { done, value } = await readOrIdle(reader, idleTimeoutMs);
 
             if (done) {
                 break;
@@ -332,9 +401,9 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
 
             // The server writes `\n`-only frames; normalise `\r\n` defensively so a
             // proxy that rewrites line endings doesn't break frame detection.
-            append(decoder.decode(value, { stream: true }));
+            frames.append(decoder.decode(value, { stream: true }));
 
-            if (drainFrames()) {
+            if (frames.drain()) {
                 // Terminal frame seen — release the connection and stop reading.
                 // eslint-disable-next-line no-await-in-loop -- runs at most once: the terminal frame exits the loop via the return below.
                 await releaseReader();
@@ -345,16 +414,18 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
 
         // Flush any bytes the decoder buffered, then drain one last time.
         // A `\r` still carried here is a lone trailing one, which ends no frame.
-        append(decoder.decode());
+        frames.append(decoder.decode());
 
         // The pump always writes `complete` or `error` before closing, so an EOF
         // that drains no terminal frame is a transport-level interruption. Whether
         // that fails the stream or triggers a reconnect is the caller's decision, so
         // it is reported here as `false` rather than failed.
-        return drainFrames();
+        return frames.drain();
     } catch (error: unknown) {
-        // An observer or dispatch threw mid-body: release the connection, then surface it.
-        await releaseReader();
+        // An idle timeout or a throwing observer/dispatch: drop the connection and surface the error at
+        // once. A body whose `cancel()` never settles must not hold the error (and the reconnect) hostage.
+        attemptAbort.abort();
+        releaseReader().catch(() => undefined);
 
         throw error;
     }
@@ -385,6 +456,124 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 
         signal.addEventListener("abort", onAbort, { once: true });
     });
+};
+
+/**
+ * Pump an SSE body a runtime delivers whole rather than as a stream: React
+ * Native's `fetch` (the `whatwg-fetch` polyfill `react-native` loads) resolves
+ * with a `Response` that defines no `body`, so `text()` is the only read. The
+ * buffered frames dispatch one per macrotask — the scheduling window a read
+ * boundary gives the consumer on the streamed path — so a promptly iterating
+ * consumer is handed frames as it takes them. Dispatching the whole payload in
+ * one synchronous pass instead would race the consumer into the queue's
+ * `maxBuffer` bound and fail with `STREAM_BACKPRESSURE` before it took one.
+ * `id:`s, `retry:`s and terminal frames behave exactly as on the streamed
+ * path; the chunks simply arrive when the response lands rather than as the
+ * handler yields them.
+ *
+ * The read is deliberately NOT idle-bounded: `text()` resolves only once the
+ * whole payload has arrived, so no per-frame progress exists to measure
+ * silence against — an idle bound here would cap the stream's TOTAL duration
+ * and kill an actively-streaming route no keepalive could save. A read that
+ * stalls or dies surfaces through the attempt abort (the fetch signal) and
+ * the caller's signal or `.cancel()`.
+ */
+const pumpBufferedSseBody = async (
+    response: Response,
+    handle: UntypedHandle,
+    observers: SseFrameObservers,
+    attemptAbort: AbortController,
+): Promise<boolean> => {
+    const frames = createSseFrameBuffer(handle, observers);
+
+    try {
+        frames.append(await response.text());
+    } catch (error: unknown) {
+        // A failed read: drop the connection and surface the error, mirroring
+        // the streamed pump's catch. A stalled one outlives this pump (see
+        // above) until the caller cancels or aborts its signal.
+        attemptAbort.abort();
+
+        throw error;
+    }
+
+    for (;;) {
+        // An aborted attempt (a consumer cancel, a failed handle) has no frame
+        // left worth dispatching — pushes into a closed handle are silent
+        // no-ops, but each of a 1000-frame payload would still cost a hop.
+        if (attemptAbort.signal.aborted) {
+            return false;
+        }
+
+        const outcome = frames.next();
+
+        if (outcome === "empty") {
+            // A payload that drains no terminal frame reads as a bare EOF: a
+            // transport interruption the caller fails or reconnects on, not an
+            // error raised here.
+            return false;
+        }
+
+        if (outcome === "terminal") {
+            return true;
+        }
+
+        // One frame per task: the awaiting consumer runs between pushes, so
+        // the bounded queue sees hand-to-hand delivery, not a burst.
+        // eslint-disable-next-line no-await-in-loop -- the dispatch loop is deliberately sequential: one frame, one scheduling window for the consumer.
+        await sleep(0, attemptAbort.signal);
+    }
+};
+
+/**
+ * The status error for a non-2xx stream response whose body is the flat `{ code, error, why }`
+ * envelope the HTTP routes send before a stream opens. It keeps the status code and carries the
+ * server's message and `why`. `undefined` for any other body, so the caller keeps its generic status error.
+ */
+const statusErrorOf = (body: unknown, status: number): LunoraError | undefined => {
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { code, error, why } = body as { code?: unknown; error?: unknown; why?: unknown };
+
+    if (typeof code !== "string" || typeof error !== "string") {
+        return undefined;
+    }
+
+    // The code stays `HTTP_STREAM_STATUS`, which callers branch on; the server's code rides in the message.
+    return new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${status.toString()}, ${code}): ${error}`, {
+        status,
+        why: typeof why === "string" ? why : undefined,
+    });
+};
+
+/**
+ * A non-2xx response's JSON body, read for at most `ERROR_BODY_WAIT_MS`. `undefined` when the body is
+ * absent, malformed or slow; the body is then cancelled so it cannot hold the connection. An abort
+ * while reading rethrows, so the attempt's abort handling takes over.
+ */
+const readErrorBody = async (response: Response, signal: AbortSignal): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(undefined);
+        }, ERROR_BODY_WAIT_MS);
+    });
+    const parsed = response.json().catch((error: unknown) => {
+        if (signal.aborted) {
+            throw error;
+        }
+
+        return undefined;
+    });
+
+    try {
+        return await Promise.race([parsed, slow]);
+    } finally {
+        clearTimeout(timer);
+        await response.body?.cancel().catch(() => undefined);
+    }
 };
 
 /**
@@ -540,34 +729,62 @@ const httpStream = <Ref extends HttpStreamRef>(
         // replaces this with the coded/transport error it carried.
         const interrupted = new LunoraError("HTTP_STREAM_INTERRUPTED", "httpStream: stream ended without a complete frame");
 
+        // Aborting only this attempt lets the pump drop a dead connection without reading as a consumer cancel.
+        // Both pumps return a bare EOF when the caller ends the stream mid-read or
+        // mid-dispatch (an external abort or a consumer cancel). That is the caller
+        // ending the stream, not a transport drop to fail with HTTP_STREAM_INTERRUPTED.
+        const outcomeOf = (completed: boolean): { completed: boolean; error: Error } | undefined => {
+            if (ac.signal.aborted) {
+                handle.complete();
+
+                return undefined;
+            }
+
+            return { completed, error: interrupted };
+        };
+
+        const attemptAbort = new AbortController();
+        const forwardAbort = (): void => {
+            attemptAbort.abort();
+        };
+
+        ac.signal.addEventListener("abort", forwardAbort, { once: true });
+
         try {
-            const response = await fetchImpl(url, { headers, method: route.method, signal: ac.signal });
+            const response = await fetchImpl(url, { headers, method: route.method, signal: attemptAbort.signal });
 
             if (!response.ok) {
-                // A bad status is a real answer, not a transport drop — release
-                // the body and fail WITHOUT reconnecting.
-                await response.body?.cancel().catch(() => {
-                    /* body already closed/unusable — nothing to release */
-                });
+                // A bad status is a real answer, not a transport drop — read its error
+                // envelope, if it has one, and fail WITHOUT reconnecting.
+                const body = await readErrorBody(response, ac.signal);
 
                 handle.fail(
-                    new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
-                        status: response.status,
-                    }),
+                    statusErrorOf(body, response.status) ??
+                        new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
+                            status: response.status,
+                        }),
                 );
 
                 return undefined;
             }
 
             if (!response.body) {
-                handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
+                // React Native's `fetch` (the `whatwg-fetch` polyfill
+                // `react-native` loads) resolves with a `Response` that defines
+                // no `body`, so the payload is read whole via `text()` instead
+                // of the reader loop. A response exposing neither read is a
+                // broken `fetch` implementation, which keeps the explicit
+                // `HTTP_STREAM_NO_BODY` failure.
+                if (typeof response.text !== "function") {
+                    handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response exposes neither a body stream nor a text() read"));
 
-                return undefined;
+                    return undefined;
+                }
+
+                return outcomeOf(await pumpBufferedSseBody(response, handle as UntypedHandle, observers, attemptAbort));
             }
 
-            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers);
-
-            return { completed, error: interrupted };
+            return outcomeOf(await pumpSseBody(response.body, handle as UntypedHandle, observers, attemptAbort, options.idleTimeoutMs));
         } catch (error: unknown) {
             // A consumer cancel (or external abort) rejects the in-flight read
             // with an AbortError — the iterator is already closing.
@@ -588,6 +805,8 @@ const httpStream = <Ref extends HttpStreamRef>(
             }
 
             return { completed: false, error: toTransportError(error) };
+        } finally {
+            ac.signal.removeEventListener("abort", forwardAbort);
         }
     };
 

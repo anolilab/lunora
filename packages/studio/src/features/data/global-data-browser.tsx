@@ -8,7 +8,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
-import { facetFilterValue } from "../../lib/internal";
+import { facetFilterValue, fireAndForget } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
@@ -120,23 +120,17 @@ export const GlobalDataBrowser = ({
 
     // Refetch every toggled-on facet for the active view — called after a filter
     // changes (and on each poll tick) so the summaries track the previewed rows.
-    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): void => {
-        refetchFacetsViaHook(facetFetcher(table, activeFilters));
-    };
+    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): Promise<void> => refetchFacetsViaHook(facetFetcher(table, activeFilters));
 
     // D1 is HTTP-only (no subscription channel), so poll to keep the table list
     // and the current page current without a manual reload — `useAutoRefresh`
     // pauses while the tab is hidden. The tick closure is held in a ref, so it
     // always sees the latest selection/filters; it re-runs the two TanStack reads
     // and the open facets.
-    useAutoRefresh(() => {
-        tablesQuery.refetch();
-
-        if (selectedTable !== null) {
-            pageQuery.refetch();
-            refetchFacets(selectedTable, filtersRef.current);
-        }
-    }, true);
+    // One timer per read: a failing facet backs off only the facet refresh, not the table list or the page.
+    useAutoRefresh(() => tablesQuery.poll(), true);
+    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null);
+    useAutoRefresh(() => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)), selectedTable !== null);
 
     // The table last applied to the selection (cross-tier jump, deep link, or
     // back/forward). Lets the URL-reconcile effect skip values this component itself
@@ -175,7 +169,7 @@ export const GlobalDataBrowser = ({
         setOffset(0);
 
         if (selectedTable !== null) {
-            refetchFacets(selectedTable, next);
+            fireAndForget(refetchFacets(selectedTable, next));
         }
     };
 

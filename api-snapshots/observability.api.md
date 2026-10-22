@@ -170,6 +170,7 @@ interface DatabaseTelemetryDeps {
     functionPath: string;
     mode: DatabaseInstrumentation;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     tally: DatabaseTally;
     userId: () => string | undefined;
@@ -572,8 +573,15 @@ interface MetricSeries {
 interface MetricsDeps {
     functionPath: string;
     record: (event: MetricEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
 }
+```
+
+### `NO_SENSITIVE_SCOPE` (const)
+
+```ts
+const NO_SENSITIVE_SCOPE: SensitiveScope;
 ```
 
 ### `QueryInsightBucket` (interface)
@@ -741,6 +749,12 @@ interface RequestLogWriteOptions {
 type RequestOutcome = "error" | "ok";
 ```
 
+### `SENSITIVE_ARG_MASK` (const)
+
+```ts
+const SENSITIVE_ARG_MASK = "«sensitive»";
+```
+
 ### `SecurityAuditResult` (interface)
 
 ```ts
@@ -769,6 +783,20 @@ type SecurityFindingKind = "admin-token-weak" | "auth-secret-weak" | "cookies-in
 
 ```ts
 type SecurityFindingLevel = "error" | "info" | "warning";
+```
+
+### `SensitiveScope` (interface)
+
+```ts
+interface SensitiveScope {
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+    clear: () => void;
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
+    name: (name: string) => string;
+    text: (text: string) => string;
+    value: <T>(value: T) => T;
+}
 ```
 
 ### `SpanBuffer` (class)
@@ -953,6 +981,7 @@ interface TracedFetchDeps {
     functionPath: string;
     propagate?: ((url: URL) => boolean) | boolean;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -968,6 +997,7 @@ interface TracerDeps {
     fuseHostSpans?: boolean;
     record: (span: SpanEvent) => void;
     resolveHostTracing?: HostTracingResolver;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -1011,10 +1041,16 @@ const createDatabaseTally: () => DatabaseTally;
 const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ```
 
+### `createSensitiveScope` (const)
+
+```ts
+const createSensitiveScope: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => SensitiveScope;
+```
+
 ### `createSpanCollector` (const)
 
 ```ts
-const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean) => SpanCollector;
+const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean, scope?: SensitiveScope) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)
@@ -1041,6 +1077,7 @@ const dispatchRootSpan: (input: {
         thrown: unknown;
     } | undefined;
     functionPath: string;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     startTs: number;
     userId: string | undefined;
@@ -1119,6 +1156,12 @@ const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTe
 
 ```ts
 const latencyBucketIndex: (durationMs: number) => number;
+```
+
+### `maskSensitiveArgs` (const)
+
+```ts
+const maskSensitiveArgs: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => Record<string, unknown>;
 ```
 
 ### `mergeScanAttribution` (const)
@@ -1245,12 +1288,30 @@ const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rows
 const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ```
 
+### `redactCredentials` (const)
+
+```ts
+const redactCredentials: (value: unknown, captureRaw?: boolean) => unknown;
+```
+
 ### `resolveTraceAnchor` (const)
 
 ```ts
 const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => TraceAnchor & {
     sampled: boolean;
 };
+```
+
+### `sensitiveNames` (const)
+
+```ts
+const sensitiveNames: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
+```
+
+### `sensitiveValues` (const)
+
+```ts
+const sensitiveValues: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
 ```
 
 ### `setHostSpanAttributes` (const)
@@ -1276,6 +1337,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;

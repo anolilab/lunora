@@ -371,6 +371,14 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
                 `@lunora/agent: codeTool cannot compose "${name}" — it has a \`needsApproval\` gate a code-mode script can't pause for. Expose it as a normal top-level tool, or gate the whole script via codeTool's \`needsApproval\`.`,
             );
         }
+
+        // Same reason as the gate above: only the loop's top-level path pauses for a secret. A script step runs `execute`, which always throws.
+        if (tool.secretRequest !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: codeTool cannot compose "${name}" — it is a requestSecretTool, which a code-mode script can't pause for the owner to supply. Expose it as a normal top-level tool.`,
+            );
+        }
     }
 
     if (options.maxSteps !== undefined && !isPositiveInteger(options.maxSteps)) {

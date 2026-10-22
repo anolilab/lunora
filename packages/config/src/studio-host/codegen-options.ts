@@ -1,5 +1,16 @@
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
+
 import type { CodegenOptions } from "@lunora/codegen";
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import {
+    CodegenDiagnosticError,
+    createCodegenProject,
+    findTsconfig,
+    projectConfigCandidatePaths,
+    refreshCodegenProject,
+    runCodegen,
+    tsconfigFingerprint,
+} from "@lunora/codegen";
 
 import { wranglerCodegenInputs } from "../cloudflare/wrangler-codegen-inputs";
 import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
@@ -41,6 +52,51 @@ const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => 
     };
 };
 
+type CodegenProject = NonNullable<CodegenOptions["project"]>;
+
+/**
+ * The one Project studio edits regenerate with, kept across requests so an edit pays a
+ * refresh instead of a cold ts-morph program build. `key` names what a refresh cannot
+ * pick up (the tsconfig, `lunora.config.*`), which the dev-loop watchers invalidate on.
+ */
+let cachedProject: { key: string; lunoraDirectory: string; project: CodegenProject } | undefined;
+
+const statKey = (path: string): string => {
+    const stats = statSync(path);
+
+    return `${path}:${String(stats.mtimeMs)}:${String(stats.size)}`;
+};
+
+/**
+ * The inputs a refresh cannot pick up. The selected tsconfig is keyed by its stats and by the settings and file list it
+ * resolves to through its `extends` chain, so an inherited config edit, or a new file its include globs match, rebuilds.
+ */
+const projectKey = (lunoraDirectory: string): string => {
+    const tsconfigPath = findTsconfig(lunoraDirectory);
+
+    return [
+        tsconfigPath === undefined ? "" : `${statKey(tsconfigPath)}\n${tsconfigFingerprint(tsconfigPath)}`,
+        ...projectConfigCandidatePaths(lunoraDirectory)
+            .filter((path) => existsSync(path))
+            .map((path) => statKey(path)),
+    ].join("\n");
+};
+
+/** The cached Project for `lunoraDirectory`, refreshed from disk, or a fresh one. */
+const studioCodegenProject = (lunoraDirectory: string): CodegenProject => {
+    const key = projectKey(lunoraDirectory);
+
+    if (cachedProject?.lunoraDirectory === lunoraDirectory && cachedProject.key === key) {
+        refreshCodegenProject(cachedProject.project, lunoraDirectory);
+
+        return cachedProject.project;
+    }
+
+    cachedProject = { key, lunoraDirectory, project: createCodegenProject(lunoraDirectory) };
+
+    return cachedProject.project;
+};
+
 /**
  * Regenerate after a studio endpoint wrote the project's source, honouring the
  * codegen switch. Returns the diagnostics to surface in the response body.
@@ -63,8 +119,14 @@ const runStudioCodegen = (request: StudioCodegenRequest): ReadonlyArray<string> 
     }
 
     try {
-        runCodegen(studioCodegenOptions(request));
+        // The same join `runCodegen` resolves its directory with, so the seeds match discovery.
+        const lunoraDirectory = join(request.projectRoot, request.schemaDirectory ?? "lunora");
+
+        runCodegen({ ...studioCodegenOptions(request), project: studioCodegenProject(lunoraDirectory) });
     } catch (error: unknown) {
+        // A failed run can leave the Project half-synced; the next request builds a fresh one.
+        cachedProject = undefined;
+
         if (error instanceof CodegenDiagnosticError) {
             return [error.message];
         }

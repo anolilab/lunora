@@ -840,7 +840,7 @@ const useDataBrowser = ({
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
+        fireAndForget(refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search)));
         // Fire on the active view; the facet callbacks are read via refs (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the refs are `useMirroredRef` handles — stable by construction, and reading them is the whole point: the effect keys on the VIEW values so it fires when the view changes, not when a callback identity churns
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: `useMirroredRef` handles are stable, and listing them would say this effect depends on identities it deliberately does not

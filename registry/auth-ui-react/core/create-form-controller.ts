@@ -13,7 +13,9 @@
  * Flows whose fields come from the server declare {@link FormControllerOptions.prefill}
  * rather than seeding themselves — see `organization-settings.ts`.
  */
+import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
+import { cooldownActive, RESEND_COOLDOWN_MS } from "./cooldown";
 import type { Localization } from "./localization";
 import { mapAuthError } from "./map-error";
 import { createStore } from "./store";
@@ -59,6 +61,12 @@ interface FormControllerOptions<TField extends string> {
      * an unreachable server shouldn't block the user from typing.
      */
     prefill?: (context: ControllerContext) => Promise<Partial<Record<TField, string>>>;
+
+    /**
+     * The submit sends something the user can ask for again (a link, a code):
+     * a success starts the resend cooldown, and `submit` is refused until it ends.
+     */
+    resendCooldown?: boolean;
     /** Whether a successful submit changed the session (triggers `onSessionChange`). */
     sessionChanging?: boolean;
     /** Perform the flow. Throw to surface an error; return a result to enter success. */
@@ -99,6 +107,9 @@ const createFormController = <TField extends string>(context: ControllerContext,
      */
     const edited = new Set<TField>();
 
+    /** The values the last cooldown-starting send went to, so editing the address lifts the cooldown. */
+    let sentValues: Record<TField, string> | undefined;
+
     const state = (): FormState<TField> => store.get();
 
     const values = (): Record<TField, string> => {
@@ -117,11 +128,14 @@ const createFormController = <TField extends string>(context: ControllerContext,
         edited.add(name);
 
         const current = state();
+        // ponytail: editing and reverting lifts the cooldown too; the server's own rate limit is the real guard.
+        const retargeted = sentValues !== undefined && sentValues[name] !== value;
 
         store.set({
             ...current,
             fields: { ...current.fields, [name]: { ...current.fields[name], error: undefined, value } },
             formError: undefined,
+            ...(retargeted ? { resendAvailableAt: undefined } : {}),
             status: statusAfterEdit(current.status),
             successMessage: undefined,
         });
@@ -138,7 +152,7 @@ const createFormController = <TField extends string>(context: ControllerContext,
     };
 
     const submit = async (): Promise<void> => {
-        if (state().status === "submitting") {
+        if (state().status === "submitting" || cooldownActive(state().resendAvailableAt)) {
             return;
         }
 
@@ -164,12 +178,25 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
         store.set({ ...state(), fields: nextFields, formError: undefined, status: "submitting" });
 
+        const mark = captchaSpends();
+
         try {
-            const result = (await options.submit(values(), context)) ?? {};
+            const sent = values();
+            const result = (await options.submit(sent, context)) ?? {};
+
+            if (options.resendCooldown) {
+                // The form stays up for a resend; if this request spent the captcha token, ask again.
+                resetCaptchaIfSpent(mark);
+                sentValues = sent;
+            }
+
+            // An edit made while the request was in flight moved the form to another destination; that one gets no cooldown.
+            const unchanged = (Object.keys(sent) as TField[]).every((name) => values()[name] === sent[name]);
 
             store.set({
                 ...state(),
                 fields: { ...state().fields },
+                ...(options.resendCooldown ? { resendAvailableAt: unchanged ? Date.now() + RESEND_COOLDOWN_MS : undefined } : {}),
                 status: "success",
                 successMessage: result.successMessage,
             });
@@ -183,6 +210,8 @@ const createFormController = <TField extends string>(context: ControllerContext,
             }
         } catch (error) {
             context.onError?.(error);
+            // If the request spent the captcha token, re-arm the widget for the retry.
+            resetCaptchaIfSpent(mark);
 
             store.set({
                 ...state(),
@@ -251,7 +280,9 @@ const createFormController = <TField extends string>(context: ControllerContext,
 
     const reset = (): void => {
         edited.clear();
-        store.set(initialState());
+        // The resend deadline outlives a reset: the same address sent again inside it is still refused.
+        const { resendAvailableAt } = state();
+        store.set({ ...initialState(), resendAvailableAt });
 
         // `initialState()` restores `loading: true` for a prefilled form, so
         // without re-running the load the form spins forever.

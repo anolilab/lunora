@@ -42,7 +42,8 @@ export const support = defineAgent({
 Declaring an agent is enough: codegen auto-registers the runtime functions the
 durable loop persists through (`agents:agentAppendMessage`, `agents:agentEnsureThread`,
 `agents:agentPatchThread`, `agents:agentResolveApproval`) plus the public thread
-queries (`agents:agentMessages`, `agents:agentThread`), and wires the typed
+queries (`agents:agentMessages`, `agents:agentThread`, `agents:agentApprovalGrants`)
+and the approval-grant revoke (`agents:agentRevokeApprovalGrant`), and wires the typed
 `ctx.agents.<name>` producer.
 
 Merge the thread tables into your schema. They auto-prefix to
@@ -115,7 +116,16 @@ the durable loop:
   final answer; the typed value is surfaced on `result.output`.
 - **`onStepFinish`**: a callback after each turn (observability/side channels).
 - **`usage`**: token usage is accumulated across turns and surfaced on the
-  run result and persisted onto the thread.
+  run result and persisted onto the thread. Beside the input, output and total
+  counts it carries `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens`
+  when the provider reports them. Those are subsets of the totals and are never
+  added on top. A bucket no turn reported is absent, and a thread written before
+  these fields existed reads as absent too, not as zero.
+  `status` says whether the report covers the run: `complete` when every turn
+  reported all of its usage, `partial` when some turn reported only part of it, and
+  `unavailable` when no turn reported any. A turn that reported nothing still counts
+  toward the status, so a run with one such turn is never persisted as `complete`. A
+  thread written before `status` existed carries none, and reads as unknown.
 - **`telemetry`**: an ai@7 `TelemetryOptions` handed to every turn; set
   `telemetry.integrations` to trace turns and tool calls.
   The [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships
@@ -155,7 +165,12 @@ name, timing, success/failure).
   the heavy vendor SDK is never imported by Lunora. Sentry turns model calls and
   tool executions into spans (`op: "gen_ai.generate"` / `"gen_ai.execute_tool"`)
   and routes errors to `Sentry.captureException`; Braintrust logs `type: "llm"` /
-  `type: "tool"` `logger.traced` spans.
+  `type: "tool"` `logger.traced` spans. A model span's token usage goes in
+  `metrics` under Braintrust's names (`prompt_tokens`, `completion_tokens`,
+  `tokens`), with `prompt_cached_tokens`, `prompt_cache_creation_tokens` and
+  `completion_reasoning_tokens` added when the provider reports them. A call whose
+  usage is unavailable logs no metrics, and its `metadata` carries
+  `lunora.usage.status`.
 - **`otlpTelemetry`**: ships a `gen_ai.*` **generation span** per model turn (and
   a span per tool call) over OTLP-over-HTTP to any collector, the Lunora cloud or
   your own, so agent generations land in the same trace store as the rest of your
@@ -234,6 +249,20 @@ is skipped and a tool result explaining the rejection is persisted so the next
 turn recovers. Because `needsApproval` runs on replay, keep it deterministic
 (no `Date.now()`/`Math.random()`).
 
+**Approve for the thread.** `agents:agentResolveApproval` also accepts
+`decision: "approve_for_thread"`: it approves the paused call and records a grant
+for that tool, so later calls to the same tool in the same thread run without
+pausing. The approved tool result is marked `approvalScope: "thread"`. The grants
+are listed by `agents:agentApprovalGrants` and removed by
+`agents:agentRevokeApprovalGrant`; a revoke applies to calls whose gate has not
+resolved yet, never to one already in flight. A grant is per thread, not
+per user or per app. Only the thread's verified owner can record one: on a thread
+with no owner (an app that sets no identity) a plain approve or reject still
+works for any caller, but `approve_for_thread` is refused, because a grant would
+let anyone who knows the thread key skip the gate for every later call.
+Once the paused call's approval window closes (`approvalTimeout`), a late `approve_for_thread` is
+refused too: the run has already rejected that call, and no grant may outlive it.
+
 **An unanswered approval is not pending forever.** The wait carries a timeout —
 `approvalTimeout` on the agent config, default `"3 days"`, **clamped to one
 week** — and when it elapses the call is recorded as **rejected** ("approval
@@ -243,6 +272,172 @@ reclaim the thread while the approval was still pending, so the approval could
 never be answered at all. Size `approvalTimeout` to your on-call reality, and do
 not assume an approval raised before a long weekend is still waiting on
 Monday.
+
+**The approvals inbox.** `agents:agentPendingApprovals` lists the caller's own
+paused approvals (newest thread first, default 50), each carrying the
+`threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes.
+It is owner-scoped: an anonymous caller gets `[]`, and ownerless threads are
+never listed. The React `useAgentApprovals` hook subscribes to it. The inbox is not
+exposed over MCP: MCP clients authenticate with a static deployment token, so a run
+started over MCP has no owner and would never be listed.
+
+## Human-supplied secrets (`requestSecretTool`)
+
+A tool that needs a credential the model does not have (an API key, a token)
+asks the person for it with `requestSecretTool`. The run pauses on
+`awaiting_secret` exactly as it does for an approval, and resumes once the owner
+calls `agents:agentSupplySecret` (the value) or `agents:agentDeclineSecret`.
+`consumer` names the one tool allowed to read the value. A consuming tool reads
+it with `withSecret`:
+
+```ts
+import { defineAgent, defineAgentTool, requestSecretTool, withSecret } from "@lunora/agent";
+import { jsonSchema } from "ai";
+
+export const billing = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: {
+        requestKey: requestSecretTool({ consumer: "charge", description: "Ask the user for their payment API key." }),
+        charge: defineAgentTool({
+            description: "Charge the card with the stored key.",
+            execute: (input, context) =>
+                withSecret(context, input.secretRef, async (apiKey) => {
+                    const response = await fetch("https://payments.example/charge", { headers: { authorization: `Bearer ${apiKey}` } });
+
+                    return { status: response.status };
+                }),
+            inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }),
+        }),
+    },
+});
+```
+
+Setup: the value is sealed under the Worker secret `LUNORA_SECRET_VALUE_KEY`
+(base64 of 32 bytes, from `openssl rand -base64 32`). Without it the pause cannot
+store the value: `put` refuses with `SecretValueKeyError`. `lunora deploy` treats
+the missing key as a required secret, aborting when it runs non-interactively,
+and `lunora env doctor` reports it as an error: `missing` before `.dev.vars` has the key, `unset` while it still holds the placeholder. `lunora dev` seeds
+`.dev.vars.example` with the key, so the check starts after the first dev run. Rotation,
+and what point-in-time recovery does to a discarded value, are in the
+platform's Secret values section.
+
+The model receives `{ "secretRef": "…" }` from the request. That ref is the
+request's slot (`<turn>:<tool-call id>`). The client answers the pause with the
+tool-call id it sees on it, and the server finds the one pending request for that
+id. The slot is not the stored value and not the store's reference, and
+the model passes it to the consuming tool. `withSecret` takes the value inside its
+own durable step, returns only what the callback returns, and discards the value
+as a second step, but only after a take that succeeded. A callback result that
+carries the value (an echoed token, a header built from it) is refused: the call
+fails with a `LunoraError` and the result is not journalled. A callback that throws
+an error carrying the value is redacted before the error propagates, so the step's
+retry, the failure the loop records and telemetry never see the value.
+
+Each pause writes a request row, which is the authority for the request: pending,
+supplied, declined, expired or consumed. Supply, decline, expiry and consumption
+are each a compare-and-set on that row, so the owner's answer and the loop's
+timeout cannot both win. The wait is armed for `approvalTimeout`, capped one minute
+under a day, plus a 60-second grace, and a supply is refused once the request's deadline has passed, even if the
+loop has not yet settled it. When the wait ends, the loop reads the row once. A
+supply that landed before the timeout is honoured. A pending request becomes
+`expired`, and a later supply is refused.
+
+**Guarantees.** The value is absent from the message rows, the workflow journal,
+the wake-up event, the supply mutation's return, the request log's redacted
+arguments and the request table. The host ref is absent from all of those too:
+it lives only in the request row and is never listed. The wake-up carries no
+payload. A consuming call claims the value under its own step name: a retry of
+that step re-reads it, and any other call gets "no longer available". Only the
+tool named by `consumer` can read the value, and only in the thread that asked for
+it. A call from any other tool, or in another thread, is refused without binding
+the value, and the declared consumer can still use it afterwards. The consuming
+tool fails once, deterministically, with no retry, if the value has expired.
+Provider-issued tool-call ids can repeat across runs, so a later run that reuses a
+finished run's id starts a new request and discards the old value.
+Supplying is owner-only and fails closed: an anonymous caller, and any caller on
+an ownerless thread, is refused, because an ownerless thread is readable by anyone
+who knows its key. A run with no `owner` that asks for a secret has nobody who can answer, so the call
+is refused at once with a tool result saying so, rather than waiting out its deadline;
+pass an `owner` to any run that uses `requestSecretTool`. A second supply, a supply after a decline or after a timeout,
+or a supply on a thread paused before the request table existed, is a `CONFLICT`
+and stores nothing.
+
+**When the wake-up is lost.** A supply is committed when `agentSupplySecret`
+returns, whether or not the wake-up that tells the paused run reached it. A wake-up
+that fails after the supply committed is not rethrown, and the owner is not asked to
+retry, because the retry would be a `CONFLICT`. If the wake-up truly never arrived,
+the run does not notice until its wait ends at the deadline, where the loop reads
+the row and honours the supply. The stored value is kept for the longer of 15
+minutes and the time left to that deadline plus the grace. The deadline is capped
+so that always fits the host's 24-hour ceiling, which is why a secret request waits
+at most a day however long `approvalTimeout` is.
+
+`agents:agentSecretRequests({ threadKey })` lists a thread's requests for the
+owner, with status, tool name, deadline and the `label` the model gave the request
+(what the secret is for; absent on requests recorded before labels). It never
+returns the ref or the value. The label is model-written text, trimmed and cut to
+200 characters, and a blank label is refused as a tool error without pausing the
+run. Render it as text, never as markup.
+The framework chat hooks still derive the pending request from the
+`awaiting_secret` message, and they do not read this list.
+
+**From a client.** The framework chat hooks answer the request with
+`supplySecret(toolCallId, value)` or `declineSecret(toolCallId)`. The pending
+request is an `awaiting-secret` entry in `useAgentToolEvents`, and it drops out
+once the server retires it. `supplySecret` always sends `onlineOnly: true`, so the
+value is never queued or persisted and the call rejects with `OFFLINE_NOT_QUEUED`
+while the connection is down. The hook keeps no copy of the value.
+
+```tsx
+const { events } = useAgentToolEvents({ api, threadKey });
+const request = events.find((event) => event.type === "awaiting-secret");
+
+if (request?.toolCallId !== undefined) await chat.supplySecret(request.toolCallId, apiKeyFromTheForm);
+```
+
+**Limits you must design for.**
+
+- **The plaintext transits the supply mutation's arguments.** The `secret`
+  argument is marked `v.sensitive`: the request log masks it, a rejected value is
+  not echoed, and the generated reference is typed as sensitive. Span exporters
+  are not covered by that masking, so do not let one record this mutation's
+  arguments.
+- **Offline queueing would persist the value.** The `secret` argument is
+  `v.sensitive`, so the generated reference is always online-only: a direct
+  `client.mutation(agentSupplySecret, …)` call is refused (`OFFLINE_NOT_QUEUED`)
+  when the device is offline rather than queued into IndexedDB or AsyncStorage,
+  and passing `onlineOnly: false` is a type error and a runtime `BAD_REQUEST`.
+- **Point-in-time recovery can bring a discarded value back** for the database's
+  recovery window (30 days). Discard removes the value from the store, not from
+  backups.
+- **"One use" means one claimant, not one read.** The value stays readable by the
+  call that first took it until it is discarded or expires, so the consumer holds
+  the credential for that long. Within one call, read each request once: `withSecret`
+  names its durable steps by call and request, so a second read returns the first
+  read's result. A call that needs two secrets has two requests.
+- **The value and the request row are not one commit.** The host writes the value
+  through its own storage handle, outside the mutation's transaction. The supply
+  therefore stores the value first and then moves the row, and it discards the value
+  if the row write fails or the deadline has passed. A process that dies between the
+  two leaves an unreadable value that expires with its TTL.
+- **Threads paused before the request table existed have no request row.** They fail
+  closed: a supply is refused with `CONFLICT`, and the wait settles as expired.
+- **The consumer must be called by the model directly.** A tool reached through a
+  `codeTool` script or an `asTool` sub-agent runs under another step name or
+  thread, so its `withSecret` is refused. The call fails closed with "no longer
+  available".
+- **Rotating the key.** Set `LUNORA_SECRET_VALUE_KEY_PREVIOUS` to the current key and
+  `LUNORA_SECRET_VALUE_KEY` to a new one, then deploy. Wait until every value sealed
+  under the old key has expired (a lifetime is at most 24 hours), then unset
+  `LUNORA_SECRET_VALUE_KEY_PREVIOUS` and deploy. The platform's Secret values section
+  has the full sequence.
+- **Never return, log or throw the value from `use`.** `traceToolExecution`
+  records a tool's input and output, and a thrown error reaches the tool row.
+- **Only shards on a target that rates `secretValues` native can hold a value**
+  (Cloudflare today). Elsewhere the supply mutation refuses with `NOT_IMPLEMENTED`.
+- The value expires 15 minutes after it is supplied. That covers the gap to the
+  model's next turn, not a long pause, so the consuming call has to follow soon
+  after the supply.
 
 ## Client hooks
 
@@ -256,15 +451,25 @@ references your app exposes.
   terminates the in-flight instance (a no-op when nothing is running or no
   cancel ref was supplied); `status`/`thread` flow live from `agents:agentThread`.
 - **`useAgentChat`** is the batteries-included chat surface:
-  `{ send, approve, reject, cancel, messages, status, streamingText }`. `send`
-  appends an optimistic user turn then starts/continues the run; `approve`/`reject`
-  resolve a pending tool approval; `messages` is the live thread.
+  `{ send, approve, approveForThread, reject, supplySecret, declineSecret, approvalGrants, revokeGrant, cancel, messages, status, streamingText }`.
+  `send` appends an optimistic user turn then starts/continues the run;
+  `approve`/`reject` resolve a pending tool approval; `messages` is the live thread.
+  `approveForThread` is `approve` plus a thread grant for that tool. `approvalGrants`
+  is the live list of the thread's grants, and `revokeGrant(toolName)` removes one,
+  so a grant is never visible without a way out. `supplySecret(toolCallId, value)`
+  and `declineSecret(toolCallId)` answer a `requestSecretTool` pause. The value is
+  sent with `onlineOnly: true`, so it is never queued or persisted, and the hook
+  keeps no copy. A pending secret request is an `awaiting-secret` entry in
+  `useAgentToolEvents`, and it drops out once the server retires its marker.
 
 ```tsx
 // React
 const chat = useAgentChat({ api, cancel: api.chat.cancelRun, send: api.chat.startRun, threadKey });
 chat.send("Refund my last order");
 if (chat.status === "awaiting_input") chat.approve(toolCallId);
+// A secret request: supply the value (online-only) or refuse it.
+await chat.supplySecret(toolCallId, apiKeyFromTheForm);
+await chat.declineSecret(toolCallId);
 ```
 
 The same hooks exist as Vue composables (`useAgent`/`useAgentChat`), Solid
@@ -583,6 +788,8 @@ runs its steps in one shot and cannot hibernate mid-way for a human decision.
 one — the agent module throws on load rather than silently bypassing the gate.
 Expose that tool as a normal top-level tool, or gate the whole script with
 `codeTool`'s own `needsApproval`.
+The same holds for a `requestSecretTool`: a script step cannot pause for the owner
+to supply the value, so `codeTool` refuses it too. Expose it as a top-level tool.
 
 Scripts are capped at `maxSteps` (default 16); a
 longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
@@ -817,7 +1024,7 @@ export const support = defineAgent({
         }
 
         return {
-            input: `${email.subject ?? "(no subject)"}\n\n${email.text ?? ""}`,
+            input: wrapUntrusted(`${email.subject ?? "(no subject)"}\n\n${email.text ?? ""}`),
             // `owner` gates the thread's reads and the run dispatches RLS-bypassed,
             // so derive it from a verified signal (a DKIM-checked address mapped to
             // an account) — never blindly from the spoofable sender.
@@ -848,6 +1055,17 @@ The auto-wired handler is registered _before_ any manual `.onEmail(...)` you add
 to the app builder, so a hand-registered handler still wins if you need full
 control.
 
+**Untrusted text in the prompt.** Authentication decides who may start a run; it
+does not make the message text safe for the model. Wrap payload text with
+`wrapUntrusted` (from `@lunora/agent`) before it goes into `input`. It places the
+text in a tag with a random id per call, so the payload cannot forge the closing
+tag, escapes `<` and `>` in it, and neutralises leading `@`, `$` and `/` triggers
+with a zero-width space (`@` and `$` not glued to a word, and a leading `/`). Pass a header map as the second argument to render the
+headers too, with credential-like values (`authorization`, `cookie`, `set-cookie`,
+`x-api-key`, and any name containing `token` or `secret`) redacted. The helper
+appends a one-line note that the enclosed data is not to be followed as
+instructions.
+
 ## Inbound channels (Slack / GitHub / Discord)
 
 Trigger an agent from a **verified** inbound webhook. Give it an `onInbound`
@@ -856,7 +1074,7 @@ mapper, then mount `dispatchAgentChannel(...)` (from `@lunora/agent/channels`) o
 an HTTP route:
 
 ```ts
-import { defineAgent } from "@lunora/agent";
+import { defineAgent, wrapUntrusted } from "@lunora/agent";
 
 export const support = defineAgent({
     model: "...",
@@ -866,7 +1084,7 @@ export const support = defineAgent({
         map: (event) => {
             const payload = event.json() as { event?: { text?: string } };
             // SECURITY: derive `owner` from the VERIFIED channel identity, never a payload field.
-            return { input: payload.event?.text ?? "", owner: "slack-workspace", threadKey: "slack-thread" };
+            return { input: wrapUntrusted(payload.event?.text ?? ""), owner: "slack-workspace", threadKey: "slack-thread" };
         },
     },
 });
@@ -1117,6 +1335,75 @@ expect(harness.dispatches).toContainEqual({ args: { city: "Berlin" }, path: "wea
 `finalTurn(text, extra?)` and `toolCallTurn(id, name, input, text?)` build turn
 scripts; `harness.thread(key)` reads the persisted thread record; provide `functions`
 runtime stubs to back the functions your tools dispatch to.
+
+A run that pauses for a human (an approval or a `requestSecretTool` request) stops
+at its wait. Give the run an `instanceId` (`harness.run(params, { instanceId: "run-1" })`)
+and resolve it with `harness.awaitWait("run-1", "secret:0:call_1")` to reach the pause, then
+`harness.supply(threadKey, toolCallId, value)`, `harness.decline(threadKey, toolCallId)`,
+`harness.deliver("run-1", name, payload)` or `harness.expire("run-1", name)`. Waits are scoped
+to their run, so two runs may wait on the same name. The secret
+store is `harness.secrets`, and `harness.journalEntries()` is what to assert a
+supplied value never reached.
+
+### Recorded model streams
+
+Scripted turns skip the streaming layer. To test it, pass a recorded stream
+instead: `recordedModel(turns)` replays one turn per model call, each an array of
+AI SDK provider stream parts, and the run goes through the production `streamText`
+seam. `onTokenDelta` receives the text deltas as they are produced.
+
+```ts
+import { agentHarness, recordedModel } from "@lunora/testing";
+
+const deltas: string[] = [];
+const harness = agentHarness(support, {});
+
+const result = await harness.run(
+    { input: "where is o_42?", threadKey: "t1" },
+    {
+        model: recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "It ", id: "t0", type: "text-delta" },
+                    { delta: "shipped.", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                    // `usage` is the provider's usage object (AI SDK `LanguageModelV4Usage`).
+                    { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage },
+                ],
+            },
+        ]),
+        onTokenDelta: (delta) => deltas.push(delta.text),
+    },
+);
+```
+
+- **Tool-call arguments** arrive as `tool-input-delta` chunks. The provider's
+  `tool-call` part carries the assembled JSON `input`, which is what the loop runs.
+- **Usage** is read from the `finish` part, as providers report it at the end.
+- **Mid-stream failure:** `error: { after, cause }` fails the stream after `after`
+  parts. The run then follows the loop's normal model-error path: `harness.run`
+  rejects and `harness.thread(key)` has `status: "error"`.
+- **Pausing:** `pause: { after, gate }` holds the stream until `gate.release()`.
+  `createStreamGate()` exposes `gate.reached`, so a test can wait for the pause point
+  and check the partial state without sleeping. Aborting the `signal` passed to
+  `createStreamGenerate` resolves to the text streamed so far once the held stream is
+  released. The recorded stream does not watch the signal, so release the gate after
+  aborting.
+
+**Provider errors in a stream retry like any model failure.** An `error` part in the
+stream, whether it follows text or arrives first, fails the turn the same way a
+rejected stream does: the `llm:turn:N` step throws, the host retries it under its
+normal policy, and nothing from the failed attempt (partial text, tool calls) is
+persisted. Its billed tokens are the one exception: when the failure reaches the run,
+they are added to the thread's usage, though only within the same invocation. A
+replayed failure loses them, and a failed attempt's tokens are not carried into the
+total of a later successful retry. A stream that closes without its `finish` part is failed the
+same way. So is a `finish` whose reason is `error`, the provider's report that it cut
+the generation short (Workers AI reports a stream truncated mid-answer this way); a
+non-streaming turn with that reason fails too. Every other finish reason, `other`
+included, completes the turn. A retried turn re-streams its deltas from the start, so
+a live consumer must reset accumulated text per turn (see `AgentTokenSink`).
 
 ## See also
 

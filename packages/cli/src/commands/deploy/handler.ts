@@ -1,15 +1,19 @@
-import { dirname } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, DiscoveryCache, ToolchainCommand } from "@lunora/config";
 import {
+    clearApiSpecMarker,
     createDiscoveryCache,
     discoverContainerInfo,
     discoverSchemaInfo,
     inferLunoraBindings,
+    MissingBuildOutputError,
     planToolchainInvocation,
     probeCelldToolchain,
+    readApiSpecMarker,
     resolveDeployDriver,
     resolveLazyFunctions,
     resolveSchemaDirectory,
@@ -45,6 +49,7 @@ import runLazySmokeLoad from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
+import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -52,9 +57,10 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
+import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
 import type { PreDeployCommand } from "./checks";
-import { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
-import { provisionDeployHyperdrive } from "./hyperdrive";
+import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
+import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
@@ -238,6 +244,7 @@ const runCodegenStep = async (
     spawner: Spawner | undefined,
     jsonOutput: boolean,
     strictAdvisories: boolean,
+    writeOutputs: boolean,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -249,7 +256,7 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
+        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
@@ -291,10 +298,11 @@ const runCodegenStep = async (
         // script. Without this a deploy would ship output the project considers
         // unfinished, and the deploy pipeline has no reason to run that script
         // first, so nothing else would catch it.
-        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+        // A bundler plugin's build already ran this hook after its own codegen and before it bundled. Running it again would repeat it.
+        const postCodegen = writeOutputs ? await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput }) : undefined;
 
         // Already logged by the hook — this only decides that it BLOCKS.
-        if (postCodegen.error !== undefined) {
+        if (postCodegen?.error !== undefined) {
             return { error: postCodegen.error };
         }
 
@@ -401,12 +409,14 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, driver: 
  * because the project or the invocation is wrong, never because the deploy
  * itself failed. A check that resolved a different bucket passes `code`.
  */
+const NO_VALIDATION: DeployCommandResult["validation"] = { problems: [], wranglerPath: undefined };
+
 const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
     return {
         code: EXIT_CODE.USAGE,
         descriptor: undefined,
         error,
-        validation: { problems: [], wranglerPath: undefined },
+        validation: NO_VALIDATION,
         ...extra,
     };
 };
@@ -496,6 +506,199 @@ type PreDeployPipelineResult =
           validation: DeployCommandResult["validation"];
       };
 
+/** Why this run deploys no services, or `undefined` when it deploys them. */
+const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
+    if (options.skipServices === true) {
+        return "--skip-services";
+    }
+
+    if (options.preview === true) {
+        return "--preview uploads the app version only";
+    }
+
+    // A temporary account is the app's alone: services deployed with the real
+    // login would land elsewhere, and the bindings could never resolve.
+    if (options.temporary === true) {
+        return "--temporary deploys the app to a throwaway account";
+    }
+
+    return undefined;
+};
+
+/** The Wrangler entrypoints of the services this run publishes, for the open-shard gate to read; none when it publishes no services. */
+const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
+    serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
+
+// A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
+// target the same host, and run for the environment wrangler deploys.
+const serviceBuildOptions = (
+    directory: string,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+    frameworkBuild: boolean | undefined,
+    spawner: Spawner,
+): Parameters<typeof runClientBuild>[0] => {
+    return {
+        cwd: directory,
+        environment: options.env,
+        frameworkBuild,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger: options.logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner,
+        strictAdvisories: resolveStrictAdvisories(options),
+        target: driver.id,
+    };
+};
+
+/**
+ * The driver's toolchain when its services deploy from here. Otherwise the reason is logged, with the services it leaves undeployed,
+ * and `undefined` is returned.
+ */
+const serviceToolchain = (
+    services: ReadonlyArray<{ worker: string }>,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): NonNullable<DeployDriver["toolchain"]> | undefined => {
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+
+    if (skipped !== undefined || toolchain === undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    return toolchain;
+};
+
+/**
+ * The first service whose client build the target refuses, named, so the deploy stops before any service is deployed. A refusal found
+ * after an earlier service deployed would leave a partial set.
+ */
+const firstServiceRefusal = (
+    services: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
+    buildFor: (directory: string) => Parameters<typeof runClientBuild>[0],
+): string | undefined => {
+    for (const service of services) {
+        const refusal = clientBuildRefusal(buildFor(dirname(service.wranglerPath)));
+
+        if (refusal !== undefined) {
+            return `service ${service.name} (${service.worker}): ${refusal}`;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The service refusal a deploy would hit, found before the app's client build writes anything. Read-only: it reads the service
+ * bindings and runs the same refusal check the service loop runs. Services the deploy skips are not checked, as in the loop.
+ */
+const serviceRefusalBeforeWrites = (cwd: string, options: DeployCommandOptions, target: string): string | undefined => {
+    const { error, services } = readServiceBindings(cwd);
+
+    // A read error is reported by the deploy itself; there is nothing to refuse here.
+    if (error !== undefined || services.length === 0) {
+        return undefined;
+    }
+
+    const driver = resolveDeployDriver(target);
+
+    if (driver.toolchain === undefined || serviceDeploySkipReason(options) !== undefined) {
+        return undefined;
+    }
+
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+
+    return firstServiceRefusal(workers, (directory) => serviceBuildOptions(directory, options, driver, frameworkBuild, defaultSpawner));
+};
+
+/**
+ * The refusals that stop a deploy before anything is written: an unusable target, an option the target refuses, and the
+ * open-shard gate. {@link runDeployCommand} runs them before the client build, so a refused deploy leaves the project as
+ * it found it; the pipeline runs them again, which is cheap and writes nothing.
+ */
+const preflightDeploy = (
+    options: DeployCommandOptions,
+    command: PreDeployCommand,
+    beforeBuild: boolean,
+): { code?: ExitCode; error: string; kind: "refused"; validation: DeployCommandResult["validation"] } | { kind: "ok"; target: string } => {
+    const cwd = options.cwd ?? process.cwd();
+
+    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
+    // and may mutate `wrangler.jsonc` well before the wrangler step, so
+    // validating at the point of driver use would leave those side effects behind
+    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
+    // reaches the driver, not just the `--target` flag.
+    //
+    // The `Runnable` form additionally rejects a registered-but-undeployable
+    // target (a driver with no toolchain). That has to happen here rather than at
+    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
+    // target's capability matrix, and failing after that leaves the app rewritten
+    // for a target it then refuses to ship.
+    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        const message = resolvedTarget.error ?? "unknown deploy target";
+
+        // Logged here, not just returned: the caller only prints `error` in
+        // `--format json` mode, so a bare return exits 1 in silence.
+        options.logger.error(message);
+
+        return { kind: "refused", error: message, validation: NO_VALIDATION };
+    }
+
+    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    // stop the deploy HERE, before codegen rewrites `_generated/*` and
+    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
+    try {
+        planDeploy(cwd, options, resolveDeployDriver(resolvedTarget.target));
+    } catch (error) {
+        // A client build this run is about to make creates the output a target needs, so that refusal waits for the
+        // pipeline, after the build. An option the target refuses stops the deploy here, before anything is written.
+        if (!(
+            beforeBuild &&
+            error instanceof MissingBuildOutputError &&
+            clientBuildRuns(cwd, options.skipCodegen === true ? false : options.frameworkBuild, options.env)
+        )) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            options.logger.error(message);
+
+            return { kind: "refused", error: message, validation: NO_VALIDATION };
+        }
+    }
+
+    // The open-shard gate reads only source and Wrangler entrypoints, so it runs before codegen or
+    // provisioning writes anything. A service is published only when this run deploys services.
+    const gateError = options.openShardGatePassed === true ? undefined : runOpenShardGate(cwd, options, command, gateServicePaths(cwd, options));
+
+    if (gateError !== undefined) {
+        return { kind: "refused", code: gateError.code, error: gateError.error, validation: NO_VALIDATION };
+    }
+
+    // A service the target refuses stops the deploy here too: after the app's client build, a refused service would have left the
+    // app's build output behind for nothing.
+    const serviceRefusal = serviceRefusalBeforeWrites(cwd, options, resolvedTarget.target);
+
+    if (serviceRefusal !== undefined) {
+        options.logger.error(serviceRefusal);
+
+        return { kind: "refused", code: EXIT_CODE.USAGE, error: serviceRefusal, validation: NO_VALIDATION };
+    }
+
+    return { kind: "ok", target: resolvedTarget.target };
+};
+
+// The spec to emit: the flag when given, else the one the client build's plugin emitted in this run (its codegen runs first and would
+// otherwise be overridden by this run's default, deleting the files the plugin wrote).
+const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undefined =>
+    options.apiSpec ?? (options.clientBuildRan === true ? readApiSpecMarker(cwd) : undefined);
+
 /**
  * The celld toolchain a deploy runs (`celld`, `esbuild`, and `CELLD_BUCKET` for a
  * live deploy): its warnings print, and its errors come back as the deploy's
@@ -545,43 +748,13 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     const strictAdvisories = resolveStrictAdvisories(options);
     const empty = { problems: [], wranglerPath: undefined };
 
-    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
-    // and may mutate `wrangler.jsonc` well before the wrangler step, so
-    // validating at the point of driver use would leave those side effects behind
-    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
-    // reaches the driver, not just the `--target` flag.
-    //
-    // The `Runnable` form additionally rejects a registered-but-undeployable
-    // target (a driver with no toolchain). That has to happen here rather than at
-    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
-    // target's capability matrix, and failing after that leaves the app rewritten
-    // for a target it then refuses to ship.
-    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+    const preflight = preflightDeploy(options, command, false);
 
-    if (resolvedTarget.target === undefined) {
-        const message = resolvedTarget.error ?? "unknown deploy target";
-
-        // Logged here, not just returned: the caller only prints `error` in
-        // `--format json` mode, so a bare return exits 1 in silence.
-        options.logger.error(message);
-
-        return { error: message, validation: empty };
+    if (preflight.kind === "refused") {
+        return { code: preflight.code, error: preflight.error, validation: preflight.validation };
     }
 
-    const { target } = resolvedTarget;
-
-    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
-    // stop the deploy HERE, before codegen rewrites `_generated/*` and
-    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
-    try {
-        planDeploy(cwd, options, resolveDeployDriver(target));
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        options.logger.error(message);
-
-        return { error: message, target, validation: empty };
-    }
+    const { target } = preflight;
 
     // The same stop for a missing celld toolchain (`celld`, `esbuild`, the fleet
     // bucket): it is checked before codegen or provisioning writes a file.
@@ -600,16 +773,17 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             cwd,
             interactive,
             options.logger,
-            options.apiSpec,
+            apiSpecFor(options, cwd),
             resolveLazyFunctions(options.lazyFunctions),
             target,
             options.spawner,
             options.format === "json",
             strictAdvisories,
+            options.clientBuildRan !== true,
         );
 
         if (codegenStep.error !== undefined) {
-            return { error: codegenStep.error, target, validation: empty };
+            return { error: codegenStep.error, target, validation: NO_VALIDATION };
         }
 
         codegen = codegenStep.result;
@@ -656,13 +830,13 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     const hyperdriveError = await provisionDeployHyperdrive(cwd, options, command, target, "check");
 
     if (hyperdriveError !== undefined) {
-        return { error: hyperdriveError, target, validation: empty };
+        return { error: hyperdriveError, target, validation: NO_VALIDATION };
     }
 
     const checkError = runPreDeployChecks(cwd, options, command, target);
 
     if (checkError !== undefined) {
-        return { code: checkError.code, error: checkError.error, target, validation: empty };
+        return { code: checkError.code, error: checkError.error, target, validation: NO_VALIDATION };
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only at
@@ -677,24 +851,39 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
 };
 
-/** Why this run deploys no services, or `undefined` when it deploys them. */
-const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
-    if (options.skipServices === true) {
-        return "--skip-services";
-    }
-
-    if (options.preview === true) {
-        return "--preview uploads the app version only";
-    }
-
-    // A temporary account is the app's alone: services deployed with the real
-    // login would land elsewhere, and the bindings could never resolve.
-    if (options.temporary === true) {
-        return "--temporary deploys the app to a throwaway account";
-    }
-
-    return undefined;
+// Clears the redirect a service build left behind, so one present after the build is this run's.
+const clearServiceRedirect = (directory: string): void => {
+    rmSync(join(directory, ".wrangler", "deploy", "config.json"), { force: true });
 };
+
+/**
+ * Refuses or runs one service's client build and reports whether it ran. A refused build keeps the redirect a previous deploy
+ * left; an allowed one clears it first, so a redirect present afterwards is this run's.
+ */
+const buildService = async (
+    serviceBuild: Parameters<typeof runClientBuild>[0],
+    frameworkBuild: boolean | undefined,
+    environment: string | undefined,
+): Promise<{ built: boolean; error: string | undefined }> => {
+    const refusal = clientBuildRefusal(serviceBuild);
+
+    if (refusal !== undefined) {
+        return { built: false, error: refusal };
+    }
+
+    const built = clientBuildRuns(serviceBuild.cwd, frameworkBuild, environment);
+
+    if (built) {
+        clearServiceRedirect(serviceBuild.cwd);
+    }
+
+    return { built, error: await runClientBuild(serviceBuild) };
+};
+
+// The redirect is this run's output when the build ran (it cleared the old one first), or the artifact an earlier build left
+// when the deploy is prebuilt or skips builds on purpose. A normal deploy whose service needed no build deploys the source config.
+const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuild: boolean | undefined): string | undefined =>
+    built || frameworkBuild === false ? generatedConfigPath(wranglerPath) : undefined;
 
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
@@ -706,34 +895,56 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
  * `--dry-run` pass through; a target refusing one says so here. Returns the
  * error that stops the deploy, if any.
  */
-const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
     const { error, services } = readServiceBindings(cwd);
 
     if (error !== undefined) {
-        return error;
+        return { code: EXIT_CODE.FAILURE, error };
     }
 
     if (services.length === 0) {
         return undefined;
     }
 
-    const { toolchain } = driver;
-    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+    const toolchain = serviceToolchain(services, options, driver);
 
-    if (skipped !== undefined || toolchain === undefined) {
-        const names = services.map((service) => service.worker).join(", ");
-
-        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
-
+    if (toolchain === undefined) {
         return undefined;
     }
 
     const manager = detectPackageManager(cwd);
     // Two keys may bind two entrypoints of one Worker: it deploys once.
     const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+    // `--prebuilt` skips the app's client build, and a service's build is part of the same artifact, so it is skipped too.
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+    const serviceBuildFor = (directory: string): Parameters<typeof runClientBuild>[0] =>
+        serviceBuildOptions(directory, options, driver, frameworkBuild, spawner);
+
+    const refused = firstServiceRefusal(workers, serviceBuildFor);
+
+    if (refused !== undefined) {
+        options.logger.error(refused);
+
+        return { code: EXIT_CODE.USAGE, error: refused };
+    }
 
     for (const service of workers) {
         const directory = dirname(service.wranglerPath);
+        const serviceBuild = serviceBuildFor(directory);
+
+        // eslint-disable-next-line no-await-in-loop -- services build in order: a failed build stops the later services and the app deploy, which must not start on a partial set
+        const { built, error: buildError } = await buildService(serviceBuild, frameworkBuild, options.env);
+
+        if (buildError !== undefined) {
+            const message = `service ${service.name} (${service.worker}): ${buildError}`;
+
+            options.logger.error(message);
+
+            return { code: EXIT_CODE.FAILURE, error: message };
+        }
+
+        const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
+
         let invocation: ReturnType<typeof planToolchainInvocation>;
 
         try {
@@ -741,10 +952,13 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
                 // Always an explicit config: wrangler left to discover one walks up
                 // from the service folder and can find the app's `wrangler.json`
                 // or a Vite build's `.wrangler/deploy/config.json` first.
-                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+                toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
             );
         } catch (error_: unknown) {
-            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`,
+            };
         }
 
         invocation.commit();
@@ -753,11 +967,14 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
         options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
 
-        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        // eslint-disable-next-line no-await-in-loop -- services deploy in order: a failed deploy stops the later services and the app deploy, which must not start on a partial set
         const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
-            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`,
+            };
         }
     }
 
@@ -905,6 +1122,12 @@ const checkArtifactsNamespaces = async (
     return failures.length === 0 ? undefined : failures.join("\n");
 };
 
+/** A before-spawn step's failure: the exit code it maps to, and the message. */
+interface BeforeSpawnFailure {
+    code: number;
+    error: string;
+}
+
 /**
  * The steps that change the account or the sibling Workers, run last, in the order of how little a
  * failure leaves behind: the Artifacts namespaces, then the Hyperdrive config (both are reused on a
@@ -917,12 +1140,23 @@ const runBeforeSpawnSteps = async (
     spawner: Spawner,
     target: string,
     wranglerPath: string | undefined,
-): Promise<string | undefined> =>
-    (createsAccountResources(options)
+): Promise<BeforeSpawnFailure | undefined> => {
+    const artifacts = createsAccountResources(options)
         ? await checkArtifactsNamespaces(cwd, wranglerPath, target, options.env, options.logger, options.discoveryCache, "create")
-        : undefined) ??
-    (await provisionDeployHyperdrive(cwd, options, "deploy", target)) ??
-    (await deployServices(cwd, options, driver, spawner));
+        : undefined;
+
+    if (artifacts !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: artifacts };
+    }
+
+    const hyperdrive = await provisionDeployHyperdrive(cwd, options, "deploy", target);
+
+    if (hyperdrive !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: hyperdrive };
+    }
+
+    return deployServices(cwd, options, driver, spawner);
+};
 
 /**
  * A lazy registry defers a broken module's error to its first call, where an eager one fails the
@@ -1043,7 +1277,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target, validation.wranglerPath);
 
     if (beforeSpawnError !== undefined) {
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: beforeSpawnError, mintedSecretsFile, validation };
+        return { code: beforeSpawnError.code, descriptor: undefined, error: beforeSpawnError.error, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, driver);
@@ -1069,6 +1303,58 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
 };
 
 /**
+ * The client build a deploy runs before wrangler, or the failed result it returns. A refused option is a usage error, and it is
+ * reported before the build writes anything.
+ */
+const runDeployClientBuild = async (options: DeployCommandOptions): Promise<DeployCommandResult | undefined> => {
+    const { logger } = options;
+    const projectRoot = options.cwd ?? process.cwd();
+
+    const clientBuild = {
+        apiSpec: options.apiSpec,
+        cwd: projectRoot,
+        environment: options.env,
+        bundleMetaPath: options.bundleMetaPath,
+        frameworkBuild: options.skipCodegen === true ? false : options.frameworkBuild,
+        strictAdvisories: resolveStrictAdvisories(options),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner: options.spawner,
+        target: options.target,
+    };
+
+    // A refused option is a usage error, and it is reported before the build writes anything.
+    const refusal = clientBuildRefusal(clientBuild);
+
+    if (refusal !== undefined) {
+        logger.error(refusal);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: refusal, validation: NO_VALIDATION };
+    }
+
+    // The spec a client build records is read after it runs, so a record left by an earlier run must not survive into this one.
+    clearApiSpecMarker(projectRoot);
+
+    const clientBuildError = await runClientBuild(clientBuild);
+
+    if (clientBuildError !== undefined) {
+        logger.error(clientBuildError);
+
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: clientBuildError, validation: NO_VALIDATION };
+    }
+
+    return undefined;
+};
+
+/** The `--env` a client build for this deploy runs with as `CLOUDFLARE_ENV`, or `undefined` when no client build runs for it. */
+const clientBuildEnvironmentFor = (projectRoot: string, options: DeployCommandOptions): string | undefined => {
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+
+    return clientBuildRuns(projectRoot, frameworkBuild, options.env) ? options.env : undefined;
+};
+
+/**
  * Run a deploy. In `--format json` mode the human/progress channel is already on
  * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
  * stdout is left to the single result document `execute` returns.
@@ -1081,12 +1367,36 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     // and `--emit-bindings`'s requirements document right after it — so nothing
     // else needs to own a snapshot.
     const { logger } = options;
-    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
+    const projectRoot = options.cwd ?? process.cwd();
+
+    // A refused deploy must not rewrite the project, and the client build rewrites `_generated/*` and `dist/`, so the refusals
+    // that need no writes run before it.
+    const preflight = preflightDeploy(options, options.commandName ?? "deploy", true);
+
+    if (preflight.kind === "refused") {
+        return { code: preflight.code ?? EXIT_CODE.USAGE, descriptor: undefined, error: preflight.error, validation: preflight.validation };
+    }
+
+    // The client build comes first: wrangler bundles whatever it finds on disk, so
+    // a Vite-generated worker or an `assets` directory must exist before it reads them.
+    const clientBuildFailure = await runDeployClientBuild(options);
+
+    if (clientBuildFailure !== undefined) {
+        return clientBuildFailure;
+    }
+
+    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(projectRoot) : undefined;
 
     let result: DeployCommandResult;
 
     try {
-        result = await executeDeploy({ ...options, logger });
+        result = await executeDeploy({
+            ...options,
+            clientBuildEnvironment: clientBuildEnvironmentFor(projectRoot, options),
+            clientBuildRan: pluginBuildRuns(projectRoot, options.skipCodegen === true ? false : options.frameworkBuild, options.env),
+            logger,
+            openShardGatePassed: true,
+        });
 
         if (result.code === 0 && options.emitBindings !== undefined) {
             const { error } = writeBindingManifestFile({ destination: options.emitBindings, logger, projectRoot: options.cwd ?? process.cwd() });
@@ -1130,10 +1440,15 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runDeployCommand({
+        allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        // `--prebuilt` trusts an artifact built earlier, so it must not rebuild the client.
+        frameworkBuild: options.prebuilt === true ? false : options.frameworkBuild,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         dryRun: options.dryRun === true,

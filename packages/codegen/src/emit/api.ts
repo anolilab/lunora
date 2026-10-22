@@ -10,6 +10,7 @@ import {
     assertIdentifier,
     baseSpecifiers,
     GENERATED_HEADER,
+    isSensitiveFunction,
     pascalCase,
     renderArgsType,
     renderNamespaceTree,
@@ -35,7 +36,11 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
             const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
             const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-            return `${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
+            // A sensitive reference is typed as such so `client.mutation` can refuse
+            // `onlineOnly: false` for it, see `SensitiveFunctionReference`.
+            const reference = `FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>`;
+
+            return `${definition.exportName}: ${isSensitiveFunction(definition) ? `${reference} & { readonly sensitive: true }` : reference};`;
         },
         // A namespace derived from a leading-digit filename (e.g. `2fa.ts`) is a
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
@@ -267,8 +272,8 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
 /**
  * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
  * functions, so `api.agents.agentMessages` / `api.agents.agentState` /
- * `api.agents.agentThread` / `api.agents.agentResolveApproval` /
- * `api.agents.agentRun` exist as typed references
+ * `api.agents.agentThread` / `api.agents.agentPendingApprovals` /
+ * `api.agents.agentResolveApproval` / `api.agents.agentRun` exist as typed references
  * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
  * `useMutation(api.agents.agentResolveApproval)`). The thread-write mutations
@@ -305,11 +310,19 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             returnType: "Record<string, unknown>[]",
         },
         {
+            args: { limit: { inner: { kind: "number" }, kind: "optional" } },
+            exportName: "agentPendingApprovals",
+            filePath: "agents",
+            kind: "query",
+            returnType: "Record<string, unknown>[]",
+        },
+        {
             args: {
                 decision: {
                     kind: "union",
                     members: [
                         { kind: "literal", literalValue: '"approve"' },
+                        { kind: "literal", literalValue: '"approve_for_thread"' },
                         { kind: "literal", literalValue: '"reject"' },
                     ],
                 },
@@ -322,6 +335,46 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "mutation",
             returnType: "{ resolved: boolean }",
+        },
+        {
+            args: {
+                secret: { kind: "string", sensitive: true },
+                threadKey: { kind: "string" },
+                toolCallId: { kind: "string" },
+            },
+            exportName: "agentSupplySecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolCallId: { kind: "string" } },
+            exportName: "agentDeclineSecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { threadKey: { kind: "string" } },
+            exportName: "agentSecretRequests",
+            filePath: "agents",
+            kind: "query",
+            returnType:
+                '{ createdAt: number; expiresAt: number; label?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]',
+        },
+        {
+            args: { key: { kind: "string" } },
+            exportName: "agentApprovalGrants",
+            filePath: "agents",
+            kind: "query",
+            returnType: "{ createdAt: number; toolName: string }[]",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolName: { kind: "string" } },
+            exportName: "agentRevokeApprovalGrant",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ revoked: boolean }",
         },
         {
             args: {
@@ -499,7 +552,7 @@ const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
     renderNamespaceTree(
         functions,
         (definition) =>
-            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
+            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)}${isSensitiveFunction(definition) ? ", sensitive: true" : ""} },`,
         "value",
     );
 

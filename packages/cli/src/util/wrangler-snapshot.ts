@@ -20,16 +20,17 @@ import { join } from "node:path";
 import { findWranglerFile } from "@lunora/config/cloudflare";
 
 /**
- * Read the project's wrangler config — and `package.json`, whose `lunora.*`
- * ownership records describe that config — and return the callback that
- * restores both. Restoring the config alone would leave a record claiming
+ * Read the project's wrangler config, its `wrangler.dev.jsonc` dev sidecar, and `package.json`, whose `lunora.*`
+ * ownership records describe those files, and return the callback that restores them. Restoring the config alone would leave a record claiming
  * entries the restored config no longer has.
  *
  * The callback skips a file that was absent and is safe to call once at the
  * end of a `finally`.
  */
 const snapshotWranglerConfig = (projectRoot: string): (() => void) => {
-    const paths = [findWranglerFile(projectRoot), join(projectRoot, "package.json")].filter((path): path is string => path !== undefined && existsSync(path));
+    const paths = [findWranglerFile(projectRoot), join(projectRoot, "package.json"), join(projectRoot, "wrangler.dev.jsonc")].filter(
+        (path): path is string => path !== undefined && existsSync(path),
+    );
     const before = paths.map((path) => [path, readFileSync(path, "utf8")] as const);
 
     return () => {

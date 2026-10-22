@@ -1,6 +1,6 @@
 {
     "name": "@lunora/replica",
-    "version": "1.0.0-alpha.197",
+    "version": "1.0.0-alpha.206",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
     "keywords": [
         "cloudflare",
@@ -74,11 +74,11 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/wire": "1.0.0-alpha.1"
+        "@lunora/wire": "1.0.0-alpha.2"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "1.0.0-alpha.222",
+        "@lunora/server": "1.0.0-alpha.231",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/flags",
-    "version": "1.0.0-alpha.78",
+    "version": "1.0.0-alpha.83",
     "description": "OpenFeature-based feature flags for Lunora — ctx.flags, useFlag, and a first-class Cloudflare Flagship provider with any OpenFeature provider pluggable",
     "keywords": [
         "cloudflare",
@@ -75,7 +75,7 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/wire": "1.0.0-alpha.1",
+        "@lunora/wire": "1.0.0-alpha.2",
         "@openfeature/server-sdk": "catalog:flags"
     },
     "devDependencies": {

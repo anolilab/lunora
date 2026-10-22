@@ -625,6 +625,191 @@ describe("schema-drift", () => {
             expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
         });
 
+        it("sees a `v.from()` schema whose inferred output type changed", () => {
+            expect.assertions(4);
+
+            const { changes, hashMoved } = compare({ score: { kind: "from", tsType: "string" } }, { score: { kind: "from", tsType: "number" } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(string) → from(number)");
+            expect(hashMoved).toBe(true);
+        });
+
+        it("does not report drift when only one side could resolve a `v.from()` output type", () => {
+            expect.assertions(2);
+
+            // A baseline written before the output type was recorded, or one built
+            // where the type checker could not resolve it, says nothing about it.
+            const { changes: gained } = compare({ score: { kind: "from" } }, { score: { kind: "from", tsType: "number" } });
+            const { changes: lost } = compare({ score: { kind: "from", tsType: "number" } }, { score: { kind: "from" } });
+
+            expect(gained).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
+        it("does not report drift when a `v.from()` nested in a container lacks a recorded output type on one side", () => {
+            expect.assertions(8);
+
+            const recorded = { kind: "from", tsType: "number" } as const;
+            const unrecorded = { kind: "from" } as const;
+            const containers: ((inner: TableIR["shape"][string]) => TableIR["shape"][string])[] = [
+                (inner) => {
+                    return { inner, kind: "array" };
+                },
+                (inner) => {
+                    return { kind: "object", shape: { score: inner } };
+                },
+                (inner) => {
+                    return { inner, kind: "optional" };
+                },
+                (inner) => {
+                    return { kind: "record", keyType: { kind: "string" }, valueType: inner };
+                },
+                (inner) => {
+                    return { kind: "union", members: [{ kind: "string" }, inner] };
+                },
+            ];
+
+            for (const wrap of containers) {
+                const { changes: gained } = compare({ score: wrap(unrecorded) }, { score: wrap(recorded) });
+                const { changes: lost } = compare({ score: wrap(recorded) }, { score: wrap(unrecorded) });
+
+                expect([gained, lost]).toStrictEqual([[], []]);
+            }
+
+            // Mixed shapes: one resolved and one unresolved `v.from()` side by side.
+            const pair = (first: typeof recorded | typeof unrecorded, second: typeof recorded | typeof unrecorded) => {
+                return {
+                    kind: "object" as const,
+                    shape: { first, second },
+                };
+            };
+
+            expect(compare({ score: pair(unrecorded, recorded) }, { score: pair(recorded, recorded) }).changes).toStrictEqual([]);
+            expect(compare({ score: pair(recorded, recorded) }, { score: pair(recorded, unrecorded) }).changes).toStrictEqual([]);
+            expect(
+                compare(
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, unrecorded] } },
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, { kind: "from", tsType: "b" }] } },
+                ).changes,
+            ).toStrictEqual([]);
+        });
+
+        it("still flags a nested `v.from()` whose output type changed when both sides recorded it", () => {
+            expect.assertions(4);
+
+            const from = (tsType: string) => ({ kind: "from", tsType }) as const;
+
+            const { changes: inArray } = compare({ score: { inner: from("string"), kind: "array" } }, { score: { inner: from("number"), kind: "array" } });
+            const { changes: inObject } = compare(
+                { score: { kind: "object", shape: { a: from("string") } } },
+                { score: { kind: "object", shape: { a: from("number") } } },
+            );
+
+            expect(inArray).toHaveLength(1);
+            expect(inArray[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(inObject).toHaveLength(1);
+            expect(inObject[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+        });
+
+        it("flags a union member whose recorded output changed next to a member with none", () => {
+            expect.assertions(3);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+
+            const { changes } = compare(
+                { score: { kind: "union", members: [{ kind: "string" }, from("string"), from()] } },
+                { score: { kind: "union", members: [{ kind: "string" }, from("number"), from()] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(number)");
+        });
+
+        it("does not flag a union whose baseline recorded none of its member outputs", () => {
+            expect.assertions(2);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+            const wrapped = (inner: ReturnType<typeof from>) => {
+                return { kind: "object" as const, shape: { a: inner } };
+            };
+
+            const { changes: sibling } = compare(
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+            );
+            const { changes: lost } = compare(
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+            );
+
+            expect(sibling).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
+        it("reads a widening to a union as safe when the old column recorded no output type", () => {
+            expect.assertions(2);
+
+            const { changes } = compare(
+                { score: { kind: "from" } },
+                { score: { kind: "union", members: [{ kind: "from", tsType: "number" }, { kind: "string" }] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "safe", type: "widenedFieldShape" });
+        });
+
+        it("does not record a `v.from()` output type that names a file path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", { score: { kind: "from", tsType: 'import("/Users/ci/work/app/schemas").Score' }, tag: { kind: "from", tsType: "string" } }),
+                ]),
+                [],
+            );
+            const fields = snapshot.tables.users?.fields;
+
+            expect(fields?.score).not.toHaveProperty("output");
+            expect(fields?.tag).toMatchObject({ output: "string" });
+        });
+
+        it("records a package-qualified output type and sees it change", () => {
+            expect.assertions(4);
+
+            const snapshot = buildSchemaSnapshot(schema([table("users", { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } })]), []);
+
+            expect(snapshot.tables.users?.fields?.score).toMatchObject({ output: 'import("@acme/schema").OldScore' });
+
+            const { changes, hashMoved } = compare(
+                { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } },
+                { score: { kind: "from", tsType: 'import("@acme/schema").NewScore' } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(hashMoved).toBe(true);
+        });
+
+        it("still skips a Windows drive path and a UNC path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", {
+                        a: { kind: "from", tsType: String.raw`import("C:\work\app\schemas").Score` },
+                        b: { kind: "from", tsType: String.raw`import("\\host\share\schemas").Score` },
+                    }),
+                ]),
+                [],
+            );
+
+            expect(snapshot.tables.users?.fields?.a).not.toHaveProperty("output");
+            expect(snapshot.tables.users?.fields?.b).not.toHaveProperty("output");
+        });
+
         it("sees an array element type change (it moves the storage projection)", () => {
             expect.assertions(3);
 

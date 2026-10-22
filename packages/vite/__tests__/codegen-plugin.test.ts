@@ -330,6 +330,54 @@ describe("codegen-plugin", () => {
             );
         });
 
+        // A directory where the marker file goes makes the write throw (EISDIR) after codegen has already written its output.
+        const blockMarker = (root: string): void => {
+            mkdirSync(join(root, ".lunora", "api-spec.json"), { recursive: true });
+        };
+
+        it("vite build fails when the API spec marker cannot be written, since the CLI reads it", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
+                /could not write the API spec marker/u,
+            );
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(true);
+        });
+
+        it("vite dev logs a marker that cannot be written and still runs the post-codegen hook", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).resolves.toBeUndefined();
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+
         it("vite dev only logs the same ERROR-level advisory (never throws)", async () => {
             expect.assertions(3);
 
@@ -1010,6 +1058,24 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
+        it("watches a lunora.config above a nested schema directory, which codegen reads too", () => {
+            expect.assertions(1);
+
+            // The schema directory is `web/lunora`, so the config codegen reads may sit in `web/`,
+            // not the root. Only the root candidates are named by the project root, so this one
+            // is watched only through the schema directory's own walk.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
+
+            expect(added).toContain(join(workdir, "web", "lunora.config.ts"));
+        });
+
         it("external wrangler binding edit restarts the dev server in place", async () => {
             expect.assertions(2);
 
@@ -1251,6 +1317,44 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             // The next schema save builds the fresh Project, seeded from the saved config.
             changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("a web/lunora.config.ts save above a nested schema directory drops the cached Project too", async () => {
+            expect.assertions(3);
+
+            // Schema under `web/lunora`, with its config one level up in `web/`. A missing
+            // `schema.ts` makes codegen skip, and a skipped pass drops the cache by itself,
+            // which would hide the save this test is about.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "web", "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
+            writeFileSync(join(workdir, "web", "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as
+                ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The nested config save invalidates the cache, without regenerating.
+            changeListener!(join(workdir, "web", "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // So the next schema save builds a fresh Project.
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 
             expect(createCalls).toHaveBeenCalledTimes(before + 2);
