@@ -1,4 +1,4 @@
-import { isRunnableTarget, resolveLazyFunctions, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { assertBuildTargetMatches, isRunnableTarget, resolveLazyFunctions, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 
 import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 
@@ -19,6 +19,8 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
             `target "${target}" has no command-line toolchain, so the Lunora Rspack plugin cannot build for it — it can only generate for it (\`lunora codegen --target ${target}\`). Buildable targets: ${runnableTargetIds().join(", ")}`,
         );
     }
+
+    assertBuildTargetMatches(target, projectRoot);
 
     return target;
 };

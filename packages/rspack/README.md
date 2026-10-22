@@ -99,6 +99,8 @@ lunoraRsbuild({
 });
 ```
 
+`target` must match the target the CLI resolved for the run. `lunora build` and `lunora deploy` set `LUNORA_BUILD_TARGET`, and a plugin whose target differs fails the build rather than emit an artifact for another host. Set the same target in the plugin options and `lunora.config.*`, or leave it unset to use the project's.
+
 `LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode only**. A production build keeps generating: the ERROR-advisory gate is the only thing that fails it, so honouring the variable there would let an app ship against a surface its target cannot serve, green the whole way.
 
 ## How the Worker runs

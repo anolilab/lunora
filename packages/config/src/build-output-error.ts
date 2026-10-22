@@ -4,5 +4,5 @@
  */
 class MissingBuildOutputError extends Error {}
 
-// eslint-disable-next-line import/prefer-default-export -- named export by repo convention (no default exports)
+// eslint-disable-next-line import/prefer-default-export -- the package index re-exports this class by name, so the module keeps the name
 export { MissingBuildOutputError };

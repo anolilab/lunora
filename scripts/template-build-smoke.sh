@@ -633,6 +633,13 @@ authui_file_re() {
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
+# A name that is not a template directory would match nothing below and report PASS over zero templates. The pattern rules out
+# `.`, `..` and path separators, which would name a directory without naming a template.
+if [[ -n "$ONLY_TEMPLATE" ]] && { [[ ! "$ONLY_TEMPLATE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || [[ ! -d "$REPO_ROOT/templates/$ONLY_TEMPLATE" ]]; }; then
+    echo "FAILED — '$ONLY_TEMPLATE' is not a template name under templates/"
+    exit 1
+fi
+
 TEMPLATES=()
 SKIPPED=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
@@ -648,6 +655,16 @@ done
 if [[ ${#TEMPLATES[@]} -eq 0 ]]; then
     echo "ERROR: no template directories found under $REPO_ROOT/templates/" >&2
     exit 1
+fi
+
+# A requested template that the skip list removed would leave nothing to test, and the run would still pass. Fail it instead.
+if [[ -n "$ONLY_TEMPLATE" ]]; then
+    only_found=0
+    for t in "${TEMPLATES[@]}"; do [[ "$t" == "$ONLY_TEMPLATE" ]] && only_found=1; done
+    if [[ $only_found -eq 0 ]]; then
+        echo "FAILED — '$ONLY_TEMPLATE' was requested but is in the skip list (SMOKE_SKIP_TEMPLATES); nothing would be tested" >&2
+        exit 1
+    fi
 fi
 
 echo "==> Discovered ${#TEMPLATES[@]} templates: ${TEMPLATES[*]}"
