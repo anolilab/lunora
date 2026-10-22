@@ -11,6 +11,11 @@
  * run from inside a cell: a real network client on a hibernation-accepted
  * socket, through the celld host's `SocketHost`.
  *
+ * The platform suite's `SchedulerHost` legs run against `SchedulerDO` through
+ * `@lunora/scheduler`'s `createSchedulerHost`, one scheduler cell per leg. Its
+ * delivery is recorded rather than sent (see {@link TckScheduler}), so the
+ * at-least-once leg sees celld fire the cell's alarm and drain the job.
+ *
  * `/fleet?name=…` reads (GET) or writes (PUT, body as value) one key in the
  * named cell through the celld host's `ShardKvStore` — the probe the
  * multi-node test (`celld-fleet.test.ts`) drives from different nodes.
@@ -26,6 +31,8 @@ import type { ConformanceHost } from "@lunora/platform/conformance";
 import { createShardDirectory } from "@lunora/platform-cloudflare";
 import type { ShardNamespaceLike } from "@lunora/runtime";
 import { createWorker } from "@lunora/runtime";
+import type { ScheduleRecord } from "@lunora/scheduler";
+import { createSchedulerHost, SchedulerDO } from "@lunora/scheduler";
 import { defineLiveStream, httpAction, httpRouter, v } from "@lunora/server";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 
@@ -36,7 +43,18 @@ import { createLegExpect } from "./tck-expect";
 import type { Factories, LegContext, LegResult, SuiteName } from "./tck-legs";
 import { collectLegs, describeFailure, LegSkipped } from "./tck-legs";
 
-type Env = BindingEnv & { ECHO: unknown; LIVE_SHARD: ShardNamespaceLike; TCK: DurableObjectNamespace };
+type Env = BindingEnv & {
+    ECHO: unknown;
+    LIVE_SHARD: ShardNamespaceLike;
+    SCHEDULER: Parameters<typeof createSchedulerHost>[0]["namespace"];
+    TCK: DurableObjectNamespace;
+};
+
+/** The KV key {@link TckScheduler} records a delivered job under. */
+const dispatchedKey = (id: string): string => `tck:dispatched:${id}`;
+
+/** How long `awaitJobDispatched` waits for celld to fire a job's alarm. */
+const DISPATCH_DEADLINE_MS = 10_000;
 
 /**
  * The live stream an app declares with `defineLiveStream`. It declares only the
@@ -117,7 +135,27 @@ const createPlatformHost = (): ConformanceHost => {
         // Same as Cloudflare: `runSerialized` is `blockConcurrencyWhile`, so
         // there is no "outside" a mutation inside one cell event to read from.
         isolatesByDispatch: true,
+        // Resolves once the scheduler cell's alarm has fired and drained the job.
+        awaitJobDispatched: async (id) => {
+            const deadline = Date.now() + DISPATCH_DEADLINE_MS;
+
+            while (Date.now() < deadline) {
+                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+                if ((await env.KV.get(dispatchedKey(id))) !== null) {
+                    return true;
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 50);
+                });
+            }
+
+            return false;
+        },
         kv: platform.kv,
+        // A scheduler cell of its own per leg, so one leg's jobs never show in another's listing.
+        scheduler: createSchedulerHost({ instanceName: `tck-${crypto.randomUUID()}`, namespace: env.SCHEDULER }),
         shard: platform.shard,
         socket: platform.sockets,
     };
@@ -352,8 +390,25 @@ class TckShard extends ShardDO {
     }
 }
 
-export { EchoCell, TckCell, TckShard };
+/**
+ * `SchedulerDO` with its delivery recorded instead of sent. The real dispatch
+ * POSTs to `LUNORA_ORIGIN_URL`, which `celld dev` on a free port cannot know
+ * ahead of time; what the leg checks is the part celld owns — that the cell's
+ * alarm fires and the drain hands the job to `dispatch` — so `dispatch` (the
+ * hook `SchedulerDO` documents for this) writes the job id to KV, where
+ * `awaitJobDispatched` reads it.
+ */
+class TckScheduler extends SchedulerDO {
+    protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
+        await (this.env as unknown as Env).KV.put(dispatchedKey(record.id), "1");
+
+        return true;
+    }
+}
+
+export { EchoCell, TckCell, TckScheduler, TckShard };
 export { TckWorkflow, VectorCell } from "./tck-bindings";
+export { ShardRegistryDO } from "@lunora/do";
 
 // A Workers entry module: the runtime reads the handlers off the default export
 // and each Durable Object class by name, so this file has to mix both.
