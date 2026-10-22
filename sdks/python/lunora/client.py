@@ -77,6 +77,13 @@ MAX_PENDING_POKES = 64
 # 32 MiB, so this matches that rather than inventing a smaller one.
 MAX_WS_FRAME_BYTES = 32 * 1024 * 1024
 
+# Close codes the server ends a socket with (protocol/README.md 6). 4001: the
+# session expired. 4003: the credential was refused, unless the reason is the
+# connect deadline, which refuses none.
+TOKEN_EXPIRED_CLOSE = 4001
+REFUSED_CLOSE = 4003
+CONNECT_DEADLINE_REASON = "connect deadline"
+
 # A WS token provider: a value, a callable returning a value, or an async callable.
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
@@ -155,6 +162,19 @@ def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None
     if token is not None:
         frame["token"] = token
     return frame
+
+
+def build_whisper_subscribe_frame(topic: str) -> dict:
+    return {"topic": topic, "type": "whisper_subscribe"}
+
+
+def build_whisper_unsubscribe_frame(topic: str) -> dict:
+    return {"topic": topic, "type": "whisper_unsubscribe"}
+
+
+def build_whisper_frame(topic: str, data: Any) -> dict:
+    """``data`` is already wire-encoded; :meth:`LunoraClient.whisper` does the encoding."""
+    return {"data": data, "topic": topic, "type": "whisper"}
 
 
 def build_subscribe_frame(
@@ -317,6 +337,21 @@ class _ShapeSubscription:
         self.error_callbacks: list[ErrorCallback] = []
 
 
+class RoomHandle:
+    """A joined room: :meth:`send` relays to its other members, :meth:`close` leaves it."""
+
+    def __init__(self, send: Callable[[Any], bool], leave: Unsubscribe) -> None:
+        self._relay = send
+        self._leave = leave
+
+    def send(self, message: Any) -> bool:
+        """Relay ``message``; ``False`` when no socket is attached (nothing is queued)."""
+        return self._relay(message)
+
+    def close(self) -> None:
+        self._leave()
+
+
 class LunoraClient:
     def __init__(
         self,
@@ -342,8 +377,15 @@ class LunoraClient:
         #: it finishes. See :meth:`flush_offline_queue`.
         self._flushing: set[str] = set()
         self._flush_again: set[str] = set()
-        #: Session credential, sent as ``connect.token``; never in the URL.
-        self.ws_token = ws_token
+        #: Session credential, sent as ``connect.token``; never in the URL. See :attr:`ws_token`.
+        self._ws_token = ws_token
+        #: Bumped each time the session credential changes; see :meth:`detach_socket`.
+        self._ws_credential_generation = 0
+        #: The generation the live socket opened under, and the last one a 4003 refusal notified.
+        self._socket_generation = 0
+        self._refused_generation: Optional[int] = None
+        self._token_expired_listeners: list[Callable[[], None]] = []
+        self._whisper_listeners: dict[str, list[Callable[[Any], None]]] = {}
         #: Admin ticket, the only WS credential that rides ``?token=``.
         self.ws_ticket = ws_ticket
         #: Minted PER INSTANCE when not given, from the same helper that mints
@@ -405,8 +447,17 @@ class LunoraClient:
 
     # --- Socket lifecycle ---------------------------------------------------
 
-    def attach_socket(self, send: Callable[[dict], None]) -> None:
-        """Register the sender subscription frames go out on; marks the client online.
+    def attach_socket(self, send: Callable[[dict], None], context: Optional[dict] = None) -> None:
+        """Open a socket on ``send``: sends ``connect`` first, then marks the client online.
+
+        ``connect`` carries ``context`` when given and the session credential when one is
+        set (``connect.token``, protocol/README.md 5.1); each whisper topic is then joined
+        again. Subscriptions are NOT resent here: :meth:`connect_and_run` does that after
+        attaching, and :meth:`resend_subscriptions` is the call for a caller who attaches
+        its own socket.
+
+        A synchronous ``ws_token`` is read here. An async provider has to be awaited, so a
+        caller that holds one attaches through :meth:`connect_and_run` instead.
 
         Also latches "has connected at least once", which is what the offline
         queue gates on: writes made before the FIRST connect fail fast by default,
@@ -416,14 +467,149 @@ class LunoraClient:
         """
 
         with self._lock:
+            generation = self._ws_credential_generation
+        self._attach(send, context, self._session_credential_now(), generation)
+
+    def _attach(self, send: Callable[[dict], None], context: Optional[dict], session: Optional[str], generation: int) -> None:
+        with self._lock:
+            self._socket_generation = generation
+        # `connect` goes out before the sender is visible, so no frame another thread
+        # produces can reach the server ahead of it.
+        send(build_connect_frame(self.client_id, context, session))
+        with self._lock:
             self._send = send
             self._was_ever_connected = True
+            topics = list(self._whisper_listeners)
+        for topic in topics:
+            send(build_whisper_subscribe_frame(topic))
 
-    def detach_socket(self) -> None:
-        """Forget the sender; marks the client offline so writes queue."""
+    def _session_credential_now(self) -> Optional[str]:
+        with self._lock:
+            provider = self._ws_token
+        if not callable(provider):
+            return provider
+        result = provider()
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()  # never awaited, so close it rather than leave it to warn
+            raise TypeError("ws_token is an async provider; use connect_and_run, which awaits it")
+        return result
+
+    def detach_socket(self, close_code: Optional[int] = None, reason: Optional[str] = None) -> None:
+        """Forget the sender; marks the client offline so writes queue.
+
+        ``close_code`` and ``reason`` are the close frame that ended the socket, or
+        ``None`` when there was none. A 4001 always notifies the token-expired
+        listeners. A 4003 notifies once per credential generation, and only when the
+        socket opened under the generation in force: a socket that refused a credential
+        since replaced refuses nothing current. A 4003 with the reason
+        ``"connect deadline"`` refuses no credential, and any other close notifies nothing.
+        """
 
         with self._lock:
             self._send = None
+            notify = close_code == TOKEN_EXPIRED_CLOSE
+            if close_code == REFUSED_CLOSE and reason != CONNECT_DEADLINE_REASON:
+                opened = self._socket_generation
+                if opened == self._ws_credential_generation and opened != self._refused_generation:
+                    self._refused_generation = opened
+                    notify = True
+            listeners = list(self._token_expired_listeners) if notify else []
+        _run_callbacks(listeners, "token-expired listener")
+
+    @property
+    def ws_token(self) -> WsToken:
+        """The session credential, sent as ``connect.token``: a value, or a provider resolved on every open.
+
+        Assigning a different credential starts a new generation, so a refusal from a
+        socket opened under the old one is not reported as a refusal of the new one.
+        """
+
+        with self._lock:
+            return self._ws_token
+
+    @ws_token.setter
+    def ws_token(self, value: WsToken) -> None:
+        with self._lock:
+            if value != self._ws_token:
+                self._ws_token = value
+                self._ws_credential_generation += 1
+
+    def on_token_expired(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Run ``listener`` when the server refuses the session credential; returns an unsubscribe.
+
+        Fires on a 4001 close, on a ``TOKEN_EXPIRED`` error frame, and once per credential on
+        a 4003 refusal. Refresh the credential here, then assign :attr:`ws_token`: the next
+        open presents it. A listener that raises is logged and does not stop the socket.
+        """
+
+        with self._lock:
+            self._token_expired_listeners.append(listener)
+
+        def remove() -> None:
+            with self._lock:
+                if listener in self._token_expired_listeners:
+                    self._token_expired_listeners.remove(listener)
+
+        return remove
+
+    def whisper_subscribe(self, topic: str, listener: Callable[[Any], None]) -> Unsubscribe:
+        """Join ``topic`` and receive its whispers; returns an unsubscribe.
+
+        The first listener on a topic sends ``whisper_subscribe`` when a socket is attached;
+        a later attach joins it again. The last one leaving sends ``whisper_unsubscribe``.
+        """
+
+        with self._lock:
+            listeners = self._whisper_listeners.get(topic)
+            joining = listeners is None
+            if listeners is None:
+                listeners = self._whisper_listeners[topic] = []
+            listeners.append(listener)
+            sender = self._send
+        if joining and sender is not None:
+            sender(build_whisper_subscribe_frame(topic))
+
+        registered = [True]
+
+        def unsubscribe() -> None:
+            with self._lock:
+                listeners = self._whisper_listeners.get(topic)
+                if not registered[0] or listeners is None:
+                    return
+                registered[0] = False
+                listeners.remove(listener)
+                leaving = not listeners
+                if leaving:
+                    del self._whisper_listeners[topic]
+                sender = self._send
+            if leaving and sender is not None:
+                sender(build_whisper_unsubscribe_frame(topic))
+
+        return unsubscribe
+
+    def whisper(self, topic: str, data: Any) -> bool:
+        """Relay ``data`` to the other members of ``topic``; ``False`` when no socket is attached.
+
+        Nothing is queued: a whisper is ephemeral, so one sent while offline is dropped.
+        """
+
+        frame = build_whisper_frame(topic, encode_wire(data))
+        with self._lock:
+            sender = self._send
+        if sender is None:
+            return False
+        sender(frame)
+        return True
+
+    def connect_room(self, name: str, listener: Callable[[Any], None]) -> RoomHandle:
+        """Join the room ``name`` (topic ``room:<name>``) and receive its messages.
+
+        Does not wait for an acknowledgement: a room join is never acked.
+        """
+
+        topic = "room:" + name
+        return RoomHandle(partial(self.whisper, topic), self.whisper_subscribe(topic, listener))
 
     @property
     def online(self) -> bool:
@@ -982,6 +1168,9 @@ class LunoraClient:
         if kind == "error":
             return self._handle_error(frame, deferred)
 
+        if kind == "whisper":
+            return self._handle_whisper(frame, deferred)
+
         if kind == "resume":
             return self._advance(frame, "resume", deferred)
 
@@ -1094,9 +1283,28 @@ class LunoraClient:
             desc["epoch"] = frame["epoch"]
         return desc
 
+    def _handle_whisper(self, frame: dict, deferred: list) -> dict:
+        topic = frame.get("topic")
+        if not isinstance(topic, str) or not topic:
+            return {"kind": "ignored", "type": "whisper"}
+        listeners = self._whisper_listeners.get(topic)
+        if not listeners:
+            return {"kind": "whisper", "topic": topic}
+        try:
+            value = decode_wire(frame.get("data"))
+        except WireFormatError:
+            return {"kind": "ignored", "type": "whisper"}
+        deferred.extend(partial(listener, value) for listener in listeners)
+        return {"kind": "whisper", "topic": topic}
+
     def _handle_error(self, frame: dict, deferred: list) -> dict:
         env = frame.get("error") or {}
         code = env.get("code") if isinstance(env, dict) else None
+        if code == "TOKEN_EXPIRED":
+            # The server refused the session credential, just before it closes 4001. The
+            # frame belongs to the socket, not to its subscription, so it is not routed.
+            deferred.extend(list(self._token_expired_listeners))
+            return {"kind": "error", "id": _frame_key(frame.get("id")), "code": code}
         message = frame.get("message") or (env.get("message") if isinstance(env, dict) else None) or "subscription error"
         error = SubscriptionError(message, code)
         sub_id = _frame_key(frame.get("id"))
@@ -1313,7 +1521,11 @@ class LunoraClient:
 
     async def _run_socket(self, websockets: Any, loop: Any, closed: asyncio.Event, shard_key: Optional[str], context: Optional[dict]) -> None:
         # Both credentials are resolved on every open, so a reconnect re-mints the
-        # ticket and re-reads the session. Only the ticket may reach the URL.
+        # ticket and re-reads the session. Only the ticket may reach the URL. The
+        # generation is read first: a credential replaced while the provider is
+        # awaited leaves this socket under the older generation, not the new one.
+        with self._lock:
+            generation = self._ws_credential_generation
         session = await self.resolve_ws_token()
         ticket = await self.resolve_ws_ticket()
         async with websockets.connect(self.ws_url_for(shard_key, ticket), max_size=MAX_WS_FRAME_BYTES) as socket:  # pragma: no cover - live I/O
@@ -1356,8 +1568,11 @@ class LunoraClient:
                         _log.exception("lunora: frame handler raised")
                         continue
                     # Only a frame the client recognised proves a live server;
-                    # `null` or an unknown `type` must not reset the backoff.
-                    if descriptor.get("kind") != "ignored":
+                    # `null` or an unknown `type` must not reset the backoff. An
+                    # `error` frame does not either: a TOKEN_EXPIRED arrives just before
+                    # a 4001 close, and counting it would reset the backoff on every
+                    # reconnect, so a lapsed token would retry at the initial delay forever.
+                    if descriptor.get("kind") not in ("ignored", "error"):
                         self._frames_received += 1
 
             # A new token re-flushes this shard (see `auth_token`). Scheduled on
@@ -1415,10 +1630,7 @@ class LunoraClient:
                 with contextlib.suppress(RuntimeError):  # the loop is already closed
                     loop.call_soon_threadsafe(start_flush)
 
-            # `connect` is enqueued before the sender is visible, so a subscribe on
-            # another thread cannot reach the server ahead of it.
-            send(build_connect_frame(self.client_id, context, session))
-            self.attach_socket(send)
+            self._attach(send, context, session, generation)
             try:
                 self.resend_subscriptions()
             except BaseException:
@@ -1433,6 +1645,8 @@ class LunoraClient:
             with self._lock:
                 self._token_listeners.append(refreshed)
 
+            code: Optional[int] = None
+            reason: Optional[str] = None
             try:
                 # The socket is back, so the backlog replays now — among itself in
                 # submission order. It is NOT ordered against concurrent writes:
@@ -1454,6 +1668,14 @@ class LunoraClient:
                 # `resend_subscriptions` puts the subscriptions back.
                 for task in done:
                     task.result()
+            except Exception as failure:
+                # A server close surfaces as the websockets `ConnectionClosed`, which
+                # carries the close frame as `rcvd` (None when no frame arrived). Read it
+                # here so detach_socket can classify it; the failure itself still propagates.
+                rcvd = getattr(failure, "rcvd", None)
+                if rcvd is not None:
+                    code, reason = rcvd.code, rcvd.reason
+                raise
             finally:
                 with self._lock:
                     self._token_listeners.remove(refreshed)
@@ -1468,7 +1690,7 @@ class LunoraClient:
                 await asyncio.gather(*flushes, return_exceptions=True)
                 # Writes submitted after this point queue instead of failing, and
                 # the writer never outlives the socket it writes to.
-                self.detach_socket()
+                self.detach_socket(code, reason)
                 for task in (reader, writer, closer):
                     task.cancel()
                 await asyncio.gather(reader, writer, closer, return_exceptions=True)
