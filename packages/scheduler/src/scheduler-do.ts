@@ -84,6 +84,12 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
+// `pq:<encoded pool>:<id>` — one row per pending pooled job, written and removed
+// in the SAME storage call as its `id:` header, so `/pool` counts one pool by
+// listing its own prefix instead of walking every header. The pool name is
+// URI-encoded because it may contain `:` (pool `a` must not list pool `a:b`).
+const POOL_QUEUE_PREFIX = "pq:";
+const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeURIComponent(pool)}:`;
 // Default page size for the `/list` + WS `jobs` view (listPage()) and the
 // page size used internally by the exact-count cursor loop (forEachPage()).
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
@@ -330,6 +336,29 @@ class SchedulerDO {
         // padTime()/TIME_PAD so the pad width has a single source of truth and
         // can't drift from the rest of the module (alarm()/rescheduleAlarm()).
         return `t:${padTime(scheduledFor)}:${id}`;
+    }
+
+    /** The record's `pq:` row key, or `undefined` for a job outside any pool. */
+    private static poolQueueKey(record: ScheduleRecord): string | undefined {
+        return record.pool === undefined ? undefined : `${poolQueuePrefix(record.pool)}${record.id}`;
+    }
+
+    /**
+     * The rows that make `record` a pending job — its header, plus its `pq:` row
+     * when pooled — ready to spread into one multi-key `put`, so the two can
+     * never disagree.
+     */
+    private static pendingRows(record: ScheduleRecord): Record<string, ScheduleRecord | string> {
+        const queueKey = SchedulerDO.poolQueueKey(record);
+
+        return { [`${HEADER_PREFIX}${record.id}`]: record, ...(queueKey === undefined ? {} : { [queueKey]: record.id }) };
+    }
+
+    /** The header key plus the `pq:` row key, to spread into the same multi-key `delete`. */
+    private static pendingKeys(record: ScheduleRecord): string[] {
+        const queueKey = SchedulerDO.poolQueueKey(record);
+
+        return queueKey === undefined ? [`${HEADER_PREFIX}${record.id}`] : [`${HEADER_PREFIX}${record.id}`, queueKey];
     }
 
     private static json(body: unknown, status: number = 200): Response {
@@ -998,7 +1027,7 @@ class SchedulerDO {
                 // later pass clears it.
                 if ((await this.state.storage.get(`${DEAD_PREFIX}${record.id}`)) !== undefined) {
                     await this.state.storage.delete(leaseKey);
-                    await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
+                    await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, ...SchedulerDO.pendingKeys(record)]);
 
                     return;
                 }
@@ -1107,7 +1136,7 @@ class SchedulerDO {
             // so the caller never re-claims the index and double-dispatches an
             // already-run job.
             try {
-                await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]);
+                await this.state.storage.delete([...SchedulerDO.pendingKeys(record), `${RETRY_PREFIX}${record.id}`]);
             } catch {
                 /* lingering header only — never re-fire a dispatched job */
             }
@@ -1387,7 +1416,7 @@ class SchedulerDO {
         // moment. One multi-key put, so a `/cancel` cannot land between the rows
         // and leave half a job behind.
         await this.state.storage.put<ScheduleRecord | string>({
-            [`${HEADER_PREFIX}${record.id}`]: retryRecord,
+            ...SchedulerDO.pendingRows(retryRecord),
             [`${RETRY_PREFIX}${record.id}`]: retryRecord,
             [SchedulerDO.indexKey(nextScheduledFor, record.id)]: record.id,
         });
@@ -1405,7 +1434,7 @@ class SchedulerDO {
         // in one batched delete. Leaving `id:<id>` behind would keep the dead job
         // visible in `/list` (and the studio) as a scheduled job
         // that can never fire — only the `dead:` record should survive.
-        await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
+        await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, ...SchedulerDO.pendingKeys(record)]);
 
         // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
         console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter ${reason}`);
@@ -1448,7 +1477,7 @@ class SchedulerDO {
         const requeued: ScheduleRecord = { ...record, scheduledFor: nextScheduledFor };
 
         await this.state.storage.put<ScheduleRecord | string>({
-            [`${HEADER_PREFIX}${record.id}`]: requeued,
+            ...SchedulerDO.pendingRows(requeued),
             [SchedulerDO.indexKey(nextScheduledFor, record.id)]: record.id,
         });
     }
@@ -1505,12 +1534,10 @@ class SchedulerDO {
         const pool = await this.loadPool(name);
         let queued = 0;
 
-        // Exact count via a bounded cursor loop — never materializes the whole
-        // header set at once (see forEachPage()).
-        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
-            if (record.pool === name) {
-                queued += 1;
-            }
+        // Exact count over this pool's own `pq:` rows only — O(this pool's
+        // backlog), not O(every pending job) — through the bounded cursor loop.
+        await this.forEachPage<string>(poolQueuePrefix(name), () => {
+            queued += 1;
         });
 
         return SchedulerDO.json({ inFlight: pool.inFlight, maxConcurrency: pool.maxConcurrency, queued });
@@ -1520,8 +1547,7 @@ class SchedulerDO {
      * `GET /status` — the app-level backlog signal that powers the studio's
      * SLO view. Enumerates every durable `pool:<name>` row for its `inFlight`/
      * `maxConcurrency` semaphore, counts the pending (not-yet-dispatched) jobs
-     * routed to each pool with the same single-pass scan {@link handlePoolStatus}
-     * uses, and rolls those up into app-wide `backlog` (sum of `queued`) and
+     * routed to each pool in one pass over the headers, and rolls those up into app-wide `backlog` (sum of `queued`) and
      * `inFlight` (sum of held slots) totals.
      *
      * Pools that have rows but no queued jobs still appear (with `queued: 0`) so
@@ -1531,8 +1557,7 @@ class SchedulerDO {
      * scan over `pool:` plus a cursor loop over `id:` is sufficient.
      */
     private async handleStatus(): Promise<Response> {
-        // Count pending jobs per pool name in a single pass over the headers,
-        // exactly as handlePoolStatus() counts for one pool.
+        // Count pending jobs per pool name in a single pass over the headers.
         const queuedByPool = new Map<string, number>();
 
         await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
@@ -1714,8 +1739,12 @@ class SchedulerDO {
             await this.persistPoolCap(pool, body.maxConcurrency);
         }
 
-        await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
-        await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, id), id);
+        // One multi-key put: the header, its time index and its `pq:` row land
+        // together or not at all.
+        await this.state.storage.put<ScheduleRecord | string>({
+            ...SchedulerDO.pendingRows(record),
+            [SchedulerDO.indexKey(record.scheduledFor, id)]: id,
+        });
         // Fast path: the new job is the only thing that could have moved the
         // earliest-pending time *earlier*. If a current alarm is already at or
         // before the new job, no rescan is needed — just keep it. Only when the
@@ -1807,8 +1836,10 @@ class SchedulerDO {
         // concurrency gate on the next drain exactly like a fresh enqueue.
         const revived: ScheduleRecord = { ...dead, attempts: 0, scheduledFor };
 
-        await this.state.storage.put(`${HEADER_PREFIX}${dead.id}`, revived);
-        await this.state.storage.put(SchedulerDO.indexKey(scheduledFor, dead.id), dead.id);
+        await this.state.storage.put<ScheduleRecord | string>({
+            ...SchedulerDO.pendingRows(revived),
+            [SchedulerDO.indexKey(scheduledFor, dead.id)]: dead.id,
+        });
         await this.state.storage.delete(`${DEAD_PREFIX}${dead.id}`);
         await this.armAlarmIfEarlier(scheduledFor);
         await this.broadcastChange();
@@ -1863,7 +1894,7 @@ class SchedulerDO {
         // take effect). Deleting only the derivable one would leave the lease
         // entry behind, holding the alarm at the horizon. The keys are equal
         // whenever nothing is leased, and deleting an absent key is a no-op.
-        const keys = [`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`];
+        const keys = [...SchedulerDO.pendingKeys(record), SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`];
         const leaseKey = this.activeLeases.get(record.id);
 
         if (leaseKey !== undefined) {
@@ -1940,12 +1971,22 @@ class SchedulerDO {
         this.reindexed = true;
 
         const indexed = new Set<string>();
+        // Read BEFORE the headers, so a job scheduled mid-walk is at worst
+        // re-put (idempotent) rather than missed.
+        const queueRows = new Set<string>();
 
         await this.forEachPage<string>("t:", (recordId) => {
             indexed.add(recordId);
         });
 
+        await this.forEachPage<string>(POOL_QUEUE_PREFIX, (_recordId, key) => {
+            queueRows.add(key);
+        });
+
         const orphans: ScheduleRecord[] = [];
+        // Backfill: a pooled header written before `pq:` rows existed has none,
+        // and `/pool` would under-count it until it next moves.
+        const missingQueueRows: [string, string][] = [];
 
         await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
             // A record whose `scheduledFor` is not representable as an index key
@@ -1953,7 +1994,19 @@ class SchedulerDO {
             if (!indexed.has(record.id) && isIndexableTime(record.scheduledFor)) {
                 orphans.push(record);
             }
+
+            const queueKey = SchedulerDO.poolQueueKey(record);
+
+            if (queueKey !== undefined && !queueRows.has(queueKey)) {
+                missingQueueRows.push([queueKey, record.id]);
+            }
         });
+
+        // Durable Object `put` takes at most 128 entries per call.
+        for (let start = 0; start < missingQueueRows.length; start += 128) {
+            // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes
+            await this.state.storage.put(Object.fromEntries(missingQueueRows.slice(start, start + 128)));
+        }
 
         for (const record of orphans) {
             // eslint-disable-next-line no-await-in-loop -- Durable Object storage is single-threaded local state; the index write and the alarm arm must land in order per record
