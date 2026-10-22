@@ -90,6 +90,14 @@ const POOL_PREFIX = "pool:";
 // URI-encoded because it may contain `:` (pool `a` must not list pool `a:b`).
 const POOL_QUEUE_PREFIX = "pq:";
 const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeURIComponent(pool)}:`;
+
+/**
+ * Present only while no `id:` header can be missing its `t:` entry, so a fresh
+ * instance may skip the full orphan walk — see
+ * {@link SchedulerDO.reindexOrphanedRecords}. Absent in a store written by an
+ * older build, which therefore gets walked once.
+ */
+const CLEAN_KEY = "meta:clean";
 // Default page size for the `/list` + WS `jobs` view (listPage()) and the
 // page size used internally by the exact-count cursor loop (forEachPage()).
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
@@ -483,11 +491,22 @@ class SchedulerDO {
     protected readonly env: SchedulerEnv;
 
     /**
-     * Whether {@link SchedulerDO.reindexOrphanedRecords} has already run in THIS
-     * instance. Once is enough: an orphan can only be minted by an eviction, and
-     * an eviction ends the instance that minted it.
+     * This instance's one run of {@link SchedulerDO.reindexOrphanedRecords},
+     * shared by every caller so none proceeds before it settles. Once is enough:
+     * an orphan can only be minted by an eviction, and an eviction ends the
+     * instance that minted it. A rejection is surfaced to the first caller only.
      */
-    private reindexed = false;
+    private recovery: Promise<void> | undefined;
+
+    /** Whether {@link SchedulerDO.recovery} completed, so this instance may vouch for the store via {@link CLEAN_KEY}. */
+    private recovered = false;
+
+    /**
+     * Set when a swallowed storage failure may have left a header with no `t:`
+     * entry in THIS instance (see `drainRecordGuarded`). Sticky: the instance
+     * then never writes {@link CLEAN_KEY} back, so its successor runs the walk.
+     */
+    private dirty = false;
 
     /**
      * Tail of the serialized `pool:<name>` critical section — see
@@ -542,8 +561,8 @@ class SchedulerDO {
         // recovering from `alarm()` alone would never run. Every route needs the
         // recovery anyway: `/list` and `/status` under-report an orphan, and
         // `armAlarmIfEarlier` on a fresh `/schedule` compares against a clock
-        // derived from `t:` alone. Guarded by `reindexed`, so this is one boolean
-        // read per request after the first.
+        // derived from `t:` alone. Memoized per instance, so this is one settled
+        // promise per request after the first.
         await this.reindexOrphanedRecords();
 
         const url = new URL(request.url);
@@ -671,6 +690,15 @@ class SchedulerDO {
         // cached copy written back afterwards would resurrect the completed
         // job's slot and leak pool capacity forever (a POOL SLOT has no expiry to
         // reclaim it — unlike the dispatch claim, see DISPATCH_LEASE_MS).
+        //
+        // A drain is the only place an orphan can be minted (see
+        // reindexOrphanedRecords), so the store stops vouching for itself for
+        // exactly its duration: an instance that dies inside it leaves no
+        // CLEAN_KEY behind, and its successor runs the full walk.
+        if (due.length > 0) {
+            await this.state.storage.delete(CLEAN_KEY);
+        }
+
         try {
             await this.drainDue(due);
         } finally {
@@ -678,6 +706,10 @@ class SchedulerDO {
             // single failing record could leave the DO with no future alarm and
             // strand every still-pending job.
             await this.rescheduleAlarm();
+
+            if (due.length > 0 && this.recovered && !this.dirty) {
+                await this.state.storage.put(CLEAN_KEY, true);
+            }
         }
 
         // Jobs fired (and were removed or moved to retry), so push the new list
@@ -1042,7 +1074,9 @@ class SchedulerDO {
                 // Swallow so the remaining due records still drain and
                 // rescheduleAlarm() still runs. Whichever of the two keys survived
                 // keeps the job recoverable — at worst it re-fires at the lease
-                // horizon instead of immediately.
+                // horizon instead of immediately. If neither survived, only the
+                // orphan walk finds it, so keep the next instance from skipping it.
+                this.dirty = true;
             }
 
             return;
@@ -1138,7 +1172,10 @@ class SchedulerDO {
             try {
                 await this.state.storage.delete([...SchedulerDO.pendingKeys(record), `${RETRY_PREFIX}${record.id}`]);
             } catch {
-                /* lingering header only — never re-fire a dispatched job */
+                // Lingering header only — never re-fire a dispatched job. Once its
+                // lease is dropped it is unindexed, which the next instance's
+                // orphan walk is what reconciles; see `dirty`.
+                this.dirty = true;
             }
 
             return true;
@@ -1960,16 +1997,66 @@ class SchedulerDO {
      * key `409 DISPATCH_IN_PROGRESS`, which is a non-2xx, so the record is
      * re-armed rather than cleared.
      *
-     * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
-     * per-header `get`, so the cost is one pass over each prefix.
+     * Bounded walks (all `t:` values, `pq:` rows, then all `id:` headers) rather
+     * than a per-header `get`, so the cost is one pass over each prefix.
+     *
+     * **The walk runs only when {@link CLEAN_KEY} is absent.** It is O(every
+     * pending job), and an instance is evicted whenever alarms are spaced wider
+     * than the idle timeout, so running it on every new instance made a large
+     * future backlog cost a full scan per alarm. The key is sufficient because
+     * every remaining way to mint an orphan sits inside an alarm drain: the
+     * schedule, dead-retry, retry and requeue writes each put header and index in
+     * ONE call, and cancel deletes them in one. `alarm()` deletes the key before
+     * a non-empty drain and writes it back only after the drain settled with no
+     * swallowed failure ({@link dirty}) in an instance whose own recovery
+     * finished — so an instance that dies mid-drain, or swallowed a failed
+     * index write, leaves the key absent and its successor walks. A store from
+     * an older build has no key and is walked once. The no-clock check at the
+     * end is cheap and runs on every new instance regardless.
      */
     private async reindexOrphanedRecords(): Promise<void> {
-        if (this.reindexed) {
-            return;
+        if (this.recovery !== undefined) {
+            return this.recovery;
         }
 
-        this.reindexed = true;
+        const run = this.recoverStore();
 
+        this.recovery = run.catch(() => undefined);
+
+        return run;
+    }
+
+    /** One run of {@link reindexOrphanedRecords}. */
+    private async recoverStore(): Promise<void> {
+        if ((await this.state.storage.get(CLEAN_KEY)) === undefined) {
+            await this.reindexWalk();
+            await this.state.storage.put(CLEAN_KEY, true);
+        }
+
+        // A drain that was cut off never reached its `rescheduleAlarm()`, so the
+        // instance that comes back can hold pending `t:` rows and NO clock at
+        // all — nothing scheduled to fire any of them. That used to be masked
+        // here: a claim deleted its index entry, so every claimed record arrived
+        // as an orphan and the walk re-armed on its way past. A leased
+        // record is not an orphan, so the walk never sees it and the horizon
+        // would never come due. Re-derive the clock from `t:` instead — and only
+        // when there is none, so an armed alarm is never pushed later.
+        if ((await this.state.storage.getAlarm()) === null) {
+            const earliest = await this.earliestPendingTime();
+
+            // Deliberately NOT `rescheduleAlarm()`: that clears the alarm when
+            // nothing is pending, and an instance whose store is empty has no
+            // alarm to clear. This path only ever ADDS a missing clock.
+            if (earliest !== undefined && Number.isFinite(earliest)) {
+                await this.state.storage.setAlarm(earliest);
+            }
+        }
+
+        this.recovered = true;
+    }
+
+    /** The full orphan walk — see {@link reindexOrphanedRecords}. */
+    private async reindexWalk(): Promise<void> {
         const indexed = new Set<string>();
         // Read BEFORE the headers, so a job scheduled mid-walk is at worst
         // re-put (idempotent) rather than missed.
@@ -2013,25 +2100,6 @@ class SchedulerDO {
             await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
             // eslint-disable-next-line no-await-in-loop -- same
             await this.armAlarmIfEarlier(record.scheduledFor);
-        }
-
-        // A drain that was cut off never reached its `rescheduleAlarm()`, so the
-        // instance that comes back can hold pending `t:` rows and NO clock at
-        // all — nothing scheduled to fire any of them. That used to be masked
-        // here: a claim deleted its index entry, so every claimed record arrived
-        // as an orphan and the loop above re-armed on its way past. A leased
-        // record is not an orphan, so the loop never sees it and the horizon
-        // would never come due. Re-derive the clock from `t:` instead — and only
-        // when there is none, so an armed alarm is never pushed later.
-        if ((await this.state.storage.getAlarm()) === null) {
-            const earliest = await this.earliestPendingTime();
-
-            // Deliberately NOT `rescheduleAlarm()`: that clears the alarm when
-            // nothing is pending, and an instance whose store is empty has no
-            // alarm to clear. This path only ever ADDS a missing clock.
-            if (earliest !== undefined && Number.isFinite(earliest)) {
-                await this.state.storage.setAlarm(earliest);
-            }
         }
     }
 
