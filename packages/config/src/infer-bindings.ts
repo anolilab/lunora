@@ -26,6 +26,7 @@ import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
+    createTargetScope,
     discoverNotifyChannels,
     foldCapabilitySignals,
     mayReadCapabilityContext,
@@ -452,6 +453,8 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     const candidates: { file: string; inLunora: boolean }[] = [];
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
+    // One scope for the whole scan: a target a barrel reaches from several files is parsed once.
+    const targets = createTargetScope();
     let usesEnvAi = false;
     let usesEnvDatabase = false;
 
@@ -488,7 +491,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     // is in the project before any is read: removing a file after its own read made the next relative import re-resolve
     // against a rebuilt program, which took minutes on a backend with a few hundred files.
     for (const { file, inLunora } of candidates) {
-        (inLunora ? lunoraFiles : otherFiles).push(sourceCapabilitySignals(project.getSourceFileOrThrow(file)));
+        (inLunora ? lunoraFiles : otherFiles).push(sourceCapabilitySignals(project.getSourceFileOrThrow(file), targets));
     }
 
     const lunora = foldCapabilitySignals(lunoraFiles);

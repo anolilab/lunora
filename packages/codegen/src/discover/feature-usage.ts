@@ -1,5 +1,5 @@
-import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
@@ -296,6 +296,76 @@ const toolExports = (names: Iterable<string>): SecretToolExports => {
 };
 
 /**
+ * The targets one scan follows. A target is parsed at most once per scope, into a project per declaring project: adding it
+ * to the declaring project would throw that program away. A target's own relative specifiers resolve with the declaring
+ * project's options, so a barrel's next hop keeps its `rootDirs` and `moduleSuffixes`. A scope is made per scan, so an
+ * edit between scans is seen and no file is re-read within one.
+ */
+interface TargetScope {
+    /** Each target project's declaring project, so a target's own hop can still see the declaring project's files. */
+    readonly origins: Map<Project, Project>;
+    /** The target project each declaring project resolves into. */
+    readonly projects: Map<Project, Project>;
+}
+
+/** A fresh scope for one scan: the targets it follows are parsed once and kept for that scan only. */
+const createTargetScope = (): TargetScope => {
+    return { projects: new Map(), origins: new Map() };
+};
+
+const targetProjectOf = (scope: TargetScope, project: Project): Project => {
+    if (scope.origins.has(project)) {
+        return project;
+    }
+
+    let targets = scope.projects.get(project);
+
+    if (targets === undefined) {
+        targets = new Project({
+            compilerOptions: { ...project.getCompilerOptions(), allowJs: true },
+            fileSystem: project.getFileSystem(),
+            skipAddingFilesFromTsConfig: true,
+            skipFileDependencyResolution: true,
+            skipLoadingLibFiles: true,
+        });
+        scope.projects.set(project, targets);
+        scope.origins.set(targets, project);
+    }
+
+    return targets;
+};
+
+/**
+ * The file a relative specifier names, resolved the way TypeScript resolves it for the declaring project: its options
+ * (`rootDirs`, `moduleSuffixes`, the `.js` to `.ts` mapping) and its file system. TypeScript's resolver is a pure function
+ * over that host, so no program is built.
+ */
+const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
+    const file = declaration.getSourceFile();
+    const project = file.getProject();
+    // Every hop resolves with the declaring project's options. A target project forces `allowJs` so it can parse a JS
+    // file; that must not change which modules a hop finds.
+    const declaring = scope.origins.get(project) ?? project;
+    const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), declaring.getCompilerOptions(), declaring.getModuleResolutionHost());
+    const path = resolvedModule?.resolvedFileName;
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    // A hop from a target looks in the declaring project first, so an edit made there is seen rather than the disk copy.
+    const known = declaring.getSourceFile(path) ?? project.getSourceFile(path);
+
+    if (known !== undefined) {
+        return known;
+    }
+
+    const targets = targetProjectOf(scope, project);
+
+    return targets.getSourceFile(path) ?? targets.addSourceFileAtPath(path);
+};
+
+/**
  * Accumulate into `exported` what a re-export makes visible, given what `forwarded` carries through it:
  * every name for `export *`, the listed ones under their aliases otherwise. A namespace export binds the
  * forwarded names as one object, so its members are read off the binding rather than imported directly.
@@ -352,6 +422,7 @@ const reexportedBy = (declaration: ExportDeclaration, forwarded: SecretToolExpor
  * the agent carries the tool; a relative module carries what `resolve` finds in it.
  */
 const forwardedThrough = (
+    scope: TargetScope,
     declaration: ExportDeclaration,
     bound: ReadonlySet<string>,
     resolve: (target: SourceFile) => SecretToolExports,
@@ -366,7 +437,7 @@ const forwardedThrough = (
         return toolExports([REQUEST_SECRET_TOOL]);
     }
 
-    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(scope, declaration, specifier) : undefined;
 
     return target === undefined ? toolExports([]) : resolve(target);
 };
@@ -378,14 +449,15 @@ const forwardedThrough = (
  * modules being visited: a module is cut only while it is its own ancestor, so a second re-export of the
  * same module (a sibling alias) still resolves.
  */
-const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): SecretToolExports => {
+const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<string>, scope: TargetScope): SecretToolExports => {
     const exported = toolExports([]);
+    const path = file.getFilePath();
 
-    if (onPath.has(file)) {
+    if (onPath.has(path)) {
         return exported;
     }
 
-    onPath.add(file);
+    onPath.add(path);
 
     const bound = boundToolNames(file);
 
@@ -396,7 +468,7 @@ const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): 
 
         reexportedBy(
             declaration,
-            forwardedThrough(declaration, bound, (target) => requestSecretToolExportsOf(target, onPath)),
+            forwardedThrough(scope, declaration, bound, (target) => requestSecretToolExportsOf(target, onPath, scope)),
             exported,
         );
     }
@@ -413,22 +485,22 @@ const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): 
         }
     }
 
-    onPath.delete(file);
+    onPath.delete(path);
 
     return exported;
 };
 
 /** What an import declaration brings in from the secret tool: the agent's, or a relative module's exports of it. */
-const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile): SecretToolExports => {
+const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile, scope: TargetScope): SecretToolExports => {
     const specifier = declaration.getModuleSpecifierValue();
 
     if (specifier === AGENT_MODULE_SPECIFIER) {
         return toolExports([REQUEST_SECRET_TOOL]);
     }
 
-    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(scope, declaration, specifier) : undefined;
 
-    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer]));
+    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer.getFilePath()]), scope);
 };
 
 /** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
@@ -500,13 +572,13 @@ const namedImportWiresTool = (file: SourceFile, named: ImportSpecifier, exported
  * import does not count: only a value import wires the tool into an agent. The one rule
  * codegen's secret-store gate and `@lunora/config`'s binding inference both read.
  */
-const fileWiresRequestSecretTool = (file: SourceFile): boolean =>
+const fileWiresRequestSecretTool = (file: SourceFile, scope: TargetScope = createTargetScope()): boolean =>
     file.getImportDeclarations().some((declaration) => {
         if (declaration.isTypeOnly()) {
             return false;
         }
 
-        const exported = importedToolNames(declaration, file);
+        const exported = importedToolNames(declaration, file, scope);
 
         if (exported.names.size === 0 && exported.namespaces.size === 0) {
             return false;
@@ -535,7 +607,7 @@ const fileWiresRequestSecretTool = (file: SourceFile): boolean =>
  * exported so `@lunora/config`'s binding inference reads the same signals and
  * judges them with the same {@link capabilitiesUsedBy}.
  */
-const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignals => {
+const sourceCapabilitySignals = (sourceFile: SourceFile, scope: TargetScope = createTargetScope()): SourceCapabilitySignals => {
     const imports = sourceFile.getImportDeclarations();
     const sandboxTools = noSandboxUsage();
 
@@ -550,7 +622,7 @@ const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignal
     return {
         contextReads: contextPropertiesRead(sourceFile),
         dynamicImports: dynamicImportSpecifiers(sourceFile),
-        requestSecretTool: fileWiresRequestSecretTool(sourceFile),
+        requestSecretTool: fileWiresRequestSecretTool(sourceFile, scope),
         sandboxTools,
         valueImports: new Set(
             [...imports, ...sourceFile.getExportDeclarations()].flatMap((declaration) => {
@@ -629,9 +701,10 @@ const mayReadCapabilityContext = (code: string): boolean => CONTEXT_PATTERN.test
  * `payments`) and — via `buildStudioFeatures` — the studio nav.
  */
 const discoverFeatureUsage = (project: Project, lunoraDirectory: string): FeatureUsage => {
+    const scope = createTargetScope();
     const signals = foldCapabilitySignals(
         listLunoraSourceFiles(lunoraDirectory).map((filePath) =>
-            sourceCapabilitySignals(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath)),
+            sourceCapabilitySignals(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath), scope),
         ),
     );
     const used = capabilitiesUsedBy(signals);
@@ -643,10 +716,11 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
 export {
     capabilitiesUsedBy,
     contextPropertiesRead,
+    createTargetScope,
     discoverFeatureUsage,
     fileWiresRequestSecretTool,
     foldCapabilitySignals,
     mayReadCapabilityContext,
     sourceCapabilitySignals,
 };
-export type { FeatureUsage, SourceCapabilitySignals };
+export type { FeatureUsage, SourceCapabilitySignals, TargetScope };
