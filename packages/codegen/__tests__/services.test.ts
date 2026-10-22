@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -239,6 +239,102 @@ export class Gateway {
 
         // Beside the directory the import resolved to, so the package root and its manifest are untouched.
         write("services/llm-gateway/node_modules/llm-kit/dist/sub.d.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file shadows an import resolved under a build-named directory of the service", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/src/dist/sub/index.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "./dist/sub";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to; `dist` is excluded from the tree scan, so only the directory's own stamp sees this.
+        write("services/llm-gateway/src/dist/sub.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a dependency's symlink is repointed to another install", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/store/llm-kit-1/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/store/llm-kit-1/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write("services/llm-gateway/store/llm-kit-2/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/store/llm-kit-2/index.d.ts", `export interface Usage { tokens: string }\n`);
+        mkdirSync(join(workdir, "services/llm-gateway/node_modules"), { recursive: true });
+        symlinkSync(join(workdir, "services/llm-gateway/store/llm-kit-1"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Same manifest and same declaration file under the old target; only the link moves, as a package manager does on an update.
+        unlinkSync(join(workdir, "services/llm-gateway/node_modules/llm-kit"));
+        symlinkSync(join(workdir, "services/llm-gateway/store/llm-kit-2"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a dependency of an imported package is relinked in the package store", () => {
+        expect.assertions(2);
+
+        const store = join(workdir, "node_modules", ".pnpm");
+
+        writeServices();
+        write(join("node_modules", ".pnpm", "dep@1", "node_modules", "dep", "package.json"), `{ "name": "dep", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "dep@1", "node_modules", "dep", "index.d.ts"), `export interface Tokens { count: number }\n`);
+        write(join("node_modules", ".pnpm", "dep@2", "node_modules", "dep", "package.json"), `{ "name": "dep", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "dep@2", "node_modules", "dep", "index.d.ts"), `export interface Tokens { count: string }\n`);
+        write(join("node_modules", ".pnpm", "llm-kit@1", "node_modules", "llm-kit", "package.json"), `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "llm-kit@1", "node_modules", "llm-kit", "index.d.ts"), `export type { Tokens as Usage } from "dep";\n`);
+        mkdirSync(join(store, "llm-kit@1", "node_modules"), { recursive: true });
+        symlinkSync(join(store, "dep@1", "node_modules", "dep"), join(store, "llm-kit@1", "node_modules", "dep"), "dir");
+        mkdirSync(join(workdir, "services/llm-gateway/node_modules"), { recursive: true });
+        symlinkSync(join(store, "llm-kit@1", "node_modules", "llm-kit"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { count: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // The package and its manifest are untouched; only the link to its dependency, beside it in the store, moves.
+        unlinkSync(join(store, "llm-kit@1", "node_modules", "dep"));
+        symlinkSync(join(store, "dep@2", "node_modules", "dep"), join(store, "llm-kit@1", "node_modules", "dep"), "dir");
 
         expect(emitLlmGateway()).not.toBe(first);
         expect(emitLlmGateway()).toBe(emitLlmGateway());
