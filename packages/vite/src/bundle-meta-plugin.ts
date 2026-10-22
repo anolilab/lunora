@@ -95,7 +95,7 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
                     const key = toKey(projectRoot, id);
 
                     // Bytes, not characters: a non-ASCII module renders more bytes than its string length.
-                    output.inputs[key] = { bytesInOutput: new TextEncoder().encode(module.code ?? "").byteLength };
+                    output.inputs[key] = { bytesInOutput: Buffer.byteLength(module.code ?? "") };
 
                     if (!inputs[key]) {
                         const info = this.getModuleInfo(id);
