@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
-import { runShardMigrations } from "../src/ctx-db";
+import { minCdcReplayableSeq, runShardMigrations } from "../src/ctx-db";
 import { nextTtlExpiry, selectExpiredIds } from "../src/ttl-sweep";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * The query plans of the TTL sweep's hot paths, taken from the SQL the
+ * The query plans of two alarm/replica hot paths, taken from the SQL the
  * production functions actually emit (recorded off the `SqlExec`), so the test
  * fails if the query and its index ever stop matching textually.
  */
@@ -88,5 +88,15 @@ describe("hot-path index plans", () => {
         expect(nextTtlExpiry(harness.sql, { after: 50, field: "expiresAt", table: "sessions" })).toBe(250);
         // The tombstone's earlier expiry is not live, so it does not count.
         expect(nextTtlExpiry(harness.sql, { field: "expiresAt", softDeleteField: "deletedAt", table: "otps" })).toBe(300);
+    });
+
+    it("answers the cdc payload floor from the partial index", () => {
+        expect.assertions(1);
+
+        runShardMigrations(harness.sql, schema, { cdc: true });
+
+        const plans = plansOf((sql) => minCdcReplayableSeq(sql));
+
+        expect(plans[0]).toContain("SEARCH __cdc_log USING INDEX __cdc_log_payload_gap");
     });
 });
