@@ -205,6 +205,9 @@ class LunoraClient {
   int _credentialGeneration = 0;
   int _socketGeneration = 0;
 
+  /// Bumped by attach and detach, so a superseded attach does not install its sender.
+  int _attachGeneration = 0;
+
   /// The generation a 4003 was last reported for, so one credential's refusal
   /// reports once however many retries repeat it.
   int? _lastRefusedGeneration;
@@ -232,8 +235,10 @@ class LunoraClient {
   /// given. Whisper topics joined so far are rejoined right after it. Subscriptions
   /// are not replayed here: call [resendSubscriptions] after this.
   void attachSocket(LunoraFrameSender sender, {Map<String, Object?>? context}) {
-    _send = sender;
-    _socketGeneration = _credentialGeneration;
+    // Offline until every write below has returned: a write that throws leaves the client offline, and a
+    // detach the sender makes during the writes supersedes this attach.
+    _send = null;
+    final attachGeneration = ++_attachGeneration;
 
     // Built before any is sent, for the reason [resendSubscriptions] gives: the
     // sender is the caller's code.
@@ -245,6 +250,13 @@ class LunoraClient {
     for (final frame in frames) {
       sender(frame);
     }
+
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
+    _send = sender;
+    _socketGeneration = _credentialGeneration;
   }
 
   /// Forgets the sender, so a subscription made while the socket is down is
@@ -266,6 +278,7 @@ class LunoraClient {
     // Offline before any listener runs, so a listener that reattaches is not
     // undone by this method clearing the sender afterwards.
     _send = null;
+    _attachGeneration++;
 
     if (code == 4001) {
       _notifyTokenExpired();

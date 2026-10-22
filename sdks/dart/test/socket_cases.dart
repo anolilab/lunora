@@ -238,6 +238,19 @@ void caseThrowingWhisperListenerDoesNotEndDispatch() {
   equals(canonical(received), canonical(<Object?>['hi']), 'the listener after a throwing one still receives the whisper');
 }
 
+/// A connect write that throws leaves the client offline: nothing is sent through the failed socket.
+void caseFailedConnectLeavesTheClientOffline() {
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+
+  try {
+    client.attachSocket((_) => throw StateError('the socket is gone'));
+  } on StateError {
+    // The write failed, as the sender reported.
+  }
+
+  check(!client.whisper('room:general', 'after a failed connect'), 'the client must stay offline after a failed connect');
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');
