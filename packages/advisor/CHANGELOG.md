@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.248...@lunora/advisor@1.0.0-alpha.249) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+
 ## @lunora/advisor [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.247...@lunora/advisor@1.0.0-alpha.248) (2026-10-22)
 
 
