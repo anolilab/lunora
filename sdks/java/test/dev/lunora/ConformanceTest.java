@@ -47,6 +47,7 @@ public final class ConformanceTest {
         emptyShardKeyIsOmitted();
         socketCredentialsStayOutOfTheUrl();
         writeDuringAttachStaysOffTheReplacedSocket();
+        detachDuringAttachStaysDetached();
         attachSocketSendsClientIdAndContext();
         rpcRequestBodies();
         rpcResponses();
@@ -437,6 +438,26 @@ public final class ConformanceTest {
         check(
                 context.equals(connect.get("context")),
                 "attachSocket's connect must carry the connection context");
+    }
+
+    /**
+     * A detach made while a replacement socket's {@code connect} frame is going out must stand: the
+     * attach that is still sending must not install its sender afterwards.
+     */
+    private static void detachDuringAttachStaysDetached() {
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+        client.attachSocket(
+                frame -> {
+                    if ("connect".equals(frame.get("type"))) {
+                        client.detachSocket();
+                    }
+                });
+
+        check(
+                !client.online(),
+                "a detach during the replacement's connect must not be undone by that attach");
     }
 
     /**

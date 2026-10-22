@@ -285,6 +285,18 @@ private fun socketCredentialsStayOutOfTheUrl() {
 
     check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
 
+    // A detach made while a replacement socket's connect frame is going out must stand.
+    val detached = Client("https://app.example", null)
+
+    detached.attachSocket { }
+    detached.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            detached.detachSocket()
+        }
+    }
+
+    check(!detached.online(), "a detach during the replacement's connect must not be undone by that attach")
+
     // A write made while a replacement socket's connect frame is going out must not reach the socket it replaces.
     val replaced = mutableListOf<Map<String, Any?>>()
     val racing = Client("https://app.example", null)

@@ -171,6 +171,13 @@ public final class Client {
     final Object lock = new Object();
 
     FrameSender sender;
+
+    /**
+     * Bumped by every attach and detach, so an attach whose connect is still going out can tell it
+     * was superseded.
+     */
+    private long attachGeneration;
+
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
@@ -486,15 +493,22 @@ public final class Client {
     public void attachSocket(FrameSender sender, Map<String, Object> context) {
         // Writes queue while the connect frame goes out, so none can reach the socket this one
         // replaces.
+        long generation;
+
         synchronized (lock) {
             this.sender = null;
+            generation = ++this.attachGeneration;
         }
 
         sender.send(buildConnectFrame(clientId, context, resolve(wsTokenProvider)));
 
+        // A detach or a newer attach during the send supersedes this one: installing this sender
+        // would undo it.
         synchronized (lock) {
-            this.sender = sender;
-            this.wasEverConnected = true;
+            if (generation == this.attachGeneration) {
+                this.sender = sender;
+                this.wasEverConnected = true;
+            }
         }
     }
 
@@ -502,6 +516,7 @@ public final class Client {
     public void detachSocket() {
         synchronized (lock) {
             this.sender = null;
+            this.attachGeneration++;
         }
     }
 

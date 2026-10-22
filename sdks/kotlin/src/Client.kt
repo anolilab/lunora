@@ -203,6 +203,9 @@ class Client(
     internal val lock = Any()
 
     internal var send: ((Map<String, Any?>) -> Unit)? = null
+
+    /** Bumped by every attach and detach, so an attach whose connect is still going out can tell it was superseded. */
+    private var attachGeneration = 0L
     internal val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
@@ -509,19 +512,26 @@ class Client(
      */
     fun attachSocket(context: Map<String, Any?>?, sender: (Map<String, Any?>) -> Unit) {
         // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
-        synchronized(lock) {
+        val generation = synchronized(lock) {
             send = null
+            ++attachGeneration
         }
         sender(buildConnectFrame(clientId = clientId, context = context, token = wsToken?.invoke()))
+        // A detach or a newer attach during the send supersedes this one: installing this sender would undo it.
         synchronized(lock) {
-            send = sender
-            wasEverConnected = true
+            if (generation == attachGeneration) {
+                send = sender
+                wasEverConnected = true
+            }
         }
     }
 
     /** Forgets the sender, so subsequent writes queue rather than fail. */
     fun detachSocket() {
-        synchronized(lock) { send = null }
+        synchronized(lock) {
+            send = null
+            attachGeneration++
+        }
     }
 
     /** Whether a socket is currently attached. */
