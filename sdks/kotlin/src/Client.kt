@@ -534,8 +534,8 @@ class Client(
     private class WhisperListener(val onValue: (WireValue) -> Unit)
 
     /**
-     * Registers the sender used for subscription frames. Call once the socket is
-     * open.
+     * Registers the sender for this socket and writes its `connect` frame first. Call
+     * it once per socket open, before [resendSubscriptions].
      *
      * It also latches "has connected at least once", which is what the write queue
      * gates on: a write made before the FIRST connect fails fast by default, so a
@@ -544,18 +544,14 @@ class Client(
      *
      * It sends the `connect` frame first, carrying [wsToken] resolved now, so every
      * open and every reconnect presents the session credential before any
-     * subscription. The app must not send `connect` itself.
-     */
-    fun attachSocket(sender: (Map<String, Any?>) -> Unit) = attachSocket(null, sender)
-
-    /**
-     * [attachSocket] with a connection [context] on the `connect` frame. The server
-     * records it for the `onConnect` hooks, so it applies to every open and reconnect.
+     * subscription. The app must not send `connect` itself. [context], when given,
+     * rides that frame: the server records it for the `onConnect` hooks, so it applies
+     * to every open and reconnect. Pass nothing, or `null`, when there is none.
      *
      * After `connect`, every registered whisper topic is joined again. Subscriptions
      * are not: [resendSubscriptions] sends those, and the app calls it after attaching.
      */
-    fun attachSocket(context: Map<String, Any?>?, sender: (Map<String, Any?>) -> Unit) {
+    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit) {
         // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
         // The credential generation is read with the attach generation: a rotation racing this attach
         // must not tag the socket with a generation newer than the credential it presents.
