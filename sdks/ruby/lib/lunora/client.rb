@@ -83,6 +83,20 @@ module Lunora
   # A subscription-scoped error the server pushed.
   SubscriptionError = Struct.new(:code, :message)
 
+  # A joined room. Made by +Client#connect_room+; +close+ leaves it and is
+  # idempotent, because the unsubscribe it wraps is.
+  class Room
+    def initialize(client, topic, leave)
+      @client = client
+      @topic = topic
+      @leave = leave
+    end
+
+    def send(message) = @client.whisper(@topic, message)
+
+    def close = @leave.call
+  end
+
   # What +Client#submit+ did with a write: :committed (it went out and the server
   # answered) or :queued (the socket was down and it was enqueued for replay).
   #
@@ -258,6 +272,14 @@ module Lunora
 
   def build_shape_unsubscribe_frame(id) = { "id" => id, "type" => "shape_unsubscribe" }
 
+  def build_whisper_subscribe_frame(topic) = { "topic" => topic, "type" => "whisper_subscribe" }
+
+  def build_whisper_unsubscribe_frame(topic) = { "topic" => topic, "type" => "whisper_unsubscribe" }
+
+  # +data+ is wire-encoded, as every value is. An unencodable one raises
+  # WireFormatError before anything is sent.
+  def build_whisper_frame(topic, data) = { "data" => encode_wire(data), "topic" => topic, "type" => "whisper" }
+
   # A Lunora deployment client.
   #
   # The HTTP poster and the socket frame sender are injected rather than
@@ -294,6 +316,21 @@ module Lunora
       end
 
       run_callbacks(deferred)
+    end
+
+    # The WebSocket session credential, sent as +connect.token+ on every socket
+    # open. It is not the RPC bearer: +auth_token+ does not change it, and it
+    # never rides the socket URL. A new value starts a new credential generation,
+    # so a refusal of the old one notifies +on_token_expired+ again.
+    def session_token = @mutex.synchronize { @session_token }
+
+    def session_token=(value)
+      @mutex.synchronize do
+        unless value == @session_token
+          @session_token = value
+          @credential_generation += 1
+        end
+      end
     end
 
     # An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
@@ -375,24 +412,138 @@ module Lunora
       # The queues backing every open +stream+, closed by +close+ so a consumer
       # blocked in one returns instead of hanging on a dead client.
       @streams = []
+      @session_token = nil
+      # Advances each time the session credential changes. A socket records the
+      # generation it opened under; a refusal notifies only for the current one.
+      @credential_generation = 0
+      @socket_generation = nil
+      @last_notified_generation = nil
+      @token_expired_listeners = []
+      # Topic => [[listener id, listener]...], oldest first. A topic is present
+      # exactly while it has a listener, and is joined with the server exactly then.
+      @whispers = {}
+      @next_listener_id = 0
       @mutex = Mutex.new
     end
 
-    # Register the sender subscription frames go out on; marks the client online.
+    # Open the subscription channel on a freshly opened socket, and mark the
+    # client online. The first frame is +connect+ (the client id, +context+ when
+    # given, and the session credential when one is set), then a
+    # +whisper_subscribe+ for every joined topic. Subscriptions are sent by
+    # +resend_subscriptions+ after this returns, so they always follow connect.
+    #
+    # The lock is released around each send: a sender that calls back into the
+    # client (to detach on a write failure, say) must not deadlock. Until connect
+    # is out nothing is attached, so no frame can overtake it. A write that
+    # raises leaves the client offline and propagates to the caller.
     #
     # It also latches "has connected at least once", which is what the write
     # queue gates on: a write made before the FIRST connect fails fast by
     # default, so a misconfigured endpoint surfaces on the first write instead of
     # silently filling a queue that will never flush.
-    def attach_socket(sender)
-      @mutex.synchronize do
+    def attach_socket(sender, context = nil)
+      connect = @mutex.synchronize do
+        @send = nil
+        @socket_generation = @credential_generation
+        Lunora.build_connect_frame(@client_id, context, token: @session_token)
+      end
+
+      sender.call(connect)
+
+      joins = @mutex.synchronize do
         @send = sender
         @was_ever_connected = true
+        # A topic joined while connect was in flight is in this snapshot or sends
+        # its own join, because @send is set in the same critical section.
+        @whispers.keys.sort.map { |topic| Lunora.build_whisper_subscribe_frame(topic) }
+      end
+
+      joins.each { |frame| sender.call(frame) }
+    end
+
+    # Forget the sender, so subsequent writes queue rather than fail, and classify
+    # the close that ended the socket. +close_code+ nil means no close frame.
+    #
+    # A 4001 is token expiry. A 4003 is a refused session credential, unless its
+    # reason is exactly "connect deadline" (a socket that never sent connect
+    # refused no credential). It notifies +on_token_expired+ once per credential
+    # generation, and only for a socket that opened under the generation in force:
+    # a socket opened under an earlier one refused a credential no longer used.
+    def detach_socket(close_code = nil, reason = nil)
+      expired = @mutex.synchronize do
+        @send = nil
+        expiry_notified_by_close?(close_code, reason)
+      end
+
+      notify_token_expired if expired
+    end
+
+    # Register a listener for token-expiry signals: a 4001 close, a
+    # +TOKEN_EXPIRED+ error frame, and a refused session credential. The listener
+    # is expected to fetch a fresh credential and assign +session_token+. Returns
+    # the handle that unregisters it.
+    def on_token_expired(listener)
+      id = nil
+
+      @mutex.synchronize do
+        @next_listener_id += 1
+        id = @next_listener_id
+        @token_expired_listeners << [id, listener]
+      end
+
+      -> { @mutex.synchronize { @token_expired_listeners.reject! { |entry| entry.first == id } } }
+    end
+
+    # Join +topic+ and deliver its whispers to +listener+ (a block). The first
+    # listener on a topic joins it with the server, and each attach rejoins every
+    # topic. Returns the handle that removes this listener; removing the last one
+    # leaves the topic and forgets it.
+    def whisper_subscribe(topic, &listener)
+      raise ArgumentError, "whisper_subscribe needs a block" if listener.nil?
+
+      id = nil
+
+      locked_send do
+        @next_listener_id += 1
+        id = @next_listener_id
+        joining = !@whispers.key?(topic)
+        (@whispers[topic] ||= []) << [id, listener]
+        Lunora.build_whisper_subscribe_frame(topic) if joining
+      end
+
+      lambda do
+        locked_send do
+          listeners = @whispers.fetch(topic, [])
+          next nil unless listeners.any? { |entry| entry.first == id }
+
+          remaining = listeners.reject { |entry| entry.first == id }
+          if remaining.empty?
+            @whispers.delete(topic)
+            Lunora.build_whisper_unsubscribe_frame(topic)
+          else
+            @whispers[topic] = remaining
+            nil
+          end
+        end
       end
     end
 
-    # Forget the sender, so subsequent writes queue rather than fail.
-    def detach_socket = @mutex.synchronize { @send = nil }
+    # Relay +data+ to the other members of +topic+. It is not queued: with no
+    # socket attached this returns false and sends nothing.
+    def whisper(topic, data) # rubocop:disable Naming/PredicateMethod -- a send verb: the boolean reports whether a socket took it
+      sender = @mutex.synchronize { @send }
+      return false if sender.nil?
+
+      sender.call(Lunora.build_whisper_frame(topic, data))
+      true
+    end
+
+    # Join the room +name+ (the topic "room:<name>"). A room is never
+    # acknowledged, so the returned handle's +send+ may be used at once.
+    def connect_room(name, &)
+      topic = "room:#{name}"
+      Room.new(self, topic, whisper_subscribe(topic, &))
+    end
 
     def online? = @mutex.synchronize { !@send.nil? }
 
@@ -785,6 +936,7 @@ module Lunora
       when "data", "delta" then deliver(entry, frame, kind, deferred)
       when "resume", "settled" then sweep(entry, frame, kind, deferred)
       when "error" then deliver_error(frame, kind, deferred)
+      when "whisper" then deliver_whisper(frame, kind, deferred)
       when "complete" then cancel_subscription(entry, kind, deferred)
       when "pokeStart"
         # Evict oldest-first at the cap. A Hash preserves insertion order, so
@@ -860,6 +1012,14 @@ module Lunora
       # Only an OBJECT is an envelope: +"error": 5+ or +[1]+ indexed as one
       # raised a TypeError out of the read loop.
       envelope = frame["error"].is_a?(Hash) ? frame["error"] : {}
+
+      # A token expiry is a session signal. It notifies whether or not the frame
+      # names a subscription, and it is never routed to one.
+      if envelope["code"] == "TOKEN_EXPIRED"
+        deferred << -> { notify_token_expired }
+        return kind
+      end
+
       message = [frame["message"], envelope["message"]].find { |text| text.is_a?(String) } || "subscription error"
       error = SubscriptionError.new(envelope["code"], message)
       id = frame["id"]
@@ -886,6 +1046,51 @@ module Lunora
       end
 
       kind
+    end
+
+    # A whisper goes to its topic's listeners and nobody else. A frame whose topic
+    # is not a non-empty string, or whose data will not decode, is dropped here:
+    # it must not raise out of the read loop.
+    def deliver_whisper(frame, kind, deferred)
+      topic = frame["topic"]
+      return kind unless topic.is_a?(String) && !topic.empty?
+
+      listeners = @whispers.fetch(topic, [])
+      return kind if listeners.empty?
+
+      begin
+        value = Lunora.decode_wire(frame["data"])
+      rescue WireFormatError
+        return kind
+      end
+
+      listeners.each { |entry| deferred << -> { entry.last.call(value) } }
+      kind
+    end
+
+    # Runs with the lock held. Decides whether this close is a token expiry and,
+    # for a refusal, records the generation it notified for. The caller notifies
+    # after releasing the lock.
+    def expiry_notified_by_close?(close_code, reason)
+      return true if close_code == 4001
+      return false unless close_code == 4003 && reason != "connect deadline"
+      return false unless @socket_generation == @credential_generation && @socket_generation != @last_notified_generation
+
+      @last_notified_generation = @socket_generation
+      true
+    end
+
+    # Runs the token-expiry listeners outside the lock, so one that assigns
+    # +session_token+ does not deadlock. A listener that raises is contained, so
+    # the others are still told and the caller's read loop keeps running.
+    def notify_token_expired
+      listeners = @mutex.synchronize { @token_expired_listeners.map(&:last) }
+
+      listeners.each do |listener|
+        listener.call
+      rescue StandardError
+        nil
+      end
     end
 
     def advance(entry, frame)
