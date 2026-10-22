@@ -1082,12 +1082,17 @@ class LunoraRoom {
 
   final LunoraUnsubscribe _leave;
 
+  bool _closed = false;
+
   /// Sends [message] to the room's other members. False when no socket is
-  /// attached; see [LunoraClient.whisper].
-  bool send(Object? message) => _client.whisper(topic, message);
+  /// attached, or when the room has been closed; see [LunoraClient.whisper].
+  bool send(Object? message) => !_closed && _client.whisper(topic, message);
 
   /// Leaves the room. Calling it again does nothing.
-  void close() => _leave();
+  void close() {
+    _closed = true;
+    _leave();
+  }
 }
 
 /// The store handed to a mutation's [LunoraOptimisticUpdate].

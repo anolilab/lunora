@@ -209,6 +209,22 @@ void caseWhisperFramesJoinSendAndDeliver() {
   }
 }
 
+/// A closed room refuses sends, even while another listener keeps its topic joined.
+void caseClosedRoomRefusesSends() {
+  final sent = <Map<String, Object?>>[];
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+
+  attachRecording(client, sent);
+
+  final room = client.connectRoom('general', (_) {});
+
+  client.whisperSubscribe('room:general', (_) {});
+  room.close();
+
+  check(!room.send('after close'), 'a closed room must report its send as not sent');
+  check(sent.every((frame) => frame['type'] != 'whisper'), 'and must write no whisper frame after close');
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');
