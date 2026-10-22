@@ -112,7 +112,7 @@ describe("lunora seed", () => {
     });
 
     it("deals a table-level unique index read from the schema, so a through table repeats no pair", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         mkdirSync(join(workDir, "lunora"), { recursive: true });
         writeFileSync(
@@ -139,6 +139,9 @@ export default defineSchema({
 
         expect(links).toHaveLength(4);
         expect(new Set(links.map((row) => `${row.doc.authorId as string}|${row.doc.bookId as string}`)).size).toBe(4);
+        // The deal walks the first member's digit fastest, so four rows take four different authors.
+        // Random draws would rarely do that, so this fails if the index never reaches the planner.
+        expect(new Set(links.map((row) => row.doc.authorId)).size).toBe(4);
     });
 
     it("rejects an unknown --table", async () => {
