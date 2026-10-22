@@ -56,7 +56,7 @@ interface UseAdminQueryOptions {
      * Open a live admin subscription (`client.subscribe`) for this exact key and
      * push every server re-run into the query cache, so the panel streams writes
      * with no manual Refresh — the same model as `@lunora/react`'s `useQuery`. A
-     * rejected subscription (e.g. the client carries no admin `wsToken`) surfaces
+     * rejected subscription (e.g. the client carries no admin `wsTicket`) surfaces
      * as {@link AdminQueryResult.liveError}; the one-shot fetch still seeded the
      * data, so it stays visible. Defaults to `false` (one-shot read).
      */
@@ -233,7 +233,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  *
  * The admin RPCs are intercepted inside the Durable Object and gated by the
  * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer; the WS leg rides
- * the client's `wsToken` provider, which mints a short-lived sub-token so the
+ * the client's `wsTicket` provider, which mints a short-lived sub-token so the
  * master credential never appears in the socket URL); this hook
  * issues no credentials of its own. The `QueryClient` it uses is the one
  * `@lunora/react`'s `LunoraProvider` already mounts above the studio.

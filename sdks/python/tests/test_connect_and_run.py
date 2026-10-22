@@ -22,6 +22,7 @@ import threading
 import types
 import unittest
 import unittest.mock
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -188,6 +189,94 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         # The writer does not outlive the socket: the client is offline, and a
         # frame produced now goes nowhere near a closed connection.
         self.assertFalse(client.online)
+
+    async def test_the_session_credential_rides_connect_and_never_the_url(self):
+        """The session value goes in the first ``connect`` frame; ``?token=`` is the ticket only.
+
+        Proxies and edge logs record the URL on every open, so the session
+        credential must not be part of it. Fails on any build that appends the
+        session value to the URL.
+        """
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+
+        client = LunoraClient("http://example.invalid", ws_token="sess-SECRET-1", ws_ticket="tkt-1")
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: socket.sent)
+        self.assertEqual(socket.sent[0]["type"], "connect")
+        self.assertEqual(socket.sent[0]["token"], "sess-SECRET-1")
+        self.assertEqual(parse_qs(urlsplit(fake.urls[0]).query), {"token": ["tkt-1"]})
+        self.assertNotIn("sess-SECRET-1", fake.urls[0])
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_reconnect_resolves_both_credentials_again_and_keeps_the_session_out_of_the_url(self):
+        """Each open re-resolves the session (sync) and the ticket (async), and only the ticket is in the URL."""
+
+        minted = {"n": 0}
+
+        def session() -> str:
+            minted["n"] += 1
+            return f"sess-SECRET-{minted['n']}"
+
+        async def ticket() -> str:
+            return f"tkt-{minted['n']}"
+
+        first = _FakeSocket()
+        fake = self._install(first)
+        client = LunoraClient("http://example.invalid", ws_token=session, ws_ticket=ticket)
+
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: first.sent)
+        first.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        second = _FakeSocket()
+        fake._socket = second
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: second.sent)
+        second.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        self.assertEqual(len(fake.urls), 2)
+        self.assertEqual(second.sent[0]["type"], "connect")
+        self.assertEqual(second.sent[0]["token"], "sess-SECRET-2")
+        self.assertEqual(parse_qs(urlsplit(fake.urls[1]).query), {"token": ["tkt-2"]})
+        for url in fake.urls:
+            self.assertNotIn("SECRET", url)
+
+    def test_a_stale_token_on_the_configured_url_never_reaches_the_upgrade(self):
+        """A ``token`` already on ``ws_url`` is a stale credential; the upgrade carries only the ticket.
+
+        Proxies record the URL on every open, so a session bearer left in
+        ``ws_url`` must not ride the upgrade, with or without a ticket.
+        """
+
+        client = LunoraClient("http://example.invalid", ws_url="wss://app.example/_lunora/ws?token=old-session&x=1")
+
+        self.assertNotIn("old-session", client.ws_url_for(None, None))
+        self.assertNotIn("old-session", client.ws_url_for("room-1", "tkt-1"))
+        self.assertEqual(client.ws_url_for(None, None), "wss://app.example/_lunora/ws?x=1")
+
+    async def test_connect_omits_token_when_no_session_credential_is_held(self):
+        """With no session credential, ``connect`` carries no ``token`` key and the URL has no query."""
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+
+        client = LunoraClient("http://example.invalid", ws_token=lambda: None)
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: socket.sent)
+        self.assertEqual(socket.sent[0]["type"], "connect")
+        self.assertNotIn("token", socket.sent[0])
+        self.assertEqual(parse_qs(urlsplit(fake.urls[0]).query), {})
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
 
     async def test_a_failing_send_surfaces_instead_of_stranding_the_writer(self):
         """A lost frame must end the run, not leave a dead writer under a live reader.

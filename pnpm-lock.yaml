@@ -3311,6 +3311,9 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../client
       '@lunora/do':
         specifier: workspace:*
         version: link:../do

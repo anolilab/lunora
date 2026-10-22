@@ -121,8 +121,8 @@ without a separate `useState`.
 
 Returns `{ status, user, token, setToken(next) }`. Call `setToken(jwt)` after a
 sign-in flow; subsequent RPC calls carry the token automatically. It does not
-re-authenticate an open subscription — the WebSocket credential is fixed at
-upgrade time; `client.setWsToken(token)` rotates that.
+re-authenticate an open subscription — a socket keeps the session credential it
+connected with; `client.setWsToken(token)` rotates that.
 
 `status` is the gate: `"loading"`, `"authenticated"`, `"unauthenticated"` or
 `"unreachable"` (a credential is held but the identity endpoint could not be

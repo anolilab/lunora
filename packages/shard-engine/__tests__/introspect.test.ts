@@ -784,6 +784,21 @@ describe("introspect", () => {
                 totalSubscriptions: 0,
             });
         });
+
+        it("leaves a socket still awaiting its connect frame out of the connection count", () => {
+            expect.assertions(1);
+
+            expect(
+                summarizeSubscriptions([
+                    { authenticated: false, subs: {} },
+                    { authenticated: true, subs: {} },
+                ]),
+            ).toEqual({
+                connections: [{ admin: false, id: 0, subscriptions: [] }],
+                totalConnections: 1,
+                totalSubscriptions: 0,
+            });
+        });
     });
 
     describe("summarizeFanoutTopics", () => {
@@ -791,6 +806,12 @@ describe("introspect", () => {
             expect.assertions(1);
 
             expect(summarizeFanoutTopics([])).toEqual({ peakSubscribers: 0, topics: [], totalConnections: 0 });
+        });
+
+        it("keeps a socket still awaiting its connect frame out of the connection count", () => {
+            expect.assertions(1);
+
+            expect(summarizeFanoutTopics([{ authenticated: false }, { authenticated: true }]).totalConnections).toBe(1);
         });
 
         it("counts shapes by name and whispers by topic, busiest first", () => {

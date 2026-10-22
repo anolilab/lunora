@@ -1223,7 +1223,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "fresh",
+                wsTicket: "fresh",
                 wsUrl: "wss://app.example/_lunora/ws?token=stale",
             });
 
@@ -1236,14 +1236,14 @@ describe("lunoraClient", () => {
             expect(url).toContain("token=fresh");
         });
 
-        it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
+        it("appends wsTicket to the WebSocket URL so the upgrade can authorize it", () => {
             expect.assertions(2);
 
             const client = new LunoraClient({
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "admin tok/en",
+                wsTicket: "admin tok/en",
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -1384,7 +1384,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -3677,7 +3677,7 @@ describe("lunoraClient", () => {
                 fetch: async () => jsonResponse({ result: null }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const seen: unknown[] = [];
@@ -3714,7 +3714,7 @@ describe("lunoraClient", () => {
                     fetch: async () => jsonResponse({ result: null }),
                     url: "https://app.example",
                     WebSocket: createMockWebSocket(),
-                    wsToken: "adm1n",
+                    wsTicket: "adm1n",
                 });
 
                 const seen: unknown[] = [];
@@ -3752,7 +3752,7 @@ describe("lunoraClient", () => {
                 fetch: async () => jsonResponse({ result: null }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const seen: string[][] = [];
@@ -3788,7 +3788,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3810,7 +3810,7 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
-        it("resolves a wsToken provider per connect, re-minting on reconnect", async () => {
+        it("resolves a wsTicket provider per connect, re-minting on reconnect", async () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
@@ -3821,7 +3821,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     mints += 1;
 
                     return `eph-${String(mints)}`;
@@ -3892,7 +3892,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3927,7 +3927,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3966,7 +3966,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -4010,7 +4010,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -4047,7 +4047,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 1000, jitter: false, maxDelayMs: 1000 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -4093,7 +4093,7 @@ describe("lunoraClient", () => {
         });
     });
 
-    describe("lunoraClient — wsToken provider (ephemeral admin token)", () => {
+    describe("lunoraClient — wsTicket provider (ephemeral admin token)", () => {
         it("resolves the provider before the shard socket connects and appends the minted token", async () => {
             expect.assertions(3);
 
@@ -4102,7 +4102,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: provider,
+                wsTicket: provider,
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -4148,7 +4148,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     mints += 1;
 
                     return `eph-${String(mints)}`;
@@ -4203,7 +4203,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     attempts += 1;
 
                     if (attempts === 1) {
@@ -4729,7 +4729,7 @@ describe("lunoraClient", () => {
             // Held: the socket for the old credential has not opened yet.
             expect(room.send({ text: "for old user" })).toBe(true);
 
-            client.setWsToken("new-user-token");
+            client.setWsTicket("new-user-token");
             // The reconnect that carries the new credential is scheduled after the old socket closes.
             vi.runOnlyPendingTimers();
 
@@ -4754,7 +4754,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: () =>
+                wsTicket: () =>
                     new Promise<string>((resolve) => {
                         resolvers.push(resolve);
                     }),
@@ -4764,7 +4764,7 @@ describe("lunoraClient", () => {
             client.whisperSubscribe("cursors", () => undefined);
 
             // The credential changes while that request is in flight, then the stale one resolves.
-            client.setWsToken("fresh-token");
+            client.setWsTicket("fresh-token");
             resolvers[0]?.("stale-token");
             await new Promise<void>((resolve) => {
                 setTimeout(resolve, 0);

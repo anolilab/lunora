@@ -105,7 +105,7 @@ export default defineConfig({
                       test: {
                           name: "workerd",
                           include: ["__tests__/workerd/**/*.test.ts"],
-                          exclude: ["**/node_modules/**", "**/dist/**", "__tests__/workerd/random-replay/**"],
+                          exclude: ["**/node_modules/**", "**/dist/**", "__tests__/workerd/random-replay/**", "__tests__/workerd/ws-gate/**"],
                       },
                   },
                   {
@@ -121,6 +121,25 @@ export default defineConfig({
                       test: {
                           name: "workerd-random-replay",
                           include: ["__tests__/workerd/random-replay/**/*.test.ts"],
+                      },
+                  },
+                  {
+                      extends: true,
+                      plugins: [
+                          cloudflareTest({
+                              main: "__tests__/workerd/ws-gate/test-worker.ts",
+                              wrangler: {
+                                  configPath: "./__tests__/workerd/ws-gate/wrangler.jsonc",
+                              },
+                              // The gate is a deployment setting: this project boots with a bearer, the shared suite without one.
+                              miniflare: {
+                                  bindings: { LUNORA_WS_BEARER: "ws-gate-workerd-fixture" },
+                              },
+                          }),
+                      ],
+                      test: {
+                          name: "workerd-ws-gate",
+                          include: ["__tests__/workerd/ws-gate/**/*.test.ts"],
                       },
                   },
               ]

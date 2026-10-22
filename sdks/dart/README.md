@@ -40,6 +40,8 @@ retries and socket library:
 final client = LunoraClient(url: 'https://my-app.example.com', post: myPoster, authToken: '…')
   ..attachSocket((frame) => socket.add(jsonEncode(frame)))
   ..setConnected(true);
+// On every socket open, before anything else: the session credential rides here, never the URL.
+socket.add(jsonEncode(LunoraClient.buildConnectFrame(token: session)));
 
 final messages = await client.query('messages:list', args: {'channel': 'general'});
 await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'});
@@ -68,7 +70,7 @@ while (!client.closed) {
       break;
     }
     void send(Map<String, Object?> frame) => socket.add(jsonEncode(frame));
-    send(LunoraClient.buildConnectFrame()); // connect first: the server's onConnect hook fires on it
+    send(LunoraClient.buildConnectFrame(token: session)); // connect first: the server's onConnect hook fires on it
     client.attachSocket(send);
     client.resendSubscriptions();
     client.setConnected(true);
@@ -93,6 +95,8 @@ while (!client.closed) {
   await Future<void>.delayed(Duration(milliseconds: ms ~/ 2 + Random().nextInt(ms ~/ 2)));
 }
 ```
+
+The `connect` frame carries the session credential as `token`; a deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The session credential never goes in the socket URL; the only `?token=` a client sends is an admin ticket.
 
 A shape poke is applied whole or not at all: a row the codec refuses leaves the
 view as it was and reaches the shape's `onError` coded `WIRE_DECODE_FAILED`. A

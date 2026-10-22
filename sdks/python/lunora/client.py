@@ -145,12 +145,15 @@ def parse_rpc_response(body: Any, status: int) -> Any:
         raise decode_failed(failure) from failure
 
 
-def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None) -> dict:
+def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None, token: Optional[str] = None) -> dict:
     frame: dict[str, Any] = {"id": "connect", "type": "connect"}
     if client_id is not None:
         frame["clientId"] = client_id
     if context is not None:
         frame["context"] = context
+    # The session credential (protocol/README.md 5.1, 6): it never rides the URL.
+    if token is not None:
+        frame["token"] = token
     return frame
 
 
@@ -326,6 +329,7 @@ class LunoraClient:
         timeout: float = DEFAULT_HTTP_TIMEOUT,
         offline_queue: Optional[OfflineQueue] = None,
         identity: Optional[str] = None,
+        ws_ticket: WsToken = None,
     ) -> None:
         self.url = url
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
@@ -338,7 +342,10 @@ class LunoraClient:
         #: it finishes. See :meth:`flush_offline_queue`.
         self._flushing: set[str] = set()
         self._flush_again: set[str] = set()
+        #: Session credential, sent as ``connect.token``; never in the URL.
         self.ws_token = ws_token
+        #: Admin ticket, the only WS credential that rides ``?token=``.
+        self.ws_ticket = ws_ticket
         #: Minted PER INSTANCE when not given, from the same helper that mints
         #: mutation ids. It is not cosmetic: the shard namespaces an anonymous
         #: caller's idempotency rows by this value, so a constant shared by every
@@ -743,28 +750,36 @@ class LunoraClient:
 
     # --- WS credential ------------------------------------------------------
 
-    async def resolve_ws_token(self) -> Optional[str]:
-        """Resolve the WS ``?token=`` credential fresh (mirrors ``WsTokenProvider``)."""
-
-        token = self.ws_token
-        if callable(token):
-            result = token()
+    async def _resolve_ws_credential(self, provider: WsToken) -> Optional[str]:
+        if callable(provider):
+            result = provider()
             if inspect.isawaitable(result):
                 result = await result
             return result
-        return token
+        return provider
 
-    def ws_url_for(self, shard_key: Optional[str], token: Optional[str]) -> str:
-        params = []
+    async def resolve_ws_token(self) -> Optional[str]:
+        """Resolve the session credential fresh, for ``connect.token`` (mirrors ``WsTokenProvider``)."""
+        return await self._resolve_ws_credential(self.ws_token)
+
+    async def resolve_ws_ticket(self) -> Optional[str]:
+        """Resolve the admin ticket fresh, for the ``?token=`` URL parameter."""
+        return await self._resolve_ws_credential(self.ws_ticket)
+
+    def ws_url_for(self, shard_key: Optional[str], ticket: Optional[str]) -> str:
+        # Only the ticket may ride the URL. A `token` already on the configured URL is a stale credential, so it is
+        # dropped, as the TS client does; a `shard` is replaced by the one this call names.
+        base, _, query = self.ws_url.partition("?")
+        drop = {"token"} | ({"shard"} if shard_key else set())
+        kept = [piece for piece in query.split("&") if piece and piece.split("=", 1)[0] not in drop]
         # Empty is absent, matching `build_rpc_body` — see its docstring.
         if shard_key:
-            params.append("shard=" + _percent(shard_key))
-        if token is not None:
-            params.append("token=" + _percent(token))
-        if not params:
-            return self.ws_url
-        sep = "&" if "?" in self.ws_url else "?"
-        return self.ws_url + sep + "&".join(params)
+            kept.append("shard=" + _percent(shard_key))
+        if ticket is not None:
+            kept.append("token=" + _percent(ticket))
+        if not kept:
+            return base
+        return base + "?" + "&".join(kept)
 
     # --- Subscriptions ------------------------------------------------------
 
@@ -1297,8 +1312,11 @@ class LunoraClient:
                 self._close_hooks.remove(end)
 
     async def _run_socket(self, websockets: Any, loop: Any, closed: asyncio.Event, shard_key: Optional[str], context: Optional[dict]) -> None:
-        token = await self.resolve_ws_token()
-        async with websockets.connect(self.ws_url_for(shard_key, token), max_size=MAX_WS_FRAME_BYTES) as socket:  # pragma: no cover - live I/O
+        # Both credentials are resolved on every open, so a reconnect re-mints the
+        # ticket and re-reads the session. Only the ticket may reach the URL.
+        session = await self.resolve_ws_token()
+        ticket = await self.resolve_ws_ticket()
+        async with websockets.connect(self.ws_url_for(shard_key, ticket), max_size=MAX_WS_FRAME_BYTES) as socket:  # pragma: no cover - live I/O
             outbox: asyncio.Queue = asyncio.Queue()
 
             # One FIFO drained by one writer, so frames reach the socket in the
@@ -1399,7 +1417,7 @@ class LunoraClient:
 
             # `connect` is enqueued before the sender is visible, so a subscribe on
             # another thread cannot reach the server ahead of it.
-            send(build_connect_frame(self.client_id, context))
+            send(build_connect_frame(self.client_id, context, session))
             self.attach_socket(send)
             try:
                 self.resend_subscriptions()

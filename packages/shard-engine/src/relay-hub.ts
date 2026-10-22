@@ -63,6 +63,13 @@ import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAtta
 /** Fixed relay-fan when a shard promotes (per-deployment via `LUNORA_RELAY_FAN`). */
 const DEFAULT_RELAY_FAN = 2;
 
+/** Whether the deployment gates sockets behind `LUNORA_WS_BEARER`: only then can a socket be pending. */
+const isBearerGated = (env: unknown): boolean => {
+    const bearer = (env as Record<string, unknown> | undefined)?.LUNORA_WS_BEARER;
+
+    return typeof bearer === "string" && bearer.length > 0;
+};
+
 /** Hard ceiling on relays per shard (per-deployment via `LUNORA_MAX_RELAYS`) — the cost cap a viral shard can never exceed. */
 const DEFAULT_MAX_RELAYS = 8;
 
@@ -464,6 +471,14 @@ abstract class RelayLink {
         return this.siblingStub(this.roleId.ownerKey) !== undefined;
     }
 
+    /**
+     * Whether the server has admitted this socket. A pending socket has not proved its credential, and a peer can open one
+     * freely, so promotion, drain and idle count only admitted sockets.
+     */
+    protected isAdmitted(ws: ShardSocketLike): boolean {
+        return this.host.readAttachment(ws).authenticated !== false;
+    }
+
     /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
     protected siblingStub(targetName: string): SiblingStub | undefined {
         return siblingStub(this.host.env(), this.bindingName(), targetName, this.host.shardJurisdiction());
@@ -802,7 +817,10 @@ class OwnerRelay extends RelayLink {
      * threshold. Advances the promotion latch, so it is not a pure read.
      */
     public override relayCount(): number {
-        const subscribers = this.host.getWebSockets().length;
+        // A pending socket has not proved its credential, and a peer can open one freely, so it must not promote the owner.
+        // Pending sockets exist only behind the bearer gate, so an ungated owner counts without reading any attachment.
+        const sockets = this.host.getWebSockets();
+        const subscribers = isBearerGated(this.host.env()) ? sockets.filter((ws) => this.isAdmitted(ws)).length : sockets.length;
         const tUp = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
         const tDownRaw = envPositiveInt(this.host.env(), "LUNORA_RELAY_COLLAPSE_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tDown);
 
@@ -1999,7 +2017,7 @@ class RelayMember extends RelayLink {
      * that cannot reach its owner still owns its own table.
      */
     public override async announceDrain(closing: ShardSocketLike): Promise<void> {
-        if (this.host.getWebSockets().some((ws) => ws !== closing)) {
+        if (this.host.getWebSockets().some((ws) => ws !== closing && this.isAdmitted(ws))) {
             return;
         }
 
@@ -2108,7 +2126,7 @@ class RelayMember extends RelayLink {
      * forgets its own attach, so the next socket attaches again rather than trust a registration the owner is about to drop.
      */
     protected override refusesAsIdle(): boolean {
-        if (this.host.getWebSockets().length > 0) {
+        if (this.host.getWebSockets().some((ws) => this.isAdmitted(ws))) {
             return false;
         }
 

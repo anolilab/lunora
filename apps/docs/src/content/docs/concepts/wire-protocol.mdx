@@ -27,8 +27,12 @@ in the repository. It covers every layer a client needs:
 - **The WebSocket frames**: `connect`, `subscribe`/`unsubscribe`, the
   `ack`/`data`/`delta`/`resume`/`settled`/`error` server frames, and the
   `pokeStart`/`pokePart`/`pokeEnd` shape (partial-replication) protocol.
-- **Auth**: the HTTP bearer, the WS `?token=` credential, and the short-lived
-  **ephemeral WS admin token** minted at `POST /_lunora/admin/ws-token`.
+- **Auth**: the HTTP bearer; the WS session credential, sent in the `connect`
+  frame and never in the URL; and the short-lived **ephemeral WS admin token**
+  minted at `POST /_lunora/admin/ws-token`, the only credential that rides `?token=`.
+  A socket still awaiting `connect` 10 seconds after its upgrade is closed with
+  `4003`. A shard at its cap of 1024 such sockets answers a new unauthenticated
+  upgrade with `503`, which is transient: retry with backoff.
 
 ## Conformance fixtures
 

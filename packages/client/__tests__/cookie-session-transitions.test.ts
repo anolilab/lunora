@@ -363,6 +363,35 @@ describe("cookie session: the server's answer drives every transition", () => {
         client.close();
     });
 
+    it("adopts the identity frame of a cookie socket that also carries the session credential in connect", async () => {
+        expect.assertions(3);
+
+        const sockets: MockSocket[] = [];
+        // `/get-session` never answers, so only the frame can settle the identity.
+        const fetchImpl = vi.fn<typeof fetch>(async () => new Promise<Response>(() => {}));
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+            wsToken: "shared-gate-bearer",
+        });
+
+        client.expectIdentityResolution();
+        client.subscribe(fnRef("notes:mine"), {}, () => {});
+        await settle();
+        sockets[0]?.open();
+        await settle();
+        sockets[0]?.receive({ subject: "user-a", type: "identity" });
+        await settle();
+
+        expect(client.currentIdentity()).toBe("subj:user-a");
+        expect(sockets[0]?.sent.some((frame) => frame.type === "connect" && frame.token === "shared-gate-bearer")).toBe(true);
+        expect(sockets[0]?.closed).toBe(false);
+
+        client.close();
+    });
+
     it("a → b over one socket that never reconnects: the frame from the next socket names b", async () => {
         expect.assertions(3);
 
