@@ -575,7 +575,11 @@ class Client(
             socketGeneration = credential
             wasEverConnected = true
             try {
-                for (topic in whisperTopics.keys.toList()) sender(buildWhisperSubscribeFrame(topic))
+                for (topic in whisperTopics.keys.toList()) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach.
+                    if (generation != attachGeneration) return
+                    sender(buildWhisperSubscribeFrame(topic))
+                }
                 unjoinedTopics.clear()
             } catch (failure: Throwable) {
                 if (send === sender) send = null

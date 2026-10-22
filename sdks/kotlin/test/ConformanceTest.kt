@@ -557,6 +557,22 @@ private fun whisperFramesJoinSendAndDeliver() {
     check(general.isEmpty() && other.size == 1, "room:other frames must reach only room:other's listeners: ${general.size}/${other.size}")
 }
 
+private fun supersededAttachStopsWritingJoins() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.whisperSubscribe("room:a") { }
+    client.whisperSubscribe("room:b") { }
+    client.attachSocket { frame ->
+        sent.add(frame)
+
+        if (frame["type"] == "whisper_subscribe") client.detachSocket()
+    }
+
+    check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a detach during the joins must stop the remaining joins")
+}
+
 private fun closedRoomRefusesSends() {
     val sent = mutableListOf<Map<String, Any?>>()
     val client = Client("https://app.example")
@@ -1517,6 +1533,7 @@ fun main() {
     whisperFramesJoinSendAndDeliver()
     whisperTopicsRejoinAfterReconnect()
     closedRoomRefusesSends()
+    supersededAttachStopsWritingJoins()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()
