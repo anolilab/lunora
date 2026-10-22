@@ -1,3 +1,6 @@
+import { dirname } from "node:path";
+
+import { ResolverFactory } from "oxc-resolver";
 import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
@@ -296,6 +299,29 @@ const toolExports = (names: Iterable<string>): SecretToolExports => {
 };
 
 /**
+ * Resolves a relative specifier from the file that imports it, without the type checker. `getModuleSpecifierSourceFile()`
+ * builds the program to do this, and a program is rebuilt after each file added to or removed from its project, so a scan
+ * over hundreds of files spent minutes resolving. The resolved file joins the declaring file's own project.
+ */
+const RELATIVE_RESOLVER = new ResolverFactory({
+    extensionAlias: { ".cjs": [".cts", ".cjs"], ".js": [".ts", ".tsx", ".js"], ".mjs": [".mts", ".mjs"] },
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
+});
+
+const relativeTargetOf = (declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
+    const file = declaration.getSourceFile();
+    const { path } = RELATIVE_RESOLVER.sync(dirname(file.getFilePath()), specifier);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    const project = file.getProject();
+
+    return project.getSourceFile(path) ?? project.addSourceFileAtPath(path);
+};
+
+/**
  * Accumulate into `exported` what a re-export makes visible, given what `forwarded` carries through it:
  * every name for `export *`, the listed ones under their aliases otherwise. A namespace export binds the
  * forwarded names as one object, so its members are read off the binding rather than imported directly.
@@ -366,7 +392,7 @@ const forwardedThrough = (
         return toolExports([REQUEST_SECRET_TOOL]);
     }
 
-    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(declaration, specifier) : undefined;
 
     return target === undefined ? toolExports([]) : resolve(target);
 };
@@ -426,7 +452,7 @@ const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile)
         return toolExports([REQUEST_SECRET_TOOL]);
     }
 
-    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+    const target = isRelativeSpecifier(specifier) ? relativeTargetOf(declaration, specifier) : undefined;
 
     return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer]));
 };
