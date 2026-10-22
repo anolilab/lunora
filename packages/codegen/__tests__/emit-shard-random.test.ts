@@ -46,12 +46,13 @@ describe("emitShard — ctx.random", () => {
         expect(shard).toContain("random: field(createStableRandomFactory(undefined, stableScope)),");
     });
 
-    it("gives a mutation composed from an action the action's replay key", () => {
-        expect.assertions(1);
+    it("draws every mutation an action composes from one shared sequence", () => {
+        expect.assertions(2);
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain("value: createStableRandomFactory(stableKey, stableScope), writable: true },");
+        expect(shard).toContain("const composedRandom = createStableRandomFactory(stableKey, stableScope);");
+        expect(shard).toContain("value: composedRandom, writable: true },");
     });
 
     it("keeps a reactor run off the writer's replay key", () => {

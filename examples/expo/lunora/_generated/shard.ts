@@ -1185,6 +1185,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // inherit the writer's key: every run would restart the same id and random sequence.
             const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
             const stableScope = JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            // One sequence for every mutation this run composes: their ids share one counter (the copied `newId`), so their draws must too.
+            const composedRandom = createStableRandomFactory(stableKey, stableScope);
 
             const ctx: Record<string, unknown> = {
                 auth: {
@@ -1263,9 +1265,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },
                                 orm: { configurable: true, enumerable: true, value: mutationDatabase.orm, writable: true },
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
-                                // The composed mutation's ids already come from the action's replay key, so its draws take that key too;
-                                // the action's own unkeyed random would make a retried action's mutation draw different values.
-                                random: { configurable: true, enumerable: true, value: createStableRandomFactory(stableKey, stableScope), writable: true },
+                                // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
+                                // fresh factory per call would repeat the same draws across sibling mutations.
+                                random: { configurable: true, enumerable: true, value: composedRandom, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
