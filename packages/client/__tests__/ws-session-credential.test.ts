@@ -25,9 +25,9 @@ class MockSocket {
         this.dispatch("open");
     }
 
-    public triggerClose(code = 1006): void {
+    public triggerClose(code = 1006, reason = ""): void {
         this.readyState = 3;
-        this.dispatch("close", { code, reason: "" });
+        this.dispatch("close", { code, reason });
     }
 
     public send(data: string): void {
@@ -271,6 +271,33 @@ describe("lunoraClient session credential (protocol §6)", () => {
         rotated.triggerClose(4003);
 
         expect(notified).toBe(2);
+    });
+
+    it("does not report token expiry when the connect deadline closes a socket, since no credential was refused", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: WebSocketImpl, wsToken: "session-secret" });
+        let notified = 0;
+
+        client.onTokenExpired(() => {
+            notified += 1;
+        });
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+
+        const socket = await openNextSocket(0);
+
+        socket.triggerClose(4003, "connect deadline");
+
+        expect(notified).toBe(0);
+
+        const known = sockets.length;
+
+        // A later real refusal still notifies, so the deadline did not disable the signal.
+        const retry = await openNextSocket(known);
+
+        retry.triggerClose(4003, "unauthenticated");
+
+        expect(notified).toBe(1);
     });
 
     it("sends connect before any subscription frame on every open", async () => {

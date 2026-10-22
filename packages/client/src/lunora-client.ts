@@ -6967,9 +6967,10 @@ class LunoraClient {
                 // never carries one either.
                 if (event?.code === 4001) {
                     this.notifyTokenExpired();
-                } else if (event?.code === 4003 && this.refusedCredentialGeneration !== this.wsCredentialGeneration) {
+                } else if (event?.code === 4003 && event.reason !== "connect deadline" && this.refusedCredentialGeneration !== this.wsCredentialGeneration) {
                     // 4003 is the session the server refused (see protocol §6). It repeats on every
                     // backoff retry, so the listener is told once per credential, not once per retry.
+                    // The connect deadline also closes with 4003, but it refuses no credential.
                     this.refusedCredentialGeneration = this.wsCredentialGeneration;
                     this.notifyTokenExpired();
                 }
