@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute, runDeployCommand } from "../../src/commands/deploy/handler";
 import type { DeployOptions } from "../../src/commands/deploy/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { SpawnDescriptor } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -438,7 +439,7 @@ describe("lunora deploy — a service's client build", () => {
         const { calls, spawner } = createRecordingSpawner();
         const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
 
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls.some((call) => call.descriptor.cwd === serviceDirectory)).toBe(false);
     });
 

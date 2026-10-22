@@ -830,11 +830,11 @@ const firstServiceRefusal = (
  * `--dry-run` pass through; a target refusing one says so here. Returns the
  * error that stops the deploy, if any.
  */
-const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<BeforeSpawnFailure | undefined> => {
     const { error, services } = readServiceBindings(cwd);
 
     if (error !== undefined) {
-        return error;
+        return { code: EXIT_CODE.FAILURE, error };
     }
 
     if (services.length === 0) {
@@ -860,7 +860,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
     if (refused !== undefined) {
         options.logger.error(refused);
 
-        return refused;
+        return { code: EXIT_CODE.USAGE, error: refused };
     }
 
     for (const service of workers) {
@@ -875,7 +875,7 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
             options.logger.error(message);
 
-            return message;
+            return { code: EXIT_CODE.FAILURE, error: message };
         }
 
         const generated = serviceDeployConfig(service.wranglerPath, built, frameworkBuild);
@@ -890,7 +890,10 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
                 toolchain.deploy({ configPath: configPath ?? generated ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
             );
         } catch (error_: unknown) {
-            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`,
+            };
         }
 
         invocation.commit();
@@ -903,7 +906,10 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
         const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
-            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
+            return {
+                code: EXIT_CODE.FAILURE,
+                error: `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`,
+            };
         }
     }
 
@@ -1050,6 +1056,12 @@ const checkArtifactsNamespaces = async (
     return failures.length === 0 ? undefined : failures.join("\n");
 };
 
+/** A before-spawn step's failure: the exit code it maps to, and the message. */
+interface BeforeSpawnFailure {
+    code: number;
+    error: string;
+}
+
 /**
  * The steps that change the account or the sibling Workers, run last, in the order of how little a
  * failure leaves behind: the Artifacts namespaces, then the Hyperdrive config (both are reused on a
@@ -1062,12 +1074,23 @@ const runBeforeSpawnSteps = async (
     spawner: Spawner,
     target: string,
     wranglerPath: string | undefined,
-): Promise<string | undefined> =>
-    (createsAccountResources(options)
+): Promise<BeforeSpawnFailure | undefined> => {
+    const artifacts = createsAccountResources(options)
         ? await checkArtifactsNamespaces(cwd, wranglerPath, target, options.env, options.logger, options.discoveryCache, "create")
-        : undefined) ??
-    (await provisionDeployHyperdrive(cwd, options, "deploy", target)) ??
-    (await deployServices(cwd, options, driver, spawner));
+        : undefined;
+
+    if (artifacts !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: artifacts };
+    }
+
+    const hyperdrive = await provisionDeployHyperdrive(cwd, options, "deploy", target);
+
+    if (hyperdrive !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: hyperdrive };
+    }
+
+    return deployServices(cwd, options, driver, spawner);
+};
 
 /**
  * A lazy registry defers a broken module's error to its first call, where an eager one fails the
@@ -1188,7 +1211,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     const beforeSpawnError = await runBeforeSpawnSteps(cwd, options, driver, spawner, pipeline.target, validation.wranglerPath);
 
     if (beforeSpawnError !== undefined) {
-        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: beforeSpawnError, mintedSecretsFile, validation };
+        return { code: beforeSpawnError.code, descriptor: undefined, error: beforeSpawnError.error, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, driver);
