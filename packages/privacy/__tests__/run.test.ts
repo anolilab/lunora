@@ -261,6 +261,31 @@ describe("a data port that leaves out a table", () => {
         expect(store.rows.get(opened.id)?.status).toBe("failed");
         expect([...files.files.keys()].some((key) => key.endsWith("export.zip"))).toBe(false);
     });
+
+    it("names the missing table and its dataset on the failed event", async () => {
+        const store = memoryRequests();
+        const details: string[] = [];
+        const recording = {
+            ...store,
+            addEvent: async (requestId: string, at: Date, kind: string, detail?: string) => {
+                details.push(detail ?? "");
+                await store.addEvent(requestId, at, kind, detail);
+            },
+        };
+        const { port } = memoryData({});
+        const partial: DataPort = {
+            ...port,
+            collect: async () => {
+                return { goals: [] };
+            },
+        };
+        const { privacy } = setup({ data: partial, datasets: [tasks], store: recording });
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        expect(details.join("|")).toContain('table "tasks" of dataset "tasks"');
+    });
 });
 
 describe("omitted columns", () => {

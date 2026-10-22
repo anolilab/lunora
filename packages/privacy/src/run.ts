@@ -12,7 +12,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { Dataset } from "./dataset";
-import { erasureOrder, requireTables, retainedTables } from "./dataset";
+import { erasureOrder, PortTableMissingError, requireTables, retainedTables } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
@@ -195,9 +195,16 @@ const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
 /**
  * The detail a failed run records. Only the error's code: a message can carry a subject's values (an id, a
- * column value), and the event log is read by people who should not see them.
+ * column value), and the event log is read by people who should not see them. The one exception is a missing
+ * dataset table, whose message holds schema names only, so the event can say which table the port left out.
  */
-const failureDetail = (error: unknown): string => `${error instanceof LunoraError ? error.code : "INTERNAL"}: the run stopped before it finished`;
+const failureDetail = (error: unknown): string => {
+    if (error instanceof PortTableMissingError) {
+        return `INTERNAL: the data port returned no entry for table "${error.table}" of dataset "${error.dataset}"`;
+    }
+
+    return `${error instanceof LunoraError ? error.code : "INTERNAL"}: the run stopped before it finished`;
+};
 
 /**
  * Record a status change and its event. Every phase writes one event, named after the status it
