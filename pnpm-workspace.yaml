@@ -1162,10 +1162,6 @@ minimumReleaseAgeExclude:
   - 'dompurify@3.4.11 || 3.4.13'
   # Published 2026-10-21, inside the 24h window; drop this entry once it ages out.
   - 'drizzle-orm@1.0.0-rc.5'
-  # Renovate's vite bump (#1287) resolved ^8.3.3 to this past the window; the
-  # entry just lets a local install reproduce the committed lockfile. Drop once
-  # it ages out.
-  - 'vite@8.3.5'
   - 'esbuild@0.28.1'
   - 'eslint-plugin-react-dom@5.8.17'
   - 'eslint-plugin-react-jsx@5.8.17'
