@@ -205,6 +205,35 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 expect(result).toStrictEqual({ deleted: 2 });
                 await expect(writer.findMany("messages", {}).then((page) => page.page)).resolves.toHaveLength(1);
             });
+
+            it("deleteWhere rejects an over-cap match with the full match count and deletes nothing", async () => {
+                expect.assertions(2);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany("messages", [row(1), row(2), row(3), row(4), row(5)]);
+
+                // The read stops one row past the cap, yet the message still reports all 5 matches.
+                await expect(writer.deleteWhere("messages", {}, { limit: 2 })).rejects.toThrow("deleteWhere: batch of 5 exceeds the limit of 2");
+                await expect(writer.findMany("messages", {}).then((page) => page.page)).resolves.toHaveLength(5);
+            });
+
+            it("deleteWhere deletes a match exactly at the cap", async () => {
+                expect.assertions(2);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany("messages", [
+                    { authorId: "a1", channelId: "c1", text: "x" },
+                    { authorId: "a1", channelId: "c2", text: "y" },
+                    { authorId: "a2", channelId: "c1", text: "z" },
+                ]);
+
+                const result = await writer.deleteWhere("messages", { authorId: "a1" }, { limit: 2 });
+
+                expect(result).toStrictEqual({ deleted: 2 });
+                await expect(writer.findMany("messages", {}).then((page) => page.page.map((document) => document["authorId"]))).resolves.toStrictEqual(["a2"]);
+            });
         });
 
         describe("patchMany", () => {
@@ -256,6 +285,18 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 const channelIds = await writer.findMany("messages", {}).then((page) => new Set(page.page.map((document) => document["channelId"])));
 
                 expect(channelIds).toStrictEqual(new Set(["c1", "patched"]));
+            });
+
+            it("patchWhere rejects an over-cap match with the full match count", async () => {
+                expect.assertions(1);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany("messages", [row(1), row(2), row(3), row(4)]);
+
+                await expect(writer.patchWhere("messages", { patch: { text: "x" }, where: {} }, { limit: 1 })).rejects.toThrow(
+                    "patchWhere: batch of 4 exceeds the limit of 1",
+                );
             });
         });
 
