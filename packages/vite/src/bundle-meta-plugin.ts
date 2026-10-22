@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
-import { BUNDLE_META_PATH_ENV, DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
+import { BUNDLE_META_PATH_ENV, canonicalPath, DEFAULT_BUNDLE_META_PATH } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import toPosixPath from "./to-posix-path";
@@ -117,7 +117,10 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
             // Only a path under this project's .lunora is the CLI's: a build script's nested build for another project inherits the variable.
             const requested = process.env[BUNDLE_META_PATH_ENV];
             const override = requested === undefined || requested === "" ? undefined : resolve(projectRoot, requested);
-            const metaPath = override?.startsWith(`${resolve(projectRoot, ".lunora")}${sep}`) ? override : resolve(projectRoot, DEFAULT_BUNDLE_META_PATH);
+            // Both sides are canonical, so a symlinked project path still matches its own .lunora.
+            const ownDirectory = `${canonicalPath(resolve(projectRoot, ".lunora"))}${sep}`;
+            const metaPath =
+                override !== undefined && canonicalPath(override).startsWith(ownDirectory) ? override : resolve(projectRoot, DEFAULT_BUNDLE_META_PATH);
 
             // Only one server environment's graph can be the app's, and the CLI cannot tell which. A second one leaves no metafile:
             // a missing file is honest, a wrong one is not. Named in a warning, since the missing file alone explains nothing.

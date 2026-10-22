@@ -15,6 +15,7 @@ export {
 export type { MarkedApiSpec } from "./api-spec-marker";
 export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api-spec-marker";
 export { MissingBuildOutputError } from "./build-output-error";
+export { default as canonicalPath } from "./canonical-path";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
 export {

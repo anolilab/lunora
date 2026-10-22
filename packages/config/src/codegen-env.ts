@@ -27,14 +27,14 @@ const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
 /** Env var that enables lazy function imports for codegen when it spells `1` / `true`. */
 const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
 
+/** The project root the CLI started a client build for. Only that root's plugin checks {@link BUILD_TARGET_ENV} against itself. */
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+
 /**
  * Env var the CLI sets on the client build it spawns (`lunora build` and `lunora deploy`): the target it resolved for this run.
  * A plugin whose own `target` option names another one refuses to build, so the artifact cannot
  * describe a target the deploy will not ship to.
  */
-/** The project root the CLI started a client build for. Only that root's plugin checks {@link BUILD_TARGET_ENV} against itself. */
-const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
-
 const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
 
 /** Env var the CLI sets to the path the Vite plugin writes its server metafile to. Unset means the default under `.lunora/`. */

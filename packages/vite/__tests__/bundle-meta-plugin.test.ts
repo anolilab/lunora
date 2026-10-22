@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -28,6 +28,35 @@ describe("bundleMetaPlugin", () => {
 
     afterEach(() => {
         rmSync(projectRoot, { force: true, recursive: true });
+    });
+
+    it("keeps the CLI's metafile when the project is reached through a symlink", () => {
+        expect.assertions(1);
+
+        const real = join(projectRoot, "real-app");
+        const link = join(projectRoot, "linked-app");
+
+        mkdirSync(join(real, "src"), { recursive: true });
+        symlinkSync(real, link);
+
+        const requested = join(link, ".lunora", "vite-bundle-meta-run.json");
+
+        process.env[BUNDLE_META_PATH_ENV] = requested;
+
+        try {
+            const plugin = bundleMetaPlugin(link);
+            const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
+
+            generateBundle.call(
+                { environment: { name: "ssr" }, getModuleInfo: () => undefined },
+                {},
+                { "index.js": chunk({ facadeModuleId: join(link, "src", "index.ts"), modules: {} }) },
+            );
+
+            expect(existsSync(join(real, ".lunora", "vite-bundle-meta-run.json"))).toBe(true);
+        } finally {
+            Reflect.deleteProperty(process.env, BUNDLE_META_PATH_ENV);
+        }
     });
 
     it("ignores a metafile path outside its own .lunora, which a nested build for another project inherits", () => {

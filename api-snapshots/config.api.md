@@ -1298,6 +1298,12 @@ const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "plat
 const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
 ```
 
+### `canonicalPath` (const)
+
+```ts
+const canonicalPath: (path: string) => string;
+```
+
 ### `claimAgentRulesHint` (const)
 
 ```ts

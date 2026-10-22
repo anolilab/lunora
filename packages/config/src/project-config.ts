@@ -17,10 +17,10 @@
  * throws, or an unexpected `remote` value all degrade to "no project preference"
  * rather than throwing, so a typo never breaks `lunora dev`.
  */
-import { resolve } from "node:path";
 
 import { readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 
+import canonicalPath from "./canonical-path";
 import { BUILD_ROOT_ENV, BUILD_TARGET_ENV } from "./codegen-env";
 import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
 
@@ -126,7 +126,9 @@ const assertBuildTargetMatches = (target: string, projectRoot: string): void => 
 
     // The CLI's target is for the project it builds. A build script can start a Vite build for another project, and that build
     // inherits the variable, so only the plugin for the CLI's own root checks it.
-    if (process.env[BUILD_ROOT_ENV] !== resolve(projectRoot)) {
+    const buildRoot = process.env[BUILD_ROOT_ENV];
+
+    if (buildRoot === undefined || buildRoot === "" || canonicalPath(buildRoot) !== canonicalPath(projectRoot)) {
         return;
     }
 
