@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
+import { emitServiceDeclarations } from "../src/emit/service-declarations";
 import { resolveServiceBindings, runCodegen } from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -21,6 +22,29 @@ const write = (relative: string, source: string): void => {
 };
 
 const generated = (name: string): string => readFileSync(join(workdir, "lunora", "_generated", name), "utf8");
+
+/** A service that imports a type from the llm-kit package, which the service's node_modules provides. */
+const writeLlmKitImport = (): void => {
+    write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+    write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+    write(
+        "services/llm-gateway/src/index.ts",
+        `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+    );
+};
+
+/** The declaration snapshot the llmGateway service emits, from the workdir's current sources. */
+const emitLlmGateway = (): Record<string, string> | undefined =>
+    resolveServiceBindings(workdir)
+        .filter(({ name }) => name === "llmGateway")
+        .map((service) => emitServiceDeclarations(service, join(workdir, "lunora", "_generated")))[0];
 
 /** A fetch service (`parser`) and an RPC service (`llmGateway`), each in its own folder with its own wrangler config. */
 const writeServices = (): void => {
@@ -121,6 +145,467 @@ export class Gateway {
 
         expect(() => generated("services/llmGateway/src/index.d.ts")).toThrow(/ENOENT/u);
         expect(() => generated("services")).toThrow(/ENOENT/u);
+    });
+
+    it("re-emits a service's snapshot when a file is added to its tree", () => {
+        expect.assertions(2);
+
+        writeServices();
+
+        const first = emitLlmGateway();
+
+        // A new file that nothing in the program imports yet still changes what the tree resolves to.
+        write("services/llm-gateway/src/shadow.ts", "export const shadow = 1;\n");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when an imported declaration file changes without a manifest change", () => {
+        expect.assertions(2);
+
+        writeServices();
+        writeLlmKitImport();
+
+        const first = emitLlmGateway();
+
+        // The manifest and its `types` target are untouched; only the declaration file the import resolves to changes.
+        // `boolean` rather than `string`: the same length as `number` would leave only the mtime to tell the two apart.
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file is added to the root of a package it imports", () => {
+        expect.assertions(1);
+
+        writeServices();
+        writeLlmKitImport();
+
+        const first = emitLlmGateway();
+
+        write("services/llm-gateway/node_modules/llm-kit/types.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+    });
+
+    it("re-emits a service's snapshot when a declaration file an imported package re-exports from changes", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export type { Usage } from "./usage";\n`);
+        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Only the file the package re-exports from changes; its manifest and index are untouched.
+        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file shadows a subpath the package resolved in a nested directory", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/dist/sub/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit/dist/sub";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to, so the package root and its manifest are untouched.
+        write("services/llm-gateway/node_modules/llm-kit/dist/sub.d.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file shadows an import resolved under a build-named directory of the service", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/src/dist/sub/index.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "./dist/sub";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to; `dist` is excluded from the tree scan, so only the directory's own stamp sees this.
+        write("services/llm-gateway/src/dist/sub.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file shadows an import resolved to a source outside any package", () => {
+        expect.assertions(2);
+
+        writeServices();
+        // Directly under the workdir, the common ancestor of the file and the service: a shadow lands there.
+        write("foo/index.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "../../../foo";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to; no package.json governs it, so only the directory's own stamp sees this.
+        write("foo.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a package is installed in the service's node_modules beside a hoisted copy", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write("services/llm-gateway/node_modules/other/package.json", `{ "name": "other" }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // A real copy nearer the service takes precedence over the hoisted one; no link or file already stamped changes.
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("does not re-emit a service's snapshot when codegen writes its own output inside the service", () => {
+        expect.assertions(2);
+
+        writeServices();
+
+        // The generated directory sits inside the service, as it does when the service is the project's own root.
+        const insideGenerated = join(workdir, "services", "llm-gateway", "_generated");
+        const emitInside = (): Record<string, string> | undefined =>
+            resolveServiceBindings(workdir)
+                .filter(({ name }) => name === "llmGateway")
+                .map((service) => emitServiceDeclarations(service, insideGenerated))[0];
+
+        const first = emitInside();
+
+        write("services/llm-gateway/_generated/services/llmGateway/src/index.d.ts", `export {};\n`);
+
+        expect(emitInside()).toBe(first);
+        expect(emitInside()).toBe(first);
+    });
+
+    it("re-emits a service's snapshot when a symlinked source directory is repointed to a directory with the same stamp", () => {
+        expect.assertions(2);
+
+        writeServices();
+        // Same byte length and same modification times everywhere: only the link's recorded target tells the two apart.
+        write("store/lib-1/index.ts", `export interface Usage { tokens: number }\n`);
+        write("store/lib-2/index.ts", `export interface Usage { tokens: string }\n`);
+        const epoch = new Date("2020-01-01T00:00:00Z");
+
+        for (const path of ["store/lib-1", "store/lib-2", "store/lib-1/index.ts", "store/lib-2/index.ts"]) {
+            utimesSync(join(workdir, path), epoch, epoch);
+        }
+
+        // At the service root, whose directory no program file stamps: the repoint moves nothing a stamp covers.
+        symlinkSync(join(workdir, "store/lib-1"), join(workdir, "services/llm-gateway/lib"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "../lib";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        unlinkSync(join(workdir, "services/llm-gateway/lib"));
+        symlinkSync(join(workdir, "store/lib-2"), join(workdir, "services/llm-gateway/lib"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a package is installed in a node_modules nested below the service root", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        // A nested node_modules that already exists, beside a package the service does not import.
+        write("services/llm-gateway/src/node_modules/other/package.json", `{ "name": "other" }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // A real copy under src/node_modules takes precedence over the hoisted one; nothing already stamped changes.
+        write("services/llm-gateway/src/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/src/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a dependency's symlink is repointed to another install", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/store/llm-kit-1/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/store/llm-kit-1/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write("services/llm-gateway/store/llm-kit-2/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/store/llm-kit-2/index.d.ts", `export interface Usage { tokens: string }\n`);
+        mkdirSync(join(workdir, "services/llm-gateway/node_modules"), { recursive: true });
+        symlinkSync(join(workdir, "services/llm-gateway/store/llm-kit-1"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Same manifest and same declaration file under the old target; only the link moves, as a package manager does on an update.
+        unlinkSync(join(workdir, "services/llm-gateway/node_modules/llm-kit"));
+        symlinkSync(join(workdir, "services/llm-gateway/store/llm-kit-2"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a dependency of an imported package is relinked in the package store", () => {
+        expect.assertions(2);
+
+        const store = join(workdir, "node_modules", ".pnpm");
+
+        writeServices();
+        write(join("node_modules", ".pnpm", "dep@1", "node_modules", "dep", "package.json"), `{ "name": "dep", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "dep@1", "node_modules", "dep", "index.d.ts"), `export interface Tokens { count: number }\n`);
+        write(join("node_modules", ".pnpm", "dep@2", "node_modules", "dep", "package.json"), `{ "name": "dep", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "dep@2", "node_modules", "dep", "index.d.ts"), `export interface Tokens { count: string }\n`);
+        write(join("node_modules", ".pnpm", "llm-kit@1", "node_modules", "llm-kit", "package.json"), `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write(join("node_modules", ".pnpm", "llm-kit@1", "node_modules", "llm-kit", "index.d.ts"), `export type { Tokens as Usage } from "dep";\n`);
+        mkdirSync(join(store, "llm-kit@1", "node_modules"), { recursive: true });
+        symlinkSync(join(store, "dep@1", "node_modules", "dep"), join(store, "llm-kit@1", "node_modules", "dep"), "dir");
+        mkdirSync(join(workdir, "services/llm-gateway/node_modules"), { recursive: true });
+        symlinkSync(join(store, "llm-kit@1", "node_modules", "llm-kit"), join(workdir, "services/llm-gateway/node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { count: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // The package and its manifest are untouched; only the link to its dependency, beside it in the store, moves.
+        unlinkSync(join(store, "llm-kit@1", "node_modules", "dep"));
+        symlinkSync(join(store, "dep@2", "node_modules", "dep"), join(store, "llm-kit@1", "node_modules", "dep"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a scoped package it imports changes its declarations", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/@kit/llm/package.json", `{ "name": "@kit/llm", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/@kit/llm/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "@kit/llm";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        write("services/llm-gateway/node_modules/@kit/llm/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a package it imports retargets its types", () => {
+        expect.assertions(3);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // The old declaration file keeps its bytes; only the manifest's `types` target moves.
+        write("services/llm-gateway/node_modules/llm-kit/other.d.ts", "export interface Usage { tokens: string }\n");
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "other.d.ts" }\n`);
+
+        const second = emitLlmGateway();
+        const entry = join("services", "llmGateway", "src", "index.d.ts");
+
+        expect(second).not.toBe(first);
+        expect(first?.[entry]).not.toContain("llm-kit/other.js");
+        expect(second?.[entry]).toContain("llm-kit/other.js");
+    });
+
+    it("re-emits a service's snapshot when a hoisted package link above the service is repointed", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("store/llm-kit-1/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("store/llm-kit-1/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write("store/llm-kit-2/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("store/llm-kit-2/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+        mkdirSync(join(workdir, "node_modules"), { recursive: true });
+        symlinkSync(join(workdir, "store/llm-kit-1"), join(workdir, "node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Resolved from above the service, through the root's node_modules: nothing under the service moves.
+        unlinkSync(join(workdir, "node_modules/llm-kit"));
+        symlinkSync(join(workdir, "store/llm-kit-2"), join(workdir, "node_modules/llm-kit"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when the package.json above it changes its module format under NodeNext", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/tsconfig.json", `{ "compilerOptions": { "module": "nodenext", "moduleResolution": "nodenext" } }\n`);
+        write("package.json", `{ "type": "commonjs" }\n`);
+
+        const first = emitLlmGateway();
+
+        write("package.json", `{ "type": "module" }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("reuses a service's declaration snapshot until a file in its program changes", () => {
+        expect.assertions(3);
+
+        writeServices();
+
+        const first = emitLlmGateway();
+
+        expect(emitLlmGateway()).toBe(first);
+
+        write(
+            "services/llm-gateway/src/index.ts",
+            `export class Gateway {\n    async complete(prompt: string): Promise<number> {\n        return prompt.length;\n    }\n}\n`,
+        );
+
+        const second = emitLlmGateway();
+
+        expect(second).not.toBe(first);
+        expect(second?.[join("services", "llmGateway", "src", "index.d.ts")]).toContain("Promise<number>");
     });
 
     it("names the service when TypeScript emits no declaration for its entry", () => {
