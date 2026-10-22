@@ -56,27 +56,36 @@ const stampOf = (path: string): string => {
     return `${String(mtimeMs)}:${String(size)}`;
 };
 
+/** Directories no service source resolves through, and that can hold a large build tree. */
+const UNTRACKED_DIRECTORIES = new Set([".git", ".wrangler", "dist", "node_modules", "target"]);
+
 /**
- * Every file under `directory` but `node_modules`, with its stamp. A file added here can shadow a module the program
- * resolved (a `foo.ts` beside `foo/index.ts`), and no stamp of an existing file would show it.
+ * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp. A file added here can shadow a module
+ * the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined when the tree cannot be read, so the caller treats the
+ * cache as a miss rather than as an unchanged tree.
  */
-const treeStampOf = (directory: string): string => {
+const treeStampOf = (directory: string): string | undefined => {
     const entries: string[] = [];
-    const walk = (current: string): void => {
-        for (const entry of readdirSync(current, { withFileTypes: true })) {
-            const path = join(current, entry.name);
 
-            if (entry.isDirectory()) {
-                if (entry.name !== "node_modules") {
-                    walk(path);
+    try {
+        const walk = (current: string): void => {
+            for (const entry of readdirSync(current, { withFileTypes: true })) {
+                const path = join(current, entry.name);
+
+                if (entry.isDirectory()) {
+                    if (!UNTRACKED_DIRECTORIES.has(entry.name)) {
+                        walk(path);
+                    }
+                } else {
+                    entries.push(`${path}:${stampOf(path)}`);
                 }
-            } else {
-                entries.push(`${path}:${stampOf(path)}`);
             }
-        }
-    };
+        };
 
-    walk(directory);
+        walk(directory);
+    } catch {
+        return undefined;
+    }
 
     return entries.toSorted((left, right) => left.localeCompare(right)).join("\n");
 };
@@ -106,7 +115,12 @@ const packageStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: string)
         }
     }
 
-    return [...manifests].toSorted((left, right) => left.localeCompare(right)).map((path): [string, string] => [path, stampOf(path)]);
+    return [...manifests]
+        .toSorted((left, right) => left.localeCompare(right))
+        .flatMap((manifest): [string, string][] => [
+            [manifest, stampOf(manifest)],
+            [dirname(manifest), stampOf(dirname(manifest))],
+        ]);
 };
 
 /**
@@ -153,13 +167,44 @@ const stillStamped = ([path, stamp]: [path: string, stamp: string]): boolean => 
 /** The cached snapshot, while its compiler options, its program, its manifests and its service tree are unchanged on disk. */
 const freshDeclarations = (cacheKey: string, optionsKey: string, serviceDirectory: string): Record<string, string> | undefined => {
     const cached = declarationCache.get(cacheKey);
+    const tree = cached === undefined ? undefined : treeStampOf(serviceDirectory);
     const fresh =
         cached?.optionsKey === optionsKey &&
         cached.stamps.every((stamp) => stillStamped(stamp)) &&
         cached.packages.every((stamp) => stillStamped(stamp)) &&
-        cached.tree === treeStampOf(serviceDirectory);
+        tree !== undefined &&
+        cached.tree === tree;
 
     return fresh ? cached.files : undefined;
+};
+
+/**
+ * Keeps a snapshot for the next run. An unreadable tree leaves nothing to compare against, so nothing is kept and the next run
+ * emits again rather than trust a stale tree.
+ */
+const rememberDeclarations = (cacheKey: string, entry: Omit<CachedDeclarations, "tree"> & { tree: string | undefined }): void => {
+    if (entry.tree !== undefined) {
+        declarationCache.set(cacheKey, { ...entry, tree: entry.tree });
+    }
+};
+
+/**
+ * What a cached snapshot is checked against: the program's files and the external declaration files its imports resolve
+ * to (with stamps), the manifests and package directories those came from, and the service tree.
+ */
+const freshnessOf = (
+    project: Project,
+    serviceDirectory: string,
+    programPaths: ReadonlyArray<string>,
+): Omit<CachedDeclarations, "files" | "optionsKey" | "tree"> & { tree: string | undefined } => {
+    const outside = importedPathsOutside(project, serviceDirectory);
+    const stampedPaths = [...programPaths, ...outside.filter((path) => existsSync(path))];
+
+    return {
+        packages: packageStampsOf([...programPaths, ...outside], serviceDirectory),
+        stamps: stampedPaths.map((path): [string, string] => [path, stampOf(path)]),
+        tree: treeStampOf(serviceDirectory),
+    };
 };
 
 /**
@@ -215,9 +260,7 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
         .getSourceFiles()
         .map((sourceFile) => sourceFile.getFilePath() as string)
         .filter((path) => existsSync(path));
-    const stamps = programPaths.map((path): [string, string] => [path, stampOf(path)]);
-    const packages = packageStampsOf([...programPaths, ...importedPathsOutside(project, serviceDirectory)], serviceDirectory);
-    const tree = treeStampOf(serviceDirectory);
+    const { packages, stamps, tree } = freshnessOf(project, serviceDirectory, programPaths);
 
     // Symlinks kept, so a resolved path is in the same tree as `_generated/` (a temp dir or a pnpm link may be one).
     const compilerOptions = { ...project.getCompilerOptions(), preserveSymlinks: true };
@@ -262,7 +305,7 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
         throw new Error(`@lunora/codegen: service "${service.name}": TypeScript emitted no declaration for its entry module ${service.main}`);
     }
 
-    declarationCache.set(cacheKey, { files, optionsKey, packages, stamps, tree });
+    rememberDeclarations(cacheKey, { files, optionsKey, packages, stamps, tree });
 
     return files;
 };

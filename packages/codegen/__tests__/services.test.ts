@@ -24,6 +24,23 @@ const write = (relative: string, source: string): void => {
 const generated = (name: string): string => readFileSync(join(workdir, "lunora", "_generated", name), "utf8");
 
 /** A fetch service (`parser`) and an RPC service (`llmGateway`), each in its own folder with its own wrangler config. */
+/** A service that imports a type from the llm-kit package, which the service's node_modules provides. */
+const writeLlmKitImport = (): void => {
+    write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+    write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+    write(
+        "services/llm-gateway/src/index.ts",
+        `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+    );
+};
+
 /** The declaration snapshot the llmGateway service emits, from the workdir's current sources. */
 const emitLlmGateway = (): Record<string, string> | undefined =>
     resolveServiceBindings(workdir)
@@ -142,6 +159,34 @@ export class Gateway {
 
         expect(emitLlmGateway()).not.toBe(first);
         expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when an imported declaration file changes without a manifest change", () => {
+        expect.assertions(2);
+
+        writeServices();
+        writeLlmKitImport();
+
+        const first = emitLlmGateway();
+
+        // The manifest and its `types` target are untouched; only the declaration file the import resolves to changes.
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file is added to the root of a package it imports", () => {
+        expect.assertions(1);
+
+        writeServices();
+        writeLlmKitImport();
+
+        const first = emitLlmGateway();
+
+        write("services/llm-gateway/node_modules/llm-kit/types.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
     });
 
     it("re-emits a service's snapshot when a package it imports retargets its types", () => {
