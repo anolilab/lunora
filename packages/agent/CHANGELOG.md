@@ -1,3 +1,9 @@
+## @lunora/agent [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.236...@lunora/agent@1.0.0-alpha.237) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
 ## @lunora/agent [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.235...@lunora/agent@1.0.0-alpha.236) (2026-10-20)
 
 
