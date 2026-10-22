@@ -643,20 +643,21 @@ func (c *Client) markUnjoined(topic string) {
 // false when no socket is attached, when data will not encode, or when the write
 // fails, and nothing is sent in those cases.
 func (c *Client) Whisper(topic string, data any) bool {
-	c.mu.Lock()
-	send := c.send
-	c.mu.Unlock()
-
-	if send == nil {
-		return false
-	}
-
 	frame, err := BuildWhisperFrame(topic, data)
 	if err != nil {
 		return false
 	}
 
-	return send(frame) == nil
+	// The write is under the lock, so a detach or a replacing attach cannot land between the sender
+	// check and the write: the frame goes to the socket that is attached, or to none.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.send == nil {
+		return false
+	}
+
+	return c.send(frame) == nil
 }
 
 // Room is a joined room. See ConnectRoom.
