@@ -2,7 +2,15 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, findTsconfig, projectConfigCandidatePaths, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import {
+    CodegenDiagnosticError,
+    createCodegenProject,
+    findTsconfig,
+    projectConfigCandidatePaths,
+    refreshCodegenProject,
+    runCodegen,
+    tsconfigFingerprint,
+} from "@lunora/codegen";
 
 import { wranglerCodegenInputs } from "../cloudflare/wrangler-codegen-inputs";
 import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
@@ -60,16 +68,14 @@ const statKey = (path: string): string => {
 };
 
 /**
- * The inputs a refresh cannot pick up, by path, mtime and size.
- *
- * ponytail: stats the nearest `tsconfig.json` and the config candidates only, as the Vite
- * watcher does; an edit to an `extends`-ed tsconfig alone keeps the cached Project.
+ * The inputs a refresh cannot pick up. The selected tsconfig is keyed by its stats and by the settings and file list it
+ * resolves to through its `extends` chain, so an inherited config edit, or a new file its include globs match, rebuilds.
  */
 const projectKey = (lunoraDirectory: string): string => {
     const tsconfigPath = findTsconfig(lunoraDirectory);
 
     return [
-        tsconfigPath === undefined ? "" : statKey(tsconfigPath),
+        tsconfigPath === undefined ? "" : `${statKey(tsconfigPath)}\n${tsconfigFingerprint(tsconfigPath)}`,
         ...projectConfigCandidatePaths(lunoraDirectory)
             .filter((path) => existsSync(path))
             .map((path) => statKey(path)),
