@@ -1,3 +1,14 @@
+## @lunora/config [1.0.0-alpha.396](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.395...@lunora/config@1.0.0-alpha.396) (2026-10-22)
+
+### Performance Improvements
+
+* **codegen:** resolve relative targets with TypeScript's resolver, without a program ([#1299](https://github.com/anolilab/lunora/issues/1299)) ([d360cd8](https://github.com/anolilab/lunora/commit/d360cd814241787e9647c5d2562988b35dbebf27))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.344
+
 ## @lunora/config [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.394...@lunora/config@1.0.0-alpha.395) (2026-10-22)
 
 ### Bug Fixes
