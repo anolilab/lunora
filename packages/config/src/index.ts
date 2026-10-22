@@ -18,6 +18,7 @@ export { MissingBuildOutputError } from "./build-output-error";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
 export {
+    BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,
     BUNDLE_META_PATH_ENV,
     CODEGEN_ENV,

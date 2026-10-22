@@ -30,6 +30,30 @@ describe("bundleMetaPlugin", () => {
         rmSync(projectRoot, { force: true, recursive: true });
     });
 
+    it("ignores a metafile path outside its own .lunora, which a nested build for another project inherits", () => {
+        expect.assertions(2);
+
+        const foreign = join(projectRoot, "elsewhere", "app-meta.json");
+
+        process.env[BUNDLE_META_PATH_ENV] = foreign;
+
+        try {
+            const plugin = bundleMetaPlugin(projectRoot);
+            const generateBundle = plugin.generateBundle as (this: unknown, options: unknown, bundle: unknown) => void;
+
+            generateBundle.call(
+                { environment: { name: "ssr" }, getModuleInfo: () => undefined },
+                {},
+                { "index.js": chunk({ facadeModuleId: join(projectRoot, "src", "index.ts"), modules: {} }) },
+            );
+
+            expect(existsSync(foreign)).toBe(false);
+            expect(existsSync(join(projectRoot, DEFAULT_BUNDLE_META_PATH))).toBe(true);
+        } finally {
+            Reflect.deleteProperty(process.env, BUNDLE_META_PATH_ENV);
+        }
+    });
+
     it("counts a module's rendered bytes, so non-ASCII text is not undercounted", () => {
         expect.assertions(1);
 

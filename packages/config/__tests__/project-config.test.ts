@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { platformMatrixIds } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { BUILD_TARGET_ENV } from "../src/codegen-env";
+import { BUILD_ROOT_ENV, BUILD_TARGET_ENV } from "../src/codegen-env";
 import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
 import { assertBuildTargetMatches, interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
 
@@ -212,9 +212,16 @@ describe("target registries", () => {
 });
 
 describe("assertBuildTargetMatches", () => {
+    const root = resolve("/app");
     const saved = process.env[BUILD_TARGET_ENV];
 
+    beforeEach(() => {
+        process.env[BUILD_ROOT_ENV] = root;
+    });
+
     afterEach(() => {
+        Reflect.deleteProperty(process.env, BUILD_ROOT_ENV);
+
         if (saved === undefined) {
             Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
         } else {
@@ -228,7 +235,7 @@ describe("assertBuildTargetMatches", () => {
         Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
 
         expect(() => {
-            assertBuildTargetMatches("node");
+            assertBuildTargetMatches("node", root);
         }).not.toThrow();
     });
 
@@ -238,7 +245,7 @@ describe("assertBuildTargetMatches", () => {
         process.env[BUILD_TARGET_ENV] = "cloudflare";
 
         expect(() => {
-            assertBuildTargetMatches("cloudflare");
+            assertBuildTargetMatches("cloudflare", root);
         }).not.toThrow();
     });
 
@@ -248,7 +255,7 @@ describe("assertBuildTargetMatches", () => {
         process.env[BUILD_TARGET_ENV] = "";
 
         expect(() => {
-            assertBuildTargetMatches("node");
+            assertBuildTargetMatches("node", root);
         }).not.toThrow();
     });
 
@@ -258,7 +265,17 @@ describe("assertBuildTargetMatches", () => {
         process.env[BUILD_TARGET_ENV] = "cloudflare";
 
         expect(() => {
-            assertBuildTargetMatches("node");
+            assertBuildTargetMatches("node", root);
         }).toThrow(/resolves target "node" but the CLI resolved "cloudflare"/);
+    });
+
+    it("does not check a nested build for another project, which inherits the variables from the CLI's build", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("node", resolve("/app/services/parser"));
+        }).not.toThrow();
     });
 });

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
+    BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,
     BUNDLE_META_PATH_ENV,
     DEFAULT_BUNDLE_META_PATH,
@@ -151,6 +152,7 @@ const runFrameworkBuild = async (cwd: string, tool: FrameworkTool, options: Fram
             command: command.command,
             cwd,
             env: {
+                [BUILD_ROOT_ENV]: resolve(cwd),
                 [BUILD_TARGET_ENV]: options.target,
                 [BUNDLE_META_PATH_ENV]: metaPath,
                 ...(options.lazyFunctions ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),

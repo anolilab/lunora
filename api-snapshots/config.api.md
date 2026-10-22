@@ -149,6 +149,12 @@ const BADGES: Record<BadgeName, BadgeSpec>;
 const BADGE_COLUMN_WIDTH: number;
 ```
 
+### `BUILD_ROOT_ENV` (const)
+
+```ts
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+```
+
 ### `BUILD_TARGET_ENV` (const)
 
 ```ts
@@ -1263,7 +1269,7 @@ const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) =>
 ### `assertBuildTargetMatches` (const)
 
 ```ts
-const assertBuildTargetMatches: (target: string) => void;
+const assertBuildTargetMatches: (target: string, projectRoot: string) => void;
 ```
 
 ### `badgeLead` (const)

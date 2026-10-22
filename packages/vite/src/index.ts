@@ -84,7 +84,7 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
         );
     }
 
-    assertBuildTargetMatches(target);
+    assertBuildTargetMatches(target, projectRoot);
 
     return target;
 };

@@ -32,6 +32,9 @@ const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
  * A plugin whose own `target` option names another one refuses to build, so the artifact cannot
  * describe a target the deploy will not ship to.
  */
+/** The project root the CLI started a client build for. Only that root's plugin checks {@link BUILD_TARGET_ENV} against itself. */
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+
 const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
 
 /** Env var the CLI sets to the path the Vite plugin writes its server metafile to. Unset means the default under `.lunora/`. */
@@ -67,6 +70,7 @@ const isLazyFunctionsEnabled = (value: string | undefined): boolean => {
 const resolveLazyFunctions = (flag?: boolean): boolean => flag === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]);
 
 export {
+    BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,
     BUNDLE_META_PATH_ENV,
     CODEGEN_ENV,
