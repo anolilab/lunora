@@ -18,6 +18,19 @@ class TestSocketSession < Minitest::Test
 
   def ws_fixture = @ws_fixture ||= fixture("ws-frames.json")
 
+  def test_a_detach_made_during_the_connect_write_stays_in_force
+    client = Lunora::Client.new("https://app.example", client_id: "client-test")
+    installed = []
+    client.attach_socket(lambda do |frame|
+      installed << frame
+      client.detach_socket if frame["type"] == "connect"
+    end)
+
+    refute client.online?, "a detach made by the connect sender must not be undone by the attach"
+    refute client.whisper("room:general", "hi"), "nothing is sent on a socket that was detached"
+    assert_equal(%w[connect], installed.map { |frame| frame["type"] })
+  end
+
   def test_connect_frame_first_and_carries_session_token
     ConformanceManifest.covers("connect_frame_first_and_carries_session_token")
     golden = ws_fixture["clientFrames"]

@@ -417,6 +417,7 @@ module Lunora
       # generation it opened under; a refusal notifies only for the current one.
       @credential_generation = 0
       @socket_generation = nil
+      @attach_generation = 0
       @last_notified_generation = nil
       @token_expired_listeners = []
       # Topic => [[listener id, listener]...], oldest first. A topic is present
@@ -442,15 +443,20 @@ module Lunora
     # default, so a misconfigured endpoint surfaces on the first write instead of
     # silently filling a queue that will never flush.
     def attach_socket(sender, context = nil)
-      connect = @mutex.synchronize do
+      generation, connect = @mutex.synchronize do
         @send = nil
+        @attach_generation += 1
         @socket_generation = @credential_generation
-        Lunora.build_connect_frame(@client_id, context, token: @session_token)
+        [@attach_generation, Lunora.build_connect_frame(@client_id, context, token: @session_token)]
       end
 
       sender.call(connect)
 
       joins = @mutex.synchronize do
+        # A detach, or a newer attach, while connect was in flight supersedes this one: the
+        # sender is not installed, so a detach the connect sender made stays in force.
+        next nil unless @attach_generation == generation
+
         @send = sender
         @was_ever_connected = true
         # A topic joined while connect was in flight is in this snapshot or sends
@@ -458,7 +464,7 @@ module Lunora
         @whispers.keys.sort.map { |topic| Lunora.build_whisper_subscribe_frame(topic) }
       end
 
-      joins.each { |frame| sender.call(frame) }
+      joins&.each { |frame| sender.call(frame) }
     end
 
     # Forget the sender, so subsequent writes queue rather than fail, and classify
@@ -472,6 +478,7 @@ module Lunora
     def detach_socket(close_code = nil, reason = nil)
       expired = @mutex.synchronize do
         @send = nil
+        @attach_generation += 1
         expiry_notified_by_close?(close_code, reason)
       end
 
