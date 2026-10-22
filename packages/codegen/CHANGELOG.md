@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.344...@lunora/codegen@1.0.0-alpha.345) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** reuse codegen project for studio edits ([#1301](https://github.com/anolilab/lunora/issues/1301)) ([a990bb3](https://github.com/anolilab/lunora/commit/a990bb3015c27921863d32a329faaa43f30601d7))
+
 ## @lunora/codegen [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.343...@lunora/codegen@1.0.0-alpha.344) (2026-10-22)
 
 ### Performance Improvements
