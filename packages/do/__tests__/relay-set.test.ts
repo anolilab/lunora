@@ -132,7 +132,7 @@ describe("owner promotion probe (/_lunora/route)", () => {
         expect.assertions(1);
 
         // Two live sockets and one pending one, under a threshold of three: the pending one must not promote the owner.
-        await expect(probe("room-1", 3, ENV, 1)).resolves.toBe(0);
+        await expect(probe("room-1", 3, { ...ENV, LUNORA_WS_BEARER: "gate" }, 1)).resolves.toBe(0);
     });
 
     it("caps the fan at LUNORA_MAX_RELAYS", async () => {
