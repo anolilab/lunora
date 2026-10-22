@@ -181,7 +181,9 @@ type Client struct {
 	tokenExpiredListeners []func()
 	// whispers holds each joined topic's listeners, oldest first. A topic is present
 	// exactly while it has a listener, and is joined with the server exactly then.
-	whispers      map[string][]whisperListener
+	whispers map[string][]whisperListener
+	// unjoined holds the topics whose last join write failed, so the next listener sends the join again.
+	unjoined      map[string]bool
 	nextWhisperID int
 }
 
@@ -486,6 +488,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.send = send
 	c.socketGeneration = c.credentialGeneration
 	c.wasEverConnected = true
+	c.unjoined = nil
 }
 
 // DetachSocket forgets the sender, so subsequent writes queue rather than fail, and
@@ -573,6 +576,7 @@ func notifyTokenExpiredListener(listener func()) {
 // last one sends whisper_unsubscribe (when attached) and forgets the topic.
 func (c *Client) WhisperSubscribe(topic string, listener WhisperHandler) Unsubscribe {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	if c.whispers == nil {
 		// A literal-constructed Client has a nil map, as Subscribe allows for.
@@ -581,17 +585,22 @@ func (c *Client) WhisperSubscribe(topic string, listener WhisperHandler) Unsubsc
 
 	c.nextWhisperID++
 	id := c.nextWhisperID
-	joining := len(c.whispers[topic]) == 0
+	joining := len(c.whispers[topic]) == 0 || c.unjoined[topic]
 	c.whispers[topic] = append(c.whispers[topic], whisperListener{id: id, handle: listener})
-	send := c.send
-	c.mu.Unlock()
 
-	if joining && send != nil {
-		_ = send(BuildWhisperSubscribeFrame(topic))
+	// The join is written under the lock, in the order the listener state changes, so a leave cannot
+	// overtake it. A join that fails is retried by the next listener on the topic.
+	if joining && c.send != nil {
+		if c.send(BuildWhisperSubscribeFrame(topic)) != nil {
+			c.markUnjoined(topic)
+		} else {
+			delete(c.unjoined, topic)
+		}
 	}
 
 	return func() {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 
 		remaining := make([]whisperListener, 0, len(c.whispers[topic]))
 
@@ -602,25 +611,32 @@ func (c *Client) WhisperSubscribe(topic string, listener WhisperHandler) Unsubsc
 		}
 
 		if len(remaining) == len(c.whispers[topic]) {
-			c.mu.Unlock()
+			return
+		}
+
+		if len(remaining) > 0 {
+			c.whispers[topic] = remaining
 
 			return
 		}
 
-		leaving := len(remaining) == 0
-		if leaving {
-			delete(c.whispers, topic)
-		} else {
-			c.whispers[topic] = remaining
-		}
+		delete(c.whispers, topic)
+		delete(c.unjoined, topic)
 
-		send := c.send
-		c.mu.Unlock()
-
-		if leaving && send != nil {
-			_ = send(BuildWhisperUnsubscribeFrame(topic))
+		if c.send != nil {
+			_ = c.send(BuildWhisperUnsubscribeFrame(topic))
 		}
 	}
+}
+
+// markUnjoined records that a topic's join was not written, so the next listener on it sends the join
+// again. Caller holds c.mu.
+func (c *Client) markUnjoined(topic string) {
+	if c.unjoined == nil {
+		c.unjoined = map[string]bool{}
+	}
+
+	c.unjoined[topic] = true
 }
 
 // Whisper relays data to the other members of topic. It is not queued: it reports

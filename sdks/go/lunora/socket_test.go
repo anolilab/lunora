@@ -6,6 +6,7 @@ package lunora
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -440,5 +441,35 @@ func TestWhisperTopicsRejoinAfterReconnect(t *testing.T) {
 		}
 
 		client.DetachSocket(0, "")
+	}
+}
+
+// TestAFailedJoinIsRetriedByTheNextListener pins that a join the socket refused is sent again by the
+// next listener on the topic, instead of that listener skipping it because the topic looks joined.
+func TestAFailedJoinIsRetriedByTheNextListener(t *testing.T) {
+	client := NewClient("https://app.example", nil)
+
+	refuseOnce := true
+	var joins int
+
+	client.AttachSocket(func(frame map[string]any) error {
+		if frame["type"] == "whisper_subscribe" {
+			if refuseOnce {
+				refuseOnce = false
+
+				return errors.New("write failed")
+			}
+
+			joins++
+		}
+
+		return nil
+	}, nil)
+
+	client.WhisperSubscribe("room:general", func(any) {})
+	client.WhisperSubscribe("room:general", func(any) {})
+
+	if joins != 1 {
+		t.Fatalf("whisper_subscribe frames written after a refused join = %d, want 1 from the second listener", joins)
 	}
 }
