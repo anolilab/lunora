@@ -1,3 +1,12 @@
+## @lunora/hyperdrive [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.196...@lunora/hyperdrive@1.0.0-alpha.197) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.200
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
 ## @lunora/hyperdrive [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.195...@lunora/hyperdrive@1.0.0-alpha.196) (2026-10-20)
 
 

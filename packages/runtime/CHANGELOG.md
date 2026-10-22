@@ -1,3 +1,12 @@
+## @lunora/runtime [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.228...@lunora/runtime@1.0.0-alpha.229) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.162
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
 ## @lunora/runtime [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.227...@lunora/runtime@1.0.0-alpha.228) (2026-10-20)
 
 

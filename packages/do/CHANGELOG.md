@@ -1,3 +1,47 @@
+## @lunora/do [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.237...@lunora/do@1.0.0-alpha.238) (2026-10-22)
+
+### ⚠ BREAKING CHANGES
+
+* the drizzle surface re-exported by @lunora/server (and
+mirrored in lunorash) now reflects drizzle-orm v1: the sync/async database
+and dialect classes (`SQLiteSyncDialect`, `SQLiteAsyncDialect`,
+`BaseSQLiteDatabase`, transactions) and the builder `*Initial` types are
+gone; v1 codec helpers (`bufferFromHex`, `camelCase`, `snakeCase`,
+`dateFrom*`, …) and insert-selection validation types are new.
+`D1Client.drizzle` / `drizzleSession` and `ShardDO.db` now return the
+schema-less `DrizzleD1Database` / `DrizzleSqliteDODatabase`. The
+`drizzle-orm` peer range moves from ^0.45.3 to exact 1.0.0-rc.5.
+
+Verified: lint:types, api:check (snapshots updated), dist:check, eslint,
+prettier, package-json order, full `pnpm run test` (the 28 codegen emit
+failures and one node-profiler failure reproduce identically on the base
+commit — pre-existing, not from this bump), and `pnpm run test:workerd`
+(19/20 suites pass; @lunora/x402 failed once from workerd resource
+contention, has no drizzle dependency, and passed standalone on retry —
+every drizzle-touching suite incl. d1, do, shard-engine, sql-store, server
+is green).
+
+* docs(d1): correct the stmt-cache rationale
+
+D1 caches compiled statements server-side, keyed by the SQL text: the JS
+D1PreparedStatement is inert, and every execution carries the text and
+params over RPC regardless of which object it came from. The cache
+therefore buys no round trips — only the allocation of one statement
+object per distinct text — so say that instead of the round-trip claim.
+
+* chore(deps): drop the vite age-gate entry alpha superseded
+
+### deps
+
+* bump drizzle-orm to 1.0.0-rc.5 ([#1293](https://github.com/anolilab/lunora/issues/1293)) ([83cb460](https://github.com/anolilab/lunora/commit/83cb46079e44f52a3e94e9abda5c9be31ec5eddb)), closes [#1292](https://github.com/anolilab/lunora/issues/1292)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
 ## @lunora/do [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.236...@lunora/do@1.0.0-alpha.237) (2026-10-20)
 
 
