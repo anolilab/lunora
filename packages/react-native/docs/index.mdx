@@ -95,8 +95,8 @@ every request so the jar never rides along; a caller supplying its own `fetch`
 should wrap it in `withoutAmbientCookies`.
 
 - **`expoBearerToken(authClient)`**: reads the better-auth Expo session token
-  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and
-  `setSessionBearer` (the socket's upgrade); returns `null` when signed out.
+  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and in the
+  socket upgrade's `Authorization` header via `getAuthHeaders`; returns `null` when signed out.
 - **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`**: re-exported
   from `@better-auth/expo/client`.
 
