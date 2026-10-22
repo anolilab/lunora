@@ -8017,7 +8017,14 @@ abstract class ShardDO {
             return;
         }
 
-        if (envelope.type === "connect" || envelope.type === "whisper" || envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+        // A pending socket's connect runs this cleanup only after its credential is verified (see the connect
+        // branch): otherwise an unauthenticated peer could retire rooms for every socket on the shard.
+        if (
+            (envelope.type === "connect" && inboundAttachment.authenticated !== false) ||
+            envelope.type === "whisper" ||
+            envelope.type === "whisper_subscribe" ||
+            envelope.type === "whisper_unsubscribe"
+        ) {
             this.rejectRetainedRooms(ws);
         }
 
@@ -8062,6 +8069,7 @@ abstract class ShardDO {
                     return;
                 }
 
+                this.rejectRetainedRooms(ws);
                 attachment.authenticated = true;
                 delete attachment.pendingSince;
 

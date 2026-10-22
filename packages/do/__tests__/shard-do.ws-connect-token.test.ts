@@ -1,5 +1,5 @@
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -150,6 +150,32 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(ws.closes).toStrictEqual([{ code: 4003, reason: "connect deadline" }]);
         expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(false);
         expect(ws.attachment?.authenticated).toBe(false);
+    });
+
+    it("does not run the retained-room cleanup for a pending connect that fails the credential check", async () => {
+        expect.assertions(1);
+
+        const shard = new GateShard(state, bearerEnv);
+        const cleanup = vi.spyOn(shard as unknown as { rejectRetainedRooms: (ws: WebSocket) => number }, "rejectRetainedRooms");
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveFrame(ws, { id: "connect", token: "wrong", type: "connect" });
+
+        expect(cleanup).not.toHaveBeenCalled();
+    });
+
+    it("runs the retained-room cleanup once a pending connect proves the credential", async () => {
+        expect.assertions(1);
+
+        const shard = new GateShard(state, bearerEnv);
+        const cleanup = vi.spyOn(shard as unknown as { rejectRetainedRooms: (ws: WebSocket) => number }, "rejectRetainedRooms");
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
+
+        expect(cleanup).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a connect whose token does not match, and sends no identity", async () => {
