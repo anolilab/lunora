@@ -25,6 +25,7 @@ import 'offline_cases.dart';
 import 'optimistic_cases.dart';
 import 'replay_cases.dart';
 import 'rpc_cases.dart';
+import 'socket_cases.dart';
 import 'wire_cases.dart';
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -150,6 +151,13 @@ Future<void> main() async {
   await run(caseTokenDigestMatchesTheReferenceClient);
   await run(caseReconnectDuringAFlushIsNotLost);
   await run(caseCloseRejectsPendingWrites);
+
+  await run(caseConnectFrameFirstAndCarriesSessionToken);
+  await run(caseWsUrlCarriesOnlyTheAdminTicket);
+  await run(caseAttachSocketCarriesConnectionContext);
+  await run(caseCloseCodesDriveTokenExpiry);
+  await run(caseWhisperFramesJoinSendAndDeliver);
+  await run(caseWhisperTopicsRejoinAfterReconnect);
 
   // The after-all hook. Adding a name to protocol/conformance-cases.json turns
   // this leg red until a case actually executes under it — the evidence is the
