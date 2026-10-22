@@ -78,8 +78,9 @@ with `LUNORA_WS_BEARER` closes a socket whose first frame is not `connect` with 
 never sent on the socket.
 
 `detachSocket(closeCode:reason:)` takes the close frame that ended the socket; pass nil
-(the default) when there was none. A 4001 always notifies the listeners `onTokenExpired(_:)` registers. A 4003 refuses the session
-credential: it notifies once per credential generation, and a new generation starts each
+(the default) when there was none. A 4001 always notifies the listeners `onTokenExpired(_:)`
+registers. A 4003 refuses the session credential: it notifies once per credential generation,
+and a new generation starts each
 time `sessionToken` changes. It notifies nothing for a socket that opened under an earlier
 generation, or for a reason of exactly `connect deadline`. A `TOKEN_EXPIRED` error frame
 notifies and is not routed to its subscription; `UNAUTHENTICATED` routes like any other
