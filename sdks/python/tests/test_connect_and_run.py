@@ -298,6 +298,29 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
+    async def test_a_session_provider_that_raises_fails_the_attempt_without_a_socket(self):
+        """A session credential that cannot be resolved fails the attempt: no socket opens and no frame is sent.
+
+        A tokenless socket would be refused with 4003 on a deployment that requires the
+        credential, or admitted as anonymous on one that does not. Failing and letting the
+        reconnect backoff re-resolve the credential is what the TS client does.
+        """
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+
+        def failing_provider():
+            raise RuntimeError("mint endpoint down")
+
+        client = LunoraClient("http://example.invalid", ws_token=failing_provider)
+
+        with self.assertRaises(RuntimeError):
+            await asyncio.wait_for(client.connect_and_run(), TIMEOUT)
+
+        self.assertEqual(fake.urls, [], "no socket URL is dialed")
+        self.assertEqual(socket.sent, [], "no frame, connect included, is sent")
+        self.assertFalse(client.online)
+
     async def test_a_server_close_code_is_classified_on_detach_through_connect_and_run(self):
         """The close frame rides the ``ConnectionClosed`` out of the read loop and reaches detach.
 
