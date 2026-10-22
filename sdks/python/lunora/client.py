@@ -343,12 +343,14 @@ class RoomHandle:
     def __init__(self, send: Callable[[Any], bool], leave: Unsubscribe) -> None:
         self._relay = send
         self._leave = leave
+        self._closed = False
 
     def send(self, message: Any) -> bool:
-        """Relay ``message``; ``False`` when no socket is attached (nothing is queued)."""
-        return self._relay(message)
+        """Relay ``message``; ``False`` when no socket is attached, or the room is closed (nothing is queued)."""
+        return not self._closed and self._relay(message)
 
     def close(self) -> None:
+        self._closed = True
         self._leave()
 
 
@@ -383,6 +385,7 @@ class LunoraClient:
         self._ws_credential_generation = 0
         #: The generation the live socket opened under, and the last one a 4003 refusal notified.
         self._socket_generation = 0
+        self._attach_generation = 0
         self._refused_generation: Optional[int] = None
         self._token_expired_listeners: list[Callable[[], None]] = []
         self._whisper_listeners: dict[str, list[Callable[[Any], None]]] = {}
@@ -473,10 +476,17 @@ class LunoraClient:
     def _attach(self, send: Callable[[dict], None], context: Optional[dict], session: Optional[str], generation: int) -> None:
         with self._lock:
             self._socket_generation = generation
-        # `connect` goes out before the sender is visible, so no frame another thread
-        # produces can reach the server ahead of it.
+            # `connect` goes out before the sender is visible, so no frame another thread
+            # produces can reach the server ahead of it.
+            self._send = None
+            self._attach_generation += 1
+            attach_generation = self._attach_generation
         send(build_connect_frame(self.client_id, context, session))
         with self._lock:
+            # A detach, or a newer attach, while connect was in flight supersedes this one: the
+            # sender is not installed, so a detach the connect sender made stays in force.
+            if attach_generation != self._attach_generation:
+                return
             self._send = send
             self._was_ever_connected = True
             topics = list(self._whisper_listeners)
@@ -508,6 +518,7 @@ class LunoraClient:
 
         with self._lock:
             self._send = None
+            self._attach_generation += 1
             notify = close_code == TOKEN_EXPIRED_CLOSE
             if close_code == REFUSED_CLOSE and reason != CONNECT_DEADLINE_REASON:
                 opened = self._socket_generation

@@ -245,6 +245,32 @@ class TestSocketSessionBehaviour(unittest.TestCase):
                 client.handle_frame(frame)
         self.assertEqual(delivered, [])
 
+    def test_a_detach_made_during_the_connect_write_stays_in_force(self):
+        client = _client()
+        sent = []
+
+        def connect_sender(frame):
+            sent.append(frame["type"])
+            if frame["type"] == "connect":
+                client.detach_socket()
+
+        client.attach_socket(connect_sender)
+
+        self.assertFalse(client.online, "a detach made by the connect sender must not be undone")
+        self.assertFalse(client.whisper("room:general", "hi"), "nothing is sent on a detached socket")
+        self.assertEqual(sent, ["connect"])
+
+    def test_a_closed_room_refuses_sends(self):
+        client = _client()
+        sent = []
+        client.attach_socket(sent.append)
+        room = client.connect_room("general", lambda _value: None)
+        client.whisper_subscribe("room:general", lambda _value: None)
+        room.close()
+
+        self.assertFalse(room.send("after close"), "a closed room must report its send as not sent")
+        self.assertNotIn("whisper", [frame["type"] for frame in sent], "and must write no whisper frame")
+
 
 if __name__ == "__main__":
     unittest.main()
