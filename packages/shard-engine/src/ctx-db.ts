@@ -475,6 +475,33 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
     }
 };
 
+/**
+ * Read the rows a `deleteWhere`/`patchWhere` will touch, rejecting an over-cap
+ * match before decoding it. The read stops one row past the cap — enough to
+ * know the batch is too big — and only the over-cap path pays a `COUNT(*)` so
+ * the error still reports the real number of matches. A non-finite cap (no
+ * bound at all) reads unbounded.
+ */
+const readBatchMatches = async (
+    source: DatabaseWriterLike,
+    tableName: string,
+    where: WhereInput,
+    limit: number | undefined,
+    op: string,
+): Promise<Record<string, unknown>[]> => {
+    const cap = limit ?? DEFAULT_BATCH_LIMIT;
+    const bounded = Number.isFinite(cap);
+    const { page } = await source.findMany(tableName, bounded ? { limit: cap + 1, omitContinueCursor: true, where } : { where });
+
+    if (bounded && page.length > cap) {
+        // `Math.max` keeps the throw here (not in deleteMany/patchMany) even if
+        // the count and the read ever disagree.
+        assertBatchLimit(Math.max(await source.count(tableName, { where }), page.length), limit, op);
+    }
+
+    return page;
+};
+
 interface SearchStage {
     definition: SearchIndexDefinitionLike;
     field: string;
@@ -3366,8 +3393,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // row). Pinning `tableName` here would therefore make every global delete a
             // silent no-op: the count would inflate, the rows would survive, and a table
             // with at least `chunkSize` rows would loop forever because `findMany` kept
-            // returning the same page. Leave the table unpinned for a global table —
-            // exactly what `deleteWhere` does when it hands ids to `deleteMany`.
+            // returning the same page. Leave the table unpinned for a global table.
             const expectedTable = isGlobalTable(tableName) ? undefined : tableName;
             let deleted = 0;
 
@@ -3437,10 +3463,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
             const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
-            const page = await source.findMany(tableName, { where });
-            const ids = page.page.map((row) => String(row["_id"]));
-
-            assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
+            const matches = await readBatchMatches(source, tableName, where, batchOptions?.limit, "deleteWhere");
+            const ids = matches.map((row) => String(row["_id"]));
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always
@@ -3449,7 +3473,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
             }
 
-            return writer.deleteMany(ids, batchOptions);
+            // Pinned to `tableName` so each id takes the single-table probe, not
+            // the UNION-ALL across every table.
+            return writer.deleteMany(ids, batchOptions, tableName);
         },
 
         async findFirst(tableName, args = {}) {
@@ -4299,12 +4325,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation-span (if any) keeps the read and the subsequent patches
             // consistent.
             const source = globalWriterFor(tableName, "patchWhere") ?? writer;
-            const page = await source.findMany(tableName, { where: args.where });
-            const patches = page.page.map((row) => {
+            const matches = await readBatchMatches(source, tableName, args.where, batchOptions?.limit, "patchWhere");
+            const patches = matches.map((row) => {
                 return { id: String(row["_id"]), patch: args.patch };
             });
-
-            assertBatchLimit(patches.length, batchOptions?.limit, "patchWhere");
 
             // Reuse the id-based pipeline so OCC, triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always
@@ -4313,7 +4337,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
             }
 
-            await writer.patchMany(patches, batchOptions);
+            // Pinned to `tableName` so each id takes the single-table probe.
+            await writer.patchMany(patches, batchOptions, tableName);
 
             return { patched: patches.length };
         },

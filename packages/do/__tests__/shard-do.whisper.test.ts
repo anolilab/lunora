@@ -264,15 +264,19 @@ describe("shardDO token-expiry", () => {
         // and then never sends another inbound frame. No write flush, no shape
         // poke and no global poll fire on a pure presence/cursor workload, so
         // this fan-out is the ONLY outbound path that can notice the expiry.
-        const b = new FakeSocket({ subs: {} });
+        const joinedAt = Date.now();
+        const b = new FakeSocket({ expiresAt: joinedAt + 60_000, subs: {} });
         const shard = makeShard([a, b]);
 
         await send(shard, a, { topic: "t", type: "whisper_subscribe" });
         await send(shard, b, { topic: "t", type: "whisper_subscribe" });
 
-        b.serializeAttachment({ ...(b.deserializeAttachment() as Record<string, unknown>), expiresAt: 1000 });
+        // b's credential lapses as time passes; a's carries no expiry.
+        const lapsed = vi.spyOn(Date, "now").mockReturnValue(joinedAt + 120_000);
 
-        await send(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" });
+        await send(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" }).finally(() => {
+            lapsed.mockRestore();
+        });
 
         expect(withoutAck(b)).toHaveLength(1);
         expect(withoutAck(b)[0]?.type).not.toBe("whisper");

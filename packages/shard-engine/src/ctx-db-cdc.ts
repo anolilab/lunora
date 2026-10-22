@@ -65,6 +65,22 @@ const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
 const CDC_LOG_TABLE_ID_SEQ_INDEX = "__cdc_log_table_id_seq";
 
 /**
+ * The rows {@link minCdcReplayableSeq} looks for: a non-delete whose post-image
+ * was compacted away. Shared by the partial index and the query, because SQLite
+ * only uses a partial index when the query's WHERE carries every term of its
+ * predicate.
+ */
+const CDC_PAYLOAD_GAP_PREDICATE = dsql.raw(`op <> 'delete' AND doc IS NULL`);
+
+/**
+ * Partial index over {@link CDC_PAYLOAD_GAP_PREDICATE}, backing the `MAX(seq)` in
+ * {@link minCdcReplayableSeq}. Without it every replica pull walks the whole log
+ * looking for a row that, with payload compaction off, does not exist. It holds
+ * only compacted rows, so it is empty (and free to maintain) until compaction runs.
+ */
+const CDC_LOG_PAYLOAD_GAP_INDEX = "__cdc_log_payload_gap";
+
+/**
  * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
  * each shard a monotonic cursor that streaming-export consumers and replay-PITR
  * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
@@ -110,6 +126,16 @@ const migrateCdcLog = (sql: SqlExec, options: { rowHistoryIndex?: boolean } = {}
         );
     } catch {
         /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
+    }
+
+    // Same isolation: the first build reads the whole log once.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_PAYLOAD_GAP_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (seq) WHERE ${CDC_PAYLOAD_GAP_PREDICATE}`,
+        );
+    } catch {
+        /* degraded read path; the next cold start retries */
     }
 
     if (options.rowHistoryIndex !== true) {
@@ -662,7 +688,7 @@ const minCdcSeq = (sql: SqlExec): number | undefined => {
 const minCdcReplayableSeq = (sql: SqlExec): number | undefined => {
     const rows = runDrizzle<{ seq: null | number }>(
         sql,
-        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE op <> 'delete' AND doc IS NULL`,
+        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE ${CDC_PAYLOAD_GAP_PREDICATE}`,
     ).toArray();
 
     const compactedThrough = rows[0]?.seq ?? undefined;

@@ -10,6 +10,7 @@
  * are excluded from the scan so the sweep doesn't re-process tombstones.
  */
 
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
@@ -49,4 +50,26 @@ export const selectExpiredIds = (sql: SqlExec, spec: TtlSweepSpec, now: number, 
     const ids = rows.slice(0, limit).map((row) => row.id);
 
     return { hasMore, ids };
+};
+
+/**
+ * The column list of a TTL table's expression index, built from the same
+ * {@link jsonPathSql} the sweep's WHERE uses so SQLite matches the two. A
+ * soft-delete table leads with its marker: `marker IS NULL` is then an equality
+ * prefix, and neither the sweep nor {@link nextTtlExpiry} walks tombstones.
+ */
+export const ttlIndexColumns = (field: string, softDeleteField: string | undefined): SQL =>
+    softDeleteField === undefined ? jsonPathSql(field) : dsql`${jsonPathSql(softDeleteField)}, ${jsonPathSql(field)}`;
+
+/**
+ * The earliest expiry instant (`field + after`) among `spec.table`'s live rows,
+ * or `undefined` when no row carries a numeric TTL. A non-numeric value never
+ * satisfies the sweep's `< cutoff`, so it never expires and is not reported.
+ */
+export const nextTtlExpiry = (sql: SqlExec, spec: TtlSweepSpec): number | undefined => {
+    const live = spec.softDeleteField === undefined ? dsql`` : dsql` WHERE ${jsonPathSql(spec.softDeleteField)} IS NULL`;
+    const query = dsql`SELECT MIN(${jsonPathSql(spec.field)}) AS expiry FROM ${dsql.identifier(spec.table)}${live}`;
+    const expiry = runDrizzle<{ expiry: unknown }>(sql, query).toArray()[0]?.expiry;
+
+    return typeof expiry === "number" ? expiry + (spec.after ?? 0) : undefined;
 };
