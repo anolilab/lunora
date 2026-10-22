@@ -487,6 +487,7 @@ const tableNameFromId = async (
     schema: SchemaLike,
     id: string,
     cache: ReturnType<typeof createTableNameCache>,
+    expectedTable?: string,
 ): Promise<string | undefined> => {
     const cached = cache.get(id);
 
@@ -500,9 +501,11 @@ const tableNameFromId = async (
     // before the `.global()` flag existed don't set shardMode at all — preserve
     // the legacy "probe every table" behaviour there so existing fixtures keep
     // working.)
+    // A pinned `expectedTable` narrows the probe to that one table; the caller still rejects any other owner.
     const candidates = Object.entries(schema.tables)
         .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
-        .map(([tableName]) => tableName);
+        .map(([tableName]) => tableName)
+        .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
 
     // Fire every probe at once; the first non-empty result wins.
     const probes = await Promise.all(
@@ -1835,7 +1838,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
         await ensureMigrated();
 
-        const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache);
+        const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache, expectedTable);
 
         // When the caller pins a table (the `ctx.db.<table>.get/delete/...`
         // by-id facade forwards its bound name), an id that resolves to a
