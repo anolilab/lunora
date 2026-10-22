@@ -1398,7 +1398,7 @@ impl Client {
                     }
                 }
             }
-            // `whisper_subscribed` and `identity` need no action: joins are never awaited.
+            // `whisper_subscribed` and `identity` need no action: this client never waits on a join.
             _ => {}
         }
 
