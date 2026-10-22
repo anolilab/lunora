@@ -240,6 +240,10 @@ class LunoraClient {
     _send = null;
     final attachGeneration = ++_attachGeneration;
 
+    // The credential generation is read with the frames, before any sender callback can change it, so the
+    // socket is tagged with the credential it presented.
+    final credential = _credentialGeneration;
+
     // Built before any is sent, for the reason [resendSubscriptions] gives: the
     // sender is the caller's code.
     final frames = <Map<String, Object?>>[
@@ -248,6 +252,12 @@ class LunoraClient {
     ];
 
     for (final frame in frames) {
+      // A sender that detaches or re-attaches during a write supersedes this attach: the rest of the
+      // frames are not written to a socket that is no longer attached.
+      if (attachGeneration != _attachGeneration) {
+        return;
+      }
+
       sender(frame);
     }
 
@@ -256,7 +266,7 @@ class LunoraClient {
     }
 
     _send = sender;
-    _socketGeneration = _credentialGeneration;
+    _socketGeneration = credential;
   }
 
   /// Forgets the sender, so a subscription made while the socket is down is

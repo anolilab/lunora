@@ -161,6 +161,7 @@ Future<void> main() async {
   await run(caseClosedRoomRefusesSends);
   await run(caseThrowingWhisperListenerDoesNotEndDispatch);
   await run(caseFailedConnectLeavesTheClientOffline);
+  await run(caseSupersededAttachWritesNoMoreJoins);
 
   // The after-all hook. Adding a name to protocol/conformance-cases.json turns
   // this leg red until a case actually executes under it — the evidence is the

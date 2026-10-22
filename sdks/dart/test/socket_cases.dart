@@ -251,6 +251,24 @@ void caseFailedConnectLeavesTheClientOffline() {
   check(!client.whisper('room:general', 'after a failed connect'), 'the client must stay offline after a failed connect');
 }
 
+/// A sender that detaches during the attach's joins stops the remaining joins from being written.
+void caseSupersededAttachWritesNoMoreJoins() {
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+  final sent = <Map<String, Object?>>[];
+
+  client
+    ..whisperSubscribe('room:a', (_) {})
+    ..whisperSubscribe('room:b', (_) {});
+  client.attachSocket((frame) {
+    sent.add(frame);
+    if (frame['type'] == 'whisper_subscribe') {
+      client.detachSocket();
+    }
+  });
+
+  equals(sent.where((frame) => frame['type'] == 'whisper_subscribe').length, 1, 'a detach during the joins stops the remaining joins');
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');
