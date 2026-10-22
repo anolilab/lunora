@@ -129,6 +129,22 @@ export interface SubscriptionState {
     optimisticLayers: OptimisticLayer[];
 
     /**
+     * The merged value of a delta run whose final, cursor-carrying frame has not
+     * arrived yet. Held aside so a run of k frames commits, notifies and
+     * broadcasts once. Dropped when a snapshot, a `resume`, or a new socket
+     * supersedes the run.
+     */
+    pendingDeltaRun?: { payload: unknown };
+
+    /**
+     * Whether the last committed frame carried a `cursor` — i.e. this shard
+     * stamps one on the final frame of every delta run, so a cursorless delta is
+     * a run's non-final frame. False on shards without CDC, where every delta
+     * commits on its own.
+     */
+    runsCarryCursor?: boolean;
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A

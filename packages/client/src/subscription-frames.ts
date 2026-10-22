@@ -63,6 +63,14 @@ export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: 
     position.cursor < state.serverCursor;
 
 /**
+ * Whether a frame is a delta run's non-final frame. The server stamps the resume cursor
+ * only on a run's last frame, and only on shards with CDC, so a cursorless delta means
+ * "more follows" only for a subscription whose frames have been carrying a cursor.
+ */
+export const isNonFinalRunFrame = (state: SubscriptionState, message: { cursor?: number; type: string }): boolean =>
+    message.type === "delta" && message.cursor === undefined && state.runsCarryCursor === true;
+
+/**
  * Whether a cross-tab frame was stamped for another identity. A frame with no stamp
  * (a mixed-version leader) is accepted, as before.
  */

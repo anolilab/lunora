@@ -1544,6 +1544,10 @@ interface SubscriptionState {
     lastMutationId?: number;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
+    runsCarryCursor?: boolean;
     serverBase: unknown;
     serverCursor?: number;
     serverEpoch?: string;
