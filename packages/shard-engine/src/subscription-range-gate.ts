@@ -27,6 +27,14 @@ interface SubscriptionReadFootprint {
 type ChangedKeys = Map<string, IndexKeyEntry[] | undefined>;
 
 /**
+ * Most positions tracked per table before it is recorded as unknown. A bulk
+ * write past this re-runs every subscription on the table, which is always
+ * safe, and keeps the per-write gate cost bounded instead of growing with the
+ * number of rows written.
+ */
+const MAX_TRACKED_KEYS_PER_TABLE = 1000;
+
+/**
  * Fold one request's written positions into the coalesced refresh batch.
  *
  * Pessimistic by construction: a table counts as unknown if it is unknown in
@@ -48,7 +56,17 @@ const mergeChangedKeys = (pending: ChangedKeys | undefined, incoming: ChangedKey
             continue;
         }
 
-        merged.set(table, previous ? [...previous, ...next] : next);
+        // Append in place: the batch owns its arrays (the drain swaps the map
+        // out before reading it), and copying here is quadratic in the burst.
+        const keys = previous ?? next;
+
+        if (previous) {
+            for (const entry of next) {
+                keys.push(entry);
+            }
+        }
+
+        merged.set(table, keys.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : keys);
     }
 
     return merged;
@@ -84,7 +102,21 @@ const recordChangedKeys = (pending: ChangedKeys | undefined, table: string, inde
 
     const existing = keysByTable.get(table);
 
-    keysByTable.set(table, existing ? [...existing, ...indexKeys] : [...indexKeys]);
+    if (!existing) {
+        // Copy once so later in-place appends never mutate the caller's array.
+        keysByTable.set(table, indexKeys.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : [...indexKeys]);
+
+        return keysByTable;
+    }
+
+    // Append in place — copying the whole list per written row is quadratic.
+    for (const entry of indexKeys) {
+        existing.push(entry);
+    }
+
+    if (existing.length > MAX_TRACKED_KEYS_PER_TABLE) {
+        keysByTable.set(table, undefined);
+    }
 
     return keysByTable;
 };
@@ -124,5 +156,5 @@ const writeTouchesMemo = (memo: SubscriptionReadFootprint, changed: Set<string>,
     return false;
 };
 
-export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo };
+export { MAX_TRACKED_KEYS_PER_TABLE, mergeChangedKeys, recordChangedKeys, writeTouchesMemo };
 export type { ChangedKeys, SubscriptionReadFootprint };
