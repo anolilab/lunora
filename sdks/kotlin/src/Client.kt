@@ -630,7 +630,8 @@ class Client(
             try {
                 listener()
             } catch (error: Exception) {
-                // One bad observer must not stop the rest, nor the socket teardown or frame handling that reported the expiry.
+                // One bad observer must not stop the rest, nor the socket teardown or
+                // frame handling that reported the expiry.
             }
         }
     }
