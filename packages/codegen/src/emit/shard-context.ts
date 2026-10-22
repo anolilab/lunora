@@ -356,6 +356,9 @@ ${
                                 ...Object.getOwnPropertyDescriptors(target),
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },${mutationOrmDescriptor}
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
+                                // The composed mutation's ids already come from the action's replay key, so its draws take that key too;
+                                // the action's own unkeyed random would make a retried action's mutation draw different values.
+                                random: { configurable: true, enumerable: true, value: createStableRandomFactory(stableKey, stableScope), writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
@@ -421,6 +424,8 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
                         ...descriptors,
                         fetch: field(refuseFetch),
                         origin: field(undefined),
+                        // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
+                        random: field(createStableRandomFactory(undefined, stableScope)),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;
