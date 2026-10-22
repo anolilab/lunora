@@ -62,8 +62,9 @@ export const createStableIdFactory = (mutationId: string | undefined, scope: str
  *
  * The values are DERIVED, not random: anyone who knows the scope and the replay key
  * can compute them. Use `crypto.getRandomValues` for anything an attacker must not
- * guess. Without a replay key this is `Math.random`, and a query, an action or a
- * nested call has no replay key, so a value there is not replay-stable.
+ * guess. Without a replay key this is `Math.random`: queries, actions themselves and
+ * unkeyed calls are not replay-stable. A mutation composed from a keyed action or
+ * mutation draws from its caller's keyed sequence.
  * @param mutationId the call's replay key, or `undefined` when there is none.
  * @param scope the same scope string {@link createStableIdFactory} takes.
  */
