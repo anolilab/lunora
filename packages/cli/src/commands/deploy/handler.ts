@@ -527,6 +527,94 @@ const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefi
 const gateServicePaths = (cwd: string, options: DeployCommandOptions): string[] =>
     serviceDeploySkipReason(options) === undefined ? readServiceBindings(cwd).services.map((service) => service.wranglerPath) : [];
 
+// A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
+// target the same host, and run for the environment wrangler deploys.
+const serviceBuildOptions = (
+    directory: string,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+    frameworkBuild: boolean | undefined,
+    spawner: Spawner,
+): Parameters<typeof runClientBuild>[0] => {
+    return {
+        cwd: directory,
+        environment: options.env,
+        frameworkBuild,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+        logger: options.logger,
+        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
+        spawner,
+        strictAdvisories: resolveStrictAdvisories(options),
+        target: driver.id,
+    };
+};
+
+/**
+ * The driver's toolchain when its services deploy from here. Otherwise the reason is logged, with the services it leaves undeployed,
+ * and `undefined` is returned.
+ */
+const serviceToolchain = (
+    services: ReadonlyArray<{ worker: string }>,
+    options: DeployCommandOptions,
+    driver: DeployDriver,
+): NonNullable<DeployDriver["toolchain"]> | undefined => {
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+
+    if (skipped !== undefined || toolchain === undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    return toolchain;
+};
+
+/**
+ * The first service whose client build the target refuses, named, so the deploy stops before any service is deployed. A refusal found
+ * after an earlier service deployed would leave a partial set.
+ */
+const firstServiceRefusal = (
+    services: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
+    buildFor: (directory: string) => Parameters<typeof runClientBuild>[0],
+): string | undefined => {
+    for (const service of services) {
+        const refusal = clientBuildRefusal(buildFor(dirname(service.wranglerPath)));
+
+        if (refusal !== undefined) {
+            return `service ${service.name} (${service.worker}): ${refusal}`;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The service refusal a deploy would hit, found before the app's client build writes anything. Read-only: it reads the service
+ * bindings and runs the same refusal check the service loop runs. Services the deploy skips are not checked, as in the loop.
+ */
+const serviceRefusalBeforeWrites = (cwd: string, options: DeployCommandOptions, target: string): string | undefined => {
+    const { error, services } = readServiceBindings(cwd);
+
+    // A read error is reported by the deploy itself; there is nothing to refuse here.
+    if (error !== undefined || services.length === 0) {
+        return undefined;
+    }
+
+    const driver = resolveDeployDriver(target);
+
+    if (driver.toolchain === undefined || serviceDeploySkipReason(options) !== undefined) {
+        return undefined;
+    }
+
+    const frameworkBuild = options.skipCodegen === true ? false : options.frameworkBuild;
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+
+    return firstServiceRefusal(workers, (directory) => serviceBuildOptions(directory, options, driver, frameworkBuild, defaultSpawner));
+};
+
 /**
  * The refusals that stop a deploy before anything is written: an unusable target, an option the target refuses, and the
  * open-shard gate. {@link runDeployCommand} runs them before the client build, so a refused deploy leaves the project as
@@ -589,6 +677,16 @@ const preflightDeploy = (
 
     if (gateError !== undefined) {
         return { kind: "refused", code: gateError.code, error: gateError.error, validation: NO_VALIDATION };
+    }
+
+    // A service the target refuses stops the deploy here too: after the app's client build, a refused service would have left the
+    // app's build output behind for nothing.
+    const serviceRefusal = serviceRefusalBeforeWrites(cwd, options, resolvedTarget.target);
+
+    if (serviceRefusal !== undefined) {
+        options.logger.error(serviceRefusal);
+
+        return { kind: "refused", code: EXIT_CODE.USAGE, error: serviceRefusal, validation: NO_VALIDATION };
     }
 
     return { kind: "ok", target: resolvedTarget.target };
@@ -755,70 +853,6 @@ const buildService = async (
 // when the deploy is prebuilt or skips builds on purpose. A normal deploy whose service needed no build deploys the source config.
 const serviceDeployConfig = (wranglerPath: string, built: boolean, frameworkBuild: boolean | undefined): string | undefined =>
     built || frameworkBuild === false ? generatedConfigPath(wranglerPath) : undefined;
-
-// A service is its own Worker, so its own client build runs first, from its folder. The parent driver deploys it, so the build must
-// target the same host, and run for the environment wrangler deploys.
-const serviceBuildOptions = (
-    directory: string,
-    options: DeployCommandOptions,
-    driver: DeployDriver,
-    frameworkBuild: boolean | undefined,
-    spawner: Spawner,
-): Parameters<typeof runClientBuild>[0] => {
-    return {
-        cwd: directory,
-        environment: options.env,
-        frameworkBuild,
-        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
-        logger: options.logger,
-        outputJson: options.format === "json" || options.clientBuildOutputJson === true,
-        spawner,
-        strictAdvisories: resolveStrictAdvisories(options),
-        target: driver.id,
-    };
-};
-
-/**
- * The driver's toolchain when its services deploy from here. Otherwise the reason is logged, with the services it leaves undeployed,
- * and `undefined` is returned.
- */
-const serviceToolchain = (
-    services: ReadonlyArray<{ worker: string }>,
-    options: DeployCommandOptions,
-    driver: DeployDriver,
-): NonNullable<DeployDriver["toolchain"]> | undefined => {
-    const { toolchain } = driver;
-    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
-
-    if (skipped !== undefined || toolchain === undefined) {
-        const names = services.map((service) => service.worker).join(", ");
-
-        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
-
-        return undefined;
-    }
-
-    return toolchain;
-};
-
-/**
- * The first service whose client build the target refuses, named, so the deploy stops before any service is deployed. A refusal found
- * after an earlier service deployed would leave a partial set.
- */
-const firstServiceRefusal = (
-    services: ReadonlyArray<{ name: string; worker: string; wranglerPath: string }>,
-    buildFor: (directory: string) => Parameters<typeof runClientBuild>[0],
-): string | undefined => {
-    for (const service of services) {
-        const refusal = clientBuildRefusal(buildFor(dirname(service.wranglerPath)));
-
-        if (refusal !== undefined) {
-            return `service ${service.name} (${service.worker}): ${refusal}`;
-        }
-    }
-
-    return undefined;
-};
 
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's

@@ -422,7 +422,7 @@ describe("lunora deploy — a service's client build", () => {
     });
 
     it("refuses before any service deploys when a later service's target differs, so no earlier service is left deployed alone", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // A second service that names another host: refused. It sorts after parser, so parser would deploy first if nothing checked ahead.
         writeFileSync(
@@ -441,6 +441,8 @@ describe("lunora deploy — a service's client build", () => {
 
         expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls.some((call) => call.descriptor.cwd === serviceDirectory)).toBe(false);
+        // The app's own client build waits for the refusal too: a refused service must not leave the app's output behind.
+        expect(calls.some((call) => isClientBuild(call.descriptor) && call.descriptor.cwd === workdir)).toBe(false);
     });
 
     it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
