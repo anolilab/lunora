@@ -63,10 +63,11 @@ const stampOf = (path: string): string => {
 const UNTRACKED_DIRECTORIES = new Set([".git", ".wrangler", "dist", "node_modules", "target"]);
 
 /**
- * The symlinks in one `node_modules` directory (top level and `@scope` level), with their targets. A package manager repoints
- * a link on update without touching any file the service owns, and the program resolves through the link.
+ * What one `node_modules` directory contributes to resolution, top level and `@scope` level: its symlinks with their targets, and the
+ * stamps of the directories themselves. A package manager repoints a link on update without touching any file the service owns, and
+ * a real package installed beside an older copy of it adds an entry, which moves the directory's stamp.
  */
-const linkTargetsOf = (nodeModules: string): string[] =>
+const nodeModulesEntriesOf = (nodeModules: string): string[] =>
     readdirSync(nodeModules, { withFileTypes: true }).flatMap((entry) => {
         const path = join(nodeModules, entry.name);
 
@@ -74,24 +75,24 @@ const linkTargetsOf = (nodeModules: string): string[] =>
             return [`${path}->${readlinkSync(path)}`];
         }
 
-        return entry.isDirectory() && entry.name.startsWith("@") ? linkTargetsOf(path) : [];
+        return entry.isDirectory() && entry.name.startsWith("@") ? [`${path}:${stampOf(path)}`, ...nodeModulesEntriesOf(path)] : [];
     });
 
 /**
- * The symlinks in every `node_modules` from `directory` up to the root, nearest first. TypeScript reaches a package through each of
- * them in turn, so a hoisted link above the service is as much an input as one in its own `node_modules`.
+ * The `node_modules` directories from `directory` up to the root, nearest first. TypeScript reaches a package through each of them in
+ * turn, so one above the service is as much an input as the service's own.
  */
-const linkTargetsFrom = (directory: string): string[] => {
+const nodeModulesFrom = (directory: string): string[] => {
     const nodeModules = join(directory, "node_modules");
-    const here = existsSync(nodeModules) ? linkTargetsOf(nodeModules) : [];
+    const here = existsSync(nodeModules) ? [`${nodeModules}:${stampOf(nodeModules)}`, ...nodeModulesEntriesOf(nodeModules)] : [];
     const parent = dirname(directory);
 
-    return parent === directory ? here : [...here, ...linkTargetsFrom(parent)];
+    return parent === directory ? here : [...here, ...nodeModulesFrom(parent)];
 };
 
 /**
- * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp, and the symlink targets in the `node_modules`
- * from it up to the root. A file added here can shadow a module the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined
+ * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp, and the `node_modules` directories from it up to
+ * the root, with their links and stamps. A file added here can shadow a module the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined
  * when the tree cannot be read, so the caller treats the cache as a miss rather than as an unchanged tree.
  */
 const treeStampOf = (directory: string): string | undefined => {
@@ -118,7 +119,7 @@ const treeStampOf = (directory: string): string | undefined => {
         };
 
         walk(directory);
-        entries.push(...linkTargetsFrom(directory));
+        entries.push(...nodeModulesFrom(directory));
     } catch {
         return undefined;
     }
