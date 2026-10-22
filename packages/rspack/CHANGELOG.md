@@ -1,3 +1,33 @@
+## @lunora/rspack [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.93...@lunora/rspack@1.0.0-alpha.94) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.398
+
+## @lunora/rspack [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.92...@lunora/rspack@1.0.0-alpha.93) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.345
+* **@lunora/config:** upgraded to 1.0.0-alpha.397
+
+## @lunora/rspack [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.91...@lunora/rspack@1.0.0-alpha.92) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.344
+* **@lunora/config:** upgraded to 1.0.0-alpha.396
+
+## @lunora/rspack [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.90...@lunora/rspack@1.0.0-alpha.91) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.395
+
 ## @lunora/rspack [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.89...@lunora/rspack@1.0.0-alpha.90) (2026-10-22)
 
 

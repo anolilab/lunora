@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.344...@lunora/codegen@1.0.0-alpha.345) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** reuse codegen project for studio edits ([#1301](https://github.com/anolilab/lunora/issues/1301)) ([a990bb3](https://github.com/anolilab/lunora/commit/a990bb3015c27921863d32a329faaa43f30601d7))
+
+## @lunora/codegen [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.343...@lunora/codegen@1.0.0-alpha.344) (2026-10-22)
+
+### Performance Improvements
+
+* **codegen:** resolve relative targets with TypeScript's resolver, without a program ([#1299](https://github.com/anolilab/lunora/issues/1299)) ([d360cd8](https://github.com/anolilab/lunora/commit/d360cd814241787e9647c5d2562988b35dbebf27))
+
 ## @lunora/codegen [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.342...@lunora/codegen@1.0.0-alpha.343) (2026-10-22)
 
 ### Features

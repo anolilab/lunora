@@ -71,6 +71,21 @@ describe("handleSchemaEditRequest", () => {
         expect(body.tables.find((table) => table.name === "todos")?.columns.some((column) => column.name === "due")).toBe(true);
     });
 
+    it("regenerates from the current source on every edit, reusing one codegen project", () => {
+        expect.assertions(3);
+
+        writeSchema(SCHEMA);
+
+        const edit = (column: string): number =>
+            handleSchemaEditRequest({ body: { column, kind: "addOptionalColumn", table: "todos", validator: "v.number()" }, method: "POST", projectRoot })
+                .status;
+
+        expect(edit("due")).toBe(200);
+        expect(edit("priority")).toBe(200);
+        // The second run sees the second edit, not the source the reused Project first parsed.
+        expect(readFileSync(join(projectRoot, "lunora", "_generated", "dataModel.ts"), "utf8")).toContain("priority");
+    });
+
     it("regenerates with the host's apiSpec instead of the default", () => {
         expect.assertions(2);
 

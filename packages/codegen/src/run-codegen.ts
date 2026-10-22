@@ -1024,6 +1024,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 };
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.
-export { createCodegenProject, findTsconfig, refreshCodegenProject } from "./codegen-project";
+export { createCodegenProject, findTsconfig, refreshCodegenProject, tsconfigFingerprint } from "./codegen-project";
 export type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 export { SCHEMA_SNAPSHOT_FILENAME };
