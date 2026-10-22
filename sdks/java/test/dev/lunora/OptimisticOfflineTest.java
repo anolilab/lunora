@@ -130,7 +130,7 @@ final class OptimisticOfflineTest {
                 null,
                 null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
-        client.detachSocket();
+        client.detachSocket(null, null);
 
         client.submit(
                 new SubmitOptions("messages:list", new LinkedHashMap<>())
@@ -404,7 +404,7 @@ final class OptimisticOfflineTest {
 
         /** Submits with the socket down, so the write queues and its overlay stays pending. */
         MutationOutcome queue(SubmitOptions options) {
-            client.detachSocket();
+            client.detachSocket(null, null);
 
             MutationOutcome outcome = client.submit(options);
 
@@ -734,7 +734,7 @@ final class OptimisticOfflineTest {
                 args,
                 value -> {
                     if (value instanceof List && ((List<?>) value).contains("c")) {
-                        client.detachSocket();
+                        client.detachSocket(null, null);
                     }
                 },
                 null,
@@ -784,7 +784,7 @@ final class OptimisticOfflineTest {
         client.attachSocket(frame -> {});
         client.subscribe("auth:setPassword", args, seen::add, null, null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
-        client.detachSocket();
+        client.detachSocket(null, null);
 
         OfflineException refused = null;
 
@@ -2110,7 +2110,7 @@ final class OptimisticOfflineTest {
         client.subscribe("messages:list", args, seen::add, null, null);
         // Prime the subscription with a server value, then drop the socket.
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
-        client.detachSocket();
+        client.detachSocket(null, null);
 
         MutationOutcome outcome =
                 client.submit(new SubmitOptions("messages:list", args).optimistic(appender("c")));

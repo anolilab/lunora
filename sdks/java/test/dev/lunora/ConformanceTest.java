@@ -73,6 +73,10 @@ public final class ConformanceTest {
         // stays the wire-protocol suite it has always been.
         OptimisticOfflineTest.run();
 
+        // The socket-session cases (connect-first credential, token expiry, whisper topics), in
+        // their own file for the same reason.
+        SocketSessionTest.run();
+
         assertManifestCovered();
 
         System.out.println("OK — " + checks + " assertions");
@@ -451,7 +455,7 @@ public final class ConformanceTest {
         client.attachSocket(
                 frame -> {
                     if ("connect".equals(frame.get("type"))) {
-                        client.detachSocket();
+                        client.detachSocket(null, null);
                     }
                 });
 
