@@ -48,6 +48,7 @@ import runLazySmokeLoad from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
+import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -1408,7 +1409,9 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runDeployCommand({
         allowOpenShards: options.allowOpenShards === true,
         allowSchemaDrift: options.allowSchemaDrift === true,

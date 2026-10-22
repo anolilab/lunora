@@ -56,6 +56,12 @@ const deployCommand: Command = {
             name: "prebuilt",
             type: Boolean,
         },
+        {
+            description:
+                "Project directory to deploy (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
+        },
         { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
         {
             description: "Worker URL for --migrate (REQUIRED with --migrate; the deploy target URL is not captured automatically)",
@@ -133,6 +139,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    root: string | undefined;
     "skip-services": boolean | undefined;
     "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;

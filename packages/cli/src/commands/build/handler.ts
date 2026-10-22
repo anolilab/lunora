@@ -11,6 +11,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
+import projectRootFor from "../../util/project-root";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { runDeployCommand } from "../deploy/handler";
@@ -243,7 +244,9 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
