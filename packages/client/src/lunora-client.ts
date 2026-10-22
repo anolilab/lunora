@@ -537,6 +537,28 @@ const ROOM_PENDING_LIMIT = 100;
 /** Longest a live-grant control POST may take, headers and body. Past it the POST is aborted so the chain behind it moves on. */
 const LIVE_CONTROL_TIMEOUT_MS = 10_000;
 
+/** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
+const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve a ticket provider, or reject once `ms` passes. A timed-out provider is abandoned, not cancelled: its result is dropped by the caller.
+ */
+const mintWithin = (provider: WsTokenProvider, ms: number): Promise<string | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error("ws ticket mint timed out"));
+        }, ms);
+    });
+
+    // An async call runs the provider synchronously and turns a synchronous throw into a rejection.
+    const minting = (async (): Promise<string | undefined> => provider())();
+
+    return Promise.race([minting, deadline]).finally(() => {
+        clearTimeout(timer);
+    });
+};
+
 /**
  * A whisper topic's join on one socket. The shard acknowledges each `whisper_subscribe` once, and a
  * leave does not change the count: `pending` is the number of joins sent for the topic whose ack is
@@ -2337,14 +2359,15 @@ class LunoraClient {
      * chat.close();
      * ```
      *
-     * The socket carries the browser's session cookie, and that cookie is the
-     * only credential that establishes a user. A route declared `auth: true` on
+     * The socket carries the browser's session cookie, or an `Authorization` header
+     * where the client can set one, and either establishes a user. A route declared `auth: true` on
      * the server refuses a socket with no verified session. The `wsToken` is
      * sent only on shard sockets, in their first `connect` frame; a route socket
      * has no `connect` frame, so `wsToken` does not authenticate it. The `wsTicket`
      * (`?token=`, see {@link setWsTicket}) is an ephemeral admin credential
      * appended to the URL, and it does not sign a user in to a route, so a
-     * private route needs the session cookie. Reconnects with the
+     * private route needs a verified session from the cookie or an `Authorization`
+     * header. Reconnects with the
      * client's configured backoff. `onMessage` receives what the route's server
      * handler sent (via its `socket.send`/`socket.broadcast`), never the sender's
      * own raw frame — the handler is authoritative. Returns a handle with `send`
@@ -6268,18 +6291,37 @@ class LunoraClient {
             });
         };
 
-        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
+        // The newest mint, and the generation it started under while still unresolved. A bounce that finds
+        // no socket uses the second to restart a mint that would otherwise never open the channel.
+        let mintId = 0;
+        let mintingGeneration: number | undefined;
+
+        /** Resolve the provider-shaped token, then open; a failed or stalled mint re-arms the reconnect timer. */
         const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
             const generation = this.wsCredentialGeneration;
+            mintId += 1;
+            const id = mintId;
             let token: string | undefined;
 
+            mintingGeneration = generation;
+
             try {
-                token = await provider();
+                token = await mintWithin(provider, WS_TICKET_MINT_TIMEOUT_MS);
             } catch {
-                scheduleReconnect();
+                if (id === mintId) {
+                    mintingGeneration = undefined;
+                    scheduleReconnect();
+                }
 
                 return;
             }
+
+            // A newer mint started while this one was pending: its result is the one that opens.
+            if (id !== mintId) {
+                return;
+            }
+
+            mintingGeneration = undefined;
 
             // The credential was replaced while this one was minted: it is superseded, so the
             // channel must not open on it. Mint again under the current credential.
@@ -6353,6 +6395,14 @@ class LunoraClient {
             const { socket } = conn;
 
             if (socket === undefined) {
+                // A mint still pending under an older credential would never open the channel: mint again.
+                if (mintingGeneration !== undefined && mintingGeneration !== this.wsCredentialGeneration) {
+                    // Supersede the pending mint, so its late result is dropped rather than opening a second socket.
+                    mintId += 1;
+                    mintingGeneration = undefined;
+                    connect();
+                }
+
                 return;
             }
 

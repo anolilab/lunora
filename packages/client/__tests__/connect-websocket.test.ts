@@ -309,4 +309,40 @@ describe("connectWebSocket", () => {
         expect(FakeSocket.instances.some((socket) => socket.url.includes("token=stale"))).toBe(false);
         expect(FakeSocket.instances.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
     });
+
+    it("restarts a ticket mint that never settles when the ticket is rotated", async () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsTicket: () => new Promise<string>(() => {}),
+        });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+        client.setWsTicket("fresh");
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(FakeSocket.instances.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
+    });
+
+    it("mints again after a ticket provider stalls past its timeout", async () => {
+        expect.assertions(1);
+
+        let mints = 0;
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsTicket: () => {
+                mints += 1;
+
+                return new Promise<string>(() => {});
+            },
+        });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(mints).toBeGreaterThanOrEqual(2);
+    });
 });
