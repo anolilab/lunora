@@ -6985,6 +6985,11 @@ class LunoraClient {
             return;
         }
 
+        // A socket that opens now supersedes any mint still pending for this connection: its late result must not
+        // touch the socket this call is about to open.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = undefined;
+
         // Pin the identity this socket is being upgraded under — see
         // `ShardConnection.identity`. Captured here (not at frame time) because
         // the credentials are what the server authenticates, and they can't change

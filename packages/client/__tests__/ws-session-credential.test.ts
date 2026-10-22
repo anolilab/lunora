@@ -318,6 +318,31 @@ describe("lunoraClient session credential (protocol §6)", () => {
         expect(sockets.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
     });
 
+    it("keeps the one socket a rotation opened when the superseded ticket mint rejects late", async () => {
+        expect.assertions(1);
+
+        let rejectStale!: (error: Error) => void;
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsTicket: () =>
+                new Promise<string>((_resolve, reject) => {
+                    rejectStale = reject;
+                }),
+            wsToken: "session-secret",
+        });
+
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        client.setWsTicket("fresh");
+        await vi.advanceTimersByTimeAsync(0);
+        sockets.find((socket) => socket.url.includes("token=fresh"))?.open();
+        rejectStale(new Error("mint down"));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(sockets.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
+    });
+
     it("sends connect before any subscription frame on every open", async () => {
         expect.assertions(2);
 
