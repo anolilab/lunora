@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { Project, ts } from "ts-morph";
 
@@ -91,11 +91,12 @@ const nodeModulesFrom = (directory: string): string[] => {
 };
 
 /**
- * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp, and the `node_modules` directories from it up to
- * the root, with their links and stamps. A file added here can shadow a module the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined
- * when the tree cannot be read, so the caller treats the cache as a miss rather than as an unchanged tree.
+ * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES} and `generatedDirectory`, with its stamp, and the `node_modules`
+ * directories from it up to the root, with their links and stamps. A file added here can shadow a module the program resolved (a
+ * `foo.ts` beside `foo/index.ts`). A symlink is recorded by its target. Undefined when the tree cannot be read, so the caller treats
+ * the cache as a miss rather than as an unchanged tree.
  */
-const treeStampOf = (directory: string): string | undefined => {
+const treeStampOf = (directory: string, generatedDirectory: string): string | undefined => {
     const entries: string[] = [];
 
     try {
@@ -103,7 +104,14 @@ const treeStampOf = (directory: string): string | undefined => {
             for (const entry of readdirSync(current, { withFileTypes: true })) {
                 const path = join(current, entry.name);
 
-                if (entry.isDirectory()) {
+                // Codegen writes its output here, and that output is not an input to the service.
+                if (path === generatedDirectory) {
+                    continue;
+                }
+
+                if (entry.isSymbolicLink()) {
+                    entries.push(`${path}->${readlinkSync(path)}`);
+                } else if (entry.isDirectory()) {
                     if (!UNTRACKED_DIRECTORIES.has(entry.name)) {
                         // Checked again without following links: an entry swapped for a symlink after readdir is not descended into.
                         if (!lstatSync(path).isDirectory()) {
@@ -310,7 +318,7 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
     const cacheKey = JSON.stringify([service.name, service.main, service.wranglerPath, generatedDirectory]);
     const optionsKey = JSON.stringify(project.getCompilerOptions());
     // Taken before any source is read: a write during the read then changes the tree and misses the cache, instead of being recorded as emitted.
-    const tree = treeStampOf(serviceDirectory);
+    const tree = treeStampOf(serviceDirectory, resolve(generatedDirectory));
     const cached = freshDeclarations(cacheKey, optionsKey, tree);
 
     if (cached !== undefined) {

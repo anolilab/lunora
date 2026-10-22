@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -322,6 +322,62 @@ export class Gateway {
         // A real copy nearer the service takes precedence over the hoisted one; no link or file already stamped changes.
         write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
         write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("does not re-emit a service's snapshot when codegen writes its own output inside the service", () => {
+        expect.assertions(2);
+
+        writeServices();
+
+        // The generated directory sits inside the service, as it does when the service is the project's own root.
+        const insideGenerated = join(workdir, "services", "llm-gateway", "_generated");
+        const emitInside = (): Record<string, string> | undefined =>
+            resolveServiceBindings(workdir)
+                .filter(({ name }) => name === "llmGateway")
+                .map((service) => emitServiceDeclarations(service, insideGenerated))[0];
+
+        const first = emitInside();
+
+        write("services/llm-gateway/_generated/services/llmGateway/src/index.d.ts", `export {};\n`);
+
+        expect(emitInside()).toBe(first);
+        expect(emitInside()).toBe(first);
+    });
+
+    it("re-emits a service's snapshot when a symlinked source directory is repointed to a directory with the same stamp", () => {
+        expect.assertions(2);
+
+        writeServices();
+        // Same byte length and same modification times everywhere: only the link's recorded target tells the two apart.
+        write("store/lib-1/index.ts", `export interface Usage { tokens: number }\n`);
+        write("store/lib-2/index.ts", `export interface Usage { tokens: string }\n`);
+        const epoch = new Date("2020-01-01T00:00:00Z");
+
+        for (const path of ["store/lib-1", "store/lib-2", "store/lib-1/index.ts", "store/lib-2/index.ts"]) {
+            utimesSync(join(workdir, path), epoch, epoch);
+        }
+
+        // At the service root, whose directory no program file stamps: the repoint moves nothing a stamp covers.
+        symlinkSync(join(workdir, "store/lib-1"), join(workdir, "services/llm-gateway/lib"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "../lib";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        unlinkSync(join(workdir, "services/llm-gateway/lib"));
+        symlinkSync(join(workdir, "store/lib-2"), join(workdir, "services/llm-gateway/lib"), "dir");
 
         expect(emitLlmGateway()).not.toBe(first);
         expect(emitLlmGateway()).toBe(emitLlmGateway());
