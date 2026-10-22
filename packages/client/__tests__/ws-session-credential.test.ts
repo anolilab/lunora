@@ -51,9 +51,9 @@ const WebSocketImpl = MockSocket as unknown as typeof WebSocket;
 const firstFrame = (socket: MockSocket): { token?: string; type: string } => JSON.parse(socket.sent[0] ?? "null") as { token?: string; type: string };
 
 /**
- * Fire the pending reconnect timer, then open the socket it creates. The timer is
- * the only scheduled work in these tests, and firing it flushes the microtasks a
- * provider-shaped credential needs before the socket constructor runs.
+ * Open the socket the next connect creates. The zero-length advance flushes the
+ * microtasks a provider-shaped credential needs before the socket constructor
+ * runs; the reconnect timer is fired only if no socket appeared yet.
  */
 const openNextSocket = async (known: number): Promise<MockSocket> => {
     await vi.advanceTimersByTimeAsync(0);
