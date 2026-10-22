@@ -130,12 +130,6 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# (This used to record react-router and solid-start as removed for supporting only
-# Vite <=7. Both are back: `templates/react-router` and
-# `templates/tanstack-start-solid` exist, pin `vite ^8.0.16`, and pass the matrix.
-# The note is kept as history because the removal is in the git log and a reader
-# finding no trace of it is worse than a dated sentence.)
-#
 # Currently empty: every template builds. It stays as a mechanism because the
 # XPASS branch makes it self-cleaning — an entry that starts passing fails the
 # run, so a fix can never quietly leave a stale exemption behind. That is how
@@ -275,17 +269,6 @@ set_typecheck() {
             # but never which files, and a count cannot say whether the payload
             # was among them.
             COVERAGE_MODE="canary"
-            ;;
-        react-router)
-            # `react-router typegen` writes `.react-router/types/**` — the route
-            # module types every route imports as `./+types/<route>`, resolved through
-            # the tsconfig's `rootDirs`. This is what the template's own `typecheck`
-            # script runs and what React Router documents for CI; without it every
-            # route fails on `Cannot find module './+types/root'`.
-            TYPECHECK_PREP=(pnpm exec react-router typegen)
-            TYPECHECK_CMD=(pnpm exec tsc --noEmit)
-            AUTHUI_RE='^lunora/auth-ui/'
-            ERROR_RE='error TS'
             ;;
         *)
             TYPECHECK_CMD=(pnpm exec tsc --noEmit)
