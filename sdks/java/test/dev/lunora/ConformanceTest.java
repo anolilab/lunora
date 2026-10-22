@@ -46,6 +46,7 @@ public final class ConformanceTest {
         stringEscapingMatchesJsonStringify();
         emptyShardKeyIsOmitted();
         socketCredentialsStayOutOfTheUrl();
+        writeDuringAttachStaysOffTheReplacedSocket();
         attachSocketSendsClientIdAndContext();
         rpcRequestBodies();
         rpcResponses();
@@ -436,6 +437,31 @@ public final class ConformanceTest {
         check(
                 context.equals(connect.get("context")),
                 "attachSocket's connect must carry the connection context");
+    }
+
+    /**
+     * A write made while a replacement socket's {@code connect} frame is going out must not reach
+     * the socket it replaces. The replacement's connect frame triggers a subscribe here, as a
+     * concurrent caller would.
+     */
+    private static void writeDuringAttachStaysOffTheReplacedSocket() {
+        Client client = new Client("https://app.example", null);
+        List<Map<String, Object>> replaced = new ArrayList<>();
+
+        client.attachSocket(replaced::add);
+
+        int beforeAttach = replaced.size();
+
+        client.attachSocket(
+                frame -> {
+                    if ("connect".equals(frame.get("type"))) {
+                        client.subscribe("messages:list", Map.of(), data -> {}, error -> {}, null);
+                    }
+                });
+
+        check(
+                replaced.size() == beforeAttach,
+                "a write during the replacement's connect must not reach the replaced socket");
     }
 
     /**

@@ -285,6 +285,25 @@ private fun socketCredentialsStayOutOfTheUrl() {
 
     check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
 
+    // A write made while a replacement socket's connect frame is going out must not reach the socket it replaces.
+    val replaced = mutableListOf<Map<String, Any?>>()
+    val racing = Client("https://app.example", null)
+
+    racing.attachSocket { replaced.add(it) }
+
+    val beforeReplacement = replaced.size
+
+    racing.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            racing.subscribe("messages:list", WireValue.Obj(emptyList()), null)
+        }
+    }
+
+    check(
+        replaced.size == beforeReplacement,
+        "a write during the replacement's connect must not reach the replaced socket",
+    )
+
     val bare = Client("https://app.example", null)
     val unset = mutableListOf<Map<String, Any?>>()
 

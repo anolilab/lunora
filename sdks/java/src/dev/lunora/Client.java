@@ -484,6 +484,12 @@ public final class Client {
      * every open and reconnect, not only the first.
      */
     public void attachSocket(FrameSender sender, Map<String, Object> context) {
+        // Writes queue while the connect frame goes out, so none can reach the socket this one
+        // replaces.
+        synchronized (lock) {
+            this.sender = null;
+        }
+
         sender.send(buildConnectFrame(clientId, context, resolve(wsTokenProvider)));
 
         synchronized (lock) {

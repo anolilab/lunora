@@ -508,6 +508,10 @@ class Client(
      * records it for the `onConnect` hooks, so it applies to every open and reconnect.
      */
     fun attachSocket(context: Map<String, Any?>?, sender: (Map<String, Any?>) -> Unit) {
+        // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
+        synchronized(lock) {
+            send = null
+        }
         sender(buildConnectFrame(clientId = clientId, context = context, token = wsToken?.invoke()))
         synchronized(lock) {
             send = sender
