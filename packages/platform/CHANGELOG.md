@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.73...@lunora/platform@1.0.0-alpha.74) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
 ## @lunora/platform [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.72...@lunora/platform@1.0.0-alpha.73) (2026-10-20)
 
 ### Bug Fixes
