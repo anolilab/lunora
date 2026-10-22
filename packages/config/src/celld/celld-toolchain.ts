@@ -69,6 +69,21 @@ const isOlder = (version: readonly [number, number, number], rated: string): boo
     return version[2] < patch;
 };
 
+/** The warning `celld --version`'s output earns, if any: unreadable, or older than the rated version. */
+const celldVersionWarning = (stdout: string): string | undefined => {
+    const found = VERSION.exec(stdout);
+
+    if (found === null) {
+        return "could not read a version from `celld --version`, so its version is unchecked";
+    }
+
+    const version = [Number(found[1]), Number(found[2]), Number(found[3])] as const;
+
+    return isOlder(version, CELLD_RATED_VERSION)
+        ? `celld ${version.join(".")} is older than ${CELLD_RATED_VERSION}, the version the celld capability matrix is rated against — some ratings may not hold; upgrade celld`
+        : undefined;
+};
+
 /**
  * Check the celld toolchain a deploy or dev session will run.
  * @returns the errors that stop it and the warnings that do not. Nothing is written.
@@ -81,25 +96,25 @@ const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise
 
     if (celld === undefined) {
         errors.push("celld is not on PATH — install it (curl -fsSL https://celld.dev/install.sh | sh) to run the celld target");
-    } else {
-        const found = VERSION.exec(celld.stdout);
+    } else if (celld.code === 0) {
+        const warning = celldVersionWarning(celld.stdout);
 
-        if (found === null) {
-            warnings.push("could not read a version from `celld --version`, so its version is unchecked");
-        } else {
-            const version = [Number(found[1]), Number(found[2]), Number(found[3])] as const;
-
-            if (isOlder(version, CELLD_RATED_VERSION)) {
-                warnings.push(
-                    `celld ${version.join(".")} is older than ${CELLD_RATED_VERSION}, the version the celld capability matrix is rated against — some ratings may not hold; upgrade celld`,
-                );
-            }
+        if (warning !== undefined) {
+            warnings.push(warning);
         }
+    } else {
+        errors.push(`\`celld --version\` exited with code ${String(celld.code)} — the celld on PATH does not run; reinstall it`);
     }
 
     if (options.purpose === "deploy") {
-        if ((await run("esbuild", ["--version"])) === undefined) {
+        const esbuild = await run("esbuild", ["--version"]);
+
+        if (esbuild === undefined) {
             errors.push("esbuild is not on PATH — `celld deploy` bundles the worker with it");
+        } else if (esbuild.code !== 0) {
+            errors.push(
+                `\`esbuild --version\` exited with code ${String(esbuild.code)} — the esbuild on PATH does not run, and \`celld deploy\` bundles with it`,
+            );
         }
 
         if (options.dryRun !== true && (options.env?.["CELLD_BUCKET"] ?? "").trim() === "") {

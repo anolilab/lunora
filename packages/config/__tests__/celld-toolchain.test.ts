@@ -52,6 +52,19 @@ describe("probeCelldToolchain", () => {
         await expect(errorsOf({ dryRun: true, env: {}, purpose: "deploy", run: tools(ALL) })).resolves.toStrictEqual([]);
     });
 
+    it("errors when celld or esbuild starts but exits nonzero", async () => {
+        expect.assertions(1);
+
+        const failing: CelldCommandRunner = async () => {
+            return { code: 127, stdout: "" };
+        };
+
+        await expect(errorsOf({ env: BUCKET, purpose: "deploy", run: failing })).resolves.toStrictEqual([
+            expect.stringMatching(/`celld --version` exited with code 127/u),
+            expect.stringMatching(/`esbuild --version` exited with code 127/u),
+        ]);
+    });
+
     it("warns, without erroring, when celld is older than the version the matrix is rated against", async () => {
         expect.assertions(2);
 
