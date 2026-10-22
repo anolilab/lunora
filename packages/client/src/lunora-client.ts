@@ -2340,7 +2340,8 @@ class LunoraClient {
      * The socket carries the browser's session cookie, and that cookie is the
      * only credential that establishes a user. A route declared `auth: true` on
      * the server refuses a socket with no verified session. The `wsToken` is
-     * the session credential sent in the first `connect` frame; the `wsTicket`
+     * sent only on shard sockets, in their first `connect` frame; a route socket
+     * has no `connect` frame, so `wsToken` does not authenticate it. The `wsTicket`
      * (`?token=`, see {@link setWsTicket}) is an ephemeral admin credential
      * appended to the URL, and it does not sign a user in to a route, so a
      * private route needs the session cookie. Reconnects with the
