@@ -571,9 +571,11 @@ public final class Client {
     /**
      * Forgets the sender, so subsequent writes queue rather than fail, and classifies the close.
      *
-     * <p>A 4001 always reports token expiry. A 4003 reports it once per credential generation,
-     * except the {@code connect deadline} close, which refuses no credential. Any other close, or
-     * none ({@code null}), reports nothing. Either way the client is offline until the next attach.
+     * <p>A 4001 always reports token expiry. A 4003 reports it once per credential generation, and
+     * only from a socket opened under the current one: a socket opened under an earlier generation
+     * refused a credential no longer in force. The {@code connect deadline} close refuses no
+     * credential. Any other close, or none ({@code null}), reports nothing. Either way the client
+     * is offline until the next attach.
      */
     public void detachSocket(Integer closeCode, String reason) {
         boolean expired = false;
@@ -587,6 +589,7 @@ public final class Client {
             } else if (closeCode != null
                     && closeCode == CLOSE_REFUSED
                     && !CONNECT_DEADLINE.equals(reason)
+                    && socketGeneration == credentialGeneration
                     && socketGeneration != refusedGeneration) {
                 refusedGeneration = socketGeneration;
                 expired = true;
