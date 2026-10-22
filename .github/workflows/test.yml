@@ -525,12 +525,36 @@
     # gate proving a `lunora init` scaffold still installs, and the only one that puts a
     # compiler on the copy-in auth-ui payload — no template imports it, so a build alone
     # tree-shakes it away first.
+    #
+    # One matrix leg per template (Expo has its own job below). A single leg ran every
+    # template in sequence and hit the job time limit; the script takes one template name
+    # as its positional argument, so each leg scaffolds only its own template.
     "templates":
-        "name": "Template scaffold matrix"
+        "name": "Template scaffold (${{ matrix.template }})"
         "if": "needs.files-changed.outputs.templates == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 60
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "template":
+                    [
+                        "analog",
+                        "astro",
+                        "next",
+                        "nuxt",
+                        "react-router",
+                        "rspack-react",
+                        "solid-v2",
+                        "standalone",
+                        "sveltekit",
+                        "tanstack-start-react-rspack",
+                        "tanstack-start-react",
+                        "tanstack-start-solid",
+                        "vinext-pages",
+                        "vinext",
+                    ]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -562,16 +586,14 @@
             # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
             # pulls the react-native/expo graph that no other template shares, and
             # editing `templates/next` cannot break it.
-            - "name": "Run the template scaffold matrix"
-              "run": "pnpm run test:templates"
-              "env":
-                  "SMOKE_SKIP_TEMPLATES": "expo"
+            - "name": "Run the template scaffold"
+              "run": 'pnpm run test:templates "${{ matrix.template }}"'
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
-                  "name": "template-smoke-logs"
+                  "name": "template-smoke-logs-${{ matrix.template }}"
                   "path": ".template-smoke-logs"
                   "retention-days": 7
                   "if-no-files-found": "ignore"
