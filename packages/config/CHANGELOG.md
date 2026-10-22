@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.392...@lunora/config@1.0.0-alpha.393) (2026-10-22)
+
+### Features
+
+* **vite:** write the server bundle's metafile for lunora build ([#1290](https://github.com/anolilab/lunora/issues/1290)) ([9f88e40](https://github.com/anolilab/lunora/commit/9f88e407777daaecec07363ddf733219327c7b73))
+
 ## @lunora/config [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.391...@lunora/config@1.0.0-alpha.392) (2026-10-21)
 
 ### Features
