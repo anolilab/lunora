@@ -477,6 +477,87 @@ describe("discover/feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).mail).toBe(false);
     });
 
+    describe("relative targets resolve the way TypeScript resolves them", () => {
+        const TOOLS_EXPORT = `export { requestSecretTool } from "@lunora/agent";`;
+        const agentsSource = (specifier: string) =>
+            `import { requestSecretTool } from "${specifier}";\nexport const ask = requestSecretTool({ consumer: "a", description: "d" });`;
+        const inMemory = (compilerOptions = {}): Project => new Project({ compilerOptions, useInMemoryFileSystem: true });
+
+        it("follows a .jsx specifier to a .tsx helper", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile("/app/lunora/tools.tsx", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools.jsx"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("follows a relative barrel that exists only in an in-memory project", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("prefers the module suffix the project lists first", () => {
+            expect.assertions(2);
+
+            const project = inMemory({ moduleSuffixes: [".native", ""] });
+
+            project.createSourceFile("/app/lunora/tools.native.ts", TOOLS_EXPORT);
+            project.createSourceFile("/app/lunora/tools.ts", "export const other = 1;");
+
+            const native = project.createSourceFile("/app/lunora/native.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(native).requestSecretTool).toBe(true);
+
+            // The unsuffixed module exports the tool, but the suffixed one is what TypeScript picks.
+            const unsuffixed = inMemory({ moduleSuffixes: [".native", ""] });
+
+            unsuffixed.createSourceFile("/app/lunora/tools.native.ts", "export const other = 1;");
+            unsuffixed.createSourceFile("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            expect(sourceCapabilitySignals(unsuffixed.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"))).requestSecretTool).toBe(false);
+        });
+
+        it("follows a specifier that rootDirs maps into a sibling root", () => {
+            expect.assertions(1);
+
+            const project = inMemory({ rootDirs: ["/app/lunora", "/app/src/generated"] });
+
+            project.createSourceFile("/app/src/generated/tools.ts", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("sees a barrel edited between two scans of the same project", () => {
+            expect.assertions(2);
+
+            const project = inMemory();
+            const fileSystem = project.getFileSystem();
+
+            fileSystem.writeFileSync("/app/lunora/tools.ts", "export const other = 1;");
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(false);
+
+            fileSystem.writeFileSync("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+    });
+
     describe("buildStudioFeatures", () => {
         it("hides every page when nothing uses a feature and no signal fires", () => {
             expect.assertions(1);

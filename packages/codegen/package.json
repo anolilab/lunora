@@ -76,7 +76,6 @@
         "@lunora/workflow": "1.0.0-alpha.92",
         "@visulima/fs": "catalog:cli",
         "jiti": "catalog:tooling",
-        "oxc-resolver": "11.24.2",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"
     },

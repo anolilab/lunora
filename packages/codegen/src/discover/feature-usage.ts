@@ -1,8 +1,5 @@
-import { dirname } from "node:path";
-
-import { ResolverFactory } from "oxc-resolver";
 import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, SourceFile } from "ts-morph";
-import { Node, Project, SyntaxKind } from "ts-morph";
+import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
@@ -299,18 +296,9 @@ const toolExports = (names: Iterable<string>): SecretToolExports => {
 };
 
 /**
- * Resolves a relative specifier from the file that imports it, without the type checker. `getModuleSpecifierSourceFile()`
- * builds the program to do this, and a program is rebuilt after each file added to or removed from its project, so a scan
- * over hundreds of files spent minutes resolving. The resolved file joins the declaring file's own project.
- */
-const RELATIVE_RESOLVER = new ResolverFactory({
-    extensionAlias: { ".cjs": [".cts", ".cjs"], ".js": [".ts", ".tsx", ".js"], ".mjs": [".mts", ".mjs"] },
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
-});
-
-/**
  * The projects that hold relative targets, one per declaring project. A target is parsed here rather than added to the
- * declaring project: adding a file after its program is built throws that program away.
+ * declaring project: adding a file after its program is built throws that program away. It shares the declaring
+ * project's file system, so an in-memory barrel is found the same way a disk one is.
  */
 const TARGET_PROJECTS = new WeakMap<Project, Project>();
 
@@ -320,6 +308,7 @@ const targetProjectOf = (project: Project): Project => {
     if (targets === undefined) {
         targets = new Project({
             compilerOptions: { allowJs: true },
+            fileSystem: project.getFileSystem(),
             skipAddingFilesFromTsConfig: true,
             skipFileDependencyResolution: true,
             skipLoadingLibFiles: true,
@@ -330,18 +319,38 @@ const targetProjectOf = (project: Project): Project => {
     return targets;
 };
 
+/**
+ * The file a relative specifier names, resolved the way TypeScript resolves it for the declaring project: its options
+ * (`rootDirs`, `moduleSuffixes`, the `.js` to `.ts` mapping) and its file system. TypeScript's resolver is a pure function
+ * over that host, so no program is built. A target already in the declaring project is used as it is; one kept from an
+ * earlier scan is re-read, so an edit between two scans is seen.
+ */
 const relativeTargetOf = (declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
     const file = declaration.getSourceFile();
-    const { path } = RELATIVE_RESOLVER.sync(dirname(file.getFilePath()), specifier);
+    const project = file.getProject();
+    const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), project.getCompilerOptions(), project.getModuleResolutionHost());
+    const path = resolvedModule?.resolvedFileName;
 
     if (path === undefined) {
         return undefined;
     }
 
-    const project = file.getProject();
-    const targets = targetProjectOf(project);
+    const known = project.getSourceFile(path);
 
-    return project.getSourceFile(path) ?? targets.getSourceFile(path) ?? targets.addSourceFileAtPath(path);
+    if (known !== undefined) {
+        return known;
+    }
+
+    const targets = targetProjectOf(project);
+    const kept = targets.getSourceFile(path);
+
+    if (kept !== undefined) {
+        kept.refreshFromFileSystemSync();
+
+        return kept;
+    }
+
+    return targets.addSourceFileAtPath(path);
 };
 
 /**
