@@ -35,6 +35,19 @@ type ChangedKeys = Map<string, IndexKeyEntry[] | undefined>;
 const MAX_TRACKED_KEYS_PER_TABLE = 1000;
 
 /**
+ * Append `entries` to `target` in place, or report the table unknown (`undefined`) once
+ * it is past the cap. Appending in place keeps a bulk write linear; copying the whole list
+ * per written row is quadratic. `target` must be owned by the batch, never a caller's array.
+ */
+const appendCapped = (target: IndexKeyEntry[], entries: ReadonlyArray<IndexKeyEntry>): IndexKeyEntry[] | undefined => {
+    for (const entry of entries) {
+        target.push(entry);
+    }
+
+    return target.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : target;
+};
+
+/**
  * Fold one request's written positions into the coalesced refresh batch.
  *
  * Pessimistic by construction: a table counts as unknown if it is unknown in
@@ -56,17 +69,7 @@ const mergeChangedKeys = (pending: ChangedKeys | undefined, incoming: ChangedKey
             continue;
         }
 
-        // Append in place: the batch owns its arrays (the drain swaps the map
-        // out before reading it), and copying here is quadratic in the burst.
-        const keys = previous ?? next;
-
-        if (previous) {
-            for (const entry of next) {
-                keys.push(entry);
-            }
-        }
-
-        merged.set(table, keys.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : keys);
+        merged.set(table, appendCapped(previous ?? [], next));
     }
 
     return merged;
@@ -100,23 +103,7 @@ const recordChangedKeys = (pending: ChangedKeys | undefined, table: string, inde
         return keysByTable;
     }
 
-    const existing = keysByTable.get(table);
-
-    if (!existing) {
-        // Copy once so later in-place appends never mutate the caller's array.
-        keysByTable.set(table, indexKeys.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : [...indexKeys]);
-
-        return keysByTable;
-    }
-
-    // Append in place — copying the whole list per written row is quadratic.
-    for (const entry of indexKeys) {
-        existing.push(entry);
-    }
-
-    if (existing.length > MAX_TRACKED_KEYS_PER_TABLE) {
-        keysByTable.set(table, undefined);
-    }
+    keysByTable.set(table, appendCapped(keysByTable.get(table) ?? [], indexKeys));
 
     return keysByTable;
 };

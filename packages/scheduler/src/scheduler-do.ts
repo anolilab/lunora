@@ -89,6 +89,11 @@ const POOL_PREFIX = "pool:";
 // listing its own prefix instead of walking every header. The pool name is
 // URI-encoded because it may contain `:` (pool `a` must not list pool `a:b`).
 const POOL_QUEUE_PREFIX = "pq:";
+// Durable Object `put` and `delete` take at most 128 keys per call.
+const MAX_STORAGE_BATCH = 128;
+
+/** A non-empty string, or `undefined` for anything else. */
+const optionalName = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeURIComponent(pool)}:`;
 
 /**
@@ -364,9 +369,7 @@ class SchedulerDO {
 
     /** The header key plus the `pq:` row key, to spread into the same multi-key `delete`. */
     private static pendingKeys(record: ScheduleRecord): string[] {
-        const queueKey = SchedulerDO.poolQueueKey(record);
-
-        return queueKey === undefined ? [`${HEADER_PREFIX}${record.id}`] : [`${HEADER_PREFIX}${record.id}`, queueKey];
+        return Object.keys(SchedulerDO.pendingRows(record));
     }
 
     private static json(body: unknown, status: number = 200): Response {
@@ -1584,23 +1587,23 @@ class SchedulerDO {
      * `GET /status` — the app-level backlog signal that powers the studio's
      * SLO view. Enumerates every durable `pool:<name>` row for its `inFlight`/
      * `maxConcurrency` semaphore, counts the pending (not-yet-dispatched) jobs
-     * routed to each pool in one pass over the headers, and rolls those up into app-wide `backlog` (sum of `queued`) and
-     * `inFlight` (sum of held slots) totals.
+     * routed to each pool from its `pq:` rows, and rolls those up into app-wide
+     * `backlog` (sum of `queued`) and `inFlight` (sum of held slots) totals.
      *
      * Pools that have rows but no queued jobs still appear (with `queued: 0`) so
      * a saturated-but-idle pool stays visible; a pool that only ever existed as
      * queued jobs without a persisted row is unreachable here (the schedule path
      * always writes a `pool:<name>` row before the job's header), so a single
-     * scan over `pool:` plus a cursor loop over `id:` is sufficient.
+     * scan over `pool:` plus a cursor loop over `pq:` is sufficient.
      */
     private async handleStatus(): Promise<Response> {
-        // Count pending jobs per pool name in a single pass over the headers.
+        // Count pending jobs per pool from its `pq:` rows, not every header.
         const queuedByPool = new Map<string, number>();
 
-        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
-            if (record.pool !== undefined) {
-                queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
-            }
+        await this.forEachPage<string>(POOL_QUEUE_PREFIX, (_recordId, key) => {
+            const name = decodeURIComponent(key.slice(POOL_QUEUE_PREFIX.length, key.indexOf(":", POOL_QUEUE_PREFIX.length)));
+
+            queuedByPool.set(name, (queuedByPool.get(name) ?? 0) + 1);
         });
 
         const pools: SchedulerPoolStatus[] = [];
@@ -1744,8 +1747,13 @@ class SchedulerDO {
             return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "LUNORA_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
 
-        const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
-        const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
+        const pool = optionalName(body.pool);
+
+        if (pool !== undefined && !pool.isWellFormed()) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "pool must be a well-formed string");
+        }
+
+        const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);
 
         const resolved = await this.resolveId(body.id);
@@ -2001,9 +2009,8 @@ class SchedulerDO {
      * than a per-header `get`, so the cost is one pass over each prefix.
      *
      * **The walk runs only when {@link CLEAN_KEY} is absent.** It is O(every
-     * pending job), and an instance is evicted whenever alarms are spaced wider
-     * than the idle timeout, so running it on every new instance made a large
-     * future backlog cost a full scan per alarm. The key is sufficient because
+     * pending job), and an instance is evicted between alarms spaced wider than the
+     * idle timeout, so it must not run on every new instance. The key is sufficient because
      * every remaining way to mint an orphan sits inside an alarm drain: the
      * schedule, dead-retry, retry and requeue writes each put header and index in
      * ONE call, and cancel deletes them in one. `alarm()` deletes the key before
@@ -2021,7 +2028,12 @@ class SchedulerDO {
 
         const run = this.recoverStore();
 
-        this.recovery = run.catch(() => undefined);
+        this.recovery = run;
+        // A failed attempt is forgotten, so the next request or alarm retries the walk
+        // instead of skipping recovery for the rest of this instance.
+        run.catch(() => {
+            this.recovery = undefined;
+        });
 
         return run;
     }
@@ -2035,12 +2047,9 @@ class SchedulerDO {
 
         // A drain that was cut off never reached its `rescheduleAlarm()`, so the
         // instance that comes back can hold pending `t:` rows and NO clock at
-        // all — nothing scheduled to fire any of them. That used to be masked
-        // here: a claim deleted its index entry, so every claimed record arrived
-        // as an orphan and the walk re-armed on its way past. A leased
-        // record is not an orphan, so the walk never sees it and the horizon
-        // would never come due. Re-derive the clock from `t:` instead — and only
-        // when there is none, so an armed alarm is never pushed later.
+        // all. A leased record is not an orphan, so the walk does not re-arm for
+        // it; the clock is re-derived from `t:` here, and only when none is set,
+        // so an armed alarm is never pushed later.
         if ((await this.state.storage.getAlarm()) === null) {
             const earliest = await this.earliestPendingTime();
 
@@ -2070,6 +2079,7 @@ class SchedulerDO {
             queueRows.add(key);
         });
 
+        const headerIds = new Set<string>();
         const orphans: ScheduleRecord[] = [];
         // Backfill: a pooled header written before `pq:` rows existed has none,
         // and `/pool` would under-count it until it next moves.
@@ -2082,6 +2092,8 @@ class SchedulerDO {
                 orphans.push(record);
             }
 
+            headerIds.add(record.id);
+
             const queueKey = SchedulerDO.poolQueueKey(record);
 
             if (queueKey !== undefined && !queueRows.has(queueKey)) {
@@ -2089,10 +2101,18 @@ class SchedulerDO {
             }
         });
 
-        // Durable Object `put` takes at most 128 entries per call.
-        for (let start = 0; start < missingQueueRows.length; start += 128) {
+        // A `pq:` row whose header is gone is left by a build that deleted headers without
+        // their queue rows; it would keep `/pool` counting a job that no longer exists.
+        const strayQueueRows = [...queueRows].filter((key) => !headerIds.has(key.slice(key.indexOf(":", POOL_QUEUE_PREFIX.length) + 1)));
+
+        for (let start = 0; start < strayQueueRows.length; start += MAX_STORAGE_BATCH) {
             // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes
-            await this.state.storage.put(Object.fromEntries(missingQueueRows.slice(start, start + 128)));
+            await this.state.storage.delete(strayQueueRows.slice(start, start + MAX_STORAGE_BATCH));
+        }
+
+        for (let start = 0; start < missingQueueRows.length; start += MAX_STORAGE_BATCH) {
+            // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes
+            await this.state.storage.put(Object.fromEntries(missingQueueRows.slice(start, start + MAX_STORAGE_BATCH)));
         }
 
         for (const record of orphans) {

@@ -839,6 +839,7 @@ export interface ServerDataMessage {
     delta?: unknown;
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
+
     id: string;
 
     /**
@@ -848,6 +849,12 @@ export interface ServerDataMessage {
      * the matching optimistic overlay. Absent on shards without custom mutators.
      */
     lastMutationId?: number;
+
+    /**
+     * Set on a legacy `broadcastDelta` frame, which is a whole change and never part of a
+     * multi-frame run, so it is committed on arrival even when its subscription has cursors.
+     */
+    standalone?: boolean;
     type: "data" | "delta";
 }
 

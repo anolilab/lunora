@@ -1639,8 +1639,11 @@ describe("lunoraClient", () => {
                 const received: unknown[] = [];
 
                 client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
-                // Solo self-promotion (default 3s leaderTimeout) opens the socket.
-                await vi.advanceTimersByTimeAsync(3100);
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
 
                 const socket = latestSocket();
 
@@ -1669,6 +1672,47 @@ describe("lunoraClient", () => {
             } finally {
                 client.close();
                 broadcast.mockRestore();
+                vi.useRealTimers();
+            }
+        });
+
+        it("commits a standalone legacy delta on arrival, even after cursor-bearing frames", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 10, data: [{ _id: "a" }], id: subId, type: "data" });
+
+                // A standalone legacy broadcast is a whole change on its own: it commits now,
+                // not held for a cursor-bearing frame that will never follow it.
+                socket.receive({ delta: { key: "b", op: "insert", row: { _id: "b" }, table: "messages" }, id: subId, standalone: true, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+                // A cursorless run frame without the flag is still held until the run ends.
+                socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+            } finally {
+                client.close();
                 vi.useRealTimers();
             }
         });
@@ -6222,8 +6266,11 @@ describe("lunoraClient", () => {
             try {
                 client.subscribe(fnRef("q:list"), {}, () => undefined);
 
-                // Solo self-promotion (default 3s leaderTimeout) opens the socket.
-                await vi.advanceTimersByTimeAsync(3100);
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
 
                 expect(sockets).toHaveLength(1);
 

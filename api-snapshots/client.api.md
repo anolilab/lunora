@@ -2583,6 +2583,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    standalone?: boolean;
     type: "data" | "delta";
 }
 ```

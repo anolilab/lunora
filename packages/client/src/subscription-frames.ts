@@ -65,10 +65,23 @@ export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: 
 /**
  * Whether a frame is a delta run's non-final frame. The server stamps the resume cursor
  * only on a run's last frame, and only on shards with CDC, so a cursorless delta means
- * "more follows" only for a subscription whose frames have been carrying a cursor.
+ * "more follows" only for a subscription whose frames have been carrying a cursor. A
+ * standalone legacy `broadcastDelta` frame is cursorless too, but it is never part of a
+ * run; the server marks it `standalone`, so it commits at once.
  */
-export const isNonFinalRunFrame = (state: SubscriptionState, message: { cursor?: number; type: string }): boolean =>
-    message.type === "delta" && message.cursor === undefined && state.runsCarryCursor === true;
+export const isNonFinalRunFrame = (state: SubscriptionState, message: { cursor?: number; standalone?: boolean; type: string }): boolean =>
+    message.type === "delta" && message.cursor === undefined && message.standalone !== true && state.runsCarryCursor === true;
+
+/**
+ * Record whether a committed frame carried the run-ending cursor, so the next cursorless
+ * delta is held. A standalone frame is no run and leaves the flag as it was.
+ */
+export const noteCommittedFrame = (state: SubscriptionState, message: { cursor?: number; standalone?: boolean }): void => {
+    if (message.standalone !== true) {
+        // eslint-disable-next-line no-param-reassign -- the run position is the subscription's own state
+        state.runsCarryCursor = message.cursor !== undefined;
+    }
+};
 
 /**
  * Whether a cross-tab frame was stamped for another identity. A frame with no stamp

@@ -480,7 +480,7 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
  * match before decoding it. The read stops one row past the cap — enough to
  * know the batch is too big — and only the over-cap path pays a `COUNT(*)` so
  * the error still reports the real number of matches. A non-finite cap (no
- * bound at all) reads unbounded, as before.
+ * bound at all) reads unbounded.
  */
 const readBatchMatches = async (
     source: DatabaseWriterLike,
@@ -498,8 +498,6 @@ const readBatchMatches = async (
         // the count and the read ever disagree.
         assertBatchLimit(Math.max(await source.count(tableName, { where }), page.length), limit, op);
     }
-
-    assertBatchLimit(page.length, limit, op);
 
     return page;
 };
@@ -3395,8 +3393,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // row). Pinning `tableName` here would therefore make every global delete a
             // silent no-op: the count would inflate, the rows would survive, and a table
             // with at least `chunkSize` rows would loop forever because `findMany` kept
-            // returning the same page. Leave the table unpinned for a global table —
-            // exactly what `deleteWhere` does when it hands ids to `deleteMany`.
+            // returning the same page. Leave the table unpinned for a global table.
             const expectedTable = isGlobalTable(tableName) ? undefined : tableName;
             let deleted = 0;
 

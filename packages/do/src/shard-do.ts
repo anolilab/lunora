@@ -1705,7 +1705,8 @@ const countLiveConnections = (
 };
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
-    return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
+    // A copy: the attachment is shared with the socket cache, and user code receives this object.
+    return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
 };
 
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
@@ -1950,30 +1951,6 @@ const refuseLiveSubscribe = (
     }
 
     return undefined;
-};
-
-/**
- * Persist a WebSocket's live grants on its attachment. Refuses, rather than acknowledging, when
- * the runtime will not hold the attachment: an acknowledged grant that never persisted would
- * stop delivering silently after the next hibernation.
- */
-const persistLiveGrants = (write: (next: SocketAttachment) => void, attachment: SocketAttachment, grants: Record<string, string>): Response => {
-    const next: SocketAttachment = { ...attachment, liveGrants: grants };
-
-    if (Object.keys(grants).length === 0) {
-        delete next.liveGrants;
-    }
-
-    try {
-        write(next);
-    } catch {
-        return jsonResponse(
-            { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
-            429,
-        );
-    }
-
-    return jsonResponse({ ok: true });
 };
 
 /**
@@ -6404,7 +6381,7 @@ abstract class ShardDO {
 
                 // Delivery is best-effort here (legacy broadcast path has no diff
                 // baseline to protect), so the boolean is intentionally ignored.
-                this.sendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
+                this.sendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"standalone":true,"delta":${deltaJson}}`);
             }
         }
     }
@@ -7947,10 +7924,7 @@ abstract class ShardDO {
             return;
         }
 
-        //
-        // The attachment is read ONCE here and reused for the route check below,
-        // so a `defineWebSocket` route adds no second `deserializeAttachment` to
-        // the subscription hot path (`isSocketExpired` would have read it again).
+        // Read once here and reused for the route check below.
         const inboundAttachment = this.readAttachment(ws);
 
         if (isIdentityExpired(inboundAttachment.expiresAt)) {
@@ -9931,7 +9905,7 @@ abstract class ShardDO {
             shardKey: this.runner.shardKey ?? ROOT_SHARD_NAME,
             // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
             userId: attachment.userId ?? null,
-            ...(attachment.context === undefined ? {} : { context: attachment.context }),
+            ...(attachment.context === undefined ? {} : { context: structuredClone(attachment.context) }),
         };
 
         return { event, ...socketIdentity(attachment) };
@@ -14808,22 +14782,23 @@ abstract class ShardDO {
      * sourced write, so counting those would spend the budget with no alarm armed.
      * `globalPollArmedAt` lives in memory, so an eviction-driven cold start still counts.
      */
-    private scheduleBootstrapPoll(): Promise<void> {
+    private scheduleBootstrapPoll(atMs?: number): Promise<void> {
         const pendingAt = this.globalPollArmedAt;
         const now = Date.now();
+        const target = atMs ?? now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
 
-        if (pendingAt !== undefined && pendingAt <= now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
-            return this.scheduleGlobalPoll();
+        if (pendingAt !== undefined && pendingAt <= target) {
+            return this.scheduleGlobalPoll(target);
         }
 
-        // This arm always targets the floor, so it is floor-paced: checked against the
-        // window, never recorded. A tripped window still refuses it, which is what stops
-        // an eviction-driven loop from re-arming through a fresh instance.
-        if (!this.admitAlarmRearm(now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS, now, false)) {
+        // Floor-paced: checked against the window, never recorded. A tripped window still
+        // refuses it, which is what stops an eviction-driven loop from re-arming through a
+        // fresh instance. A TTL re-arm passes its own target and is paced the same way.
+        if (!this.admitAlarmRearm(target, now, false)) {
             return this.armRecoveryWake();
         }
 
-        return this.scheduleGlobalPoll();
+        return this.scheduleGlobalPoll(target);
     }
 
     /**
@@ -15120,10 +15095,10 @@ abstract class ShardDO {
     /**
      * When the TTL tier should next wake for `specs`: 1 ms past the earliest live
      * expiry (the sweep's `expiry < now` is strict), but never before `now +`
-     * {@link TTL_SWEEP_INTERVAL_MS}. The floor keeps the old bounds — at most one
-     * wake per interval, and a row is swept within one interval of expiring — and
-     * covers a row already past due (a backlog the pass left, or one written
-     * expired) without a due-now loop. `undefined` when no row carries a TTL.
+     * {@link TTL_SWEEP_INTERVAL_MS}. The floor bounds wakes to one per interval, so a
+     * row is swept within one interval of expiring. It also covers a row already past
+     * due (a backlog the pass left, or one written expired) without a due-now loop.
+     * `undefined` when no row carries a TTL.
      */
     private nextTtlWake(specs: ReadonlyArray<TtlSweepSpec>, now: number): number | undefined {
         const sql = this.sql as SqlExec;
@@ -15160,17 +15135,13 @@ abstract class ShardDO {
             return;
         }
 
-        const now = Date.now();
-        const target = this.nextTtlWake(specs, now);
-        const pendingAt = this.globalPollArmedAt;
+        const target = this.nextTtlWake(specs, Date.now());
 
-        if (target === undefined || (pendingAt !== undefined && pendingAt <= target)) {
+        if (target === undefined) {
             return;
         }
 
-        // Floor-paced (at least TTL_SWEEP_INTERVAL_MS out), so the breaker only
-        // reads its window here — the same gate `scheduleBootstrapPoll` applies.
-        await (this.admitAlarmRearm(target, now, false) ? this.scheduleGlobalPoll(target) : this.armRecoveryWake());
+        await this.scheduleBootstrapPoll(target);
     }
 
     /**
@@ -15789,9 +15760,8 @@ abstract class ShardDO {
      * `__shape_poke_cursor` table so it survives hibernation. Called only on
      * a delivered/advanced poke (never on a computed-but-unsent diff) — see
      * the call sites in {@link ShardDO.pokeShapeSubscribers}. Takes
-     * `connectionId` from the caller rather than re-deserializing the
-     * attachment (`deserializeAttachment()` is a structured-clone read) —
-     * every caller already holds it from resolving the socket's shapes.
+     * `connectionId` from the caller, which already holds the attachment from
+     * resolving the socket's shapes.
      */
     private recordShapeMemo(
         ws: ShardSocketLike,
@@ -18239,26 +18209,38 @@ abstract class ShardDO {
      * index moves only when the write persisted, so it never claims a grant the attachment lacks.
      */
     private persistSocketGrants(ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response {
-        const response = persistLiveGrants(
-            (next) => {
-                this.writeAttachment(ws, next);
-            },
-            attachment,
-            grants,
-        );
+        const next: SocketAttachment = { ...attachment, liveGrants: grants };
 
-        if (response.ok) {
-            if (Object.keys(grants).length > 0) {
-                this.liveGrantSockets.add(ws);
-            } else {
-                this.liveGrantSockets.delete(ws);
-            }
+        if (Object.keys(grants).length === 0) {
+            delete next.liveGrants;
         }
 
-        return response;
+        // Refuse rather than acknowledge when the runtime will not hold the attachment: an
+        // acknowledged grant that never persisted would stop delivering silently after the
+        // next hibernation. The grant-holder index moves only once the write persisted.
+        try {
+            this.writeAttachment(ws, next);
+        } catch {
+            return jsonResponse(
+                { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
+                429,
+            );
+        }
+
+        if (Object.keys(grants).length > 0) {
+            this.liveGrantSockets.add(ws);
+        } else {
+            this.liveGrantSockets.delete(ws);
+        }
+
+        return jsonResponse({ ok: true });
     }
 
-    /** The socket's attachment, shared with the cache: read it, never mutate it. */
+    /**
+     * The socket's attachment, shared with the cache: read it, never mutate it. A subclass
+     * that stamps an attachment with `ws.serializeAttachment` directly, rather than through
+     * {@link ShardDO.writeAttachment}, leaves this cache stale.
+     */
     private readAttachment(ws: ShardSocketLike): SocketAttachment {
         const cached = this.attachmentCache.get(ws);
 
@@ -18315,7 +18297,7 @@ abstract class ShardDO {
     }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, TTL_SWEEP_INTERVAL_MS };
 export type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,

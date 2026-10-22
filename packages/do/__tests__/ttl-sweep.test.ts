@@ -3,7 +3,7 @@ import { ADMIN_FUNCTIONS, createShardCtxDb as createShardContextDatabase, runSha
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do";
-import { ShardDO } from "../src/shard-do";
+import { ShardDO, TTL_SWEEP_INTERVAL_MS } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -260,7 +260,7 @@ describe("ttl sweep", () => {
             await writer.insert("sessions", { _id: "s3", expiresAt: before - 1000, token: "d" }, { allowExplicitId: true });
             await shard.flushWrite("sessions");
 
-            expect(armed.at(-1)).toBeGreaterThanOrEqual(before + 30_000);
+            expect(armed.at(-1)).toBeGreaterThanOrEqual(before + TTL_SWEEP_INTERVAL_MS);
         });
     });
 
