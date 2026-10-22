@@ -13708,7 +13708,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
+                await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
             }
         };
 
@@ -13777,7 +13777,7 @@ abstract class ShardDO {
      * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
     private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
-        const seedArgs = query.args ?? {};
+        const seedArgs = structuredClone(query.args ?? {});
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
         // so even though a subscribe envelope can interleave with an in-flight RPC
@@ -13950,7 +13950,7 @@ abstract class ShardDO {
         let resolved: ResolvedShape | undefined;
 
         try {
-            resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+            resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
         } catch (error) {
             // A throwing `resolveShape` must not reject the whole `shape_subscribe`
             // (and with it the socket's message handling). Surface it for diagnosis
@@ -14351,7 +14351,7 @@ abstract class ShardDO {
 
         for (const [subId, shape] of Object.entries(shapes)) {
             try {
-                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+                const resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
 
                 // Unresolvable, or driven by the `.global()` poll loop rather than
                 // this flush: nothing this pass can say about it.
@@ -15651,7 +15651,7 @@ abstract class ShardDO {
             let resolved: ResolvedShape | undefined;
 
             try {
-                resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+                resolved = this.resolveShape(shape.name, structuredClone(shape.args ?? {}), identity);
             } catch (error) {
                 count += 1;
                 this.recordShapeError(`shape:poll:${subId}`, error, trace);

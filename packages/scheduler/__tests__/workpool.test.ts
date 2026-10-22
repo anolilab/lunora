@@ -280,6 +280,21 @@ describe("schedulerDO — workpool concurrency", () => {
         expect(status.queued).toBe(2);
     });
 
+    it("counts a pool whose name is not well-formed Unicode, as its own pool", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const lone = "\uD800";
+
+        await enqueuePool(scheduler, lone, 1, 2);
+
+        const response = await scheduler.fetch(get("/status"));
+        const status = await response.json<{ pools: { name: string; queued: number }[] }>();
+
+        expect(status.pools.find((pool) => pool.name === lone)?.queued).toBe(2);
+    });
+
     it("aggregates every pool's backlog via GET /status", async () => {
         expect.assertions(5);
 

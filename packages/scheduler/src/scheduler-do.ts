@@ -87,14 +87,31 @@ const POOL_PREFIX = "pool:";
 // `pq:<encoded pool>:<id>` — one row per pending pooled job, written and removed
 // in the SAME storage call as its `id:` header, so `/pool` counts one pool by
 // listing its own prefix instead of walking every header. The pool name is
-// URI-encoded because it may contain `:` (pool `a` must not list pool `a:b`).
+// hex-encoded because it may contain `:` (pool `a` must not list pool `a:b`), and hex
+// takes any UTF-16 string, including the lone surrogates older builds persisted.
 const POOL_QUEUE_PREFIX = "pq:";
 // Durable Object `put` and `delete` take at most 128 keys per call.
 const MAX_STORAGE_BATCH = 128;
 
 /** A non-empty string, or `undefined` for anything else. */
 const optionalName = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
-const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeURIComponent(pool)}:`;
+/** Four hex digits per UTF-16 code unit: no separator character can appear in the segment. */
+const encodePoolName = (pool: string): string =>
+    // eslint-disable-next-line unicorn/prefer-code-point -- code units, not code points: a lone surrogate must round-trip
+    Array.from({ length: pool.length }, (_, index) => pool.charCodeAt(index).toString(16).padStart(4, "0")).join("");
+
+const decodePoolName = (segment: string): string => {
+    let name = "";
+
+    for (let index = 0; index < segment.length; index += 4) {
+        // eslint-disable-next-line unicorn/prefer-code-point -- code units, not code points: a lone surrogate must round-trip
+        name += String.fromCharCode(Number.parseInt(segment.slice(index, index + 4), 16));
+    }
+
+    return name;
+};
+
+const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodePoolName(pool)}:`;
 
 /**
  * Present only while no `id:` header can be missing its `t:` entry, so a fresh
@@ -1606,7 +1623,7 @@ class SchedulerDO {
         const queuedByPool = new Map<string, number>();
 
         await this.forEachPage<string>(POOL_QUEUE_PREFIX, (_recordId, key) => {
-            const name = decodeURIComponent(key.slice(POOL_QUEUE_PREFIX.length, key.indexOf(":", POOL_QUEUE_PREFIX.length)));
+            const name = decodePoolName(key.slice(POOL_QUEUE_PREFIX.length, key.indexOf(":", POOL_QUEUE_PREFIX.length)));
 
             queuedByPool.set(name, (queuedByPool.get(name) ?? 0) + 1);
         });
@@ -1753,10 +1770,6 @@ class SchedulerDO {
         }
 
         const pool = optionalName(body.pool);
-
-        if (pool !== undefined && !pool.isWellFormed()) {
-            return SchedulerDO.error(400, "INVALID_INPUT", "pool must be a well-formed string");
-        }
 
         const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);

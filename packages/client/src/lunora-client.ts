@@ -7857,6 +7857,9 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
+            // A run that was partly held can no longer complete on this base: drop it, so a later
+            // frame merges onto the committed value and not onto the abandoned partial one.
+            state.pendingDeltaRun = undefined;
             fanSubscriptionError(state.errorCallbacks, {
                 code: "WIRE_DECODE_FAILED",
                 message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
