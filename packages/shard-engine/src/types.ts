@@ -112,7 +112,6 @@ export interface SubscriptionEnvelope {
      * onto the prefix the client already holds. Absent from older clients.
      */
     generation?: number;
-
     id: string;
     query?: SubscriptionQuery;
 

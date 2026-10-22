@@ -1144,17 +1144,6 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(rows[1]["note"] as? String, "n")
     }
 
-    // MARK: - Concurrency
-
-    /// The topology every real consumer has: a socket read loop on one thread,
-    /// application code subscribing on another.
-    ///
-    /// The assertion is on the COUNT, not on the absence of a crash: an
-    /// unsynchronised `nextID += 1` hands two threads the same id, the second
-    /// insert replaces the first, and the client silently forgets a live
-    /// subscription. A resend then emits fewer frames than there are subscribers —
-    /// deterministic, unlike waiting for a `Dictionary` to corrupt. Run the suite
-    /// with `--sanitize=thread` to also catch the unsynchronised access itself.
     // The session credential must never ride the socket URL: not on the first
     // open, not on a reconnect, and not when the value comes from a provider that
     // is re-resolved on every open. The URL is built from the ticket alone; the
@@ -1203,6 +1192,17 @@ final class ConformanceTests: XCTestCase {
         XCTAssertFalse(client.wsURL().contains("token="), "no ticket means no token parameter")
     }
 
+    // MARK: - Concurrency
+
+    /// The topology every real consumer has: a socket read loop on one thread,
+    /// application code subscribing on another.
+    ///
+    /// The assertion is on the COUNT, not on the absence of a crash: an
+    /// unsynchronised `nextID += 1` hands two threads the same id, the second
+    /// insert replaces the first, and the client silently forgets a live
+    /// subscription. A resend then emits fewer frames than there are subscribers —
+    /// deterministic, unlike waiting for a `Dictionary` to corrupt. Run the suite
+    /// with `--sanitize=thread` to also catch the unsynchronised access itself.
     func testConcurrentSubscribeAndHandleFrame() {
         let threads = 4
         let perThread = 250

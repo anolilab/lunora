@@ -105,9 +105,9 @@ interface ShardConnection {
      * retry that replaced it.
      */
     providerAttempt?: symbol;
-
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
     resubscribeQueue: SubscriptionState[];
 
