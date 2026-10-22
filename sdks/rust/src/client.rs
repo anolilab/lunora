@@ -1,5 +1,6 @@
 //! The RPC and WebSocket transport, ported from `shared`'s reference client.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
@@ -141,6 +142,37 @@ pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Resul
 /// crate stays free of a socket dependency.
 pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 
+/// Receives each whisper delivered on a topic the listener joined.
+pub type WhisperHandler = Box<dyn Fn(&WireValue) + Send>;
+
+/// Runs when the server signals that the session credential is expired or refused.
+pub type TokenExpiredHandler = Box<dyn Fn() + Send>;
+
+/// Names one registered listener, so it can be removed. Returned by
+/// [`Client::on_token_expired`] and [`Client::whisper_subscribe`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListenerId(u64);
+
+/// A joined room. Made by [`Client::connect_room`]; it holds no socket of its own,
+/// so [`Room::send`] and [`Room::close`] take the client.
+#[derive(Debug)]
+pub struct Room {
+    topic: String,
+    listener: ListenerId,
+}
+
+impl Room {
+    /// Relays `message` to the room's other members. See [`Client::whisper`].
+    pub fn send(&self, client: &Client, message: &WireValue) -> bool {
+        client.whisper(&self.topic, message)
+    }
+
+    /// Leaves the room. Consumes the handle, so a second close cannot be written.
+    pub fn close(self, client: &mut Client) {
+        client.whisper_unsubscribe(self.listener);
+    }
+}
+
 /// Receives each result a live query produces.
 /// One item delivered by [`Client::stream`]: a value, or the subscription error
 /// the server pushed.
@@ -277,6 +309,19 @@ pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>, tok
     }
 
     Value::Object(frame)
+}
+
+pub fn build_whisper_subscribe_frame(topic: &str) -> Value {
+    json!({ "topic": topic, "type": "whisper_subscribe" })
+}
+
+pub fn build_whisper_unsubscribe_frame(topic: &str) -> Value {
+    json!({ "topic": topic, "type": "whisper_unsubscribe" })
+}
+
+/// Relays `data` to a topic. The data is wire-encoded, as every value is.
+pub fn build_whisper_frame(topic: &str, data: &WireValue) -> Result<Value, WireError> {
+    Ok(json!({ "data": encode_wire(data)?, "topic": topic, "type": "whisper" }))
 }
 
 pub fn build_subscribe_frame(
@@ -500,6 +545,19 @@ pub struct Client {
     pub(crate) flush_not_before: Option<Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
+    /// The WebSocket session credential, sent as `connect.token` on every open.
+    /// Not the RPC bearer, and never in a URL. See [`Client::set_session_token`].
+    session_token: Option<String>,
+    /// Advances each time the session credential changes. A refusal notifies once per generation.
+    credential_generation: u64,
+    /// The generation the attached socket opened under; `None` while no socket is attached.
+    socket_generation: Option<u64>,
+    /// The generation whose refusal last notified the token-expired listeners.
+    refused_generation: Option<u64>,
+    token_expired_listeners: Vec<(ListenerId, TokenExpiredHandler)>,
+    /// Joined whisper topics, ordered so every reconnect rejoins them in the same order.
+    whispers: BTreeMap<String, Vec<(ListenerId, WhisperHandler)>>,
+    next_listener_id: u64,
 }
 
 /// By hand rather than derived: a derived `Debug` would print `auth_token`, a
@@ -510,6 +568,7 @@ impl fmt::Debug for Client {
             .debug_struct("Client")
             .field("base_url", &self.base_url)
             .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field("session_token", &self.session_token.as_ref().map(|_| "<redacted>"))
             .field("client_id", &self.client_id)
             .field("identity", &self.identity)
             .finish_non_exhaustive()
@@ -533,27 +592,200 @@ impl Client {
             post,
             send: None,
             settled_listeners: Vec::new(),
+            session_token: None,
+            credential_generation: 0,
+            socket_generation: None,
+            refused_generation: None,
+            token_expired_listeners: Vec::new(),
+            whispers: BTreeMap::new(),
+            next_listener_id: 0,
             shapes: HashMap::new(),
             subscriptions: HashMap::new(),
             was_ever_connected: false,
         }
     }
 
-    /// Registers the sender used for subscription frames. Call once the socket
-    /// is open.
+    /// Opens the subscription channel on a freshly opened socket.
+    ///
+    /// It sends `connect` as the first frame: the client id, `context` when one is
+    /// given, and the session credential when one is set. It then rejoins every
+    /// whisper topic, and only after both does `send` carry later frames. Call
+    /// [`Client::resend_subscriptions`] after this, so the subscriptions follow
+    /// `connect`.
+    ///
+    /// `send` cannot report a failed write, so the caller's sender shuts the socket
+    /// down on failure, as the README's reconnect loop does.
     ///
     /// It also latches "has connected at least once", which is what the write
     /// queue gates on: a write made before the FIRST connect fails fast by
     /// default, so a misconfigured endpoint surfaces on the first write instead
     /// of silently filling a queue that will never flush.
-    pub fn attach_socket(&mut self, send: FrameSender) {
+    pub fn attach_socket(&mut self, send: FrameSender, context: Option<&Value>) {
+        // Until this open has written its frames, nothing routes to the new socket.
+        self.send = None;
+
+        send(&build_connect_frame(Some(self.client_id.as_str()), context, self.session_token.as_deref()));
+
+        for topic in self.whispers.keys() {
+            send(&build_whisper_subscribe_frame(topic));
+        }
+
+        self.socket_generation = Some(self.credential_generation);
         self.send = Some(send);
         self.was_ever_connected = true;
     }
 
-    /// Forgets the sender, so subsequent writes queue rather than fail.
-    pub fn detach_socket(&mut self) {
+    /// Forgets the sender, so subsequent writes queue rather than fail, and
+    /// classifies the close that ended the socket.
+    ///
+    /// `close_code` is `None` when no close frame arrived. A 4001 always notifies
+    /// the token-expired listeners. A 4003 refuses the session credential, and
+    /// notifies once per credential generation, but only for a socket that opened
+    /// under the credential in force: a socket opened under an earlier one refused a
+    /// credential no longer in use. A 4003 whose `reason` is exactly
+    /// `connect deadline` refuses no credential. Any other close notifies nothing.
+    ///
+    /// The client is offline before any listener runs. A listener that panics
+    /// unwinds out of this call, as every other callback here does.
+    pub fn detach_socket(&mut self, close_code: Option<u16>, reason: Option<&str>) {
         self.send = None;
+
+        let opened = self.socket_generation.take();
+
+        let expired = match close_code {
+            Some(4001) => true,
+            Some(4003) if reason != Some("connect deadline") => match opened {
+                Some(generation) if generation == self.credential_generation && self.refused_generation != Some(generation) => {
+                    self.refused_generation = Some(generation);
+
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+
+        if expired {
+            self.notify_token_expired();
+        }
+    }
+
+    /// Registers a listener for token expiry: a 4001 close, a refused session
+    /// credential (once per credential), and a `TOKEN_EXPIRED` error frame. The
+    /// listener should fetch a fresh credential and pass it to
+    /// [`Client::set_session_token`]. Returns the id that removes it.
+    pub fn on_token_expired(&mut self, listener: TokenExpiredHandler) -> ListenerId {
+        let id = self.next_listener();
+
+        self.token_expired_listeners.push((id, listener));
+
+        id
+    }
+
+    /// Removes a listener from [`Client::on_token_expired`].
+    pub fn remove_token_expired_listener(&mut self, id: ListenerId) {
+        self.token_expired_listeners.retain(|(listener, _)| *listener != id);
+    }
+
+    fn notify_token_expired(&self) {
+        for (_, listener) in &self.token_expired_listeners {
+            listener();
+        }
+    }
+
+    fn next_listener(&mut self) -> ListenerId {
+        self.next_listener_id += 1;
+
+        ListenerId(self.next_listener_id)
+    }
+
+    /// The WebSocket session credential, as last set by [`Client::set_session_token`].
+    pub fn session_token(&self) -> Option<&str> {
+        self.session_token.as_deref()
+    }
+
+    /// Sets the WebSocket session credential (`connect.token`). It is sent in the
+    /// `connect` frame of each socket opened after this call. It is not the RPC
+    /// bearer, so [`Client::set_auth_token`] does not change it, and it never rides
+    /// a URL.
+    ///
+    /// A new value starts a new credential generation, so a refusal of the old one
+    /// notifies the token-expired listeners again. Setting the value already held
+    /// changes nothing. `None` and an empty string both clear it.
+    pub fn set_session_token(&mut self, token: Option<String>) {
+        let token = token.filter(|value| !value.is_empty());
+
+        if token != self.session_token {
+            self.session_token = token;
+            self.credential_generation += 1;
+        }
+    }
+
+    /// Joins `topic` and delivers its whispers to `listener`. The first listener on
+    /// a topic sends `whisper_subscribe` when a socket is attached, and every
+    /// [`Client::attach_socket`] rejoins each topic. Returns the id that removes
+    /// this listener.
+    pub fn whisper_subscribe(&mut self, topic: &str, listener: WhisperHandler) -> ListenerId {
+        let id = self.next_listener();
+        let listeners = self.whispers.entry(topic.to_string()).or_default();
+        let joining = listeners.is_empty();
+
+        listeners.push((id, listener));
+
+        if let (true, Some(send)) = (joining, &self.send) {
+            send(&build_whisper_subscribe_frame(topic));
+        }
+
+        id
+    }
+
+    /// Removes a listener from [`Client::whisper_subscribe`]. Removing a topic's last
+    /// listener forgets the topic and sends `whisper_unsubscribe` when attached.
+    pub fn whisper_unsubscribe(&mut self, id: ListenerId) {
+        let Some(topic) = self
+            .whispers
+            .iter()
+            .find_map(|(topic, listeners)| listeners.iter().any(|(listener, _)| *listener == id).then(|| topic.clone()))
+        else {
+            return;
+        };
+
+        if let Some(listeners) = self.whispers.get_mut(&topic) {
+            listeners.retain(|(listener, _)| *listener != id);
+
+            if !listeners.is_empty() {
+                return;
+            }
+        }
+
+        self.whispers.remove(&topic);
+
+        if let Some(send) = &self.send {
+            send(&build_whisper_unsubscribe_frame(&topic));
+        }
+    }
+
+    /// Relays `data` to the other members of `topic`. Nothing is queued: returns
+    /// `false`, and sends nothing, when no socket is attached or `data` will not
+    /// encode. `true` means the frame went to the socket sender.
+    pub fn whisper(&self, topic: &str, data: &WireValue) -> bool {
+        match (&self.send, build_whisper_frame(topic, data)) {
+            (Some(send), Ok(frame)) => {
+                send(&frame);
+
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Joins the room `room:<name>` and delivers its whispers to `listener`. A room
+    /// join is never acknowledged, so [`Room::send`] may be called straight away.
+    pub fn connect_room(&mut self, name: &str, listener: WhisperHandler) -> Room {
+        let topic = format!("room:{name}");
+        let listener = self.whisper_subscribe(&topic, listener);
+
+        Room { topic, listener }
     }
 
     /// Whether a socket is currently attached.
@@ -1084,8 +1316,19 @@ impl Client {
             }
             "error" => {
                 let envelope = frame.get("error");
+                let code = envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str);
+
+                // The server asking for a fresh credential, not a verdict on any
+                // subscription. Checked before the id lookup, as in the reference,
+                // so it notifies even without an id and is never routed to one.
+                if code == Some("TOKEN_EXPIRED") {
+                    self.notify_token_expired();
+
+                    return Ok(Some("error".to_string()));
+                }
+
                 let error = SubscriptionError {
-                    code: envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str).map(str::to_string),
+                    code: code.map(str::to_string),
                     message: frame
                         .get("message")
                         .and_then(Value::as_str)
@@ -1142,6 +1385,20 @@ impl Client {
             }
             "pokePart" => self.buffer_poke_part(&frame),
             "pokeEnd" => self.apply_poke(&frame),
+            "whisper" => {
+                // A frame whose topic is not a non-empty string, or whose data will not
+                // decode, is dropped: it has no listener to reach.
+                let topic = frame.get("topic").and_then(Value::as_str).filter(|topic| !topic.is_empty());
+
+                if let (Some(topic), Some(payload)) = (topic, frame.get("data")) {
+                    if let (Ok(value), Some(listeners)) = (decode_wire(payload), self.whispers.get(topic)) {
+                        for (_, listener) in listeners {
+                            listener(&value);
+                        }
+                    }
+                }
+            }
+            // `whisper_subscribed` and `identity` need no action: joins are never awaited.
             _ => {}
         }
 

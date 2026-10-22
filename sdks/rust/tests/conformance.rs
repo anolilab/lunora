@@ -22,6 +22,10 @@ use serde_json::{json, Value};
 // with no `#[test]` in it — the manifest must stay the only entry point.
 mod offline_cases;
 
+// The socket session and whisper cases. Same arrangement: plain functions, dispatched
+// from the manifest arms below and wrapped in `#[test]`s at the foot of this file.
+mod socket_cases;
+
 use offline_cases::{
     batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
     offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
@@ -159,6 +163,12 @@ fn conformance_manifest_is_covered() {
             "identity_change_evicts_previous_session" => identity_change_evicts_previous_session(),
             "auth_token_redacted_when_printed" => auth_token_redacted_when_printed(),
             "offline_unset_identity_stamps_token_digest" => offline_unset_identity_stamps_token_digest(),
+            "connect_frame_first_and_carries_session_token" => socket_cases::connect_frame_first_and_carries_session_token(),
+            "ws_url_carries_only_the_admin_ticket" => socket_cases::ws_url_carries_only_the_admin_ticket(),
+            "attach_socket_carries_connection_context" => socket_cases::attach_socket_carries_connection_context(),
+            "close_codes_drive_token_expiry" => socket_cases::close_codes_drive_token_expiry(),
+            "whisper_frames_join_send_and_deliver" => socket_cases::whisper_frames_join_send_and_deliver(),
+            "whisper_topics_rejoin_after_reconnect" => socket_cases::whisper_topics_rejoin_after_reconnect(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -524,9 +534,12 @@ fn server_frame_consumer() {
         let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let outbound = Arc::clone(&sent);
 
-        client.attach_socket(Box::new(move |frame| {
-            outbound.lock().expect("sent").push(frame.clone());
-        }));
+        client.attach_socket(
+            Box::new(move |frame| {
+                outbound.lock().expect("sent").push(frame.clone());
+            }),
+            None,
+        );
 
         // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
         // `Send`, which is what makes `Client` itself `Send` and shareable — see
@@ -607,7 +620,7 @@ fn server_frame_consumer() {
 fn a_refused_payload_stays_on_its_own_subscription() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&errors);
@@ -654,7 +667,7 @@ fn subscription_stream_yields_frame_values_in_order() {
     let case = &document["stream"];
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let (events, id) = client.stream(
         "messages:list",
@@ -696,7 +709,7 @@ fn shape_subscribe_frame() {
 fn shape_subscriptions_resend_after_reconnect() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.subscribe(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
@@ -728,7 +741,10 @@ fn shape_subscriptions_resend_after_reconnect() {
     let resent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&resent);
 
-    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())), None);
+
+    // The attach wrote `connect`; this case is about what the resend adds after it.
+    resent.lock().expect("resent").clear();
     client.resend_subscriptions().expect("resend");
 
     let frames = resent.lock().expect("resent");
@@ -749,7 +765,7 @@ fn poke_sequence_materialises_rows() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -780,7 +796,7 @@ fn poke_parts_do_not_apply_before_poke_end() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let fired = Arc::new(Mutex::new(0));
     let handle = Arc::clone(&fired);
@@ -810,7 +826,7 @@ fn reset_poke_replaces_the_view() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -850,7 +866,7 @@ fn reset_poke_replaces_the_view() {
 fn pending_poke_buffers_are_bounded() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -931,7 +947,7 @@ fn shape_client() -> (Client, Arc<Mutex<Vec<Value>>>, ShapeRecorders) {
     let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let (rows_handle, errors_handle) = (Arc::clone(&rows), Arc::clone(&errors));
 
-    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
     client.subscribe_shape(
         "roomMessages",
         Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
@@ -1075,7 +1091,7 @@ fn malformed_frames_are_ignored_without_raising() {
     let touched = Arc::new(Mutex::new(0_usize));
     let (on_data, on_error) = (Arc::clone(&touched), Arc::clone(&touched));
 
-    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
     client.subscribe(
         "messages:list",
         WireValue::Object(Vec::new()),
@@ -1145,7 +1161,7 @@ fn subscription_stream_ends_on_close() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
 
@@ -1302,7 +1318,7 @@ fn concurrent_subscribe_and_handle_frame() {
 
     let client = Arc::new(Mutex::new(Client::new("https://app.example", None)));
 
-    client.lock().expect("client").attach_socket(Box::new(|_frame| {}));
+    client.lock().expect("client").attach_socket(Box::new(|_frame| {}), None);
 
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
@@ -1342,7 +1358,14 @@ fn concurrent_subscribe_and_handle_frame() {
     let counter = Arc::clone(&resent);
     let mut guard = client.lock().expect("client");
 
-    guard.attach_socket(Box::new(move |_frame| *counter.lock().expect("resent") += 1));
+    guard.attach_socket(
+        Box::new(move |frame| {
+            if frame["type"] == json!("subscribe") {
+                *counter.lock().expect("resent") += 1;
+            }
+        }),
+        None,
+    );
     guard.resend_subscriptions().expect("resend");
 
     assert_eq!(
@@ -1443,25 +1466,35 @@ fn session_credential_never_rides_the_url() {
     assert_eq!(resolved, 3, "the provider resolves once per open");
 }
 
-// The connect envelope carries the session credential as `token`, and omits the
-// key when none is held (or it is empty).
+// The six socket cases run as ordinary tests too, so a failure names its test
+// without the manifest. The manifest arms above dispatch the same functions once
+// the manifest requires them.
 #[test]
-fn connect_frame_carries_session_token() {
-    assert_eq!(build_connect_frame(Some("client-test"), None, Some("sess-abc"))["token"], json!("sess-abc"));
-    assert!(build_connect_frame(Some("client-test"), None, None).get("token").is_none(), "absent when unset");
-    assert!(
-        build_connect_frame(Some("client-test"), None, Some("")).get("token").is_none(),
-        "absent when empty"
-    );
+fn connect_frame_first_and_carries_session_token() {
+    socket_cases::connect_frame_first_and_carries_session_token();
 }
 
-// The ticket is the only thing in `?token=`, and it is that ticket exactly.
 #[test]
-fn ws_url_ticket_is_the_only_token() {
-    let client = Client::new("https://app.example", None);
-    let url = client.ws_url(Some("tenant_a"), Some("ticket-abc"));
+fn ws_url_carries_only_the_admin_ticket() {
+    socket_cases::ws_url_carries_only_the_admin_ticket();
+}
 
-    assert_eq!(url.matches("token=").count(), 1, "exactly one token parameter in {url}");
-    assert!(url.ends_with("&token=ticket%2Dabc"), "the ticket is the token, hyphen encoded: {url}");
-    assert!(!client.ws_url(None, None).contains("token="), "no ticket means no token parameter");
+#[test]
+fn attach_socket_carries_connection_context() {
+    socket_cases::attach_socket_carries_connection_context();
+}
+
+#[test]
+fn close_codes_drive_token_expiry() {
+    socket_cases::close_codes_drive_token_expiry();
+}
+
+#[test]
+fn whisper_frames_join_send_and_deliver() {
+    socket_cases::whisper_frames_join_send_and_deliver();
+}
+
+#[test]
+fn whisper_topics_rejoin_after_reconnect() {
+    socket_cases::whisper_topics_rejoin_after_reconnect();
 }
