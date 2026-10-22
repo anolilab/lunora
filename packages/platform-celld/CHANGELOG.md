@@ -1,3 +1,9 @@
+## @lunora/platform-celld [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.27...@lunora/platform-celld@1.0.0-alpha.28) (2026-10-22)
+
+### Features
+
+* **vite:** write the server bundle's metafile for lunora build ([#1290](https://github.com/anolilab/lunora/issues/1290)) ([9f88e40](https://github.com/anolilab/lunora/commit/9f88e407777daaecec07363ddf733219327c7b73))
+
 ## @lunora/platform-celld [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.26...@lunora/platform-celld@1.0.0-alpha.27) (2026-10-20)
 
 
