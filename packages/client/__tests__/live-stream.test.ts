@@ -1,6 +1,7 @@
 import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
+import { RESUBSCRIBE_CONCURRENCY } from "../src/client-tuning";
 import { connectLiveStream } from "../src/live-stream";
 
 /**
@@ -24,6 +25,10 @@ class FakeStream {
 
     public end(): void {
         this.controller.close();
+    }
+
+    public error(): void {
+        this.controller.error(new Error("stream dropped"));
     }
 
     public send(text: string): void {
@@ -757,6 +762,203 @@ describe("connectLiveStream", () => {
 
         expect(controls.map((call) => call.subscriptionId)).toEqual(["s1", "s2"]);
         expect(live.connectionId).toBe("c1");
+
+        live.close();
+    });
+
+    it("keeps at most RESUBSCRIBE_CONCURRENCY control calls in flight while re-registering", async () => {
+        expect.assertions(3);
+
+        const topics = 9;
+        const held: (() => void)[] = [];
+        const registered: string[] = [];
+        let inFlight = 0;
+        let peak = 0;
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                return Promise.resolve(new FakeStream("c1").response);
+            }
+
+            const call = JSON.parse(init?.body as string) as ControlCall;
+
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+
+            // Each reply is held until the test releases it, so the in-flight count is observable.
+            return new Promise<Response>((resolve) => {
+                held.push(() => {
+                    inFlight -= 1;
+                    registered.push(call.subscriptionId ?? "");
+                    resolve(Response.json({ ok: true }, { status: 200 }));
+                });
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+
+        for (let index = 1; index <= topics; index += 1) {
+            live.subscribe({ id: `s${String(index)}`, topic: `T${String(index)}` });
+        }
+
+        for (let released = 0; released < topics; released += 1) {
+            // eslint-disable-next-line no-await-in-loop -- one release per step, each waiting on the next held call
+            await vi.waitFor(() => {
+                if (held.length <= released) {
+                    throw new Error("next re-registration not sent");
+                }
+            });
+
+            held[released]?.();
+        }
+
+        await live.ready;
+
+        expect(peak).toBe(RESUBSCRIBE_CONCURRENCY);
+        expect(registered).toHaveLength(topics);
+        expect(live.connectionId).toBe("c1");
+
+        live.close();
+    });
+
+    it("does not re-register a subscription that was unsubscribed while it waited for a slot", async () => {
+        expect.assertions(2);
+
+        const held: (() => void)[] = [];
+        const subscribed: string[] = [];
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                return Promise.resolve(new FakeStream("c1").response);
+            }
+
+            const call = JSON.parse(init?.body as string) as ControlCall;
+
+            if (call.action !== "subscribe") {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            subscribed.push(call.subscriptionId ?? "");
+
+            // The first window's replies are held so the rest queue behind them; anything later answers at once.
+            if (held.length >= RESUBSCRIBE_CONCURRENCY) {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            return new Promise<Response>((resolve) => {
+                held.push(() => {
+                    resolve(Response.json({ ok: true }, { status: 200 }));
+                });
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+
+        for (let index = 1; index <= RESUBSCRIBE_CONCURRENCY; index += 1) {
+            live.subscribe({ id: `s${String(index)}`, topic: `T${String(index)}` });
+        }
+
+        const unsubscribeQueued = live.subscribe({ id: "queued", topic: "Q" });
+
+        await vi.waitFor(() => {
+            if (held.length < RESUBSCRIBE_CONCURRENCY) {
+                throw new Error("window not filled");
+            }
+        });
+
+        unsubscribeQueued();
+
+        for (const release of held) {
+            release();
+        }
+
+        await live.ready;
+
+        expect(subscribed).toStrictEqual(Array.from({ length: RESUBSCRIBE_CONCURRENCY }, (_, index) => `s${String(index + 1)}`));
+        expect(live.connectionId).toBe("c1");
+
+        live.close();
+    });
+
+    it("does not send a paced re-registration on the connection it replaced", async () => {
+        expect.assertions(2);
+
+        const streams: FakeStream[] = [];
+        const held: (() => void)[] = [];
+        const subscribes: ControlCall[] = [];
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                const stream = new FakeStream(`c${String(streams.length + 1)}`);
+
+                streams.push(stream);
+
+                return Promise.resolve(stream.response);
+            }
+
+            const call = JSON.parse(init?.body as string) as ControlCall;
+
+            if (call.action !== "subscribe") {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            subscribes.push(call);
+
+            // Only the first connection's window is held, so its drain is still waiting for slots when the stream drops.
+            if (call.connectionId !== "c1") {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            return new Promise<Response>((resolve) => {
+                held.push(() => {
+                    resolve(Response.json({ ok: true }, { status: 200 }));
+                });
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        for (let index = 1; index <= RESUBSCRIBE_CONCURRENCY + 1; index += 1) {
+            live.subscribe({ id: `s${String(index)}`, topic: `T${String(index)}` });
+        }
+
+        await vi.waitFor(() => {
+            if (held.length < RESUBSCRIBE_CONCURRENCY) {
+                throw new Error("first window not sent");
+            }
+        });
+
+        streams[0]?.error();
+
+        await vi.waitFor(() => {
+            if (streams.length < 2) {
+                throw new Error("reconnect not started");
+            }
+        });
+
+        for (const release of held) {
+            release();
+        }
+
+        // The second connection's registrations are the milestone: every topic re-registered there, once each.
+        await vi.waitFor(() => {
+            if (subscribes.filter((call) => call.connectionId === "c2").length < RESUBSCRIBE_CONCURRENCY + 1) {
+                throw new Error("second connection not fully registered");
+            }
+        });
+        await flush();
+
+        const onSecond = subscribes.filter((call) => call.connectionId === "c2").map((call) => call.subscriptionId ?? "");
+        const everyId = Array.from({ length: RESUBSCRIBE_CONCURRENCY + 1 }, (_, index) => `s${String(index + 1)}`);
+
+        expect(subscribes.map((call) => call.connectionId).filter((id) => id !== "c1" && id !== "c2")).toStrictEqual([]);
+        expect([...onSecond].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(everyId);
 
         live.close();
     });
