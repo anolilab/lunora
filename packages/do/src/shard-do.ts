@@ -557,9 +557,9 @@ const MAX_PENDING_SOCKETS = 1024;
 
 /**
  * How long a pending socket may go without its `connect` frame. Enforced when the next
- * unauthenticated upgrade arrives, not by a timer: a hibernating shard runs no timers,
- * and a quiet shard has no capacity to relieve. ponytail: a pending socket on a quiet
- * shard lingers until the next upgrade; it holds a slot, not work.
+ * unauthenticated upgrade arrives, or when a late `connect` frame does, not by a timer: a
+ * hibernating shard runs no timers, and a quiet shard has no capacity to relieve.
+ * ponytail: a pending socket on a quiet shard lingers until the next upgrade; it holds a slot, not work.
  */
 const PENDING_CONNECT_DEADLINE_MS = 10_000;
 
