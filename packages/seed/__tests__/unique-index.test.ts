@@ -28,6 +28,99 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(through, { counts: { authors: 3, books: 4, authorBooks: 13 } })).toThrow(/by_author_book/u);
     });
 
+    it("carries a composite on an unbounded member when a zero-capacity string sits beside it", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            cells: defineTable({ code: v.string().max(1), weight: v.number() }).index("by_weight_code", ["weight", "code"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { cells: 5 } }), "cells");
+
+        expect(rows.every((row) => (row.code as string).length <= 1)).toBe(true);
+        expect(new Set(rows.map((row) => `${String(row.weight)}|${row.code as string}`)).size).toBe(5);
+    });
+
+    it("never counts a constant array member towards a composite's capacity", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            flags: defineTable({ on: v.boolean(), tags: v.array(v.string()).max(0) }).index("by_tags_on", ["tags", "on"], { unique: true }),
+        });
+        const pairs = new Set(rowsOf(seedPlan(schema, { counts: { flags: 2 } }), "flags").map((row) => JSON.stringify([row.tags, row.on])));
+
+        expect(pairs.size).toBe(2);
+        expect(() => seedPlan(schema, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
+    });
+
+    it("spreads a through table over several parents when one parent table alone covers the batch", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            posts: defineTable({ title: v.string() }),
+            users: defineTable({ name: v.string() }),
+            likes: defineTable({ postId: v.id("posts"), userId: v.id("users") }).index("by_post_user", ["postId", "userId"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { likes: 10, posts: 10, users: 5 } }), "likes");
+
+        expect(new Set(rows.map((row) => row.userId)).size).toBeGreaterThan(1);
+        expect(new Set(rows.map((row) => `${row.postId as string}|${row.userId as string}`)).size).toBe(10);
+
+        const both = rowsOf(seedPlan(schema, { counts: { likes: 12, posts: 10, users: 5 } }), "likes");
+
+        expect(new Set(both.map((row) => row.userId)).size).toBe(5);
+        expect(new Set(both.map((row) => `${row.postId as string}|${row.userId as string}`)).size).toBe(12);
+    });
+
+    it("keeps through-table pairs distinct across calls while the parents are unchanged", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            posts: defineTable({ title: v.string() }),
+            users: defineTable({ name: v.string() }),
+            likes: defineTable({ postId: v.id("posts"), userId: v.id("users") }).index("by_post_user", ["postId", "userId"], { unique: true }),
+        });
+        const pairsOf = (plan: ReturnType<typeof seedPlan>) => rowsOf(plan, "likes").map((row) => `${row.postId as string}|${row.userId as string}`);
+
+        for (let seed = 0; seed < 10; seed += 1) {
+            const first = pairsOf(seedPlan(schema, { counts: { likes: 5, posts: 10, users: 5 }, seed }));
+            const second = pairsOf(seedPlan(schema, { counts: { likes: 10, posts: 10, users: 5 }, indexOffset: { likes: 5 }, seed }));
+
+            expect(new Set([...first, ...second]).size).toBe(15);
+        }
+    });
+
+    it("spreads a foreign key declared after an unbounded string member", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            workspaces: defineTable({ name: v.string() }),
+            pages: defineTable({ slug: v.string(), workspaceId: v.id("workspaces") }).index("by_slug_workspace", ["slug", "workspaceId"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { pages: 12, workspaces: 3 } }), "pages");
+
+        expect(new Set(rows.map((row) => row.workspaceId)).size).toBe(3);
+        expect(new Set(rows.map((row) => `${row.slug as string}|${row.workspaceId as string}`)).size).toBe(12);
+    });
+
+    it("leaves a url member and a plain string member of a composite as the generator made them", () => {
+        expect.hasAssertions();
+
+        const tables = (indexed: boolean) => {
+            const links = defineTable({ label: v.string(), userId: v.id("users"), website: v.string().url() });
+
+            return defineSchema({
+                links: indexed ? links.index("by_user_site_label", ["userId", "website", "label"], { unique: true }) : links,
+                users: defineTable({ name: v.string() }),
+            });
+        };
+        const options = { counts: { links: 4, users: 4 } };
+        const indexed = rowsOf(seedPlan(tables(true), options), "links");
+        const plain = rowsOf(seedPlan(tables(false), options), "links");
+
+        expect(indexed.map((row) => [row.website, row.label])).toStrictEqual(plain.map((row) => [row.website, row.label]));
+        expect(new Set(indexed.map((row) => row.userId)).size).toBe(4);
+    });
+
     it("makes a single-column unique index behave like .unique()", () => {
         expect.hasAssertions();
 

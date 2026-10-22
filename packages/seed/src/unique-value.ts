@@ -226,16 +226,25 @@ const stringCapacity = ({ format, maxLength }: Constraints): number => {
  * A column whose declared shape the tag would break is refused here instead of
  * being seeded with a value its own validator rejects on insert.
  */
-const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
-    if (constraints.pattern !== undefined) {
-        refuse(table, column, "the column is pattern-constrained, and an index-tagged value would no longer match it");
+/** Why an index tag would break this string column's declared shape, or `undefined` when tagging is safe. */
+const untaggableReason = ({ format, pattern }: Constraints): string | undefined => {
+    if (pattern !== undefined) {
+        return "the column is pattern-constrained, and an index-tagged value would no longer match it";
     }
 
     // `format: "email"` survives — the tag goes in the address's local part, and
     // a generator that produced no address at all gets one built around the tag.
     // Any other format (uri, uuid, date-time, …) would be invalidated by it.
-    if (constraints.format !== undefined && constraints.format !== "email") {
-        refuse(table, column, `the column declares format "${constraints.format}", which an index-tagged value would no longer satisfy`);
+    return format === undefined || format === "email"
+        ? undefined
+        : `the column declares format "${format}", which an index-tagged value would no longer satisfy`;
+};
+
+const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
+    const why = untaggableReason(constraints);
+
+    if (why !== undefined) {
+        refuse(table, column, why);
     }
 
     return {
@@ -356,5 +365,36 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     }
 };
 
-export { planUniqueDeal, planUniqueFkDeal };
-export type { UniqueDeal };
+/** A non-foreign-key member a composite unique index can deal to make its rows distinct. */
+interface CompositeMemberDeal {
+    deal: UniqueDeal;
+    /** The dealt value replaces the generated one (an index tag, a counter, a time step) rather than picking from the column's own domain. */
+    rewrites: boolean;
+}
+
+/**
+ * How a non-foreign-key member of a composite unique index could carry the
+ * index's distinctness, or `undefined` when it cannot: a hash-derived value
+ * (array, object, record, storage, an open union) whose distinct-value count is
+ * unknown — `v.array(…).max(0)` is always `[]` — a string an index tag would
+ * break, or a column with at most one value.
+ */
+const planCompositeMemberDeal = (field: FieldSpec, options: UniqueDealOptions): CompositeMemberDeal | undefined => {
+    const constraints = constraintsOf(field.validator);
+    const tagged = (field.kind === "string" || field.kind === "any") && !(Array.isArray(constraints.enum) && constraints.enum.length > 0);
+
+    if (tagged && untaggableReason(constraints) !== undefined) {
+        return undefined;
+    }
+
+    const deal = planUniqueDeal(field, options);
+
+    if (deal === anonymousDeal || deal.capacity <= 1) {
+        return undefined;
+    }
+
+    return { deal, rewrites: tagged || !Number.isFinite(deal.capacity) };
+};
+
+export { planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
+export type { CompositeMemberDeal, UniqueDeal };

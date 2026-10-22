@@ -6,7 +6,7 @@ import { generateValue } from "./generate-value";
 import type { FieldSpec, TableSpec, UniqueIndexSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
-import { planUniqueDeal, planUniqueFkDeal } from "./unique-value";
+import { planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -346,31 +346,65 @@ const assertSelfReferenceDealable = (
     );
 };
 
-/** Give each member of a composite index the mixed-radix digit of the row's index that is its own. */
-const assignDigits = (members: ReadonlyArray<FieldSpec>, bases: ReadonlyArray<UniqueDeal>, capacity: number, deals: Map<string, UniqueDeal>): void => {
+/** A composite-index member chosen to carry part of the index's distinctness. */
+interface Carrier {
+    deal: UniqueDeal;
+    field: FieldSpec;
+}
+
+/**
+ * Give each carrier of a composite index its own digit of the row's index.
+ *
+ * The raw digits are the mixed-radix split of the index (the first carrier
+ * varies fastest), and each carrier then shifts its raw digit by the sum of the
+ * earlier carriers' raw digits, modulo its capacity. The shift depends only on
+ * earlier digits, so the split stays invertible and indexes below the product
+ * still give distinct tuples, but every carrier changes from one row to the next:
+ * with plain mixed radix the later carriers held one value for a whole cycle of
+ * the earlier ones, which put every link of a through table on one parent.
+ */
+const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals: Map<string, UniqueDeal>): void => {
+    const strides: number[] = [];
     let stride = 1;
 
-    for (const [position, field] of members.entries()) {
-        const base = bases[position] as UniqueDeal;
-        const step = stride;
+    for (const { deal } of carriers) {
+        strides.push(stride);
+        stride *= deal.capacity;
+    }
 
+    const rawDigit = (valueIndex: number, position: number): number =>
+        Math.floor(valueIndex / (strides[position] as number)) % (carriers[position] as Carrier).deal.capacity;
+
+    for (const [position, { deal, field }] of carriers.entries()) {
         deals.set(field.name, {
             capacity,
-            valueAt: (valueIndex, generate) => base.valueAt(Math.floor(valueIndex / step) % base.capacity, generate),
+            valueAt: (valueIndex, generate) => {
+                let shift = 0;
+
+                for (let earlier = 0; earlier < position; earlier += 1) {
+                    shift += rawDigit(valueIndex, earlier);
+                }
+
+                return deal.valueAt((rawDigit(valueIndex, position) + shift) % deal.capacity, generate);
+            },
         });
-        stride *= base.capacity;
     }
 };
 
 /**
  * Deal one multi-column `unique` index so each row takes a distinct combination
- * of its members, drawn from the cartesian product without replacement.
+ * of its members.
  *
- * Each member gets a deal over its own values, and the row's ABSOLUTE index is
- * split into mixed-radix digits, one per member: member `j` takes its digit at
- * `index / (product of earlier capacities)`. Distinct indexes below the product
- * give distinct tuples, so two foreign keys of N and M parents seed N x M rows and
- * no more — the through-table case. A batch past the product is refused.
+ * Distinctness has to come from members whose number of distinct values is
+ * known, so only those can carry it: foreign keys (their parent pool), then
+ * closed domains (enum, boolean, literal union, bounded number, bytes), then
+ * members whose dealt value rewrites the generated one (an index-tagged string,
+ * an unbounded counter or timestamp). Foreign keys and closed domains always
+ * carry; a rewriting member carries only while their product falls short of the
+ * batch. The rest are generated as usual, so a `.url()` column or a plain string
+ * is neither refused nor retagged when the foreign keys already cover the rows. Two foreign keys of N and M parents seed
+ * N x M rows and no more — the through-table case. A batch past what the
+ * carriers can cover is refused, with the index named.
  *
  * Skipped, leaving the columns to the generator, when a member is already unique on
  * its own (the index is then satisfied), a self-reference (its pool is not known
@@ -401,11 +435,35 @@ const planCompositeDeal = (
         return;
     }
 
-    const bases = members.map((field) =>
-        field.fkTable === undefined ? planUniqueDeal(field, { now, table }) : planUniqueFkDeal(poolOf(field), table, field.name),
-    );
-    const capacity = bases.reduce((product, base) => product * base.capacity, 1);
+    // Foreign keys first, then closed domains, then the members a deal would rewrite; the sort is stable,
+    // so declaration order breaks ties.
+    const candidates = members
+        .map((field) => {
+            if (field.fkTable !== undefined) {
+                return { carrier: { deal: planUniqueFkDeal(poolOf(field), table, field.name), field }, rank: 0 };
+            }
+
+            const member = planCompositeMemberDeal(field, { now, table });
+
+            return member === undefined ? undefined : { carrier: { deal: member.deal, field }, rank: member.rewrites ? 2 : 1 };
+        })
+        .filter((candidate) => candidate !== undefined)
+        .toSorted((left, right) => left.rank - right.rank);
     const required = offset + count;
+    const carriers: Carrier[] = [];
+    let capacity = 1;
+
+    // Foreign keys and closed domains always carry: their dealt value is one the generator could have
+    // produced, and dealing them whatever the batch size keeps a pair a function of the row index, so a
+    // later call never repeats one. A rewriting member carries only when those fall short.
+    for (const { carrier, rank } of candidates) {
+        if (rank === 2 && capacity >= required) {
+            break;
+        }
+
+        carriers.push(carrier);
+        capacity *= carrier.deal.capacity;
+    }
 
     if (required > capacity) {
         throw new LunoraError(
@@ -414,7 +472,7 @@ const planCompositeDeal = (
         );
     }
 
-    assignDigits(members, bases, capacity, deals);
+    assignDigits(carriers, capacity, deals);
 };
 
 /** Deal every multi-column `unique` index of one table; see {@link planCompositeDeal}. */
