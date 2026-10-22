@@ -8045,6 +8045,15 @@ abstract class ShardDO {
             // Verified before `identity` is sent, so a refused socket learns nothing
             // about who it is. Only an unauthenticated socket reaches this check.
             if (attachment.authenticated === false) {
+                // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
+                // would have closed this socket, and the client reads only the reason to tell them apart.
+                if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
+                    this.dropLiveSocket(attachment.connectionId);
+                    ws.close?.(4003, "connect deadline");
+
+                    return;
+                }
+
                 const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
 
                 if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {

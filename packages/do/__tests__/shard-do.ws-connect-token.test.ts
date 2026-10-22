@@ -138,6 +138,20 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(ws.closes).toStrictEqual([{ code: 4003, reason: "unauthenticated" }]);
     });
 
+    it("closes a valid connect that arrives after the deadline with the deadline reason, and admits nothing", async () => {
+        expect.assertions(3);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { ...unauthenticated(), pendingSince: Date.now() - 11_000 });
+        await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
+
+        expect(ws.closes).toStrictEqual([{ code: 4003, reason: "connect deadline" }]);
+        expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(false);
+        expect(ws.attachment?.authenticated).toBe(false);
+    });
+
     it("refuses a connect whose token does not match, and sends no identity", async () => {
         expect.assertions(3);
 
@@ -309,7 +323,7 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
             const shard = new GateShard(state, bearerEnv);
             const ws = createFakeWebSocket();
 
-            shard.registerSocket(ws, { ...unauthenticated(), pendingSince: 1 });
+            shard.registerSocket(ws, { ...unauthenticated(), pendingSince: Date.now() });
             await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
 
             expect(ws.attachment?.authenticated).toBe(true);
