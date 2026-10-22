@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.394...@lunora/config@1.0.0-alpha.395) (2026-10-22)
+
+### Bug Fixes
+
+* **config:** parse a scan's candidate files in one project ([#1298](https://github.com/anolilab/lunora/issues/1298)) ([cf7113b](https://github.com/anolilab/lunora/commit/cf7113bbcc5be6281841df3adf45944ad1dcf8f1))
+
 ## @lunora/config [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.393...@lunora/config@1.0.0-alpha.394) (2026-10-22)
 
 
