@@ -782,7 +782,8 @@ describe("connectLiveStream", () => {
                 return Promise.resolve(new FakeStream("c1").response);
             }
 
-            const call = JSON.parse(init?.body as string) as ControlCall;
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
 
             inFlight += 1;
             peak = Math.max(peak, inFlight);
@@ -836,7 +837,8 @@ describe("connectLiveStream", () => {
                 return Promise.resolve(new FakeStream("c1").response);
             }
 
-            const call = JSON.parse(init?.body as string) as ControlCall;
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
 
             if (call.action !== "subscribe") {
                 return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
@@ -902,7 +904,8 @@ describe("connectLiveStream", () => {
                 return Promise.resolve(stream.response);
             }
 
-            const call = JSON.parse(init?.body as string) as ControlCall;
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
 
             if (call.action !== "subscribe") {
                 return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
