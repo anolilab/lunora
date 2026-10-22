@@ -28,7 +28,8 @@
  * # Cache
  *
  * `listShardKeys` caches the per-table answer for `cacheTtlMs` (default 30s)
- * in process memory. The TTL is the eventual-consistency bound: a newly
+ * in process memory, and concurrent misses on one table share a single
+ * registry request. The TTL is the eventual-consistency bound: a newly
  * registered shard key takes up to `cacheTtlMs` to participate in a
  * fan-out. Calling `register`/`unregister` busts the local cache eagerly,
  * but only on the worker that made the call — other worker isolates will
@@ -120,6 +121,9 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     const instanceName = options.instanceName ?? SHARD_REGISTRY_DO_NAME;
     const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
     const cache = new Map<string, CacheEntry>();
+    // The `/list` in flight per table, so concurrent misses share one request. Cleared with `cache`, so a
+    // caller that just registered never joins a list that started before the registration.
+    const pending = new Map<string, Promise<ReadonlyArray<string>>>();
     // Pin the registry DO to the configured jurisdiction (unchanged when unset).
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
@@ -144,8 +148,10 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
         invalidate(table) {
             if (table === undefined) {
                 cache.clear();
+                pending.clear();
             } else {
                 cache.delete(table);
+                pending.delete(table);
             }
         },
 
@@ -159,19 +165,41 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
                 return cached.shardKeys;
             }
 
-            const response = await get(`/list?table=${encodeURIComponent(table)}`);
+            const inFlight = pending.get(table);
 
-            if (!response.ok) {
-                throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
+            if (inFlight) {
+                return inFlight;
             }
 
-            const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
+            const request = (async (): Promise<ReadonlyArray<string>> => {
+                const response = await get(`/list?table=${encodeURIComponent(table)}`);
 
+                if (!response.ok) {
+                    throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
+                }
+
+                const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
+
+                if (cacheTtlMs > 0) {
+                    cache.set(table, { expiresAt: now + cacheTtlMs, shardKeys });
+                }
+
+                return shardKeys;
+            })();
+
+            // With caching off, every call is meant to reach the DO, so nothing is shared. A failed request
+            // is dropped here too, so the next call retries rather than replaying the rejection.
             if (cacheTtlMs > 0) {
-                cache.set(table, { expiresAt: now + cacheTtlMs, shardKeys });
+                pending.set(table, request);
             }
 
-            return shardKeys;
+            try {
+                return await request;
+            } finally {
+                if (pending.get(table) === request) {
+                    pending.delete(table);
+                }
+            }
         },
 
         async register(table, shardKey) {
@@ -185,6 +213,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             // change immediately on this worker. Other isolates will see it
             // after their cache TTL elapses.
             cache.delete(table);
+            pending.delete(table);
         },
 
         async snapshot() {
@@ -207,6 +236,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             }
 
             cache.delete(table);
+            pending.delete(table);
         },
     };
 };
