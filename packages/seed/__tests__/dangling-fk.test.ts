@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import { createSeedClient } from "../src/client";
 import { seedPlan } from "../src/plan";
 
 const rowsOf = (plan: ReturnType<typeof seedPlan>, table: string): ReadonlyArray<Record<string, unknown>> => plan.find((entry) => entry.table === table)!.rows;
@@ -70,14 +71,61 @@ describe("seedPlan — dangling foreign keys", () => {
         expect(rowsOf(plan, "books").every((row) => authorIds.has(row.authorId as string))).toBe(true);
     });
 
-    it("refuses a unique FK on a cycle edge, which cannot be dealt", () => {
+    it("passes allowOrphans through the seed client", async () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ nodes: defineTable({ parentId: v.id("nodes") }) });
+
+        type Model = { nodes: { parentId: string } };
+
+        await expect(createSeedClient<Model>(schema).nodes(1)).rejects.toThrow(/"parentId"/u);
+        await expect(createSeedClient<Model>(schema, { allowOrphans: true }).nodes(1)).resolves.toHaveProperty("nodes");
+    });
+
+    it("points a required self-reference at existing rows when the table already has some", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ nodes: defineTable({ parentId: v.id("nodes") }) });
+        const rows = rowsOf(seedPlan(schema, { counts: { nodes: 3 }, existingIds: { nodes: ["root"] } }), "nodes");
+        const known = new Set(["root", ...rows.map((row) => row._id)]);
+
+        expect(rows.every((row) => known.has(row.parentId as string))).toBe(true);
+    });
+
+    it("refuses a cycle whose other side seeds no rows, rather than leaving the id dangling", () => {
         expect.hasAssertions();
 
         const schema = defineSchema({
-            authors: defineTable({ latestBookId: v.id("books").unique() }),
+            authors: defineTable({ latestBookId: v.id("books") }),
             books: defineTable({ authorId: v.id("authors") }),
         });
 
-        expect(() => seedPlan(schema, { counts: { authors: 2, books: 2 } })).toThrow(/"latestBookId"/u);
+        expect(() => seedPlan(schema, { counts: { authors: 2, books: 0 } })).toThrow(/"latestBookId"/u);
+    });
+
+    describe.each([
+        ["authors first", true],
+        ["books first", false],
+    ])("a unique FK on a cycle edge, %s", (_label, authorsFirst) => {
+        const authors = defineTable({ latestBookId: v.id("books").unique() });
+        const books = defineTable({ authorId: v.id("authors") });
+        const schema = defineSchema(authorsFirst ? { authors, books } : { books, authors });
+
+        it("is dealt distinct values that all point at real rows", () => {
+            expect.hasAssertions();
+
+            const plan = seedPlan(schema, { counts: { authors: 3, books: 3 } });
+            const bookIds = new Set(rowsOf(plan, "books").map((row) => row._id));
+            const latest = rowsOf(plan, "authors").map((row) => row.latestBookId as string);
+
+            expect(new Set(latest).size).toBe(3);
+            expect(latest.every((id) => bookIds.has(id))).toBe(true);
+        });
+
+        it("is refused past its parent's row count, naming the column", () => {
+            expect.hasAssertions();
+
+            expect(() => seedPlan(schema, { counts: { authors: 3, books: 2 } })).toThrow(/"latestBookId" has only 2/u);
+        });
     });
 });

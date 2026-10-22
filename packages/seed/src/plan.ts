@@ -134,7 +134,7 @@ const fkFallback = (field: FieldSpec, table: string, input: unknown, allowOrphan
 
     throw new LunoraError(
         "BAD_REQUEST",
-        `cannot seed "${table}": required foreign key "${field.name}" points at "${field.fkTable as string}", which has no rows to reference. Seed "${field.fkTable as string}" too, make "${field.name}" optional or nullable, supply "${field.name}" yourself, or pass \`allowOrphans: true\` to accept dangling ids.`,
+        `cannot seed "${table}": required foreign key "${field.name}" points at "${field.fkTable as string}", which has no rows to reference. Seed "${field.fkTable as string}" too, make "${field.name}" optional or nullable, supply "${field.name}" yourself, or pass \`allowOrphans: true\` (\`--allow-orphans\` on the CLI) to accept dangling ids.`,
     );
 };
 
@@ -265,13 +265,6 @@ const emptyPoolValue = (field: FieldSpec, context: RowContext): unknown => {
 
     if (parent === table || !selected.has(parent) || idsByTable.has(parent)) {
         return fkFallback(field, table, input, allowOrphans);
-    }
-
-    if (field.unique) {
-        throw new LunoraError(
-            "BAD_REQUEST",
-            `cannot seed "${table}": unique foreign key "${field.name}" points at "${parent}", which is part of a table cycle and is seeded after it, so its values cannot be dealt. Supply "${field.name}" yourself or break the cycle.`,
-        );
     }
 
     return DEFERRED;
@@ -522,22 +515,56 @@ const planUniqueDeals = (
 /** A foreign-key cell a cycle left open for the second pass. */
 interface DeferredCell {
     field: FieldSpec;
+    /** The row's ABSOLUTE index, which a `.unique()` cell is dealt by. */
+    index: number;
     input: ReadonlyArray<unknown>;
+    /** `offset + count` of the cell's table: how many distinct values a `.unique()` cell needs. */
+    required: number;
     row: Record<string, unknown>;
     table: string;
 }
 
-/** The value for one deferred cell, drawn from its parent's ids now that every table has been generated. */
+/**
+ * The value for one deferred cell, drawn from its parent's ids now that every
+ * table has been generated. A `.unique()` cell is dealt from the completed pool
+ * as {@link planUniqueDeals} deals any other unique FK, so the outcome does not
+ * depend on which table of the cycle was declared first.
+ */
 const resolveDeferred = (
-    { field, input, table }: DeferredCell,
+    { field, index, input, required, table }: DeferredCell,
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
     allowOrphans: boolean,
+    deals: Map<string, UniqueDeal>,
 ): unknown => {
     const parent = field.fkTable as string;
     const pool = [...(idsByTable.get(parent) ?? []), ...(existingIds[parent] ?? [])];
 
-    return pool.length === 0 ? fkFallback(field, table, input, allowOrphans) : copycat.oneOf(input, pool);
+    if (pool.length === 0) {
+        return fkFallback(field, table, input, allowOrphans);
+    }
+
+    if (!field.unique) {
+        return copycat.oneOf(input, pool);
+    }
+
+    const key = JSON.stringify([table, field.name]);
+    let deal = deals.get(key);
+
+    if (deal === undefined) {
+        deal = planUniqueFkDeal(pool, table, field.name);
+
+        if (required > deal.capacity) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `cannot seed ${String(required)} rows into "${table}": unique column "${field.name}" has only ${String(deal.capacity)} possible values`,
+            );
+        }
+
+        deals.set(key, deal);
+    }
+
+    return deal.valueAt(index, () => copycat.oneOf(input, pool));
 };
 
 /** Refuse a seed `only` list naming a table the schema does not define. */
@@ -606,12 +633,12 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // Cells whose parent table is generated later in a cycle; filled once every table has ids.
     const deferred: DeferredCell[] = [];
     // A deferred cell is recorded for the second pass; any other generated value passes through.
-    const settle = (value: unknown, field: FieldSpec, input: ReadonlyArray<unknown>, row: Record<string, unknown>, table: string): unknown => {
+    const settle = (value: unknown, cell: DeferredCell): unknown => {
         if (value !== DEFERRED) {
             return value;
         }
 
-        deferred.push({ field, input, row, table });
+        deferred.push(cell);
 
         return undefined;
     };
@@ -689,10 +716,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
                             table,
                             uniqueDeals,
                         }),
-                        field,
-                        input,
-                        row,
-                        table,
+                        { field, index, input, required: offset + count, row, table },
                     ),
                 );
             }
@@ -705,8 +729,10 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
 
     // Second pass: every table now has ids, so each cell a cycle left open can
     // point at a real parent row.
+    const deferredDeals = new Map<string, UniqueDeal>();
+
     for (const cell of deferred) {
-        const value = resolveDeferred(cell, idsByTable, existingIds, allowOrphans);
+        const value = resolveDeferred(cell, idsByTable, existingIds, allowOrphans, deferredDeals);
 
         if (value !== undefined) {
             cell.row[cell.field.name] = value;

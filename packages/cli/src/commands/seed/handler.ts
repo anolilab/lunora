@@ -21,6 +21,8 @@ import { runResetCommand } from "../reset/handler";
 import type { SeedOptions } from "./index";
 
 interface SeedCommandOptions {
+    /** Let a required foreign key with no parent row take a dangling id instead of failing. */
+    allowOrphans?: boolean;
     batchSize?: number;
     /** Inject a custom confirmer (tests, non-TTY callers). Returns `true` on confirmation. */
     confirm?: (prompt: string) => Promise<boolean>;
@@ -284,6 +286,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
 
     const schema = schemaFromIr(ir);
     const plan = seedPlan(schema, {
+        allowOrphans: options.allowOrphans === true,
         defaultCount: options.count ?? 10,
         // Omitted → `seedPlan` stamps the current clock. Passing it pins the one
         // input `--seed` does not cover, which is what makes a run replayable.
@@ -344,6 +347,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
 /** `lunora seed` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions, SeedCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runSeedCommand({
+        allowOrphans: options.allowOrphans === true,
         batchSize: options.batchSize,
         count: options.count,
         cwd,
