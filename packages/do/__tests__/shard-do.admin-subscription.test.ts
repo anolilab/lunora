@@ -350,6 +350,17 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toBeUndefined();
     });
 
+    it("refuses (403) the raw master token in a later ?token= value, not only the first", async () => {
+        expect.assertions(1);
+
+        const attachment = await upgradeAndCaptureAttachment(
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            `https://shard.internal/?token=harmless&token=${ADMIN_TOKEN}`,
+        );
+
+        expect(attachment).toBeUndefined();
+    });
+
     it("admits an unauthenticated upgrade when LUNORA_WS_BEARER gates the socket, to await connect.token", async () => {
         expect.assertions(1);
 

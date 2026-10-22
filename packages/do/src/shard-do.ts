@@ -16108,9 +16108,11 @@ abstract class ShardDO {
 
         // Neither raw credential may ride the query string, even with no bearer gate
         // configured: the URL is the leak this gate exists to close.
-        const queryToken = new URL(request.url).searchParams.get("token");
+        const queryTokens = new URL(request.url).searchParams.getAll("token");
         const rawCredentials = [env.LUNORA_ADMIN_TOKEN, env.LUNORA_WS_BEARER];
-        const rawInQuery = queryToken !== null && rawCredentials.some((raw) => raw !== undefined && raw.length > 0 && constantTimeEqual(queryToken, raw));
+        const rawInQuery = queryTokens.some((queryToken) =>
+            rawCredentials.some((raw) => raw !== undefined && raw.length > 0 && constantTimeEqual(queryToken, raw)),
+        );
 
         // A route socket has no `connect` frame to present the session credential in,
         // so the upgrade itself must authenticate it.
