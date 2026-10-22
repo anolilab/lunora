@@ -587,7 +587,7 @@
             # pulls the react-native/expo graph that no other template shares, and
             # editing `templates/next` cannot break it.
             - "name": "Run the template scaffold"
-              "run": 'pnpm run test:templates "${{ matrix.template }}"'
+              "run": "pnpm run test:templates ${{ matrix.template }}"
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
