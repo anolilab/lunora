@@ -43,7 +43,7 @@ final class SocketSessionTest {
 
         List<Map<String, Object>> sent = new ArrayList<>();
 
-        client.attachSocket(sent::add);
+        client.attachSocket(sent::add, null);
         client.resendSubscriptions();
 
         check(
@@ -71,7 +71,7 @@ final class SocketSessionTest {
         Client bare = new Client("https://app.example", null);
         List<Map<String, Object>> unauthenticated = new ArrayList<>();
 
-        bare.attachSocket(unauthenticated::add);
+        bare.attachSocket(unauthenticated::add, null);
 
         check(
                 !unauthenticated.get(0).containsKey("token"),
@@ -129,7 +129,7 @@ final class SocketSessionTest {
 
         List<Map<String, Object>> withoutContext = new ArrayList<>();
 
-        client.attachSocket(withoutContext::add);
+        client.attachSocket(withoutContext::add, null);
 
         check(
                 !withoutContext.get(0).containsKey("context"),
@@ -173,7 +173,7 @@ final class SocketSessionTest {
                 Map<String, Object> step = (Map<String, Object>) rawStep;
 
                 if (step.containsKey("attach")) {
-                    client.attachSocket(sent::add);
+                    client.attachSocket(sent::add, null);
                 } else if (step.containsKey("close")) {
                     Map<String, Object> close = (Map<String, Object>) step.get("close");
 
@@ -206,7 +206,7 @@ final class SocketSessionTest {
         Runnable unregister = client.onTokenExpired(() -> notified[0]++);
 
         unregister.run();
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.detachSocket(4001, "");
 
         check(notified[0] == 0, "an unregistered token-expiry listener must not be called");
@@ -249,7 +249,7 @@ final class SocketSessionTest {
         Client client = new Client("https://app.example", null);
 
         client.clientId = "client-test";
-        client.attachSocket(sent::add);
+        client.attachSocket(sent::add, null);
 
         Runnable leave = client.whisperSubscribe("room:general", value -> {});
 
@@ -322,7 +322,7 @@ final class SocketSessionTest {
         for (int attach = 0; attach < 2; attach++) {
             List<Map<String, Object>> sent = new ArrayList<>();
 
-            client.attachSocket(sent::add);
+            client.attachSocket(sent::add, null);
 
             check("connect".equals(sent.get(0).get("type")), "connect must lead every attach");
             check(

@@ -122,7 +122,7 @@ final class OptimisticOfflineTest {
                         "https://app.example",
                         (url, headers, body) -> new Response(200, CODED_ERROR));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe(
                 "messages:list",
                 new LinkedHashMap<>(),
@@ -160,7 +160,7 @@ final class OptimisticOfflineTest {
                                 })
                         .onSettled(event -> assertUnlocked(client, violations, "onSettled")));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         FlushReport report = client.flushOfflineQueue(null);
 
@@ -203,7 +203,7 @@ final class OptimisticOfflineTest {
                             return new Response(200, "{\"result\":null}");
                         });
 
-        live.attachSocket(frame -> {});
+        live.attachSocket(frame -> {}, null);
         live.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()).shardKey(""));
 
         check(
@@ -376,7 +376,7 @@ final class OptimisticOfflineTest {
                     new Client(
                             "https://app.example",
                             (url, headers, payload) -> new Response(200, body[0]));
-            client.attachSocket(frame -> {});
+            client.attachSocket(frame -> {}, null);
             client.subscribe("messages:list", args, seen::add, null, null);
             client.onMutationSettled(settled::add);
         }
@@ -408,7 +408,7 @@ final class OptimisticOfflineTest {
 
             MutationOutcome outcome = client.submit(options);
 
-            client.attachSocket(frame -> {});
+            client.attachSocket(frame -> {}, null);
 
             return outcome;
         }
@@ -728,7 +728,7 @@ final class OptimisticOfflineTest {
         Map<String, Object> args = new LinkedHashMap<>();
 
         args.put("token", ONLINE_ONLY_SECRET);
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe(
                 "auth:setPassword",
                 args,
@@ -781,7 +781,7 @@ final class OptimisticOfflineTest {
         List<Object> seen = new ArrayList<>();
 
         args.put("token", ONLINE_ONLY_SECRET);
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("auth:setPassword", args, seen::add, null, null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
         client.detachSocket(null, null);
@@ -827,7 +827,7 @@ final class OptimisticOfflineTest {
                         });
 
         client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         MutationOutcome outcome = client.submit(onlineOnlyWrite());
 
@@ -2106,7 +2106,7 @@ final class OptimisticOfflineTest {
 
         args.put("channel", "general");
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("messages:list", args, seen::add, null, null);
         // Prime the subscription with a server value, then drop the socket.
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
@@ -2121,7 +2121,7 @@ final class OptimisticOfflineTest {
         check(posts[0] == 0, "nothing reaches the wire while the socket is down");
         check(client.pendingMutationCount() == 1, "and the queue depth reflects it");
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.flushOfflineQueue(null);
 
         check(posts[0] == 1, "the flush replays it");
@@ -2216,7 +2216,7 @@ final class OptimisticOfflineTest {
                                         200,
                                         "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"gone\"}}"));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
 
@@ -2923,7 +2923,7 @@ final class OptimisticOfflineTest {
 
             client.identity((String) transition[2]);
             token(client, (String) transition[0]);
-            client.attachSocket(sent::add);
+            client.attachSocket(sent::add, null);
             client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
             client.handleFrame(Json.write(testCase.get("queryFrame")));
             client.subscribeShape("roomMessages", Map.of("room", "general"), delivered::add, null);

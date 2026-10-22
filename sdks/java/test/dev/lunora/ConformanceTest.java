@@ -285,7 +285,7 @@ public final class ConformanceTest {
 
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         List<Object> seen = new ArrayList<>();
         List<Client.SubscriptionError> errors = new ArrayList<>();
@@ -451,13 +451,14 @@ public final class ConformanceTest {
     private static void detachDuringAttachStaysDetached() {
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.attachSocket(
                 frame -> {
                     if ("connect".equals(frame.get("type"))) {
                         client.detachSocket(null, null);
                     }
-                });
+                },
+                null);
 
         check(
                 !client.online(),
@@ -473,7 +474,7 @@ public final class ConformanceTest {
         Client client = new Client("https://app.example", null);
         List<Map<String, Object>> replaced = new ArrayList<>();
 
-        client.attachSocket(replaced::add);
+        client.attachSocket(replaced::add, null);
 
         int beforeAttach = replaced.size();
 
@@ -482,7 +483,8 @@ public final class ConformanceTest {
                     if ("connect".equals(frame.get("type"))) {
                         client.subscribe("messages:list", Map.of(), data -> {}, error -> {}, null);
                     }
-                });
+                },
+                null);
 
         check(
                 replaced.size() == beforeAttach,
@@ -504,7 +506,7 @@ public final class ConformanceTest {
 
         List<Map<String, Object>> first = new ArrayList<>();
 
-        client.attachSocket(first::add);
+        client.attachSocket(first::add, null);
 
         check(
                 "connect".equals(first.get(0).get("type")),
@@ -524,7 +526,7 @@ public final class ConformanceTest {
 
         List<Map<String, Object>> reconnect = new ArrayList<>();
 
-        client.attachSocket(reconnect::add);
+        client.attachSocket(reconnect::add, null);
 
         check(
                 "connect".equals(reconnect.get(0).get("type"))
@@ -538,7 +540,7 @@ public final class ConformanceTest {
         Client bare = new Client("https://app.example", null);
         List<Map<String, Object>> unset = new ArrayList<>();
 
-        bare.attachSocket(unset::add);
+        bare.attachSocket(unset::add, null);
 
         check(
                 "connect".equals(unset.get(0).get("type")) && !unset.get(0).containsKey("token"),
@@ -571,7 +573,7 @@ public final class ConformanceTest {
 
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         List<Object> seen = new ArrayList<>();
 
@@ -864,7 +866,7 @@ public final class ConformanceTest {
             Client client = new Client("https://app.example", null);
             List<Map<String, Object>> sent = new ArrayList<>();
 
-            client.attachSocket(sent::add);
+            client.attachSocket(sent::add, null);
 
             List<Object> seen = new ArrayList<>();
             List<Client.SubscriptionError> errors = new ArrayList<>();
@@ -939,7 +941,7 @@ public final class ConformanceTest {
                 (Map<String, Object>) fixture("ws-frames.json").get("stream");
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         Map<String, Object> args = new LinkedHashMap<>();
 
@@ -1001,7 +1003,7 @@ public final class ConformanceTest {
         Map<String, Object> args = new LinkedHashMap<>();
 
         args.put("room", "general");
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
         client.subscribeShape("roomMessages", args, rows -> {}, null);
 
@@ -1017,7 +1019,7 @@ public final class ConformanceTest {
 
         List<Map<String, Object>> resent = new ArrayList<>();
 
-        client.attachSocket(resent::add);
+        client.attachSocket(resent::add, null);
         client.resendSubscriptions();
         check("connect".equals(resent.remove(0).get("type")), "connect opens the socket");
 
@@ -1051,7 +1053,7 @@ public final class ConformanceTest {
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         List<List<Object>> delivered = new ArrayList<>();
         Map<String, Object> args = new LinkedHashMap<>();
@@ -1077,7 +1079,7 @@ public final class ConformanceTest {
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         int[] fired = {0};
 
@@ -1108,7 +1110,7 @@ public final class ConformanceTest {
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         List<List<Object>> delivered = new ArrayList<>();
         Map<String, Object> args = new LinkedHashMap<>();
@@ -1148,7 +1150,7 @@ public final class ConformanceTest {
 
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         List<List<Object>> delivered = new ArrayList<>();
         Map<String, Object> args = new LinkedHashMap<>();
@@ -1239,7 +1241,7 @@ public final class ConformanceTest {
         // Attached only now; the count is the attach's connect frame plus one subscribe per call.
         AtomicInteger resent = new AtomicInteger();
 
-        client.attachSocket(frame -> resent.incrementAndGet());
+        client.attachSocket(frame -> resent.incrementAndGet(), null);
         client.resendSubscriptions();
 
         check(
@@ -1296,7 +1298,7 @@ public final class ConformanceTest {
         Client client = new Client("https://app.example", null);
         List<Map<String, Object>> sent = new ArrayList<>();
 
-        client.attachSocket(sent::add);
+        client.attachSocket(sent::add, null);
 
         List<List<Object>> delivered = new ArrayList<>();
         List<List<Object>> otherDelivered = new ArrayList<>();
@@ -1399,7 +1401,7 @@ public final class ConformanceTest {
         List<Map<String, Object>> contiguousSent = new ArrayList<>();
         List<List<Object>> contiguousDelivered = new ArrayList<>();
 
-        contiguous.attachSocket(contiguousSent::add);
+        contiguous.attachSocket(contiguousSent::add, null);
         contiguous.subscribeShape("roomMessages", args, contiguousDelivered::add, null);
 
         for (Object frame : (List<Object>) shape.get("pokeSequence")) {
@@ -1440,7 +1442,7 @@ public final class ConformanceTest {
             List<Object> seen = new ArrayList<>();
             List<Client.SubscriptionError> errors = new ArrayList<>();
 
-            client.attachSocket(sent::add);
+            client.attachSocket(sent::add, null);
             client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, errors::add, null);
             client.handleFrame(Json.write(testCase.get("setupFrame")));
             seen.clear();
@@ -1517,7 +1519,7 @@ public final class ConformanceTest {
                 (Map<String, Object>) fixture("ws-frames.json").get("stream");
         Client client = new Client("https://app.example", null);
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         Client.Stream stream = client.stream("messages:list", Map.of("channel", "general"), null);
         List<Object> seen = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -1570,7 +1572,7 @@ public final class ConformanceTest {
             List<List<Object>> delivered = new ArrayList<>();
 
             client.identity((String) transition.get("from"));
-            client.attachSocket(sent::add);
+            client.attachSocket(sent::add, null);
             client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
             client.handleFrame(Json.write(testCase.get("queryFrame")));
             client.subscribeShape("roomMessages", Map.of("room", "general"), delivered::add, null);

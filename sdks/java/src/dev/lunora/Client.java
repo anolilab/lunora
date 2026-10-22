@@ -513,20 +513,14 @@ public final class Client {
      *
      * <p>It sends the {@code connect} frame first, carrying the session credential from {@link
      * #wsToken(Supplier)} resolved now, so every open and every reconnect presents it before any
-     * subscription. The app must not send {@code connect} itself.
+     * subscription. The app must not send {@code connect} itself. Pass {@code null} for {@code
+     * context} when there is none; a non-null {@code context} rides the {@code connect} frame,
+     * where the server records it for the {@code onConnect} lifecycle hooks, so it applies to every
+     * open and reconnect, not only the first.
      *
      * <p>It also latches "has connected at least once", which is what the write queue gates on: a
      * write made before the FIRST connect fails fast by default, so a misconfigured endpoint
      * surfaces on the first write instead of silently filling a queue that will never flush.
-     */
-    public void attachSocket(FrameSender sender) {
-        attachSocket(sender, null);
-    }
-
-    /**
-     * {@link #attachSocket(FrameSender)} with a connection {@code context} on the {@code connect}
-     * frame. The server records it for the {@code onConnect} lifecycle hooks, so it applies to
-     * every open and reconnect, not only the first.
      */
     public void attachSocket(FrameSender sender, Map<String, Object> context) {
         Supplier<String> provider;

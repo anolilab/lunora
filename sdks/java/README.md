@@ -41,7 +41,7 @@ client.mutation("messages:send", Map.of("channel", "general", "text", "hi"), nul
 
 // Live subscription: attach your socket, then feed it frames.
 // attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
-client.attachSocket(frame -> socket.send(Json.write(frame)));
+client.attachSocket(frame -> socket.send(Json.write(frame)), null);
 Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, null);
 ```
 
@@ -76,7 +76,7 @@ while (!Thread.currentThread().isInterrupted()) {
     String closeReason = null;
     try (Socket socket = connect()) { // your socket library
         // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
-        client.attachSocket(frame -> socket.send(Json.write(frame)));
+        client.attachSocket(frame -> socket.send(Json.write(frame)), null);
         client.resendSubscriptions();
         var report = client.flushOfflineQueue(shard);
         if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
