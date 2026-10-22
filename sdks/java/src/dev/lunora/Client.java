@@ -561,6 +561,13 @@ public final class Client {
 
             try {
                 for (String topic : new ArrayList<>(whisperListeners.keySet())) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach:
+                    // the
+                    // remaining joins are not written to a socket that is no longer attached.
+                    if (generation != this.attachGeneration) {
+                        return;
+                    }
+
                     sender.send(buildWhisperSubscribeFrame(topic));
                 }
 
@@ -681,22 +688,30 @@ public final class Client {
 
     /** Removes one registration; the last one on a topic also sends {@code whisper_unsubscribe}. */
     private void leaveWhisper(String topic, Registration<Consumer<Object>> registration) {
-        // The unsubscribe goes out under the lock, in the order the listener state changes.
+        // The unsubscribe goes out under the lock, in the order the listener state changes. It is
+        // sent
+        // before the state is removed, so a write that throws leaves the listener registered and
+        // the
+        // leave can be retried: the membership is not stranded on the server.
         synchronized (lock) {
             List<Registration<Consumer<Object>>> listeners = whisperListeners.get(topic);
 
-            if (listeners == null || !listeners.remove(registration)) {
+            if (listeners == null || !listeners.contains(registration)) {
                 return;
             }
 
-            if (listeners.isEmpty()) {
-                whisperListeners.remove(topic);
-                unjoinedTopics.remove(topic);
+            if (listeners.size() > 1) {
+                listeners.remove(registration);
 
-                if (sender != null) {
-                    sender.send(buildWhisperUnsubscribeFrame(topic));
-                }
+                return;
             }
+
+            if (sender != null) {
+                sender.send(buildWhisperUnsubscribeFrame(topic));
+            }
+
+            whisperListeners.remove(topic);
+            unjoinedTopics.remove(topic);
         }
     }
 

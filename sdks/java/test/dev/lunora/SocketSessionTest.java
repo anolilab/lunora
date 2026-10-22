@@ -26,6 +26,8 @@ final class SocketSessionTest {
         whisperFramesJoinSendAndDeliver();
         whisperTopicsRejoinAfterReconnect();
         closedRoomRefusesSends();
+        failedUnsubscribeCanBeRetried();
+        supersededAttachStopsWritingJoins();
     }
 
     /** The first frame of every open is {@code connect}, carrying the session credential. */
@@ -303,6 +305,70 @@ final class SocketSessionTest {
                             .equals(Key.stableStringify(expected)),
                     name + ": values delivered to the room:general listener");
         }
+    }
+
+    /**
+     * A last-listener leave whose unsubscribe write fails stays registered, so the leave can be
+     * retried.
+     */
+    private static void failedUnsubscribeCanBeRetried() {
+        List<Map<String, Object>> sent = new ArrayList<>();
+        boolean[] refuse = {true};
+        Client client = new Client("https://app.example", null);
+
+        client.clientId = "client-test";
+        client.attachSocket(
+                frame -> {
+                    if ("whisper_unsubscribe".equals(frame.get("type")) && refuse[0]) {
+                        refuse[0] = false;
+                        throw new IllegalStateException("write refused");
+                    }
+
+                    sent.add(frame);
+                },
+                null);
+
+        Runnable leave = client.whisperSubscribe("room:general", value -> {});
+
+        try {
+            leave.run();
+            check(false, "the refused unsubscribe must surface to the caller");
+        } catch (IllegalStateException expected) {
+            // The write was refused, as the sender reported.
+        }
+
+        leave.run();
+
+        check(
+                sent.stream().anyMatch(frame -> "whisper_unsubscribe".equals(frame.get("type"))),
+                "the retried leave must write whisper_unsubscribe");
+    }
+
+    /**
+     * A sender that detaches during the attach's joins stops the remaining joins from being
+     * written.
+     */
+    private static void supersededAttachStopsWritingJoins() {
+        List<Map<String, Object>> sent = new ArrayList<>();
+        Client client = new Client("https://app.example", null);
+
+        client.clientId = "client-test";
+        client.whisperSubscribe("room:a", value -> {});
+        client.whisperSubscribe("room:b", value -> {});
+        client.attachSocket(
+                frame -> {
+                    sent.add(frame);
+
+                    if ("whisper_subscribe".equals(frame.get("type"))) {
+                        client.detachSocket(null, null);
+                    }
+                },
+                null);
+
+        check(
+                sent.stream().filter(frame -> "whisper_subscribe".equals(frame.get("type"))).count()
+                        == 1,
+                "a detach during the joins must stop the remaining joins");
     }
 
     /** A closed room refuses sends, even while another listener keeps its topic joined. */
