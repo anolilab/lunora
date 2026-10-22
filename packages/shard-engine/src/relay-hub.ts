@@ -464,6 +464,14 @@ abstract class RelayLink {
         return this.siblingStub(this.roleId.ownerKey) !== undefined;
     }
 
+    /**
+     * The sockets the server has admitted. A pending socket has not proved its credential, and a peer can open one
+     * freely, so promotion, drain and idle all count this set and never the raw one.
+     */
+    protected admittedSockets(): ShardSocketLike[] {
+        return this.host.getWebSockets().filter((ws) => this.host.readAttachment(ws).authenticated !== false);
+    }
+
     /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
     protected siblingStub(targetName: string): SiblingStub | undefined {
         return siblingStub(this.host.env(), this.bindingName(), targetName, this.host.shardJurisdiction());
@@ -803,7 +811,7 @@ class OwnerRelay extends RelayLink {
      */
     public override relayCount(): number {
         // A pending socket has not proved its credential, and a peer can open one freely, so it must not promote the owner.
-        const subscribers = this.host.getWebSockets().filter((ws) => this.host.readAttachment(ws).authenticated !== false).length;
+        const subscribers = this.admittedSockets().length;
         const tUp = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
         const tDownRaw = envPositiveInt(this.host.env(), "LUNORA_RELAY_COLLAPSE_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tDown);
 
@@ -2000,7 +2008,7 @@ class RelayMember extends RelayLink {
      * that cannot reach its owner still owns its own table.
      */
     public override async announceDrain(closing: ShardSocketLike): Promise<void> {
-        if (this.host.getWebSockets().some((ws) => ws !== closing)) {
+        if (this.admittedSockets().some((ws) => ws !== closing)) {
             return;
         }
 
@@ -2109,7 +2117,7 @@ class RelayMember extends RelayLink {
      * forgets its own attach, so the next socket attaches again rather than trust a registration the owner is about to drop.
      */
     protected override refusesAsIdle(): boolean {
-        if (this.host.getWebSockets().length > 0) {
+        if (this.admittedSockets().length > 0) {
             return false;
         }
 

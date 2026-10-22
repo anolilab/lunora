@@ -759,6 +759,56 @@ describe("relay hub", () => {
 
             expect(memoRows()).toBe(0);
         });
+
+        it("drains once the last admitted socket closes, even while a pending socket is still open", async () => {
+            expect.assertions(2);
+
+            // A pending socket has not proved its credential. Left open, it must not keep the relay attached.
+            // A dropped socket (server-side close, no release) leaves a memo row that only the drain clears.
+            const attachments = new Map<ShardSocketLike, SocketAttachment>();
+            const dropped = { send: () => 1 } as unknown as ShardSocketLike;
+            const admitted = { send: () => 1 } as unknown as ShardSocketLike;
+            const pending = { send: () => 1 } as unknown as ShardSocketLike;
+
+            attachments.set(dropped, { connectionId: "c-dropped", shapes: { s1: OPEN_SHAPE }, subs: {} });
+            attachments.set(admitted, { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} });
+            attachments.set(pending, { authenticated: false, connectionId: "c-pending", subs: {} });
+
+            const ownerStub = { fetch: () => Promise.resolve(Response.json({ cursor: 10, epoch: "e1", frames: ["seed"] })) };
+            const live = new Set([admitted, dropped, pending]);
+
+            const relay = createRelayLink({
+                currentCdcEpoch: () => "e1",
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => ownerStub, getByName: () => ownerStub, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [...live],
+                nextPokeId: () => "poke-1",
+                readAttachment: (ws: ShardSocketLike) => attachments.get(ws),
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
+            if (relay === undefined) {
+                throw new Error("expected a relay link for a `::relay::` DO name");
+            }
+
+            await relay.seedRelayShape(dropped, "s1", OPEN_SHAPE, {});
+            await relay.seedRelayShape(admitted, "s1", OPEN_SHAPE, {});
+
+            expect(memoRows()).toBe(2);
+
+            // The dropped socket leaves without a release. Alice closes; only the pending socket is left.
+            live.delete(dropped);
+            live.delete(admitted);
+            await relay.releaseRelayShapes(admitted);
+            await relay.announceDrain(admitted);
+
+            expect(memoRows()).toBe(0);
+        });
     });
 
     describe("owner seed reply", () => {
