@@ -2351,7 +2351,7 @@ abstract class ShardDO {
      * DO driver only touches `storage.sql`, so test doubles only need to
      * supply that field — see {@link ShardDOState}.
      */
-    private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
+    private drizzleHandle: DrizzleSqliteDODatabase | undefined;
 
     /**
      * Tracks transaction nesting so we can reject nested transactions —
@@ -4070,7 +4070,7 @@ abstract class ShardDO {
      * subclasses; wrap your work in `runInTransaction` and use `this.db`
      * inside the handler instead.
      */
-    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>> {
+    protected get db(): DrizzleSqliteDODatabase {
         if (this.drizzleHandle) {
             return this.drizzleHandle;
         }

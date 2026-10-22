@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.340...@lunora/codegen@1.0.0-alpha.341) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.237
+
 ## @lunora/codegen [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.339...@lunora/codegen@1.0.0-alpha.340) (2026-10-20)
 
 ### Bug Fixes

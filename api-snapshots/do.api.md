@@ -449,7 +449,7 @@ abstract class ShardDO {
     protected dispatchShardInit(): Promise<void>;
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown;
-    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
+    protected get db(): DrizzleSqliteDODatabase;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
