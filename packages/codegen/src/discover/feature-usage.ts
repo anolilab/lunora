@@ -302,19 +302,19 @@ const toolExports = (names: Iterable<string>): SecretToolExports => {
  * edit between scans is seen and no file is re-read within one.
  */
 interface TargetScope {
+    /** Each target project's declaring project, so a target's own hop can still see the declaring project's files. */
+    readonly origins: Map<Project, Project>;
     /** The target project each declaring project resolves into. */
     readonly projects: Map<Project, Project>;
-    /** The target projects themselves, so a target's own hop stays in its project. */
-    readonly targets: Set<Project>;
 }
 
 /** A fresh scope for one scan: the targets it follows are parsed once and kept for that scan only. */
 const createTargetScope = (): TargetScope => {
-    return { projects: new Map(), targets: new Set() };
+    return { projects: new Map(), origins: new Map() };
 };
 
 const targetProjectOf = (scope: TargetScope, project: Project): Project => {
-    if (scope.targets.has(project)) {
+    if (scope.origins.has(project)) {
         return project;
     }
 
@@ -329,7 +329,7 @@ const targetProjectOf = (scope: TargetScope, project: Project): Project => {
             skipLoadingLibFiles: true,
         });
         scope.projects.set(project, targets);
-        scope.targets.add(targets);
+        scope.origins.set(targets, project);
     }
 
     return targets;
@@ -350,7 +350,9 @@ const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | E
         return undefined;
     }
 
-    const known = project.getSourceFile(path);
+    // A hop from a target looks in the declaring project first, so an edit made there is seen rather than the disk copy.
+    const declaring = scope.origins.get(project) ?? project;
+    const known = declaring.getSourceFile(path) ?? project.getSourceFile(path);
 
     if (known !== undefined) {
         return known;

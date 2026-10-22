@@ -540,6 +540,22 @@ describe("discover/feature-usage", () => {
             expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
         });
 
+        it("prefers the declaring project's copy of a helper that a barrel loaded from disk re-exports", () => {
+            expect.assertions(1);
+
+            // The disk copy of the helper has no tool; the declaring project holds an edit that does.
+            writeSource("helper.ts", "export const other = 1;");
+            writeSource("barrel.ts", `export * from "./helper";`);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            project.createSourceFile(join(workdir, "helper.ts"), TOOLS_EXPORT, { overwrite: true });
+
+            const agents = project.createSourceFile(join(workdir, "agents.ts"), agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
         it("keeps a barrel's next hop on the declaring project's rootDirs", () => {
             expect.assertions(1);
 
