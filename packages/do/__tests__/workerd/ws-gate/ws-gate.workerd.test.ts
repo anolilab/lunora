@@ -12,26 +12,14 @@ const BEARER = "ws-gate-workerd-fixture";
 
 interface GatedSocket {
     client: WebSocket;
-    closed: number | undefined;
+    /** Resolves with the close code: the milestone a refused socket reaches. */
+    closed: Promise<number>;
+    /** The close code once it has arrived, or `undefined` while the socket is open. */
+    closedCode: () => number | undefined;
+    /** Resolves once the server sends its `identity` frame: the milestone an admitted socket reaches. */
+    identity: Promise<void>;
     received: string[];
 }
-
-const waitFor = async (predicate: () => boolean, { intervalMs = 10, timeoutMs = 2000 }: { intervalMs?: number; timeoutMs?: number } = {}): Promise<void> => {
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-        if (predicate()) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling a socket milestone is the point: each check waits on the runtime's queue
-        await new Promise((resolve) => {
-            setTimeout(resolve, intervalMs);
-        });
-    }
-
-    throw new Error(`waitFor: predicate never became true within ${String(timeoutMs)}ms`);
-};
 
 // A fresh shard per test, so no test sees another's sockets.
 const newStub = () => env.SHARD.get(env.SHARD.idFromName(`gate-${crypto.randomUUID()}`));
@@ -43,19 +31,31 @@ const upgrade = async (stub: ReturnType<typeof newStub>): Promise<GatedSocket> =
         throw new Error(`expected websocket upgrade, got status ${String(response.status)}`);
     }
 
-    const socket: GatedSocket = { client: response.webSocket, closed: undefined, received: [] };
+    const client = response.webSocket;
+    const received: string[] = [];
+    let code: number | undefined;
 
-    socket.client.addEventListener("message", (event) => {
-        if (typeof event.data === "string") {
-            socket.received.push(event.data);
-        }
-    });
-    socket.client.addEventListener("close", (event) => {
-        socket.closed = event.code;
-    });
-    socket.client.accept();
+    const identity = new Promise<void>((resolve) => {
+        client.addEventListener("message", (event) => {
+            if (typeof event.data === "string") {
+                received.push(event.data);
 
-    return socket;
+                if (event.data.includes('"type":"identity"')) {
+                    resolve();
+                }
+            }
+        });
+    });
+    const closed = new Promise<number>((resolve) => {
+        client.addEventListener("close", (event) => {
+            code = event.code;
+            resolve(event.code);
+        });
+    });
+
+    client.accept();
+
+    return { client, closed, closedCode: () => code, identity, received };
 };
 
 describe("shardDO bearer gate (workerd)", () => {
@@ -66,9 +66,9 @@ describe("shardDO bearer gate (workerd)", () => {
         const socket = await upgrade(stub);
 
         socket.client.send(JSON.stringify({ id: "connect", token: BEARER, type: "connect" }));
-        await waitFor(() => socket.received.some((message) => message.includes('"type":"identity"')));
+        await socket.identity;
 
-        expect(socket.closed).toBeUndefined();
+        expect(socket.closedCode()).toBeUndefined();
 
         // The admitted flag is what the runtime serialized, so it survives hibernation.
         await runInDurableObject(stub, (_instance, state) => {
@@ -89,9 +89,8 @@ describe("shardDO bearer gate (workerd)", () => {
         const socket = await upgrade(newStub());
 
         socket.client.send(JSON.stringify({ id: "connect", token: "not-the-bearer", type: "connect" }));
-        await waitFor(() => socket.closed !== undefined);
 
-        expect(socket.closed).toBe(4003);
+        await expect(socket.closed).resolves.toBe(4003);
         expect(socket.received.some((message) => message.includes('"type":"identity"'))).toBe(false);
     });
 
@@ -101,9 +100,8 @@ describe("shardDO bearer gate (workerd)", () => {
         const socket = await upgrade(newStub());
 
         socket.client.send(JSON.stringify({ id: "s", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" }));
-        await waitFor(() => socket.closed !== undefined);
 
-        expect(socket.closed).toBe(4003);
+        await expect(socket.closed).resolves.toBe(4003);
         expect(socket.received.some((message) => message.includes('"code":"UNAUTHENTICATED"'))).toBe(true);
     });
 });
