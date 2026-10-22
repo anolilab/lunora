@@ -91,21 +91,75 @@
         "$comment": "Each case is a run of steps, in order: `attach` (the socket opens: the client sends `connect` first, under the session credential in force), `frame` (a server frame the open socket delivered), `close` (a close frame's code and reason), or `credentialChange` (the app sets a new session credential, which supersedes any socket open under the old one). The run registers one subscription, `sub_1`, before its first step. `tokenExpiredNotifications` counts how many times the token-expired listeners fire. This is the reference's rule (`@lunora/client`): a 4001 close always notifies; a TOKEN_EXPIRED error frame always notifies and is NOT routed to its subscription, and a 4001 close that follows it notifies again; a 4003 close notifies once per credential generation, and a `credentialChange` starts a new generation; a 4003 from a socket opened under an earlier generation notifies nothing, because it refused a credential no longer in force; a 4003 whose reason is exactly \"connect deadline\" refuses no credential and notifies nothing; any other close notifies nothing. An UNAUTHENTICATED error frame notifies nothing on its own and reaches its subscription like any other error. Every close leaves the client offline, and the reconnect loop runs as before.",
         "cases": [
             { "name": "token_expired_close", "steps": [{ "attach": true }, { "close": { "code": 4001, "reason": "" } }], "tokenExpiredNotifications": 1 },
-            { "name": "refused_credential_notifies_once_per_credential", "steps": [{ "attach": true }, { "close": { "code": 4003, "reason": "refused" } }, { "attach": true }, { "close": { "code": 4003, "reason": "refused" } }], "tokenExpiredNotifications": 1 },
-            { "name": "credential_change_rearms_refusal", "steps": [{ "attach": true }, { "close": { "code": 4003, "reason": "refused" } }, { "attach": true }, { "credentialChange": true }, { "attach": true }, { "close": { "code": 4003, "reason": "refused" } }], "tokenExpiredNotifications": 2 },
-            { "name": "superseded_socket_refusal_is_not_notified", "steps": [{ "attach": true }, { "credentialChange": true }, { "close": { "code": 4003, "reason": "refused" } }], "tokenExpiredNotifications": 0 },
-            { "name": "connect_deadline_is_not_a_refusal", "steps": [{ "attach": true }, { "close": { "code": 4003, "reason": "connect deadline" } }], "tokenExpiredNotifications": 0 },
-            { "name": "normal_close_notifies_nothing", "steps": [{ "attach": true }, { "close": { "code": 1000, "reason": "" } }], "tokenExpiredNotifications": 0 },
-            { "name": "token_expired_frame_is_not_routed", "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } }], "tokenExpiredNotifications": 1, "subscriptionErrors": 0 },
-            { "name": "unauthenticated_frame_reaches_subscription", "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "UNAUTHENTICATED" } } }], "tokenExpiredNotifications": 0, "subscriptionErrors": 1 },
-            { "name": "token_expired_frame_then_close_notifies_twice", "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } }, { "close": { "code": 4001, "reason": "" } }], "tokenExpiredNotifications": 2 }
+            {
+                "name": "refused_credential_notifies_once_per_credential",
+                "steps": [
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } },
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } }
+                ],
+                "tokenExpiredNotifications": 1
+            },
+            {
+                "name": "credential_change_rearms_refusal",
+                "steps": [
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } },
+                    { "attach": true },
+                    { "credentialChange": true },
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } }
+                ],
+                "tokenExpiredNotifications": 2
+            },
+            {
+                "name": "superseded_socket_refusal_is_not_notified",
+                "steps": [{ "attach": true }, { "credentialChange": true }, { "close": { "code": 4003, "reason": "refused" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "connect_deadline_is_not_a_refusal",
+                "steps": [{ "attach": true }, { "close": { "code": 4003, "reason": "connect deadline" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "normal_close_notifies_nothing",
+                "steps": [{ "attach": true }, { "close": { "code": 1000, "reason": "" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "token_expired_frame_is_not_routed",
+                "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } }],
+                "tokenExpiredNotifications": 1,
+                "subscriptionErrors": 0
+            },
+            {
+                "name": "unauthenticated_frame_reaches_subscription",
+                "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "UNAUTHENTICATED" } } }],
+                "tokenExpiredNotifications": 0,
+                "subscriptionErrors": 1
+            },
+            {
+                "name": "token_expired_frame_then_close_notifies_twice",
+                "steps": [
+                    { "attach": true },
+                    { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } },
+                    { "close": { "code": 4001, "reason": "" } }
+                ],
+                "tokenExpiredNotifications": 2
+            }
         ]
     },
     "whisperFrames": {
         "$comment": "A topic is joined with `whisper_subscribe` and left with `whisper_unsubscribe`. `whisper` is an ephemeral relay in both directions: a send is `whisper` carrying the topic and the wire-encoded `data`, and a delivered `whisper` frame is decoded and handed to that topic's listeners only. A room is the topic `room:<name>`, and a room topic is never acknowledged, so a port must not wait for an ack before it sends. On every reconnect, a port joins each registered topic again right after the `connect` frame. `whisper_subscribed` is an acknowledgement a port may ignore. A frame whose topic is not a string is dropped without raising out of the frame handler.",
         "rejoinOnReconnect": ["room:general"],
         "serverFrames": [
-            { "name": "delivered_to_topic", "frame": { "type": "whisper", "topic": "room:general", "data": { "text": "hi" }, "from": "user-a" }, "delivered": [{ "topic": "room:general", "value": { "text": "hi" } }] },
+            {
+                "name": "delivered_to_topic",
+                "frame": { "type": "whisper", "topic": "room:general", "data": { "text": "hi" }, "from": "user-a" },
+                "delivered": [{ "topic": "room:general", "value": { "text": "hi" } }]
+            },
             { "name": "other_topic_not_delivered", "frame": { "type": "whisper", "topic": "room:other", "data": { "text": "x" } }, "delivered": [] },
             { "name": "whisper_subscribed_is_ignored", "frame": { "type": "whisper_subscribed", "topic": "room:general" }, "delivered": [] },
             { "name": "non_string_topic_is_dropped", "frame": { "type": "whisper", "topic": 7, "data": { "text": "x" } }, "delivered": [] }
