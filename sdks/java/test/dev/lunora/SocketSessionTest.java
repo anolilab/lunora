@@ -281,8 +281,7 @@ final class SocketSessionTest {
             Map<String, Object> serverCase = (Map<String, Object>) raw;
             String name = (String) serverCase.get("name");
             Client receiver = new Client("https://app.example", null);
-            // The port is joined to room:general alone: a frame on any other topic must not reach
-            // it.
+            // Joined to room:general alone: a frame on any other topic must not reach the listener.
             List<Object> received = new ArrayList<>();
 
             receiver.whisperSubscribe("room:general", received::add);

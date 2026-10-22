@@ -1601,8 +1601,7 @@ public final class Client {
                                 envelope.get("code") instanceof String code ? code : null, message);
 
                 // Token expiry is the session's, not the subscription's: report it, and do not
-                // route
-                // the frame, whether or not it names one.
+                // route the frame, whether or not it names one.
                 if (CODE_TOKEN_EXPIRED.equals(error.code())) {
                     notifyTokenExpired();
 
