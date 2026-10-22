@@ -135,6 +135,8 @@ describe("createPollingFallback", () => {
 interface MockSocket {
     close: () => void;
     open: () => void;
+    receive: (frame: unknown) => void;
+    refuse: (code: number) => void;
     sent: string[];
     triggerClose: () => void;
 }
@@ -174,6 +176,17 @@ const createMockWebSocket = (): typeof WebSocket => {
         public triggerClose(): void {
             this.readyState = 3;
             this.dispatch("close");
+        }
+
+        /** The server closes the socket with a code, as a refused connect frame does. */
+        public refuse(code: number): void {
+            this.readyState = 3;
+            this.dispatch("close", { code, reason: "" });
+        }
+
+        /** A server frame, as the shard sends it. */
+        public receive(frame: unknown): void {
+            this.dispatch("message", { data: JSON.stringify(frame) });
         }
 
         private dispatch(type: string, event?: unknown): void {
@@ -292,6 +305,8 @@ describe("lunoraClient polling fallback", () => {
         expect(polledWhileDown).toBeGreaterThan(0);
 
         sockets.at(-1)?.open();
+        // Polling stops once the server admits the socket, not when the upgrade opens.
+        sockets.at(-1)?.receive({ subject: null, type: "identity" });
         await vi.advanceTimersByTimeAsync(5000);
 
         expect(client.connectionStatus()).toBe("connected");
@@ -328,6 +343,35 @@ describe("lunoraClient polling fallback", () => {
         await vi.advanceTimersByTimeAsync(0);
 
         expect(JSON.parse(sockets.at(-1)?.sent[0] ?? "null")).toMatchObject({ type: "connect" });
+
+        client.close();
+    });
+
+    it("engages polling when a gated shard refuses every connect frame, after the upgrade opens", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ results: [{ body: { result: 1 }, id: 0, status: 200 }] }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("messages:list"), {}, () => {});
+
+        // Each upgrade opens, then the shard refuses its connect frame with 4003 and never sends identity.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            sockets.at(-1)?.open();
+            sockets.at(-1)?.refuse(4003);
+            // eslint-disable-next-line no-await-in-loop -- each refused attempt must settle before the next reconnect is armed
+            await vi.advanceTimersByTimeAsync(STEP_MS);
+        }
+
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
 
         client.close();
     });

@@ -6989,23 +6989,30 @@ class LunoraClient {
         // `ShardConnection.identity`. Captured here (not at frame time) because
         // the credentials are what the server authenticates, and they can't change
         // for the life of the socket.
-        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.identity = this.identityFingerprint();
 
         if (credentials.ticket === undefined && this.authToken === null) {
             this.identityQuestions += 1;
+            // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
             conn.identityQuestion = this.identityQuestions;
         } else {
+            // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
             conn.identityQuestion = undefined;
         }
 
         // Kept for the `connect` envelope, which is re-sent on every open and on a
         // context change: the value must be the one this socket was opened under.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.sessionToken = credentials.session;
 
         // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.retired = false;
-        /* eslint-enable no-param-reassign */
+
+        // The credential generation this socket opens under. A close from a socket a rotation has since
+        // superseded reports on a credential that is no longer the one in force, so it notifies nothing.
+        const openedUnder = this.wsCredentialGeneration;
 
         openManagedSocket(conn, this.wsUrlFor(shardKey, credentials.ticket), this.managedSocketOptions, {
             onClose: (event) => {
@@ -7015,13 +7022,23 @@ class LunoraClient {
                 // optional — some WS doubles fire `close` without one, and a
                 // synthesized disconnect (connect-timeout, watchdog, bare error)
                 // never carries one either.
+                // A socket refused at its connect frame opened and then closed without being admitted: count it as a failed open.
+                if (event?.code === 4003) {
+                    conn.polling.noteFailedOpen();
+                }
+
                 if (event?.code === 4001) {
                     this.notifyTokenExpired();
-                } else if (event?.code === 4003 && event.reason !== "connect deadline" && this.refusedCredentialGeneration !== this.wsCredentialGeneration) {
+                } else if (
+                    event?.code === 4003 &&
+                    event.reason !== "connect deadline" &&
+                    openedUnder === this.wsCredentialGeneration &&
+                    this.refusedCredentialGeneration !== openedUnder
+                ) {
                     // 4003 is the session the server refused (see protocol §6). It repeats on every
                     // backoff retry, so the listener is told once per credential, not once per retry.
                     // The connect deadline also closes with 4003, but it refuses no credential.
-                    this.refusedCredentialGeneration = this.wsCredentialGeneration;
+                    this.refusedCredentialGeneration = openedUnder;
                     this.notifyTokenExpired();
                 }
 
@@ -7079,11 +7096,6 @@ class LunoraClient {
                 // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
                 // also be told the previous socket's answers still stand.
                 this.markShardPendingAck(shardKey, true);
-
-                // A socket opened, so whatever was refusing the upgrade is gone: stop polling and
-                // let the resubscribe handshake below take the subscriptions back onto the live
-                // channel. Stopping reports status, so it runs after the un-answer above.
-                conn.polling.noteOpen();
                 this.emitConnectionStatus();
 
                 // Resubscribe everyone bound to this shard, a bounded few frames
@@ -8674,6 +8686,11 @@ class LunoraClient {
 
         if (conn !== undefined) {
             conn.identityConfirmed = true;
+
+            // Only an admitted socket proves the channel works. An upgrade the server then refuses at
+            // its connect frame opens and closes, and must not reset the failed-open run that polling needs.
+            // Stopping polling reports status, so it runs after the identity is recorded.
+            conn.polling.noteOpen();
         }
 
         this.releaseRoomSends(shardKey);
