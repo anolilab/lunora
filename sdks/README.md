@@ -145,7 +145,11 @@ change that adds or removes a capability.
 | Re-flush on a new token       | ✅⁹    | ➖⁹  | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
 | Unset identity = token digest | ✅¹⁰   | ✅¹⁰ | ✅¹⁰ | ✅¹⁰ | ✅¹⁰  | ✅¹⁰ | ✅¹⁰   | ✅¹⁰ |
 | Row-delta merge into a list   | ❌⁷    | ❌⁷  | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
-| `chunk` / `whisper` frames    | ❌⁸    | ❌⁸  | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
+| `chunk` frames                | ❌⁸    | ❌⁸  | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
+| Whisper topics and rooms      | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Session credential on connect | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Connection context on attach  | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Token expiry from close codes | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³  | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -244,12 +248,10 @@ only require behaviour every port has. Closing it is one merge implementation pe
 language against the placement rule in `protocol/README.md` §5.1.1, which the
 `pageDeltaFrames` goldens already carry.
 
-⁸ **Neither frame is handled.** `chunk` (a streaming-query chunk, with the durable
-`seq`/`generation` resume watermark) and `whisper` (the ephemeral topic relay) are
-in `protocol/README.md` §5.2 and reach the default arm of every port's frame
-switch, where they are ignored. No port sends `stream`, `whisper_subscribe` or
-`whisper` either, so nothing arrives to drop; the gap is that a deployment using
-those features has no non-JS client for them.
+⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
+resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
+switch and is ignored. No port sends `stream`, so no chunk arrives to drop; the gap is that a
+deployment using streaming queries has no non-JS client for them.
 
 ⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
 `UNAUTHORIZED`) is held in all eight, and every replay reads the token current
@@ -1073,6 +1075,10 @@ Every row below is either pinned by a named case or listed under
 | `{ error }` with `code` / `message` / `data`           | `rpc.responseError`                                                                                                                                                                             |
 | a non-2xx body with no envelope is `INTERNAL`          | `non_2xx_without_error_envelope_fails`                                                                                                                                                          |
 | `connect` / `subscribe` / `unsubscribe` frames         | `clientFrames`, `client_frame_builders`                                                                                                                                                         |
+| connect first, carrying the session token              | `connect_frame_first_and_carries_session_token`, `attach_socket_carries_connection_context`                                                                                                     |
+| the socket URL carries only the admin ticket           | `ws_url_carries_only_the_admin_ticket`                                                                                                                                                          |
+| close codes drive token expiry                         | `close_codes_drive_token_expiry` (over `closeSequences`)                                                                                                                                        |
+| whisper topics, rooms and rejoin                       | `whisper_frames_join_send_and_deliver`, `whisper_topics_rejoin_after_reconnect`                                                                                                                 |
 | `shape_subscribe`, resume across reconnect             | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                                                           |
 | `ack` / `data` / `error` / `resume` / `settled`        | `serverFrames`, `server_frame_consumer`                                                                                                                                                         |
 | `complete` cancels without dropping the registration   | `serverFrames`'s `complete`, `complete_frame_cancels_without_dropping_the_subscription`                                                                                                         |
@@ -1092,7 +1098,7 @@ Every row below is either pinned by a named case or listed under
 | an unset identity stamps the token digest              | `tokenIdentity`, `offline_unset_identity_stamps_token_digest`                                                                                                                                   |
 | the bearer token never reaches a printed value         | `auth_token_redacted_when_printed`                                                                                                                                                              |
 | `shape_unsubscribe` spelling                           | **unpinned** — see below                                                                                                                                                                        |
-| `delta` merged into a cached list, `chunk`, `whisper`  | **not implemented in any port** — see the capability matrix above                                                                                                                               |
+| `delta` merged into a cached list, `chunk`             | **not implemented in any port** — see the capability matrix above                                                                                                                               |
 
 #### Deliberately unpinned, and why
 
