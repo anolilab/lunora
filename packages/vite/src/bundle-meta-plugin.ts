@@ -69,6 +69,8 @@ const bundleMetaPlugin = (projectRoot: string): Plugin => {
         apply: "build",
         applyToEnvironment: (environment) => environment.config.consumer === "server",
         name: "lunora:bundle-meta",
+        // One instance across the build's environments, so the second environment sees the first one's write.
+        sharedDuringBuild: true,
         generateBundle(_options, bundle) {
             const inputs: Record<string, MetafileInput> = {};
             const outputs: Record<string, MetafileOutput> = {};
