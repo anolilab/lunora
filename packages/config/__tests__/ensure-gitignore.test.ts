@@ -49,6 +49,23 @@ describe("ensureGitignoreEntries", () => {
         expect(ensureGitignoreEntries(directory, PATTERNS)).toEqual([]);
     });
 
+    it("re-appends a present pattern a later negation would re-include", () => {
+        expect.hasAssertions();
+
+        writeFileSync(
+            join(directory, ".gitignore"),
+            ".celld/\n.celld.wrangler.json\n.celld.service.*.wrangler.json\n!.celld.service.parser.wrangler.json\n",
+            "utf8",
+        );
+
+        expect(ensureGitignoreEntries(directory, PATTERNS)).toEqual(PATTERNS);
+
+        const lines = read().split("\n");
+
+        expect(lines.lastIndexOf(".celld.service.*.wrangler.json")).toBeGreaterThan(lines.indexOf("!.celld.service.parser.wrangler.json"));
+        expect(ensureGitignoreEntries(directory, PATTERNS)).toEqual([]);
+    });
+
     it("re-states the negations after the additions, so the example file stays visible", () => {
         expect.hasAssertions();
 

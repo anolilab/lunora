@@ -1032,6 +1032,7 @@ interface PostCodegenHookResult {
 interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
+    vars: Readonly<Record<string, unknown>>;
     write: () => void;
 }
 ```

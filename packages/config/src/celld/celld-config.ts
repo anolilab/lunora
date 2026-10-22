@@ -433,12 +433,13 @@ const adjustBuildOutput = (
  * What `wrangler dev --var WORKER_ENV:development` marks on Cloudflare:
  * without it the runtime treats the dev worker as production (live mail, no
  * queue capture). It beats a `WORKER_ENV` in the config's `vars`, as wrangler's
- * `--var` does; `.dev.vars` still beats it, because celld reads that file last.
+ * `--var` does; `.dev.vars` still beats it — celld reads the app's file last, and a
+ * service's inlined one comes in as `devVariables`, applied over the marker.
  */
-const markDevelopment = (projected: Config): Config => {
+const markDevelopment = (projected: Config, devVariables: Readonly<Record<string, string>> = {}): Config => {
     const variables = isRecord(projected["vars"]) ? projected["vars"] : {};
 
-    return { ...projected, vars: { ...variables, WORKER_ENV: "development" } };
+    return { ...projected, vars: { ...variables, WORKER_ENV: "development", ...devVariables } };
 };
 
 /**
@@ -489,9 +490,17 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
     return {
         configPath,
         dropped: build.reported,
+        vars: isRecord(projected["vars"]) ? projected["vars"] : {},
         write: () => {
+            // Best-effort, unlike a service projection's: this one carries only what the
+            // committed wrangler config already does, so a read-only checkout still runs.
+            try {
+                ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
+            } catch {
+                // The projection is no secret; an unignored one is only noise in `git status`.
+            }
+
             writeFileSync(configPath, contents);
-            ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
 
             // Removed on a `--dry-run` too: celld refuses the file outright, so
             // keeping it would fail every dry run instead of checking the bundle a
@@ -537,17 +546,20 @@ const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedCo
         ? Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map(({ key, value }) => [key, value]))
         : {};
     const rebased = rebaseMigrationDirectories(rebasePaths(config, serviceDirectory, root), own, serviceDirectory, root);
-    const variables = isRecord(rebased["vars"]) ? rebased["vars"] : {};
     // The Worker name is the service's own config; keep it from steering the file name.
     const configPath = join(root, `.celld.service.${name.replaceAll(/[^\w.-]/gu, "-")}.wrangler.json`);
-    const contents = `${JSON.stringify(markDevelopment({ ...rebased, vars: { ...variables, ...devVariables } }), undefined, 4)}\n`;
+    const projected = markDevelopment(rebased, devVariables);
+    const contents = `${JSON.stringify(projected, undefined, 4)}\n`;
 
     return {
         configPath,
         dropped,
+        vars: isRecord(projected["vars"]) ? projected["vars"] : {},
         write: () => {
-            writeFileSync(configPath, contents);
+            // Fails closed: the file inlines the service's `.dev.vars`, so it is never
+            // written unless the ignore that keeps it out of git is in place first.
             ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
+            writeFileSync(configPath, contents);
         },
     };
 };

@@ -207,6 +207,18 @@ describe("celld config projection on disk", () => {
         expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "development" } });
     });
 
+    // The app projection carries nothing the committed wrangler config does not, so
+    // an unwritable `.gitignore` (here a directory: EISDIR even as root) must not stop it.
+    it("still writes the app projection when .gitignore cannot be updated", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts" }), "utf8");
+        mkdirSync(join(root, ".gitignore"));
+        resolveDeployDriver("celld").projectConfig?.(root, "deploy").write();
+
+        expect(existsSync(join(root, ".celld.wrangler.json"))).toBe(true);
+    });
+
     it("refuses a source entry outside the project, which celld would resolve against the wrong root", () => {
         expect.assertions(1);
 
@@ -390,6 +402,34 @@ describe(planCelldServiceConfig, () => {
 
         expect(projected.configPath).toBe(join(root, ".celld.service...-parser.wrangler.json"));
         expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ MODE: "local", TOKEN: "secret", WORKER_ENV: "development" });
+    });
+
+    it("keeps a WORKER_ENV the service's .dev.vars sets explicitly", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `WORKER_ENV=staging\n`);
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        projected.write();
+
+        expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ WORKER_ENV: "staging" });
+    });
+
+    // The projection inlines the service's `.dev.vars`: with no ignore in place it
+    // must not reach the disk at all.
+    it("writes no service projection when .gitignore cannot be updated", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `TOKEN=secret\n`);
+        mkdirSync(join(root, ".gitignore"));
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        expect(() => {
+            projected.write();
+        }).toThrow(/EISDIR/u);
+        expect(existsSync(projected.configPath)).toBe(false);
     });
 
     it("refuses a service outside the app's folder, which celld cannot resolve from there", () => {
