@@ -981,6 +981,23 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("celld toolchain", () => {
+        // `lunora dev` and a dry-run deploy never touch the fleet bucket, so a
+        // dev-only celld project must not fail doctor for lacking one.
+        it("warns, never fails, when CELLD_BUCKET is unset", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+            const bucket = findings.filter((finding) => finding.message.includes("CELLD_BUCKET"));
+
+            expect(bucket.map((finding) => finding.level)).toStrictEqual(["warn"]);
+            expect(bucket[0]?.code).toBe("celld-toolchain-warn");
+        });
+    });
+
     describe("observability sampling", () => {
         const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
 

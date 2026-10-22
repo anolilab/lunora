@@ -822,26 +822,31 @@ const checkDurableObjectClassBudget = async (
     }
 };
 
+const BUCKET_UNSET = "CELLD_BUCKET is not set — a live `lunora deploy` needs it to name the fleet bucket; `lunora dev` and a dry run do not.";
+
 /**
  * The celld toolchain a deploy needs (`celld`, `esbuild`, `CELLD_BUCKET`), checked
- * the way `lunora deploy` checks it. Only for a celld project.
+ * the way `lunora deploy` checks it. Only for a celld project. A missing bucket
+ * only warns: a project that runs `lunora dev` or dry-run deploys never needs it.
  */
 const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
     if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "celld") {
         return;
     }
 
-    const probe = await probeCelldToolchain({ env: options.environment ?? process.env, purpose: "deploy" });
+    const environment = options.environment ?? process.env;
+    const probe = await probeCelldToolchain({ dryRun: true, env: environment, purpose: "deploy" });
+    const warnings = (environment["CELLD_BUCKET"] ?? "").trim() === "" ? [...probe.warnings, BUCKET_UNSET] : probe.warnings;
 
     for (const message of probe.errors) {
         findings.push({ code: "celld-toolchain-missing", level: "fail", message });
     }
 
-    for (const message of probe.warnings) {
+    for (const message of warnings) {
         findings.push({ code: "celld-toolchain-warn", level: "warn", message });
     }
 
-    if (probe.errors.length === 0 && probe.warnings.length === 0) {
+    if (probe.errors.length === 0 && warnings.length === 0) {
         findings.push({ code: "celld-toolchain-ok", level: "pass", message: "celld, esbuild and CELLD_BUCKET are in place for a deploy." });
     }
 };
