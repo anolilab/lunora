@@ -49,6 +49,8 @@ interface PrivacyCoverage {
     readonly enabled: boolean;
     /** Names of `defineDataset` constants that no `definePrivacy` passes. Empty when the `datasets` literal cannot be resolved. */
     readonly unusedDatasets: ReadonlyArray<string>;
+    /** The table names a `v.id` may name to mark its row as holding user data: the defaults and any renamed auth user table. */
+    readonly userTables: ReadonlySet<string>;
 }
 
 /** A named `defineDataset` variable found in a lunora file. */
@@ -63,6 +65,8 @@ interface CoverageState {
     readonly datasets: Map<string, string>;
     /** Table name to the exclusion reason. */
     readonly excluded: Map<string, string>;
+    /** Starts as the default user tables; `authDataset` adds the name it renamed the user table to. */
+    readonly userTables: Set<string>;
 }
 
 /** The text of a string literal, or `undefined` for anything else. */
@@ -123,6 +127,10 @@ const coverAuth = (call: CallExpression, state: CoverageState): void => {
 
         if (value !== undefined) {
             state.datasets.set(value, "authDataset");
+
+            if (keyOf(rename) === "user") {
+                state.userTables.add(value);
+            }
         }
     }
 };
@@ -390,10 +398,10 @@ const coverageFiles = (project: Project, lunoraDirectory: string): SourceFile[] 
  */
 const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, declaredDependencies: ReadonlySet<string> | undefined): PrivacyCoverage => {
     if (declaredDependencies?.has(PRIVACY_PACKAGE) !== true) {
-        return { classifications: {}, enabled: false, unusedDatasets: [] };
+        return { classifications: {}, enabled: false, unusedDatasets: [], userTables: USER_TABLES };
     }
 
-    const state: CoverageState = { datasets: new Map<string, string>(), excluded: new Map<string, string>() };
+    const state: CoverageState = { datasets: new Map<string, string>(), excluded: new Map<string, string>(), userTables: new Set(USER_TABLES) };
     const declared: DatasetDeclaration[] = [];
     const privacyCalls: PrivacyCall[] = [];
 
@@ -429,19 +437,31 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
     // An exclusion overwrites a dataset, as it does in `definePrivacy().coverage`.
     const classifications = classifyTables(state.datasets, state.excluded);
 
-    return { classifications, enabled: privacyCalls.length > 0, unusedDatasets };
+    return { classifications, enabled: privacyCalls.length > 0, unusedDatasets, userTables: state.userTables };
 };
 
-/** A `v.id` of a user table, looking through `v.optional` and `v.array` wrappers. */
-const referencesUser = (validator: ValidatorIR): boolean =>
-    validator.kind === "id" ? USER_TABLES.has(validator.tableName ?? "") : validator.inner !== undefined && referencesUser(validator.inner);
+/**
+ * A `v.id` of a user table, looking through `v.optional`, `v.array` and `v.union` wrappers. A nullable reference is
+ * a union of the id and `v.null()`, so the members are read too.
+ */
+const referencesUser = (validator: ValidatorIR, userTables: ReadonlySet<string>): boolean => {
+    if (validator.kind === "id") {
+        return userTables.has(validator.tableName ?? "");
+    }
+
+    return (
+        (validator.inner !== undefined && referencesUser(validator.inner, userTables)) ||
+        (validator.members?.some((member) => referencesUser(member, userTables)) ?? false)
+    );
+};
 
 /**
  * A table holds a user's data when it has an owner column, or a `v.id` of a user table, and is not one of the
  * privacy package's own tables. The `v.id` case catches a table whose owner column is named otherwise.
  */
-const holdsUserData = (table: TableIR): boolean =>
-    table.extensionKey !== PRIVACY_EXTENSION_KEY && (OWNER_COLUMN in table.shape || Object.values(table.shape).some((validator) => referencesUser(validator)));
+const holdsUserData = (table: TableIR, userTables: ReadonlySet<string>): boolean =>
+    table.extensionKey !== PRIVACY_EXTENSION_KEY &&
+    (OWNER_COLUMN in table.shape || Object.values(table.shape).some((validator) => referencesUser(validator, userTables)));
 
 /** The message for one coverage problem. Names the table, so the reviewer knows which one to fix. */
 const messageFor = (problem: CoverageProblem): string =>
@@ -459,7 +479,7 @@ const assertPrivacyCoverage = (tables: ReadonlyArray<TableIR>, coverage: Privacy
         return;
     }
 
-    const owned = tables.filter((candidate) => holdsUserData(candidate)).map((table) => table.name);
+    const owned = tables.filter((candidate) => holdsUserData(candidate, coverage.userTables)).map((table) => table.name);
     const [problem] = checkCoverage(owned, coverage.classifications);
 
     if (problem !== undefined) {

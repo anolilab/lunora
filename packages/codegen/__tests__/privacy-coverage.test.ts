@@ -199,6 +199,44 @@ export default defineSchema({
         }).not.toThrow();
     });
 
+    it("classifies a v.id of a renamed auth user table as user data", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: {
+                "privacy.ts": `import { authDataset, definePrivacy } from "@lunora/privacy";\n\nexport const auth = authDataset({ user: "people" });\n\nexport const privacy = definePrivacy({ datasets: [auth] });\n`,
+            },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.optional(v.id("people")) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("classifies a table by a nullable v.id of the users table, a union with v.null()", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.union(v.id("users"), v.null()) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
     it("checks a table whose name starts with privacy_", () => {
         expect.assertions(1);
 
