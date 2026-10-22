@@ -23,7 +23,6 @@ const write = (relative: string, source: string): void => {
 
 const generated = (name: string): string => readFileSync(join(workdir, "lunora", "_generated", name), "utf8");
 
-/** A fetch service (`parser`) and an RPC service (`llmGateway`), each in its own folder with its own wrangler config. */
 /** A service that imports a type from the llm-kit package, which the service's node_modules provides. */
 const writeLlmKitImport = (): void => {
     write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
@@ -47,6 +46,7 @@ const emitLlmGateway = (): Record<string, string> | undefined =>
         .filter(({ name }) => name === "llmGateway")
         .map((service) => emitServiceDeclarations(service, join(workdir, "lunora", "_generated")))[0];
 
+/** A fetch service (`parser`) and an RPC service (`llmGateway`), each in its own folder with its own wrangler config. */
 const writeServices = (): void => {
     write(
         "lunora.config.ts",
@@ -187,6 +187,61 @@ export class Gateway {
         write("services/llm-gateway/node_modules/llm-kit/types.d.ts", `export interface Usage { tokens: boolean }\n`);
 
         expect(emitLlmGateway()).not.toBe(first);
+    });
+
+    it("re-emits a service's snapshot when a declaration file an imported package re-exports from changes", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export type { Usage } from "./usage";\n`);
+        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Only the file the package re-exports from changes; its manifest and index are untouched.
+        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a file shadows a subpath the package resolved in a nested directory", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/dist/sub/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit/dist/sub";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to, so the package root and its manifest are untouched.
+        write("services/llm-gateway/node_modules/llm-kit/dist/sub.d.ts", `export interface Usage { tokens: string }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
     it("re-emits a service's snapshot when a package it imports retargets its types", () => {

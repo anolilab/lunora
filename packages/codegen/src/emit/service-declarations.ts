@@ -91,11 +91,12 @@ const treeStampOf = (directory: string): string | undefined => {
 };
 
 /**
- * The `package.json` that governs each file the program reached outside the service's own sources (node_modules included), with its stamp. A changed `types`
- * or `exports` target redirects an import without changing the file it used to name.
+ * The `package.json` that governs each file the program reached outside the service's own sources (node_modules included), with its stamp, and every
+ * directory from such a file up to that manifest. A changed `types` or `exports` target redirects an import without changing the file it used to name; a
+ * new file in one of those directories can become the candidate a specifier now picks (`dist/sub.d.ts` beside `dist/sub/index.d.ts`).
  */
 const packageStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: string): [path: string, stamp: string][] => {
-    const manifests = new Set<string>();
+    const stamped = new Set<string>();
 
     for (const path of paths) {
         const owned = !relative(serviceDirectory, path).startsWith("..") && !path.split(sep).includes("node_modules");
@@ -107,41 +108,17 @@ const packageStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: string)
         let directory = dirname(path);
 
         while (directory !== dirname(directory) && !existsSync(join(directory, "package.json"))) {
+            stamped.add(directory);
             directory = dirname(directory);
         }
 
         if (existsSync(join(directory, "package.json"))) {
-            manifests.add(join(directory, "package.json"));
+            stamped.add(directory);
+            stamped.add(join(directory, "package.json"));
         }
     }
 
-    return [...manifests]
-        .toSorted((left, right) => left.localeCompare(right))
-        .flatMap((manifest): [string, string][] => [
-            [manifest, stampOf(manifest)],
-            [dirname(manifest), stampOf(dirname(manifest))],
-        ]);
-};
-
-/**
- * What the service's own imports resolve to outside its sources, with `node_modules`. The program does not keep those
- * declaration files, so their manifests are found from the specifiers instead.
- */
-const importedPathsOutside = (project: Project, serviceDirectory: string): string[] => {
-    const options = project.getCompilerOptions();
-
-    return project.getSourceFiles().flatMap((sourceFile) => {
-        const path = sourceFile.getFilePath() as string;
-
-        if (!relative(serviceDirectory, path).startsWith("..") && !path.split(sep).includes("node_modules")) {
-            return sourceFile
-                .getImportDeclarations()
-                .map((declaration) => ts.resolveModuleName(declaration.getModuleSpecifierValue(), path, options, ts.sys).resolvedModule?.resolvedFileName)
-                .filter((resolved): resolved is string => resolved !== undefined);
-        }
-
-        return [];
-    });
+    return [...stamped].map((path): [string, string] => [path, stampOf(path)]);
 };
 
 interface CachedDeclarations {
@@ -152,7 +129,7 @@ interface CachedDeclarations {
     tree: string;
 }
 
-// shortcut: never evicts, and a re-pointed pnpm link whose new target has the same package.json and no new file goes unseen; upgrade if a link is ever re-pointed in a checkout.
+// shortcut: never evicts. A specifier that resolved to nothing at emit time, and is satisfied only by a node_modules change the service tree does not see (a re-pointed pnpm link, a package installed without touching the service's own files), goes unseen; upgrade by re-resolving the recorded specifiers on each hit if that happens.
 const declarationCache = new Map<string, CachedDeclarations>();
 
 /** Whether `path` still has the stamp recorded for it; a path that has gone is stale. */
@@ -189,20 +166,16 @@ const rememberDeclarations = (cacheKey: string, entry: Omit<CachedDeclarations, 
 };
 
 /**
- * What a cached snapshot is checked against: the program's files and the external declaration files its imports resolve
- * to (with stamps), the manifests and package directories those came from, and the service tree.
+ * What a cached snapshot is checked against: every file the program resolved (external declarations included, however
+ * far the import chain reaches), the manifests and package directories those came from, and the service tree.
  */
 const freshnessOf = (
-    project: Project,
     serviceDirectory: string,
     programPaths: ReadonlyArray<string>,
 ): Omit<CachedDeclarations, "files" | "optionsKey" | "tree"> & { tree: string | undefined } => {
-    const outside = importedPathsOutside(project, serviceDirectory);
-    const stampedPaths = [...programPaths, ...outside.filter((path) => existsSync(path))];
-
     return {
-        packages: packageStampsOf([...programPaths, ...outside], serviceDirectory),
-        stamps: stampedPaths.map((path): [string, string] => [path, stampOf(path)]),
+        packages: packageStampsOf(programPaths, serviceDirectory),
+        stamps: programPaths.map((path): [string, string] => [path, stampOf(path)]),
         tree: treeStampOf(serviceDirectory),
     };
 };
@@ -255,12 +228,14 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
     project.addSourceFileAtPath(service.main);
     project.resolveSourceFileDependencies();
 
+    // The program, not ts-morph's source list: it holds the declarations an import chain reaches, which ts-morph does not keep.
     // ts-morph's bundled lib files have no path on disk; they are fixed by the installed version.
     const programPaths = project
-        .getSourceFiles()
-        .map((sourceFile) => sourceFile.getFilePath() as string)
+        .getProgram()
+        .compilerObject.getSourceFiles()
+        .map((sourceFile) => sourceFile.fileName)
         .filter((path) => existsSync(path));
-    const { packages, stamps, tree } = freshnessOf(project, serviceDirectory, programPaths);
+    const { packages, stamps, tree } = freshnessOf(serviceDirectory, programPaths);
 
     // Symlinks kept, so a resolved path is in the same tree as `_generated/` (a temp dir or a pnpm link may be one).
     const compilerOptions = { ...project.getCompilerOptions(), preserveSymlinks: true };
