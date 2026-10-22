@@ -36,6 +36,7 @@ import {
     readServiceBindings,
     refreshCodegenProject,
     runCodegen,
+    tsconfigFingerprint,
 } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
@@ -100,7 +101,10 @@ const readProjectInputs = (projectRoot: string, absoluteLunoraDirectory: string)
     const configPaths = new Set([...projectConfigCandidatePaths(absoluteLunoraDirectory), ...PROJECT_CONFIG_FILENAMES.map((name) => join(projectRoot, name))]);
     const configs = [...configPaths].map((path) => `${path}\n${readFileOrEmpty(path)}`);
 
-    return [tsconfigPath === undefined ? "" : readFileOrEmpty(tsconfigPath), ...configs].join("\0");
+    // The path matters too: a nearer tsconfig with identical bytes resolves paths against another directory.
+    const tsconfig = tsconfigPath === undefined ? "" : `${tsconfigPath}\n${tsconfigFingerprint(tsconfigPath)}`;
+
+    return [tsconfig, ...configs].join("\0");
 };
 
 interface ReusableProject {

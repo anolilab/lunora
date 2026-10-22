@@ -62,6 +62,27 @@ describe("startCodegenWatch", () => {
     });
 
     /** Stub codegen to a clean run, so a test can reach the hook without a real project. */
+    /** Counts the watcher's codegen runs, and resolves once the Nth has happened: the test waits on the run, not a poll. */
+    const runCounter = (): { reached: (count: number) => Promise<void>; report: () => void } => {
+        let runs = 0;
+        const waiting = new Map<number, () => void>();
+
+        return {
+            report: (): void => {
+                runs += 1;
+                waiting.get(runs)?.();
+            },
+            reached: (count: number): Promise<void> =>
+                new Promise((resolve) => {
+                    if (runs >= count) {
+                        resolve();
+                    } else {
+                        waiting.set(count, resolve);
+                    }
+                }),
+        };
+    };
+
     const codegenSucceeds = (): void => {
         vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
     };
@@ -113,10 +134,18 @@ describe("startCodegenWatch", () => {
 
         writeFileSync(join(workdir, "schema.ts"), "", "utf8");
 
+        // Each run reports itself, so the test waits for the run its edit caused instead of polling the mock.
+        const runs = runCounter();
+
         vi.mocked(runCodegen).mockImplementationOnce(() => {
+            runs.report();
             throw new Error("schema.ts is not parseable");
         });
-        codegenSucceeds();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
 
         const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
         const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
@@ -125,18 +154,49 @@ describe("startCodegenWatch", () => {
             await handle.ready;
 
             writeFileSync(join(workdir, "schema.ts"), "// edit 1", "utf8");
-            await vi.waitFor(() => {
-                expect(runCodegen).toHaveBeenCalledTimes(2);
-            });
+            await runs.reached(2);
 
             writeFileSync(join(workdir, "schema.ts"), "// edit 2", "utf8");
-            await vi.waitFor(() => {
-                expect(runCodegen).toHaveBeenCalledTimes(3);
-            });
+            await runs.reached(3);
 
             expect(projectOf(0)).toBeDefined();
             expect(projectOf(1)).not.toBe(projectOf(0));
             expect(projectOf(2)).toBe(projectOf(1));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when a tsconfig it extends changes", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-extends-"));
+
+        writeFileSync(join(workdir, "base.json"), JSON.stringify({ compilerOptions: { strict: false } }), "utf8");
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ extends: "./base.json" }), "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // The extended file changes its settings; the selected tsconfig's own bytes do not.
+            writeFileSync(join(workdir, "base.json"), JSON.stringify({ compilerOptions: { strict: true } }), "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
         } finally {
             await handle.close();
             rmSync(workdir, { force: true, recursive: true });
