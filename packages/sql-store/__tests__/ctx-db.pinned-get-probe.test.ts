@@ -79,7 +79,7 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
 
         const row = await writer.get(id);
 
-        expect([...probes].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a", "b", "c"]);
+        expect(probes.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a", "b", "c"]);
         expect(row?.["title"]).toBe("in b");
     });
 
