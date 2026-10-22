@@ -51,16 +51,15 @@ const WebSocketImpl = MockSocket as unknown as typeof WebSocket;
 const firstFrame = (socket: MockSocket): { token?: string; type: string } => JSON.parse(socket.sent[0] ?? "null") as { token?: string; type: string };
 
 /**
- * Advance fake time until a socket beyond `known` exists, then open it. A socket
- * left unopened hits the connect timeout and reconnects again, so it is opened
- * as soon as it appears. A provider-shaped credential creates its socket after
- * an await, which is why this polls rather than reading the list once.
+ * Fire the pending reconnect timer, then open the socket it creates. The timer is
+ * the only scheduled work in these tests, and firing it flushes the microtasks a
+ * provider-shaped credential needs before the socket constructor runs.
  */
 const openNextSocket = async (known: number): Promise<MockSocket> => {
-    for (let step = 0; step < 100 && sockets.length <= known; step += 1) {
-        // Each step lets the reconnect timer fire before the next check; the steps must run in order.
-        // eslint-disable-next-line no-await-in-loop -- sequential by construction: each check needs the previous step's timers
-        await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(0);
+
+    if (sockets.length <= known) {
+        await vi.advanceTimersToNextTimerAsync();
     }
 
     const next = sockets.at(-1);
