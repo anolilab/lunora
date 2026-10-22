@@ -540,6 +540,21 @@ describe("discover/feature-usage", () => {
             expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
         });
 
+        it("keeps a barrel's next hop on the declaring project's rootDirs", () => {
+            expect.assertions(1);
+
+            const project = inMemory({ rootDirs: ["/app/lunora", "/app/src/generated"] });
+            const fileSystem = project.getFileSystem();
+
+            // Only on the file system, so the barrel is a target and its own relative hop is resolved from there.
+            fileSystem.writeFileSync("/app/src/generated/tools.ts", TOOLS_EXPORT);
+            fileSystem.writeFileSync("/app/lunora/barrel.ts", `export * from "./tools";`);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
         it("sees a barrel edited between two scans of the same project", () => {
             expect.assertions(2);
 

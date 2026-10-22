@@ -34,8 +34,8 @@ export { default as discoverCrons } from "./discover/crons";
 // imports, sandbox tools, `ctx.<property>` reads), its fold across files and the
 // one "is it used" matcher — exported so `@lunora/config`'s binding inference
 // marks a capability used on exactly the signals, and by exactly the rule, codegen does.
-export type { SourceCapabilitySignals } from "./discover/feature-usage";
-export { capabilitiesUsedBy, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals } from "./discover/feature-usage";
+export type { SourceCapabilitySignals, TargetScope } from "./discover/feature-usage";
+export { capabilitiesUsedBy, createTargetScope, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals } from "./discover/feature-usage";
 export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
 export { default as discoverFunctions } from "./discover/functions";
 export { default as discoverHttpRoutes } from "./discover/http-routes";
