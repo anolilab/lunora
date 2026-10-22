@@ -557,6 +557,22 @@ private fun whisperFramesJoinSendAndDeliver() {
     check(general.isEmpty() && other.size == 1, "room:other frames must reach only room:other's listeners: ${general.size}/${other.size}")
 }
 
+private fun closedRoomRefusesSends() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.attachSocket { sent.add(it) }
+
+    val room = client.connectRoom("general") { }
+
+    client.whisperSubscribe("room:general") { }
+    room.close()
+
+    check(!room.send(WireValue.Text("after close")), "a closed room must report its send as not sent")
+    check(sent.none { it["type"] == "whisper" }, "and must write no whisper frame after close")
+}
+
 private fun whisperTopicsRejoinAfterReconnect() {
     covers("whisper_topics_rejoin_after_reconnect")
 
@@ -1500,6 +1516,7 @@ fun main() {
     closeCodesDriveTokenExpiry()
     whisperFramesJoinSendAndDeliver()
     whisperTopicsRejoinAfterReconnect()
+    closedRoomRefusesSends()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()

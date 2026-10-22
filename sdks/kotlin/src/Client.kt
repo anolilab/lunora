@@ -531,6 +531,9 @@ class Client(
     /** Joined topics and their listeners. A topic is present while it has at least one. */
     private val whisperTopics = LinkedHashMap<String, MutableList<WhisperListener>>()
 
+    /** Topics whose join write failed; the next listener on one of them sends the join again. Guarded by [lock]. */
+    private val unjoinedTopics = mutableSetOf<String>()
+
     private class WhisperListener(val onValue: (WireValue) -> Unit)
 
     /**
@@ -573,6 +576,7 @@ class Client(
             wasEverConnected = true
             try {
                 for (topic in whisperTopics.keys.toList()) sender(buildWhisperSubscribeFrame(topic))
+                unjoinedTopics.clear()
             } catch (failure: Throwable) {
                 if (send === sender) send = null
                 throw failure
@@ -645,34 +649,38 @@ class Client(
      */
     fun whisperSubscribe(topic: String, listener: (WireValue) -> Unit): () -> Unit {
         val entry = WhisperListener(listener)
-        val socket = synchronized(lock) {
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave cannot overtake
+        // it. A join that fails is retried by the next listener on the topic.
+        synchronized(lock) {
             val listeners = whisperTopics.getOrPut(topic) { mutableListOf() }
+            val join = listeners.isEmpty() || topic in unjoinedTopics
 
             listeners.add(entry)
 
-            send.takeIf { listeners.size == 1 }
-        }
+            val socket = send
 
-        socket?.invoke(buildWhisperSubscribeFrame(topic))
-
-        return {
-            val leave = synchronized(lock) {
-                val listeners = whisperTopics[topic]
-
-                when {
-                    listeners == null || !listeners.remove(entry) -> null
-
-                    listeners.isEmpty() -> {
-                        whisperTopics.remove(topic)
-
-                        send
-                    }
-
-                    else -> null
+            if (join && socket != null) {
+                try {
+                    socket(buildWhisperSubscribeFrame(topic))
+                    unjoinedTopics.remove(topic)
+                } catch (failure: Throwable) {
+                    unjoinedTopics.add(topic)
+                    throw failure
                 }
             }
+        }
 
-            leave?.invoke(buildWhisperUnsubscribeFrame(topic))
+        return {
+            synchronized(lock) {
+                val listeners = whisperTopics[topic]
+
+                if (listeners != null && listeners.remove(entry) && listeners.isEmpty()) {
+                    whisperTopics.remove(topic)
+                    unjoinedTopics.remove(topic)
+                    send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                }
+            }
         }
     }
 
@@ -690,10 +698,16 @@ class Client(
 
     /** A joined room: [send] relays a message to it, [close] leaves it. */
     class Room internal constructor(private val relay: (WireValue) -> Boolean, private val leave: () -> Unit) {
-        /** Relays [message]; false when no socket is attached. */
-        fun send(message: WireValue): Boolean = relay(message)
+        @Volatile
+        private var closed = false
 
-        fun close() = leave()
+        /** Relays [message]; false when no socket is attached, or the room is closed. */
+        fun send(message: WireValue): Boolean = !closed && relay(message)
+
+        fun close() {
+            closed = true
+            leave()
+        }
     }
 
     /**
@@ -1218,7 +1232,13 @@ class Client(
                     }
                     val listeners = synchronized(lock) { whisperTopics[topic]?.toList().orEmpty() }
 
-                    for (listener in listeners) listener.onValue(value)
+                    for (listener in listeners) {
+                        try {
+                            listener.onValue(value)
+                        } catch (error: Exception) {
+                            // An app listener must not end the read loop, nor skip the listeners after it.
+                        }
+                    }
                 }
             }
         }
