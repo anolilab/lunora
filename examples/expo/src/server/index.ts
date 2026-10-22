@@ -50,13 +50,11 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session as a **bearer** token: the client sends the
- * session in the `Authorization` header
- * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
- * headers on a WS handshake). We fold that `?token=` into an `Authorization`
- * header — only on a request carrying `Upgrade: websocket`, so a URL-borne
- * credential never authenticates a plain HTTP call — so better-auth's `bearer`
- * plugin resolves both via `getSession`. A cookie credential cannot work here:
+ * `resolveIdentity` reads the session as a **bearer** token in the `Authorization`
+ * header. HTTP RPC sends it there, and so does the WebSocket upgrade (the client's
+ * `getAuthHeaders` sets it on the socket). No credential is read from the query
+ * string, so better-auth's `bearer` plugin resolves both via `getSession`. A cookie
+ * credential cannot work here:
  * the CSRF guard rejects a cookie-bearing state-changing request with no trusted
  * `Origin`, and a native request sends none.
  *

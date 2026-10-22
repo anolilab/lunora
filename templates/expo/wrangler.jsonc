@@ -19,8 +19,8 @@
     // Raise it if a legitimate handler needs longer.
     "limits": { "cpu_ms": 30000 },
     // Cost default: sample 10% of requests into Workers Logs. Raise it while debugging.
-    // Invocation logs stay off: they record the request URL, and this app's WebSocket
-    // URL carries the session token (`?token=`), so they would write live credentials
+    // Invocation logs stay off: they record the request URL, and a shard's WebSocket
+    // URL can carry an admin ticket (`?token=`), so they would write live credentials
     // into Workers Logs.
     "observability": { "enabled": true, "head_sampling_rate": 0.1, "logs": { "invocation_logs": false } },
     // Deploy attribution: the runtime reads this binding and stamps
