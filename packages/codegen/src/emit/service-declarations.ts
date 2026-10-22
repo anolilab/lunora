@@ -159,10 +159,27 @@ const stampUpToManifest = (from: string, stamped: Set<string>): string | undefin
 };
 
 /**
+ * Adds the directories from `from` up to the first one that also contains the service, that common ancestor included. A file outside
+ * any package and outside the service is found through those directories, so a file added to one of them can shadow it. The walk
+ * stops at the common ancestor, so it never reaches above the tree the service and the file share.
+ */
+const stampBelowCommonAncestor = (from: string, serviceDirectory: string, stamped: Set<string>): void => {
+    let directory = from;
+
+    while (relative(directory, serviceDirectory).startsWith("..") && directory !== dirname(directory)) {
+        stamped.add(directory);
+        directory = dirname(directory);
+    }
+
+    stamped.add(directory);
+};
+
+/**
  * Every directory a program file sits in, with its stamp. A file added to one can become the candidate an import resolves to now:
  * in the service (`src/dist/sub.ts` beside `src/dist/sub/index.ts`, where `dist` is not walked) or in a package (`dist/sub.d.ts`
  * beside `dist/sub/index.d.ts`). Outside the service the walk stops at the `package.json` that governs the file, which is stamped
- * too: a changed `types` or `exports` target redirects an import without changing the file it used to name.
+ * too: a changed `types` or `exports` target redirects an import without changing the file it used to name. With no such manifest
+ * it stops at the common ancestor with the service instead.
  */
 const directoryStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: string): [path: string, stamp: string][] => {
     const stamped = new Set<string>();
@@ -183,8 +200,10 @@ const directoryStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: strin
 
         const manifestDirectory = stampUpToManifest(dirname(path), stamped);
 
-        // The package's own dependencies are links beside it in the directory it sits in, so a relink moves that directory.
-        if (manifestDirectory !== undefined) {
+        if (manifestDirectory === undefined) {
+            stampBelowCommonAncestor(dirname(path), serviceDirectory, stamped);
+        } else {
+            // The package's own dependencies are links beside it in the directory it sits in, so a relink moves that directory.
             stamped.add(modulesOf(manifestDirectory));
         }
     }
@@ -200,7 +219,7 @@ interface CachedDeclarations {
     tree: string;
 }
 
-// shortcut: never evicts. Not stamped: a specifier that resolved to nothing at emit time and is satisfied later; a package.json that appears above the service when none governed it at emit time (a walk with no manifest stamps nothing); and, on a filesystem with coarse mtimes, a write in the same second as a directory-based check. Upgrade by re-resolving the recorded specifiers on each hit when one of those is hit.
+// shortcut: never evicts. Not stamped: a specifier that resolved to nothing at emit time and is satisfied later; a package.json that appears above the service when none governed its sources at emit time (nothing is stamped above a service without one); and, on a filesystem with coarse mtimes, a write in the same second as a directory-based check. Upgrade by re-resolving the recorded specifiers on each hit when one of those is hit.
 const declarationCache = new Map<string, CachedDeclarations>();
 
 /** Whether `path` still has the stamp recorded for it; a path that has gone is stale. */

@@ -271,6 +271,33 @@ export class Gateway {
         expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
+    it("re-emits a service's snapshot when a file shadows an import resolved to a source outside any package", () => {
+        expect.assertions(2);
+
+        writeServices();
+        // Directly under the workdir, the common ancestor of the file and the service: a shadow lands there.
+        write("foo/index.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "../../../foo";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Beside the directory the import resolved to; no package.json governs it, so only the directory's own stamp sees this.
+        write("foo.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
     it("re-emits a service's snapshot when a dependency's symlink is repointed to another install", () => {
         expect.assertions(2);
 
