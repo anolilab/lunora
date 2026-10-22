@@ -453,6 +453,32 @@ export class Gateway {
         expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
+    it("re-emits a service's snapshot when a scoped package it imports changes its declarations", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/@kit/llm/package.json", `{ "name": "@kit/llm", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/@kit/llm/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "@kit/llm";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        write("services/llm-gateway/node_modules/@kit/llm/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
     it("re-emits a service's snapshot when a package it imports retargets its types", () => {
         expect.assertions(3);
 
