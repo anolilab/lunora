@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, resolveRange } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isEpochColumn, NUMBER_RANGE, resolveRange } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -176,6 +176,14 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
         return countingDeal;
     }
 
+    // Only an exclusive lower bound (`.positive()`): still an open range, so count up from the
+    // first whole number above it rather than shrinking the column to the default window.
+    if (constraints.maximum === undefined && constraints.minimumFromExclusive === true) {
+        const first = Math.floor(constraints.exclusiveMinimum ?? 0) + 1;
+
+        return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
+    }
+
     const { max, min } = resolveRange(constraints, defaults, column);
 
     return rangeDeal(min, max);
@@ -333,7 +341,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         case "number": {
             // A time-named column with no declared bounds is epoch-ms, not a
             // quantity — the same rule the generator applies.
-            if (constraints.maximum === undefined && constraints.minimum === undefined && isTimestampField(field.name)) {
+            if (isEpochColumn(constraints, field.name)) {
                 return temporalDeal(now);
             }
 

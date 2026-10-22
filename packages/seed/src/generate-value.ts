@@ -28,6 +28,8 @@ interface Constraints {
     maxItems?: number;
     maxLength?: number;
     minimum?: number;
+    /** Set by {@link constraintsOf} when `minimum` was derived from `exclusiveMinimum` alone, with no declared `minimum`. */
+    minimumFromExclusive?: boolean;
     /** Array `.min()` — the fewest items the value must hold. */
     minItems?: number;
     minLength?: number;
@@ -39,6 +41,20 @@ interface Constraints {
 
 /** Gap above an exclusive float lower bound. */
 const EXCLUSIVE_EPSILON = 1e-6;
+
+/** The lowest value strictly above `exclusive` the column can hold. */
+const inclusiveAbove = (exclusive: number, maximum: number | undefined, integer: boolean): number => {
+    if (integer) {
+        return Math.floor(exclusive) + 1;
+    }
+
+    const above = exclusive + EXCLUSIVE_EPSILON;
+    const halfway = maximum === undefined ? above : (exclusive + maximum) / 2;
+
+    // A float interval narrower than the epsilon still has values: its midpoint is strictly
+    // inside it. A maximum at or below the bound keeps the overshoot, so resolveRange refuses it.
+    return maximum !== undefined && above > maximum && halfway > exclusive ? halfway : above;
+};
 
 /**
  * A validator's constraints with the numeric ones normalised into plain inclusive
@@ -53,15 +69,7 @@ const constraintsOf = (validator: Validator): Constraints => {
     let { maximum, minimum } = raw;
 
     if (typeof raw.exclusiveMinimum === "number") {
-        const exclusive = raw.exclusiveMinimum;
-        let above = exclusive + (integer ? 1 : EXCLUSIVE_EPSILON);
-        const halfway = maximum === undefined ? above : (exclusive + maximum) / 2;
-
-        // A float interval narrower than the epsilon still has values: its midpoint is strictly
-        // inside it. A maximum at or below the bound keeps the overshoot, so resolveRange refuses it.
-        if (!integer && maximum !== undefined && above > maximum && halfway > exclusive) {
-            above = halfway;
-        }
+        const above = inclusiveAbove(raw.exclusiveMinimum, maximum, integer);
 
         minimum = minimum === undefined ? above : Math.max(minimum, above);
     }
@@ -71,7 +79,7 @@ const constraintsOf = (validator: Validator): Constraints => {
         maximum = maximum === undefined ? undefined : Math.floor(maximum);
     }
 
-    return { ...raw, maximum, minimum };
+    return { ...raw, maximum, minimum, minimumFromExclusive: raw.minimum === undefined && typeof raw.exclusiveMinimum === "number" };
 };
 
 /**
@@ -189,6 +197,17 @@ const isTimestampField = (fieldName: string): boolean => {
 
     return last !== undefined && TIMESTAMP_WORDS.has(last);
 };
+
+/**
+ * Whether a numeric column takes epoch-ms: time-named, with no declared bounds.
+ * A `.positive()` bound (an exclusive minimum at or below zero) does not count —
+ * every timestamp clears it, and treating it as a bound turned `createdAt:
+ * v.number().positive()` into a quantity in `[0, 1000]`.
+ */
+const isEpochColumn = (constraints: Constraints, fieldName: string): boolean =>
+    constraints.maximum === undefined &&
+    (constraints.minimum === undefined || (constraints.minimumFromExclusive === true && (constraints.exclusiveMinimum ?? 0) <= 0)) &&
+    isTimestampField(fieldName);
 
 /**
  * A deterministic epoch-ms within {@link TIMESTAMP_WINDOW_MS} before `now`.
@@ -414,9 +433,18 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 return [];
             }
 
-            const { maxItems, minItems } = constraints;
-            const lowest = minItems ?? Math.min(1, maxItems ?? 1);
-            const highest = maxItems ?? Math.max(3, lowest);
+            // A length is a whole number, so a fractional limit admits only the integers inside it.
+            const fewest = constraints.minItems === undefined ? undefined : Math.max(0, Math.ceil(constraints.minItems));
+            const most = constraints.maxItems === undefined ? undefined : Math.floor(constraints.maxItems);
+            const lowest = fewest ?? Math.max(0, Math.min(1, most ?? 1));
+            const highest = most ?? Math.max(3, lowest);
+
+            if (highest < lowest) {
+                return refuseColumn(
+                    fieldName,
+                    `declares minItems ${String(constraints.minItems)} and maxItems ${String(constraints.maxItems)}, which no whole array length satisfies`,
+                );
+            }
 
             return copycat.times(input, [lowest, highest], (itemInput) => generateValue(element, fieldName, itemInput, now));
         }
@@ -450,7 +478,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
         case "timestamp": {
             // Lunora stores dates as epoch-ms numbers, anchored on the caller's
             // `now` like every other time-valued column — the `number` arm's
-            // `isTimestampField` branch below, and the `.unique()` twin's
+            // `isEpochColumn` branch below, and the `.unique()` twin's
             // `temporalDeal`. A generator-local window would put two spellings
             // of the same column (`v.timestamp()` and `v.timestamp().unique()`)
             // decades apart, and would ignore the one input `SeedOptions.now`
@@ -486,7 +514,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             // A time-named column with no explicit bounds is epoch-ms, not a
             // quantity. Declared bounds win — a schema that says `minimum: 0,
             // maximum: 5` means a rating, whatever the column is called.
-            if (constraints.maximum === undefined && constraints.minimum === undefined && isTimestampField(fieldName)) {
+            if (isEpochColumn(constraints, fieldName)) {
                 return generateTimestamp(input, now);
             }
 
@@ -536,5 +564,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, resolveRange };
+export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isEpochColumn, NUMBER_RANGE, resolveRange };
 export type { Constraints };

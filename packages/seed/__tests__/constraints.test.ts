@@ -27,6 +27,9 @@ describe("generateValue — validator constraints the generator must honour", ()
         ["array.max(0)", v.array(v.string()).max(0)],
         ["array.min(4).max(4)", v.array(v.string()).min(4).max(4)],
         ["array.max(2)", v.array(v.string()).max(2)],
+        ["array.max(2.5)", v.array(v.string()).max(2.5)],
+        ["array.max(0.5)", v.array(v.string()).max(0.5)],
+        ["array.min(1.5).max(3)", v.array(v.string()).min(1.5).max(3)],
     ])("%s passes its own validator across many inputs", (_name, validator) => {
         expect.hasAssertions();
 
@@ -51,5 +54,56 @@ describe("generateValue — validator constraints the generator must honour", ()
         for (let index = 0; index < 50; index += 1) {
             expect(Number.isInteger(generateValue(v.number().int(), "amount", ["int", index], NOW))).toBe(true);
         }
+    });
+
+    it("keeps lengths whole for fractional array limits", () => {
+        expect.hasAssertions();
+
+        const lengths = new Set<number>();
+
+        for (let index = 0; index < 200; index += 1) {
+            lengths.add((generateValue(v.array(v.string()).min(0.5).max(2.5), "tags", ["array", index], NOW) as unknown[]).length);
+        }
+
+        expect([...lengths].toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
+    });
+
+    it("refuses array limits no whole length satisfies", () => {
+        expect.hasAssertions();
+        expect(() => generateValue(v.array(v.string()).min(1.2).max(1.8), "tags", "input", NOW)).toThrow(/no whole array length/u);
+    });
+
+    it("seeds 1 for an integer column with exclusive minimum 0.5 and maximum 1", () => {
+        expect.hasAssertions();
+
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: 0.5, maximum: 1, type: "integer" } } } as unknown as Validator;
+
+        expect(generateValue(validator, "amount", "input", NOW)).toBe(1);
+    });
+
+    it("keeps epoch-ms for a time-named .positive() column", () => {
+        expect.hasAssertions();
+
+        const value = generateValue(v.number().positive(), "createdAt", "input", NOW) as number;
+
+        expect(value).toBeGreaterThan(NOW - 365 * 24 * 60 * 60 * 1000);
+        expect(value).toBeLessThanOrEqual(NOW);
+
+        const { rows } = seedPlan(defineSchema({ events: defineTable({ createdAt: v.number().positive().unique() }) }), {
+            counts: { events: 20 },
+            now: NOW,
+        })[0]!;
+
+        expect(rows.every((row) => (row.createdAt as number) > NOW - 365 * 24 * 60 * 60 * 1000)).toBe(true);
+    });
+
+    it("deals more than 1000 distinct rows for an open .int().positive().unique() column", () => {
+        expect.hasAssertions();
+
+        const validator = v.number().int().positive();
+        const { rows } = seedPlan(defineSchema({ items: defineTable({ rank: validator.unique() }) }), { counts: { items: 1500 } })[0]!;
+
+        expect(new Set(rows.map((row) => row.rank)).size).toBe(1500);
+        expect(rows.every((row) => accepts(validator, row.rank))).toBe(true);
     });
 });
