@@ -569,8 +569,9 @@ const pendingAttachment = (authenticated: boolean, now: number): { authenticated
 
 /**
  * Close a socket that failed the credential gate: an `UNAUTHENTICATED` error
- * frame, then `4003`. Nothing is registered for an unauthenticated socket, so
- * there is no teardown to run.
+ * frame, then `4003`. The close is server-initiated, so the runtime runs no
+ * `webSocketClose`; the caller drops the socket's live-socket entry first
+ * (see `refusePendingSocket`).
  */
 const refuseUnauthenticatedSocket = (ws: ShardSocketLike): void => {
     try {
