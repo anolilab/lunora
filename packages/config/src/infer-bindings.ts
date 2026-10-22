@@ -448,7 +448,8 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
  */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
     const lunoraRoot = join(projectRoot, lunoraDirectory);
-    const candidates: { code: string; file: string; inLunora: boolean }[] = [];
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const candidates: { file: string; inLunora: boolean }[] = [];
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
     let usesEnvAi = false;
@@ -475,21 +476,17 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
             if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
-                candidates.push({ file, code, inLunora });
+                // Registered now, while the program is not built, so the text is not kept for the signal pass.
+                project.createSourceFile(file, code, { overwrite: true });
+                candidates.push({ file, inLunora });
             }
         }
     }
 
     // Each file's signals come from `@lunora/codegen`'s own per-file probe over a parsed AST, so a type-only import, or a
-    // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen.
-    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
-
-    // Every candidate goes into one project before any is read. Removing each file after its own read made the next
-    // relative import re-resolve against a rebuilt program, which took minutes on a backend with a few hundred files.
-    for (const { file, code } of candidates) {
-        project.createSourceFile(file, code, { overwrite: true });
-    }
-
+    // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen. Every candidate
+    // is in the project before any is read: removing a file after its own read made the next relative import re-resolve
+    // against a rebuilt program, which took minutes on a backend with a few hundred files.
     for (const { file, inLunora } of candidates) {
         (inLunora ? lunoraFiles : otherFiles).push(sourceCapabilitySignals(project.getSourceFileOrThrow(file)));
     }
