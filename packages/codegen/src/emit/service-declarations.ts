@@ -78,13 +78,16 @@ const nodeModulesEntriesOf = (nodeModules: string): string[] =>
         return entry.isDirectory() && entry.name.startsWith("@") ? [`${path}:${stampOf(path)}`, ...nodeModulesEntriesOf(path)] : [];
     });
 
+/** A `node_modules` directory's own stamp, with its links and `@scope` stamps (see {@link nodeModulesEntriesOf}). */
+const nodeModulesStampsOf = (nodeModules: string): string[] => [`${nodeModules}:${stampOf(nodeModules)}`, ...nodeModulesEntriesOf(nodeModules)];
+
 /**
  * The `node_modules` directories from `directory` up to the root, nearest first. TypeScript reaches a package through each of them in
  * turn, so one above the service is as much an input as the service's own.
  */
 const nodeModulesFrom = (directory: string): string[] => {
     const nodeModules = join(directory, "node_modules");
-    const here = existsSync(nodeModules) ? [`${nodeModules}:${stampOf(nodeModules)}`, ...nodeModulesEntriesOf(nodeModules)] : [];
+    const here = existsSync(nodeModules) ? nodeModulesStampsOf(nodeModules) : [];
     const parent = dirname(directory);
 
     return parent === directory ? here : [...here, ...nodeModulesFrom(parent)];
@@ -112,7 +115,10 @@ const treeStampOf = (directory: string, generatedDirectory: string): string | un
                 if (entry.isSymbolicLink()) {
                     entries.push(`${path}->${readlinkSync(path)}`);
                 } else if (entry.isDirectory()) {
-                    if (!UNTRACKED_DIRECTORIES.has(entry.name)) {
+                    // Not walked, but a package installed in a nested node_modules can shadow an import, so its stamps are inputs.
+                    if (entry.name === "node_modules") {
+                        entries.push(...nodeModulesStampsOf(path));
+                    } else if (!UNTRACKED_DIRECTORIES.has(entry.name)) {
                         // Checked again without following links: an entry swapped for a symlink after readdir is not descended into.
                         if (!lstatSync(path).isDirectory()) {
                             throw new Error(`${path} changed during the scan`);
@@ -132,7 +138,7 @@ const treeStampOf = (directory: string, generatedDirectory: string): string | un
         return undefined;
     }
 
-    return entries.toSorted((left, right) => left.localeCompare(right)).join("\n");
+    return [...new Set(entries)].toSorted((left, right) => left.localeCompare(right)).join("\n");
 };
 
 /** The `node_modules` directory a package sits in, stepping past its `@scope` directory when it has one. */

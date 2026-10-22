@@ -383,6 +383,36 @@ export class Gateway {
         expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
+    it("re-emits a service's snapshot when a package is installed in a node_modules nested below the service root", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        // A nested node_modules that already exists, beside a package the service does not import.
+        write("services/llm-gateway/src/node_modules/other/package.json", `{ "name": "other" }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // A real copy under src/node_modules takes precedence over the hoisted one; nothing already stamped changes.
+        write("services/llm-gateway/src/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/src/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
     it("re-emits a service's snapshot when a dependency's symlink is repointed to another install", () => {
         expect.assertions(2);
 
