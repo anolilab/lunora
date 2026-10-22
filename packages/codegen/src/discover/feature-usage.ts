@@ -1,8 +1,8 @@
 import { dirname } from "node:path";
 
 import { ResolverFactory } from "oxc-resolver";
-import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { BindingElement, ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
@@ -308,6 +308,28 @@ const RELATIVE_RESOLVER = new ResolverFactory({
     extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
 });
 
+/**
+ * The projects that hold relative targets, one per declaring project. A target is parsed here rather than added to the
+ * declaring project: adding a file after its program is built throws that program away.
+ */
+const TARGET_PROJECTS = new WeakMap<Project, Project>();
+
+const targetProjectOf = (project: Project): Project => {
+    let targets = TARGET_PROJECTS.get(project);
+
+    if (targets === undefined) {
+        targets = new Project({
+            compilerOptions: { allowJs: true },
+            skipAddingFilesFromTsConfig: true,
+            skipFileDependencyResolution: true,
+            skipLoadingLibFiles: true,
+        });
+        TARGET_PROJECTS.set(project, targets);
+    }
+
+    return targets;
+};
+
 const relativeTargetOf = (declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
     const file = declaration.getSourceFile();
     const { path } = RELATIVE_RESOLVER.sync(dirname(file.getFilePath()), specifier);
@@ -317,8 +339,9 @@ const relativeTargetOf = (declaration: ImportDeclaration | ExportDeclaration, sp
     }
 
     const project = file.getProject();
+    const targets = targetProjectOf(project);
 
-    return project.getSourceFile(path) ?? project.addSourceFileAtPath(path);
+    return project.getSourceFile(path) ?? targets.getSourceFile(path) ?? targets.addSourceFileAtPath(path);
 };
 
 /**
@@ -404,14 +427,15 @@ const forwardedThrough = (
  * modules being visited: a module is cut only while it is its own ancestor, so a second re-export of the
  * same module (a sibling alias) still resolves.
  */
-const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): SecretToolExports => {
+const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<string>): SecretToolExports => {
     const exported = toolExports([]);
+    const path = file.getFilePath();
 
-    if (onPath.has(file)) {
+    if (onPath.has(path)) {
         return exported;
     }
 
-    onPath.add(file);
+    onPath.add(path);
 
     const bound = boundToolNames(file);
 
@@ -439,7 +463,7 @@ const requestSecretToolExportsOf = (file: SourceFile, onPath: Set<SourceFile>): 
         }
     }
 
-    onPath.delete(file);
+    onPath.delete(path);
 
     return exported;
 };
@@ -454,7 +478,7 @@ const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile)
 
     const target = isRelativeSpecifier(specifier) ? relativeTargetOf(declaration, specifier) : undefined;
 
-    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer]));
+    return target === undefined ? toolExports([]) : requestSecretToolExportsOf(target, new Set([importer.getFilePath()]));
 };
 
 /** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
