@@ -105,6 +105,44 @@ describe("startCodegenWatch", () => {
         }
     });
 
+    it("reuses one codegen project across runs and drops it after a failed run", async () => {
+        expect.hasAssertions();
+
+        // No `postcodegen` script, so no settle window delays the reruns.
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-project-"));
+
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        vi.mocked(runCodegen).mockImplementationOnce(() => {
+            throw new Error("schema.ts is not parseable");
+        });
+        codegenSucceeds();
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workdir, "schema.ts"), "// edit 1", "utf8");
+            await vi.waitFor(() => {
+                expect(runCodegen).toHaveBeenCalledTimes(2);
+            });
+
+            writeFileSync(join(workdir, "schema.ts"), "// edit 2", "utf8");
+            await vi.waitFor(() => {
+                expect(runCodegen).toHaveBeenCalledTimes(3);
+            });
+
+            expect(projectOf(0)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+            expect(projectOf(2)).toBe(projectOf(1));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     describe("postcodegen hook", () => {
         it("runs the project's postcodegen after a successful generate", async () => {
             expect.assertions(2);
