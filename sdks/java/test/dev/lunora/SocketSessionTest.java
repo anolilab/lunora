@@ -25,6 +25,7 @@ final class SocketSessionTest {
         closeCodesDriveTokenExpiry();
         whisperFramesJoinSendAndDeliver();
         whisperTopicsRejoinAfterReconnect();
+        closedRoomRefusesSends();
     }
 
     /** The first frame of every open is {@code connect}, carrying the session credential. */
@@ -302,6 +303,25 @@ final class SocketSessionTest {
                             .equals(Key.stableStringify(expected)),
                     name + ": values delivered to the room:general listener");
         }
+    }
+
+    /** A closed room refuses sends, even while another listener keeps its topic joined. */
+    private static void closedRoomRefusesSends() {
+        List<Map<String, Object>> sent = new ArrayList<>();
+        Client client = new Client("https://app.example", null);
+
+        client.clientId = "client-test";
+        client.attachSocket(sent::add, null);
+
+        Client.Room room = client.connectRoom("general", value -> {});
+
+        client.whisperSubscribe("room:general", value -> {});
+        room.close();
+
+        check(!room.send("after close"), "a closed room must report its send as not sent");
+        check(
+                sent.stream().noneMatch(frame -> "whisper".equals(frame.get("type"))),
+                "and must write no whisper frame after close");
     }
 
     /** Every attach re-joins each registered topic right after {@code connect}. */

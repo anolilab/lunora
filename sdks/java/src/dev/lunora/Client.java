@@ -183,6 +183,12 @@ public final class Client {
     /** The {@link #onTokenExpired} listeners. Guarded by {@link #lock}. */
     private final List<Registration<Runnable>> tokenExpiredListeners = new ArrayList<>();
 
+    /**
+     * Topics whose join write failed, so the next listener on them sends the join again. Guarded by
+     * {@link #lock}.
+     */
+    private final Set<String> unjoinedTopics = new LinkedHashSet<>();
+
     /** The {@link #whisperSubscribe} listeners, per topic. Guarded by {@link #lock}. */
     private final Map<String, List<Registration<Consumer<Object>>>> whisperListeners =
             new LinkedHashMap<>();
@@ -557,6 +563,8 @@ public final class Client {
                 for (String topic : new ArrayList<>(whisperListeners.keySet())) {
                     sender.send(buildWhisperSubscribeFrame(topic));
                 }
+
+                unjoinedTopics.clear();
             } catch (RuntimeException failure) {
                 if (this.sender == sender) {
                     this.sender = null;
@@ -647,20 +655,25 @@ public final class Client {
      */
     public Runnable whisperSubscribe(String topic, Consumer<Object> listener) {
         Registration<Consumer<Object>> registration = new Registration<>(listener);
-        FrameSender socket;
-        boolean first;
 
+        // The join goes out under the lock, in the order the listener state changes, so a leave
+        // cannot overtake it. A join that fails is retried by the next listener on the topic.
         synchronized (lock) {
             List<Registration<Consumer<Object>>> listeners =
                     whisperListeners.computeIfAbsent(topic, key -> new ArrayList<>());
+            boolean join = listeners.isEmpty() || unjoinedTopics.contains(topic);
 
-            first = listeners.isEmpty();
             listeners.add(registration);
-            socket = sender;
-        }
 
-        if (first && socket != null) {
-            socket.send(buildWhisperSubscribeFrame(topic));
+            if (join && sender != null) {
+                try {
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                    unjoinedTopics.remove(topic);
+                } catch (RuntimeException failure) {
+                    unjoinedTopics.add(topic);
+                    throw failure;
+                }
+            }
         }
 
         return () -> leaveWhisper(topic, registration);
@@ -668,9 +681,7 @@ public final class Client {
 
     /** Removes one registration; the last one on a topic also sends {@code whisper_unsubscribe}. */
     private void leaveWhisper(String topic, Registration<Consumer<Object>> registration) {
-        FrameSender socket;
-        boolean last = false;
-
+        // The unsubscribe goes out under the lock, in the order the listener state changes.
         synchronized (lock) {
             List<Registration<Consumer<Object>>> listeners = whisperListeners.get(topic);
 
@@ -680,14 +691,12 @@ public final class Client {
 
             if (listeners.isEmpty()) {
                 whisperListeners.remove(topic);
-                last = true;
+                unjoinedTopics.remove(topic);
+
+                if (sender != null) {
+                    sender.send(buildWhisperUnsubscribeFrame(topic));
+                }
             }
-
-            socket = sender;
-        }
-
-        if (last && socket != null) {
-            socket.send(buildWhisperUnsubscribeFrame(topic));
         }
     }
 
@@ -718,6 +727,7 @@ public final class Client {
         private final Client client;
         private final String topic;
         private final Runnable leave;
+        private volatile boolean closed;
 
         private Room(Client client, String topic, Runnable leave) {
             this.client = client;
@@ -725,14 +735,18 @@ public final class Client {
             this.leave = leave;
         }
 
-        /** Sends {@code message} to the room; false when no socket is attached. */
+        /**
+         * Sends {@code message} to the room; false when no socket is attached, or the room is
+         * closed.
+         */
         public boolean send(Object message) {
-            return client.whisper(topic, message);
+            return !closed && client.whisper(topic, message);
         }
 
         /** Leaves the room. Idempotent. */
         @Override
         public void close() {
+            closed = true;
             leave.run();
         }
     }
