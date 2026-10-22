@@ -97,6 +97,11 @@ These are present regardless of kind:
   deterministic (a query is re-run on every subscription re-evaluation), and the
   `nondeterministic_query_mutation` advisor flags `Date.now()`. Actions may use
   `Date.now()` freely but get `ctx.now` too for parity.
+- **`ctx.random()`**: a number in `[0, 1)`. In a `mutation` that carries an
+  idempotency key, its sequence is derived from that key, so a replay of the call
+  gets the same values. Without a key, and in queries and actions, it is
+  `Math.random()`, which a replay does not reproduce. The values are derived, not
+  random: use `crypto.getRandomValues` for a token or secret.
 
 `ctx.origin` is on mutations and actions only: the origin
 (`scheme://host[:port]`) the request behind the dispatch reached the worker on,

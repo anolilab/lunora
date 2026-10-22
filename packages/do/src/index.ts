@@ -39,7 +39,7 @@ export type {
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
-export { createStableIdFactory } from "./stable-id";
+export { createStableIdFactory, createStableRandomFactory } from "./stable-id";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";

@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SensitiveScope, TransactionHeadroomTracker, SchemaLike, ShardDOState, DeliveryAuthorization, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SubscriptionIdentity, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
-import { applyCdcChanges, createStableIdFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
+import { applyCdcChanges, createStableIdFactory, createStableRandomFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";
@@ -658,7 +658,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureServable();
 
             const footprint = createReadFootprint();
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, replayKey: false, trusted: true });
             const outcome = (await this.runMutationTransaction(ctx, async () =>
                 registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
             )) as {
@@ -996,7 +996,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -1229,6 +1229,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
             };
 
+            // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
+            // inherit the writer's key: every run would restart the same id and random sequence.
+            const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
+            const stableScope = JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            // One sequence for every mutation this run composes: their ids share one counter (the copied `newId`), so their draws must too.
+            const composedRandom = createStableRandomFactory(stableKey, stableScope);
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -1239,10 +1246,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // subscription-driven build (`options.identity`) is not a replay.
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
-                newId: createStableIdFactory(
-                    options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined,
-                    JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]),
-                ),
+                // `ctx.random()` shares the replay key and scope, so a replay reproduces both sequences.
+                newId: createStableIdFactory(stableKey, stableScope),
+                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
+                random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare
@@ -1318,6 +1325,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },
                                 orm: { configurable: true, enumerable: true, value: mutationDatabase.orm, writable: true },
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
+                                // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
+                                // fresh factory per call would repeat the same draws across sibling mutations.
+                                random: { configurable: true, enumerable: true, value: composedRandom, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
@@ -1383,6 +1393,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         ...descriptors,
                         fetch: field(refuseFetch),
                         origin: field(undefined),
+                        // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
+                        random: field(createStableRandomFactory(undefined, stableScope)),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;

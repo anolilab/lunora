@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { cyrb53 } from "@lunora/values";
+import { describe, expect, it, vi } from "vitest";
 
-import { createStableIdFactory } from "../src/stable-id";
+import { createStableIdFactory, createStableRandomFactory } from "../src/stable-id";
 
 // The shape the runtime's client-id check accepts (`ctx-db.ts` CLIENT_ID_PATTERN).
 const CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -52,5 +53,55 @@ describe("createStableIdFactory", () => {
 
         expect(CLIENT_ID.test(next())).toBe(true);
         expect(next()).not.toBe(next());
+    });
+});
+
+describe("createStableRandomFactory", () => {
+    it("reproduces the same sequence for a replay of the same call", () => {
+        expect.assertions(1);
+
+        const first = createStableRandomFactory("key-1", "user-a");
+        const replay = createStableRandomFactory("key-1", "user-a");
+
+        expect([first(), first(), first()]).toStrictEqual([replay(), replay(), replay()]);
+    });
+
+    it("keeps every value in [0, 1) and gives distinct values within one run", () => {
+        expect.assertions(2);
+
+        const next = createStableRandomFactory("key-1", "user-a");
+        const values = Array.from({ length: 200 }, () => next());
+
+        expect(values.every((value) => value >= 0 && value < 1)).toBe(true);
+        expect(new Set(values).size).toBe(200);
+    });
+
+    it("separates sequences by key and by caller", () => {
+        expect.assertions(2);
+
+        expect(createStableRandomFactory("key-2", "user-a")()).not.toBe(createStableRandomFactory("key-1", "user-a")());
+        expect(createStableRandomFactory("key-1", "user-b")()).not.toBe(createStableRandomFactory("key-1", "user-a")());
+    });
+
+    it("hashes a domain-tagged input, not the id's input for the same key and scope", () => {
+        expect.assertions(2);
+
+        const random = createStableRandomFactory("key-1", "user-a")();
+
+        expect(random).toBe(cyrb53("random\u0000user-a\u0000key-1\u00001") / 2 ** 53);
+        expect(random).not.toBe(cyrb53("user-a\u0000key-1\u00001") / 2 ** 53);
+    });
+
+    it("falls back to Math.random without a replay key", () => {
+        expect.assertions(2);
+
+        const spy = vi.spyOn(Math, "random").mockReturnValue(0.25);
+
+        try {
+            expect(createStableRandomFactory(undefined, "user-a")()).toBe(0.25);
+            expect(spy).toHaveBeenCalledTimes(1);
+        } finally {
+            spy.mockRestore();
+        }
     });
 });

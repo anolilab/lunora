@@ -92,7 +92,7 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
                 [Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),`
         : "";
 
-    return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+    return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -268,6 +268,13 @@ ${notifyBuild}
                 throw new LunoraError("FORBIDDEN", "ctx.fetch is action-only: network I/O belongs in an action, not a query or mutation");
             };
 
+            // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
+            // inherit the writer's key: every run would restart the same id and random sequence.
+            const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
+            const stableScope = JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            // One sequence for every mutation this run composes: their ids share one counter (the copied \`newId\`), so their draws must too.
+            const composedRandom = createStableRandomFactory(stableKey, stableScope);
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -278,10 +285,10 @@ ${notifyBuild}
                 // subscription-driven build (\`options.identity\`) is not a replay.
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
-                newId: createStableIdFactory(
-                    options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined,
-                    JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]),
-                ),
+                // \`ctx.random()\` shares the replay key and scope, so a replay reproduces both sequences.
+                newId: createStableIdFactory(stableKey, stableScope),
+                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
+                random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare
@@ -351,6 +358,9 @@ ${
                                 ...Object.getOwnPropertyDescriptors(target),
                                 db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },${mutationOrmDescriptor}
                                 fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
+                                // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
+                                // fresh factory per call would repeat the same draws across sibling mutations.
+                                random: { configurable: true, enumerable: true, value: composedRandom, writable: true },
                                 scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
                                 storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
                             });
@@ -416,6 +426,8 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
                         ...descriptors,
                         fetch: field(refuseFetch),
                         origin: field(undefined),
+                        // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
+                        random: field(createStableRandomFactory(undefined, stableScope)),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;

@@ -2921,6 +2921,10 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `createStableRandomFactory` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
