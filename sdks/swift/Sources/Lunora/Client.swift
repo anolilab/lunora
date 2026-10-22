@@ -70,6 +70,19 @@ public struct LunoraSubscriptionError: Error, Sendable {
     public let message: String
 }
 
+/// A joined room, made by ``LunoraClient/connectRoom(_:_:)``.
+public struct LunoraRoom {
+    let client: LunoraClient
+    let topic: String
+    let leave: LunoraUnsubscribe
+
+    /// Relays `message` to the room. False when no socket is attached; nothing is queued.
+    public func send(_ message: Any) throws -> Bool { try client.whisper(topic, data: message) }
+
+    /// Leaves the room. Safe to call more than once.
+    public func close() { leave() }
+}
+
 /// Performs one POST. Injected rather than assumed so the conformance suite runs
 /// with no network and a consumer keeps its own session, timeouts and retries.
 public typealias LunoraHTTPPoster = (_ url: String, _ headers: [String: String], _ body: Data) throws -> (status: Int, body: Data)
@@ -115,6 +128,22 @@ public final class LunoraClient {
         }
     }
 
+    /// The WebSocket session credential, sent as `connect.token` on every socket
+    /// open. It is not the RPC bearer: ``authToken`` never changes it, and it never
+    /// rides the socket URL. Setting a different value starts a new credential
+    /// generation, so a refusal of the old one notifies ``onTokenExpired(_:)`` again.
+    public var sessionToken: String? {
+        get { withLock { storedSessionToken } }
+        set {
+            withLock {
+                guard newValue != storedSessionToken else { return }
+
+                storedSessionToken = newValue
+                credentialGeneration += 1
+            }
+        }
+    }
+
     /// Who a write queued now belongs to; call with the lock held. See
     /// ``LunoraIdentity/stamp(identity:token:)``.
     func identityFingerprintLocked() -> LunoraIdentity {
@@ -122,6 +151,23 @@ public final class LunoraClient {
     }
 
     var storedAuthToken: String?
+    var storedSessionToken: String?
+
+    /// Advances each time ``sessionToken`` changes. A socket records the generation
+    /// it opened under; a refusal notifies only for the generation in force.
+    var credentialGeneration = 0
+    var socketGeneration: Int?
+
+    /// The generation a 4003 refusal last notified for. Nil until the first one,
+    /// so a fresh client is never mistaken for one already notified.
+    var lastNotifiedGeneration: Int?
+    private var tokenExpiredListeners: [(id: Int, listener: () throws -> Void)] = []
+
+    /// Topic to its listeners, oldest first. A topic is present exactly while it
+    /// has a listener, and is joined with the server exactly then.
+    private var whispers: [String: [(id: Int, listener: (Any) -> Void)]] = [:]
+    private var nextListenerID = 0
+
     /// Internal rather than private: the offline-capable write path is an
     /// extension in `Submit.swift`, and a Swift extension in another file sees a
     /// type's internal members but not its private ones.
@@ -149,9 +195,11 @@ public final class LunoraClient {
     /// A Swift `Dictionary` is not atomic — a concurrent insert during a resize
     /// is a memory error, not a lost write.
     ///
-    /// Frames and user callbacks are invoked OUTSIDE the lock. `send` writes a
-    /// socket the consumer owns, and `NSLock` is not recursive, so a callback
-    /// that subscribes would deadlock if it ran under the lock.
+    /// Frames and user callbacks are invoked OUTSIDE the lock, except the socket
+    /// writes of ``attachSocket(_:context:)`` and of the whisper join, leave and
+    /// send: those run under it, so a whisper cannot overtake `connect`. A sender
+    /// on those paths must never call back into the client. `NSLock` is not
+    /// recursive, so a callback that subscribes would deadlock if it ran under it.
     private let lock = NSLock()
 
     func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -338,22 +386,97 @@ public final class LunoraClient {
         self.authToken = authToken
     }
 
-    /// Registers the sender used for subscription frames. Call once the socket is
-    /// open.
+    /// Opens the channel on a freshly opened socket, and marks the client online.
+    /// The first frame is `connect`: the client id, `context` when given, and the
+    /// session credential when one is set. Then comes a `whisper_subscribe` for
+    /// every joined topic. Subscriptions follow via ``resendSubscriptions()``, so
+    /// they always come after connect.
+    ///
+    /// The lock is held across these writes, so a whisper on another thread cannot
+    /// write ahead of connect. A sender must never call back into the client.
     ///
     /// It also latches "has connected at least once", which is what the write
     /// queue gates on: a write made before the FIRST connect fails fast by
     /// default, so a misconfigured endpoint surfaces on the first write instead of
     /// silently filling a queue that will never flush.
-    public func attachSocket(_ sender: @escaping LunoraFrameSender) {
+    public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
+            socketGeneration = credentialGeneration
+            sender(LunoraClient.buildConnectFrame(clientID: storedClientID, context: context, token: storedSessionToken))
+
+            for topic in whispers.keys.sorted() {
+                sender(LunoraClient.buildWhisperSubscribeFrame(topic: topic))
+            }
+
             send = sender
             wasEverConnected = true
         }
     }
 
-    /// Forgets the sender, so subsequent writes queue rather than fail.
-    public func detachSocket() { withLock { send = nil } }
+    /// Forgets the sender, so subsequent writes queue rather than fail, and
+    /// classifies the close that ended the socket. `closeCode` nil means no close
+    /// frame.
+    ///
+    /// A 4001 is token expiry and always notifies ``onTokenExpired(_:)``. A 4003
+    /// refuses the session credential, and notifies once per credential generation,
+    /// but not for a reason of exactly "connect deadline" (a socket that never
+    /// sent `connect` refused nothing), nor for a socket that opened under an
+    /// earlier generation.
+    public func detachSocket(closeCode: Int? = nil, reason: String? = nil) {
+        let expired = withLock { () -> Bool in
+            send = nil
+
+            return expiryNotifiedByCloseLocked(closeCode, reason)
+        }
+
+        if expired { notifyTokenExpired() }
+    }
+
+    /// Whether this close is a token expiry; call with the lock held. A 4003
+    /// refusal records the generation it notified for, so only the first one
+    /// in a generation is reported.
+    private func expiryNotifiedByCloseLocked(_ closeCode: Int?, _ reason: String?) -> Bool {
+        if closeCode == 4001 { return true }
+
+        guard closeCode == 4003, reason != "connect deadline" else { return false }
+        guard socketGeneration == credentialGeneration, socketGeneration != lastNotifiedGeneration else { return false }
+
+        lastNotifiedGeneration = socketGeneration
+
+        return true
+    }
+
+    /// Registers a listener for token-expiry signals: a 4001 close, a
+    /// `TOKEN_EXPIRED` error frame, and a refused session credential. The listener
+    /// is expected to fetch a fresh credential and assign ``sessionToken``. Returns
+    /// the handle that unregisters it.
+    ///
+    /// A listener that throws is contained: the others are still told, and the
+    /// detach or frame that notified it carries on. The error is discarded.
+    public func onTokenExpired(_ listener: @escaping () throws -> Void) -> LunoraUnsubscribe {
+        let id = withLock { () -> Int in
+            nextListenerID += 1
+            tokenExpiredListeners.append((nextListenerID, listener))
+
+            return nextListenerID
+        }
+
+        return { [weak self] in
+            guard let self else { return }
+
+            self.withLock { self.tokenExpiredListeners.removeAll { $0.id == id } }
+        }
+    }
+
+    /// Runs the token-expiry listeners outside the lock, since one that assigns
+    /// ``sessionToken`` takes the lock itself.
+    private func notifyTokenExpired() {
+        let listeners = withLock { tokenExpiredListeners.map { $0.listener } }
+
+        for listener in listeners {
+            try? listener()
+        }
+    }
 
     /// Whether a socket is currently attached.
     public var online: Bool { withLock { send != nil } }
@@ -708,9 +831,9 @@ public final class LunoraClient {
 
     // MARK: - Frame builders
 
-    /// The one-shot frame sent first on every socket open. `token` is the session
-    /// credential: it rides here, never in the socket URL, and is omitted when nil
-    /// or empty.
+    /// The `connect` frame ``attachSocket(_:context:)`` sends first on every open.
+    /// `token` is the session credential: it rides here, never in the socket URL,
+    /// and is omitted when nil or empty.
     public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil) -> [String: Any] {
         var frame: [String: Any] = ["id": "connect", "type": "connect"]
         if let clientID { frame["clientId"] = clientID }
@@ -759,6 +882,18 @@ public final class LunoraClient {
 
     public static func buildShapeUnsubscribeFrame(id: String) -> [String: Any] {
         ["id": id, "type": "shape_unsubscribe"]
+    }
+
+    public static func buildWhisperSubscribeFrame(topic: String) -> [String: Any] {
+        ["topic": topic, "type": "whisper_subscribe"]
+    }
+
+    public static func buildWhisperUnsubscribeFrame(topic: String) -> [String: Any] {
+        ["topic": topic, "type": "whisper_unsubscribe"]
+    }
+
+    public static func buildWhisperFrame(topic: String, data: Any) throws -> [String: Any] {
+        ["data": try Wire.encode(data), "topic": topic, "type": "whisper"]
     }
 
     // MARK: - Subscriptions
@@ -939,6 +1074,62 @@ public final class LunoraClient {
         withLock { subscriptions[id]?.state }
     }
 
+    // MARK: - Whispers
+
+    /// Joins `topic` and delivers its whispers to `listener`. The first listener on
+    /// a topic sends `whisper_subscribe` when a socket is attached, and every attach
+    /// rejoins each joined topic. The returned handle removes this listener; removing
+    /// the last one sends `whisper_unsubscribe` and forgets the topic.
+    public func whisperSubscribe(_ topic: String, _ listener: @escaping (Any) -> Void) -> LunoraUnsubscribe {
+        let id = withLock { () -> Int in
+            nextListenerID += 1
+            let id = nextListenerID
+            let joining = whispers[topic] == nil
+
+            whispers[topic, default: []].append((id, listener))
+
+            if joining { send?(LunoraClient.buildWhisperSubscribeFrame(topic: topic)) }
+
+            return id
+        }
+
+        return { [weak self] in
+            guard let self else { return }
+
+            self.withLock {
+                self.whispers[topic]?.removeAll { $0.id == id }
+
+                // Not empty, or already gone: nothing to leave, and a second call is a no-op.
+                guard self.whispers[topic]?.isEmpty == true else { return }
+
+                self.whispers.removeValue(forKey: topic)
+                self.send?(LunoraClient.buildWhisperUnsubscribeFrame(topic: topic))
+            }
+        }
+    }
+
+    /// Relays `data` to the other members of `topic`. It is not queued: with no
+    /// socket attached this returns false and sends nothing. `data` is
+    /// wire-encoded, so an unencodable value throws before anything is sent.
+    public func whisper(_ topic: String, data: Any) throws -> Bool {
+        try withLock { () throws -> Bool in
+            guard let send else { return false }
+
+            send(try LunoraClient.buildWhisperFrame(topic: topic, data: data))
+
+            return true
+        }
+    }
+
+    /// Joins the room `name` (the topic `room:<name>`) and delivers its whispers to
+    /// `listener`. A room is never acknowledged, so its ``LunoraRoom/send(_:)`` may
+    /// be used at once.
+    public func connectRoom(_ name: String, _ listener: @escaping (Any) -> Void) -> LunoraRoom {
+        let topic = "room:\(name)"
+
+        return LunoraRoom(client: self, topic: topic, leave: whisperSubscribe(topic, listener))
+    }
+
     // MARK: - Inbound frames
 
     /// Applies one server frame and returns its type. Unknown types are ignored,
@@ -1058,6 +1249,15 @@ public final class LunoraClient {
             return kind
         case "error":
             let envelope = frame["error"] as? [String: Any] ?? [:]
+
+            // A token expiry is a session signal, not a subscription's: it notifies
+            // whether or not the frame names one, and is never routed to it.
+            if envelope["code"] as? String == "TOKEN_EXPIRED" {
+                notifyTokenExpired()
+
+                return kind
+            }
+
             let error = LunoraSubscriptionError(
                 code: envelope["code"] as? String,
                 message: frame["message"] as? String ?? envelope["message"] as? String ?? "subscription error"
@@ -1092,6 +1292,20 @@ public final class LunoraClient {
                     message: "subscription was cancelled by the server"
                 )
             )
+
+            return kind
+        case "whisper":
+            // Dropped, never raised: a frame whose topic is not a non-empty string,
+            // or whose data does not decode, must not end the read loop.
+            guard let topic = frame["topic"] as? String, !topic.isEmpty else { return kind }
+
+            let listeners = withLock { whispers[topic]?.map { $0.listener } ?? [] }
+
+            guard !listeners.isEmpty, let value = try? Wire.decode(frame["data"]) else { return kind }
+
+            for listener in listeners {
+                listener(value)
+            }
 
             return kind
         case "pokeStart":
@@ -1299,7 +1513,7 @@ public final class LunoraClient {
     /// The socket URL: the origin with its scheme swapped, plus the shard and
     /// admin-ticket query parameters when present. `wsTicket` is the ephemeral
     /// admin sub-token; the session credential never rides the URL —
-    /// ``buildConnectFrame(clientID:context:token:)`` carries it.
+    /// ``attachSocket(_:context:)`` carries it, in `connect`.
     public func wsURL(shardKey: String? = nil, wsTicket: String? = nil) -> String {
         var endpoint = join(lunoraWSPath)
         if endpoint.hasPrefix("https://") {
@@ -1338,6 +1552,14 @@ public final class LunoraClient {
 /// presence and never its value.
 extension LunoraClient: CustomReflectable {
     public var customMirror: Mirror {
-        Mirror(self, children: ["url": baseURL, "authToken": authToken == nil ? "nil" : "<redacted>"], displayStyle: .class)
+        Mirror(
+            self,
+            children: [
+                "url": baseURL,
+                "authToken": authToken == nil ? "nil" : "<redacted>",
+                "sessionToken": sessionToken == nil ? "nil" : "<redacted>",
+            ],
+            displayStyle: .class
+        )
     }
 }
