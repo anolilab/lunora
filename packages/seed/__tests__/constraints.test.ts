@@ -1,8 +1,10 @@
+import { defineSchema, defineTable } from "@lunora/server";
 import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import { generateValue } from "../src/generate-value";
+import { seedPlan } from "../src/plan";
 
 const NOW = 1_785_000_000_000;
 
@@ -17,6 +19,8 @@ describe("generateValue — validator constraints the generator must honour", ()
     it.each([
         ["positive()", v.number().positive()],
         ["positive().int()", v.number().positive().int()],
+        // Narrower than the fixed epsilon a float exclusive minimum used to be nudged by.
+        ["positive().max(0.0000005)", v.number().positive().max(0.000_000_5)],
         ["int().min(0.5)", v.number().int().min(0.5)],
         ["int().min(3).max(5)", v.number().int().min(3).max(5)],
         ["array.min(5)", v.array(v.string()).min(5)],
@@ -29,6 +33,16 @@ describe("generateValue — validator constraints the generator must honour", ()
         for (let index = 0; index < 200; index += 1) {
             expect(accepts(validator, generateValue(validator, "amount", ["constraint", index], NOW))).toBe(true);
         }
+    });
+
+    it("deals a .unique() float column narrower than the exclusive-minimum nudge", () => {
+        expect.hasAssertions();
+
+        const validator = v.number().positive().max(0.000_000_5);
+        const { rows } = seedPlan(defineSchema({ dust: defineTable({ grams: validator.unique() }) }), { counts: { dust: 20 } })[0]!;
+
+        expect(new Set(rows.map((row) => row.grams)).size).toBe(20);
+        expect(rows.every((row) => accepts(validator, row.grams))).toBe(true);
     });
 
     it("emits a whole number for int() with no bounds", () => {

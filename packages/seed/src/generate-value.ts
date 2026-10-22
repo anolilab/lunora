@@ -43,7 +43,8 @@ const EXCLUSIVE_EPSILON = 1e-6;
 /**
  * A validator's constraints with the numeric ones normalised into plain inclusive
  * `minimum` / `maximum`, so the generator and the `.unique()` deal read one range:
- * `exclusiveMinimum` becomes the next integer (or `+ε` for a float), and an
+ * `exclusiveMinimum` becomes the next integer (or `+ε` for a float, the interval's
+ * midpoint when the maximum is closer than `ε`), and an
  * `integer` column rounds its bounds inward.
  */
 const constraintsOf = (validator: Validator): Constraints => {
@@ -52,7 +53,15 @@ const constraintsOf = (validator: Validator): Constraints => {
     let { maximum, minimum } = raw;
 
     if (typeof raw.exclusiveMinimum === "number") {
-        const above = raw.exclusiveMinimum + (integer ? 1 : EXCLUSIVE_EPSILON);
+        const exclusive = raw.exclusiveMinimum;
+        let above = exclusive + (integer ? 1 : EXCLUSIVE_EPSILON);
+        const halfway = maximum === undefined ? above : (exclusive + maximum) / 2;
+
+        // A float interval narrower than the epsilon still has values: its midpoint is strictly
+        // inside it. A maximum at or below the bound keeps the overshoot, so resolveRange refuses it.
+        if (!integer && maximum !== undefined && above > maximum && halfway > exclusive) {
+            above = halfway;
+        }
 
         minimum = minimum === undefined ? above : Math.max(minimum, above);
     }
@@ -366,6 +375,25 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
     return value.length >= bounds.min && value.length <= bounds.max ? value : spec.fit(value, bounds);
 };
 
+/** A quantity inside the column's declared (or default) range. */
+const generateNumber = (input: unknown, constraints: Constraints, fieldName: string): number => {
+    const { max, min } = resolveRange(constraints, NUMBER_RANGE, fieldName);
+
+    // `v.number()` is a float column, so honour non-integer bounds with a
+    // float (faker's integer generator rejects fractional min/max) — unless
+    // the column is `.int()`, whose bounds `constraintsOf` already rounded inward.
+    if (constraints.type === "integer" || (Number.isInteger(min) && Number.isInteger(max))) {
+        return copycat.int(input, { max, min });
+    }
+
+    // `copycat.float` rounds to hundredths, and faker throws when no hundredth lies in the range.
+    if (Math.ceil(min * 100) > Math.floor(max * 100)) {
+        return min + (max - min) * copycat.float(input, { fractionDigits: 6, max: 1, min: 0 });
+    }
+
+    return copycat.float(input, { max, min });
+};
+
 const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number): unknown => {
     const inner = unwrapOptional(validator);
     const constraints = constraintsOf(inner);
@@ -462,16 +490,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 return generateTimestamp(input, now);
             }
 
-            const { max, min } = resolveRange(constraints, NUMBER_RANGE, fieldName);
-
-            // `v.number()` is a float column, so honour non-integer bounds with a
-            // float (faker's integer generator rejects fractional min/max) — unless
-            // the column is `.int()`, whose bounds `constraintsOf` already rounded inward.
-            if (constraints.type !== "integer" && (!Number.isInteger(min) || !Number.isInteger(max))) {
-                return copycat.float(input, { max, min });
-            }
-
-            return copycat.int(input, { max, min });
+            return generateNumber(input, constraints, fieldName);
         }
 
         case "object": {
