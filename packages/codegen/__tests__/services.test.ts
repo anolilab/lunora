@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
+import { emitServiceDeclarations } from "../src/emit/service-declarations";
 import { resolveServiceBindings, runCodegen } from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -121,6 +122,30 @@ export class Gateway {
 
         expect(() => generated("services/llmGateway/src/index.d.ts")).toThrow(/ENOENT/u);
         expect(() => generated("services")).toThrow(/ENOENT/u);
+    });
+
+    it("reuses a service's declaration snapshot until a file in its program changes", () => {
+        expect.assertions(3);
+
+        writeServices();
+
+        const emit = (): Record<string, string> | undefined =>
+            resolveServiceBindings(workdir)
+                .filter(({ name }) => name === "llmGateway")
+                .map((service) => emitServiceDeclarations(service, join(workdir, "lunora", "_generated")))[0];
+        const first = emit();
+
+        expect(emit()).toBe(first);
+
+        write(
+            "services/llm-gateway/src/index.ts",
+            `export class Gateway {\n    async complete(prompt: string): Promise<number> {\n        return prompt.length;\n    }\n}\n`,
+        );
+
+        const second = emit();
+
+        expect(second).not.toBe(first);
+        expect(second?.[join("services", "llmGateway", "src", "index.d.ts")]).toContain("Promise<number>");
     });
 
     it("names the service when TypeScript emits no declaration for its entry", () => {
