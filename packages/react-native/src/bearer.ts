@@ -7,7 +7,8 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
 /**
  * Read the current better-auth session token from an Expo auth client, for use
  * as a **bearer** credential on the Lunora client — `client.setAuthToken(token)`
- * for HTTP RPC and `setSessionBearer(token)` for the live socket's upgrade.
+ * for HTTP RPC, and the same token in the `Authorization` header the live socket's
+ * upgrade sends (`getAuthHeaders`).
  *
  * The Expo plugin persists the session as a cookie in `SecureStore`;
  * `getCookie()` exposes it, and this pulls the `session_token` value out.
@@ -30,7 +31,7 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * ```ts
  * const token = await expoBearerToken(authClient);
  * client.setAuthToken(token);
- * setSessionBearer(token);
+ * // ...and `getAuthHeaders` returns `Authorization: Bearer ${token}` for the socket upgrade.
  * ```
  * @experimental
  */
