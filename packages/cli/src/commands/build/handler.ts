@@ -146,7 +146,8 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     const { logger } = options;
     const projectRoot = options.cwd ?? process.cwd();
 
-    // Both files are named for this run: a leftover from an earlier run must not stand in for this run's output.
+    // The Vite child writes a per-run file, but the out-dir destination keeps its stable name. Both are cleared first, so a leftover
+    // from an earlier run cannot stand in for this run's output.
     const destination = resolve(projectRoot, outDirectory, "bundle-meta.json");
     const viteMeta = viteBundleMetaPath(projectRoot, randomUUID());
 
