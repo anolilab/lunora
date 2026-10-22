@@ -63,7 +63,7 @@ const stampOf = (path: string): string => {
 const UNTRACKED_DIRECTORIES = new Set([".git", ".wrangler", "dist", "node_modules", "target"]);
 
 /**
- * The symlinks in a service's own `node_modules` (top level and `@scope` level), with their targets. A package manager repoints
+ * The symlinks in one `node_modules` directory (top level and `@scope` level), with their targets. A package manager repoints
  * a link on update without touching any file the service owns, and the program resolves through the link.
  */
 const linkTargetsOf = (nodeModules: string): string[] =>
@@ -78,9 +78,21 @@ const linkTargetsOf = (nodeModules: string): string[] =>
     });
 
 /**
- * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp, and the symlink targets in its `node_modules`.
- * A file added here can shadow a module the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined when the tree cannot be
- * read, so the caller treats the cache as a miss rather than as an unchanged tree.
+ * The symlinks in every `node_modules` from `directory` up to the root, nearest first. TypeScript reaches a package through each of
+ * them in turn, so a hoisted link above the service is as much an input as one in its own `node_modules`.
+ */
+const linkTargetsFrom = (directory: string): string[] => {
+    const nodeModules = join(directory, "node_modules");
+    const here = existsSync(nodeModules) ? linkTargetsOf(nodeModules) : [];
+    const parent = dirname(directory);
+
+    return parent === directory ? here : [...here, ...linkTargetsFrom(parent)];
+};
+
+/**
+ * Every file under `directory` outside {@link UNTRACKED_DIRECTORIES}, with its stamp, and the symlink targets in the `node_modules`
+ * from it up to the root. A file added here can shadow a module the program resolved (a `foo.ts` beside `foo/index.ts`). Undefined
+ * when the tree cannot be read, so the caller treats the cache as a miss rather than as an unchanged tree.
  */
 const treeStampOf = (directory: string): string | undefined => {
     const entries: string[] = [];
@@ -106,12 +118,7 @@ const treeStampOf = (directory: string): string | undefined => {
         };
 
         walk(directory);
-
-        const nodeModules = join(directory, "node_modules");
-
-        if (existsSync(nodeModules)) {
-            entries.push(...linkTargetsOf(nodeModules));
-        }
+        entries.push(...linkTargetsFrom(directory));
     } catch {
         return undefined;
     }
@@ -123,6 +130,34 @@ const treeStampOf = (directory: string): string | undefined => {
 const modulesOf = (packageDirectory: string): string =>
     basename(dirname(packageDirectory)).startsWith("@") ? dirname(dirname(packageDirectory)) : dirname(packageDirectory);
 
+/** A file of the service itself, rather than of a dependency. */
+const isOwnSource = (path: string, serviceDirectory: string): boolean =>
+    !relative(serviceDirectory, path).startsWith("..") && !path.split(sep).includes("node_modules");
+
+/**
+ * Adds the directories from `from` up to the nearest `package.json`, and that manifest, to `stamped`. Returns the directory the
+ * manifest is in, or undefined — and then adds nothing: a walk to the root would stamp directories no package governs.
+ */
+const stampUpToManifest = (from: string, stamped: Set<string>): string | undefined => {
+    const climbed: string[] = [];
+    let directory = from;
+
+    while (directory !== dirname(directory) && !existsSync(join(directory, "package.json"))) {
+        climbed.push(directory);
+        directory = dirname(directory);
+    }
+
+    if (!existsSync(join(directory, "package.json"))) {
+        return undefined;
+    }
+
+    for (const path of [...climbed, directory, join(directory, "package.json")]) {
+        stamped.add(path);
+    }
+
+    return directory;
+};
+
 /**
  * Every directory a program file sits in, with its stamp. A file added to one can become the candidate an import resolves to now:
  * in the service (`src/dist/sub.ts` beside `src/dist/sub/index.ts`, where `dist` is not walked) or in a package (`dist/sub.d.ts`
@@ -132,10 +167,13 @@ const modulesOf = (packageDirectory: string): string =>
 const directoryStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: string): [path: string, stamp: string][] => {
     const stamped = new Set<string>();
 
-    for (const path of paths) {
-        const owned = !relative(serviceDirectory, path).startsWith("..") && !path.split(sep).includes("node_modules");
+    // Above the service, the nearest manifest decides a source's module format under NodeNext. Once for the service, not per file.
+    if (paths.some((path) => isOwnSource(path, serviceDirectory))) {
+        stampUpToManifest(serviceDirectory, stamped);
+    }
 
-        if (owned) {
+    for (const path of paths) {
+        if (isOwnSource(path, serviceDirectory)) {
             for (let directory = dirname(path); directory !== serviceDirectory && directory !== dirname(directory); directory = dirname(directory)) {
                 stamped.add(directory);
             }
@@ -143,18 +181,11 @@ const directoryStampsOf = (paths: ReadonlyArray<string>, serviceDirectory: strin
             continue;
         }
 
-        let directory = dirname(path);
+        const manifestDirectory = stampUpToManifest(dirname(path), stamped);
 
-        while (directory !== dirname(directory) && !existsSync(join(directory, "package.json"))) {
-            stamped.add(directory);
-            directory = dirname(directory);
-        }
-
-        if (existsSync(join(directory, "package.json"))) {
-            stamped.add(directory);
-            stamped.add(join(directory, "package.json"));
-            // The package's own dependencies are links beside it in the directory it sits in, so a relink moves that directory.
-            stamped.add(modulesOf(directory));
+        // The package's own dependencies are links beside it in the directory it sits in, so a relink moves that directory.
+        if (manifestDirectory !== undefined) {
+            stamped.add(modulesOf(manifestDirectory));
         }
     }
 
@@ -169,7 +200,7 @@ interface CachedDeclarations {
     tree: string;
 }
 
-// shortcut: never evicts. Not stamped: links outside the service's own node_modules and outside the directory a package sits in (a store's links to dependencies further up, a hoisted or root-only layout), and a specifier that resolved to nothing at emit time and is satisfied later. Upgrade by re-resolving the recorded specifiers on each hit when one of those is hit.
+// shortcut: never evicts. Not stamped: a specifier that resolved to nothing at emit time and is satisfied later; a package.json that appears above the service when none governed it at emit time (a walk with no manifest stamps nothing); and, on a filesystem with coarse mtimes, a write in the same second as a directory-based check. Upgrade by re-resolving the recorded specifiers on each hit when one of those is hit.
 const declarationCache = new Map<string, CachedDeclarations>();
 
 /** Whether `path` still has the stamp recorded for it; a path that has gone is stale. */
@@ -182,9 +213,8 @@ const stillStamped = ([path, stamp]: [path: string, stamp: string]): boolean => 
 };
 
 /** The cached snapshot, while its compiler options, its program, its manifests and its service tree are unchanged on disk. */
-const freshDeclarations = (cacheKey: string, optionsKey: string, serviceDirectory: string): Record<string, string> | undefined => {
+const freshDeclarations = (cacheKey: string, optionsKey: string, tree: string | undefined): Record<string, string> | undefined => {
     const cached = declarationCache.get(cacheKey);
-    const tree = cached === undefined ? undefined : treeStampOf(serviceDirectory);
     const fresh =
         cached?.optionsKey === optionsKey &&
         cached.stamps.every((stamp) => stillStamped(stamp)) &&
@@ -197,10 +227,14 @@ const freshDeclarations = (cacheKey: string, optionsKey: string, serviceDirector
 
 /**
  * Keeps a snapshot for the next run. An unreadable tree leaves nothing to compare against, so nothing is kept and the next run
- * emits again rather than trust a stale tree.
+ * emits again rather than trust a stale tree. A file modified after the read started may have been read in its old state and
+ * stamped in its new one; such a snapshot is not kept either. `readStartedAt` is wall-clock milliseconds, the clock mtimes use;
+ * a write in the first millisecond of the read is missed, which costs nothing.
  */
-const rememberDeclarations = (cacheKey: string, entry: Omit<CachedDeclarations, "tree"> & { tree: string | undefined }): void => {
-    if (entry.tree !== undefined) {
+const rememberDeclarations = (cacheKey: string, entry: Omit<CachedDeclarations, "tree"> & { tree: string | undefined }, readStartedAt: number): void => {
+    const stampedBeforeRead = [...entry.stamps, ...entry.directories].every(([, stamp]) => Math.floor(Number.parseFloat(stamp)) <= readStartedAt);
+
+    if (entry.tree !== undefined && stampedBeforeRead) {
         declarationCache.set(cacheKey, { ...entry, tree: entry.tree });
     }
 };
@@ -209,14 +243,10 @@ const rememberDeclarations = (cacheKey: string, entry: Omit<CachedDeclarations, 
  * What a cached snapshot is checked against: every file the program resolved (external declarations included, however
  * far the import chain reaches), the directories those files sit in, and the service tree.
  */
-const freshnessOf = (
-    serviceDirectory: string,
-    programPaths: ReadonlyArray<string>,
-): Omit<CachedDeclarations, "files" | "optionsKey" | "tree"> & { tree: string | undefined } => {
+const freshnessOf = (serviceDirectory: string, programPaths: ReadonlyArray<string>): Omit<CachedDeclarations, "files" | "optionsKey" | "tree"> => {
     return {
         directories: directoryStampsOf(programPaths, serviceDirectory),
         stamps: programPaths.map((path): [string, string] => [path, stampOf(path)]),
-        tree: treeStampOf(serviceDirectory),
     };
 };
 
@@ -259,11 +289,15 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
     // The emit type-checks the whole service; reuse it while its options and every file in its program are unchanged.
     const cacheKey = JSON.stringify([service.name, service.main, service.wranglerPath, generatedDirectory]);
     const optionsKey = JSON.stringify(project.getCompilerOptions());
-    const cached = freshDeclarations(cacheKey, optionsKey, serviceDirectory);
+    // Taken before any source is read: a write during the read then changes the tree and misses the cache, instead of being recorded as emitted.
+    const tree = treeStampOf(serviceDirectory);
+    const cached = freshDeclarations(cacheKey, optionsKey, tree);
 
     if (cached !== undefined) {
         return cached;
     }
+
+    const readStartedAt = Date.now();
 
     project.addSourceFileAtPath(service.main);
     project.resolveSourceFileDependencies();
@@ -275,7 +309,7 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
         .compilerObject.getSourceFiles()
         .map((sourceFile) => sourceFile.fileName)
         .filter((path) => existsSync(path));
-    const { directories, stamps, tree } = freshnessOf(serviceDirectory, programPaths);
+    const { directories, stamps } = freshnessOf(serviceDirectory, programPaths);
 
     // Symlinks kept, so a resolved path is in the same tree as `_generated/` (a temp dir or a pnpm link may be one).
     const compilerOptions = { ...project.getCompilerOptions(), preserveSymlinks: true };
@@ -320,7 +354,7 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
         throw new Error(`@lunora/codegen: service "${service.name}": TypeScript emitted no declaration for its entry module ${service.main}`);
     }
 
-    rememberDeclarations(cacheKey, { files, optionsKey, directories, stamps, tree });
+    rememberDeclarations(cacheKey, { files, optionsKey, directories, stamps, tree }, readStartedAt);
 
     return files;
 };

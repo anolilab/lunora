@@ -170,7 +170,8 @@ export class Gateway {
         const first = emitLlmGateway();
 
         // The manifest and its `types` target are untouched; only the declaration file the import resolves to changes.
-        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: string }\n`);
+        // `boolean` rather than `string`: the same length as `number` would leave only the mtime to tell the two apart.
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: boolean }\n`);
 
         expect(emitLlmGateway()).not.toBe(first);
         expect(emitLlmGateway()).toBe(emitLlmGateway());
@@ -211,7 +212,7 @@ export class Gateway {
         const first = emitLlmGateway();
 
         // Only the file the package re-exports from changes; its manifest and index are untouched.
-        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: string }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/usage.d.ts", `export interface Usage { tokens: boolean }\n`);
 
         expect(emitLlmGateway()).not.toBe(first);
         expect(emitLlmGateway()).toBe(emitLlmGateway());
@@ -341,7 +342,7 @@ export class Gateway {
     });
 
     it("re-emits a service's snapshot when a package it imports retargets its types", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         writeServices();
         write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
@@ -365,9 +366,58 @@ export class Gateway {
         write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "other.d.ts" }\n`);
 
         const second = emitLlmGateway();
+        const entry = join("services", "llmGateway", "src", "index.d.ts");
 
         expect(second).not.toBe(first);
-        expect(second?.[join("services", "llmGateway", "src", "index.d.ts")]).toBeDefined();
+        expect(first?.[entry]).not.toContain("llm-kit/other.js");
+        expect(second?.[entry]).toContain("llm-kit/other.js");
+    });
+
+    it("re-emits a service's snapshot when a hoisted package link above the service is repointed", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("store/llm-kit-1/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("store/llm-kit-1/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write("store/llm-kit-2/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("store/llm-kit-2/index.d.ts", `export interface Usage { tokens: boolean }\n`);
+        mkdirSync(join(workdir, "node_modules"), { recursive: true });
+        symlinkSync(join(workdir, "store/llm-kit-1"), join(workdir, "node_modules/llm-kit"), "dir");
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // Resolved from above the service, through the root's node_modules: nothing under the service moves.
+        unlinkSync(join(workdir, "node_modules/llm-kit"));
+        symlinkSync(join(workdir, "store/llm-kit-2"), join(workdir, "node_modules/llm-kit"), "dir");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when the package.json above it changes its module format under NodeNext", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/tsconfig.json", `{ "compilerOptions": { "module": "nodenext", "moduleResolution": "nodenext" } }\n`);
+        write("package.json", `{ "type": "commonjs" }\n`);
+
+        const first = emitLlmGateway();
+
+        write("package.json", `{ "type": "module" }\n`);
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
     });
 
     it("reuses a service's declaration snapshot until a file in its program changes", () => {
