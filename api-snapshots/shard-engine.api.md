@@ -5770,6 +5770,7 @@ abstract class RelayLink {
     handleControl(request: Request): Promise<Response>;
     maxRelays(): number;
     protected canAddressSiblings(): boolean;
+    protected isAdmitted(ws: ShardSocketLike): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
     protected nextRelaySeq(): number;
