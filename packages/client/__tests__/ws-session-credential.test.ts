@@ -300,6 +300,24 @@ describe("lunoraClient session credential (protocol §6)", () => {
         expect(notified).toBe(1);
     });
 
+    it("restarts a shard ticket mint that never settles when the ticket is rotated", async () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsTicket: () => new Promise<string>(() => {}),
+            wsToken: "session-secret",
+        });
+
+        client.subscribeShape({ args: {}, name: "messagesByChannel" }, () => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        client.setWsTicket("fresh");
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(sockets.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
+    });
+
     it("sends connect before any subscription frame on every open", async () => {
         expect.assertions(2);
 

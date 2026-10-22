@@ -9084,6 +9084,12 @@ class LunoraClient {
                 } catch {
                     /* ignore */
                 }
+            } else if (conn.providerAttempt !== undefined) {
+                // A mint still pending under the old credential would never open the shard. Restarting claims the
+                // attempt, so the superseded mint's late result returns early and only the restarted one opens.
+                this.startShardSocket(conn, conn.shardKey).catch(() => {
+                    this.handleDisconnect(conn);
+                });
             }
         }
 
