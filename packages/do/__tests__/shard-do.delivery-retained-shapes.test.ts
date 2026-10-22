@@ -132,6 +132,8 @@ describe("retained shapes when delivery authorization is enabled", () => {
         const shard = test.enable(true);
         // Complete room cleanup first so the failure belongs to the shape sweep.
         await shard.webSocketMessage(test.socket() as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+        // The connect cached the attachment, so drop it: the sweep's read must reach storage to fail there.
+        (Reflect.get(shard, "attachmentCache") as WeakMap<object, unknown>).delete(test.socket());
         vi.spyOn(test.socket(), "deserializeAttachment").mockImplementationOnce(() => {
             throw new Error("attachment read unavailable");
         });

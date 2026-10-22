@@ -1957,7 +1957,7 @@ const refuseLiveSubscribe = (
  * the runtime will not hold the attachment: an acknowledged grant that never persisted would
  * stop delivering silently after the next hibernation.
  */
-const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response => {
+const persistLiveGrants = (write: (next: SocketAttachment) => void, attachment: SocketAttachment, grants: Record<string, string>): Response => {
     const next: SocketAttachment = { ...attachment, liveGrants: grants };
 
     if (Object.keys(grants).length === 0) {
@@ -1965,7 +1965,7 @@ const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, gr
     }
 
     try {
-        (ws as HibernatableWebSocket).serializeAttachment?.(next);
+        write(next);
     } catch {
         return jsonResponse(
             { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
@@ -2757,6 +2757,16 @@ abstract class ShardDO {
      * memo simply forces one re-run and (at most) one redundant push.
      */
     private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+
+    /**
+     * Decoded socket attachments, so a write flush's two fan-out passes do not each
+     * `deserializeAttachment` (a structured-clone decode of up to 16 KiB) on every
+     * socket. Filled on first read and replaced by every write through
+     * {@link ShardDO.writeAttachment}. In memory only: after hibernation the new
+     * instance starts empty and decodes each socket once. Entries are shared, so a
+     * reader never mutates one; a writer edits {@link ShardDO.readAttachmentCopy}.
+     */
+    private readonly attachmentCache = new WeakMap<ShardSocketLike, SocketAttachment>();
 
     /**
      * Subscriptions whose refresh keeps throwing, so a deterministic failure is
@@ -3597,7 +3607,7 @@ abstract class ShardDO {
             }
 
             // Clear the attachment so a future reconnection starts clean.
-            (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+            this.writeAttachment(ws, undefined);
 
             // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
             // socket detaches from its owner, so the owner stops forwarding to it.
@@ -6088,7 +6098,7 @@ abstract class ShardDO {
             return "paid";
         }
 
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         // A `subscribe` for an id this socket already holds REPLACES it — the
         // client's re-snapshot request after a delta it could not merge is
         // exactly that. It adds nothing to the count, so it must not be refused
@@ -6113,7 +6123,7 @@ abstract class ShardDO {
         }
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             // The attachment can fail to serialize if the JSON body grows
             // past the runtime's per-socket limit. Roll back the in-memory
@@ -6147,7 +6157,7 @@ abstract class ShardDO {
     }
 
     protected unsubscribe(ws: ShardSocketLike, subId: string): void {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
 
         // Capture the current query so we can roll back on serialization failure.
         const captured = attachment.subs[subId];
@@ -6160,7 +6170,7 @@ abstract class ShardDO {
         delete attachment.subs[subId];
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             // Roll back the in-memory deletion so the subscription remains
             // intact — mirrors the subscribe() rollback path. We never throw
@@ -6190,7 +6200,7 @@ abstract class ShardDO {
      * `webSocketMessage` is a fatal-channel error under the hibernation API).
      */
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const shapes = attachment.shapes ?? {};
         // Re-subscribing a held shape id (the client's re-seed on a diverged
         // base) replaces it and adds nothing to the count — see `subscribe`.
@@ -6204,7 +6214,7 @@ abstract class ShardDO {
         attachment.shapes = shapes;
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             if (previous === undefined) {
                 // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended rollback
@@ -6221,7 +6231,7 @@ abstract class ShardDO {
 
     /** Remove a shape subscription and its poke baseline. Mirrors {@link ShardDO.unsubscribe}'s rollback-on-serialize-failure contract. */
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const { shapes } = attachment;
 
         if (!shapes) {
@@ -6234,7 +6244,7 @@ abstract class ShardDO {
         delete shapes[subId];
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             if (captured !== undefined) {
                 shapes[subId] = captured;
@@ -8050,7 +8060,7 @@ abstract class ShardDO {
             // opens: record its connection `context` on the attachment (so it
             // survives hibernation and can be replayed at close) and fire the
             // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachment(ws);
+            const attachment = this.readAttachmentCopy(ws);
 
             // Verified before `identity` is sent, so a refused socket learns nothing
             // about who it is. Only an unauthenticated socket reaches this check.
@@ -8171,14 +8181,14 @@ abstract class ShardDO {
             let persisted = true;
 
             try {
-                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+                this.writeAttachment(ws, attachment);
             } catch {
                 const withoutContext: SocketAttachment = { ...attachment };
 
                 delete withoutContext.context;
 
                 try {
-                    (ws as HibernatableWebSocket).serializeAttachment?.(withoutContext);
+                    this.writeAttachment(ws, withoutContext);
                 } catch {
                     // Neither attempt persisted. Roll back the in-memory flip so
                     // this local `attachment` object agrees with what's actually
@@ -9302,7 +9312,7 @@ abstract class ShardDO {
             const next = { ...attachment, deliveryPermits: { ...attachment.deliveryPermits, [subId]: permit } };
             try {
                 // The host's structured-clone budget includes the permit and decoded query arguments.
-                (ws as HibernatableWebSocket).serializeAttachment?.(next);
+                this.writeAttachment(ws, next);
                 const memo = this.subMemos.get(ws)?.get(subId);
                 if (memo !== undefined) {
                     memo.lastJson = UNDELIVERED_BASELINE;
@@ -16817,7 +16827,7 @@ abstract class ShardDO {
      * simply dropped (the join just doesn't take).
      */
     private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): boolean {
-        const attachment = this.readAttachment(ws);
+        const attachment = this.readAttachmentCopy(ws);
         const topics = attachment.whispers ?? [];
         const has = topics.includes(topic);
 
@@ -16842,7 +16852,7 @@ abstract class ShardDO {
         }
 
         try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            this.writeAttachment(ws, attachment);
         } catch {
             /* over-large attachment — the membership change didn't persist, so report no change */
             return false;
@@ -18229,7 +18239,13 @@ abstract class ShardDO {
      * index moves only when the write persisted, so it never claims a grant the attachment lacks.
      */
     private persistSocketGrants(ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response {
-        const response = persistLiveGrants(ws, attachment, grants);
+        const response = persistLiveGrants(
+            (next) => {
+                this.writeAttachment(ws, next);
+            },
+            attachment,
+            grants,
+        );
 
         if (response.ok) {
             if (Object.keys(grants).length > 0) {
@@ -18242,15 +18258,60 @@ abstract class ShardDO {
         return response;
     }
 
-    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
+    /** The socket's attachment, shared with the cache: read it, never mutate it. */
     private readAttachment(ws: ShardSocketLike): SocketAttachment {
-        const raw = (ws as HibernatableWebSocket).deserializeAttachment?.();
+        const cached = this.attachmentCache.get(ws);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const socket = ws as HibernatableWebSocket;
+        const raw = socket.deserializeAttachment?.();
 
         if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
+            // Only a socket whose writes pass through `writeAttachment` can be cached.
+            if (socket.serializeAttachment !== undefined) {
+                this.attachmentCache.set(ws, raw as SocketAttachment);
+            }
+
             return raw as SocketAttachment;
         }
 
         return { subs: {} };
+    }
+
+    /** A private copy of the socket's attachment for a writer to edit and hand to {@link ShardDO.writeAttachment}. */
+    private readAttachmentCopy(ws: ShardSocketLike): SocketAttachment {
+        return structuredClone(this.readAttachment(ws));
+    }
+
+    /**
+     * Persist `value` as the socket's attachment and cache it; `undefined` clears
+     * both. The caller must not mutate `value` afterwards. A failed serialize
+     * drops the cache entry and rethrows, so the next read decodes what storage
+     * actually holds.
+     */
+    private writeAttachment(ws: ShardSocketLike, value: SocketAttachment | undefined): void {
+        const socket = ws as HibernatableWebSocket;
+
+        if (socket.serializeAttachment === undefined) {
+            return;
+        }
+
+        try {
+            socket.serializeAttachment(value);
+        } catch (error) {
+            this.attachmentCache.delete(ws);
+
+            throw error;
+        }
+
+        if (value === undefined) {
+            this.attachmentCache.delete(ws);
+        } else {
+            this.attachmentCache.set(ws, value);
+        }
     }
 }
 
