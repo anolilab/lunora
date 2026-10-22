@@ -1,5 +1,3 @@
-/* eslint-disable no-bitwise -- the hash is bit arithmetic */
-
 /**
  * `ctx.newId()`: an id that a replay of the same mutation reproduces.
  *
@@ -28,6 +26,7 @@ const stableUuid = (text: string): string => {
     const hex = SEEDS.map((seed) => (cyrb53(text, seed) % 4_294_967_296).toString(16).padStart(8, "0")).join("");
     // Byte 6 carries the version in its high nibble; byte 8 carries the variant (10xx).
     const version = `8${hex.slice(13, 16)}`;
+    // eslint-disable-next-line no-bitwise -- the variant bits are masked from one nibble, which is bit arithmetic
     const variant = `${((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`;
     const body = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}-${hex.slice(20, 32)}`;
 
