@@ -360,7 +360,8 @@ describe("lunora deploy", () => {
                     celldToolchain: () => Promise.resolve({ errors: ["celld is not on PATH"], warnings: [] }),
                 });
 
-                expect(result).toMatchObject({ code: 2, error: "celld is not on PATH" });
+                // A missing tool is the machine, not a bad flag: EXIT_CODE.MISSING_DEPENDENCY.
+                expect(result).toMatchObject({ code: 9, error: "celld is not on PATH" });
                 expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
                 expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
                 expect(calls).toHaveLength(0);

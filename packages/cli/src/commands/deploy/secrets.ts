@@ -19,7 +19,6 @@ import {
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
 } from "@lunora/config";
-import { readWranglerJsonc } from "@lunora/config/cloudflare";
 import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
@@ -328,40 +327,32 @@ interface MissingSecretsOutcome {
 
 /**
  * The secrets check for a target with no secret store: its only channel is the
- * wrangler config's `vars`, which the deploy ships as plain strings. A required
- * key the config does not carry is therefore missing from the deployed worker.
- * Non-interactive it aborts; interactive it warns, because nothing here can mint
- * a value into a store the target does not have.
+ * `vars` of the config projection the deploy ships (for a Vite virtual entry,
+ * the build's config, not the project's), sent as plain strings. A required key
+ * the projection does not carry is missing from the deployed worker, and nothing
+ * here can supply it — so the deploy aborts, interactive or not.
  */
-const checkVariablesForSecrets = async (
-    cwd: string,
-    options: DeployCommandOptions,
-    interactive: boolean,
-    driver: DeployDriver,
-    wranglerPath: string | undefined,
-): Promise<MissingSecretsOutcome> => {
-    const config = wranglerPath === undefined ? undefined : readWranglerJsonc<{ vars?: Record<string, unknown> }>(wranglerPath).parsed;
-    const projected = new Set(Object.keys(config?.vars ?? {}));
+const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
+    let deployed: Readonly<Record<string, unknown>>;
+
+    try {
+        deployed = driver.projectConfig?.(cwd, "deploy").vars ?? {};
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+    }
+
     const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
-    const missing = required.filter((key) => !projected.has(key));
+    const missing = required.filter((key) => !Object.hasOwn(deployed, key));
 
     if (missing.length === 0) {
         return {};
     }
 
-    const list = missing.join(", ");
-
-    if (!interactive) {
-        return {
-            error:
-                `missing required secret(s) in the wrangler vars: ${list}. ${driver.name} has no secret store, so each one must be a \`vars\` entry in the wrangler config — ` +
-                `keep real secrets in a secret manager, one bootstrap credential in vars. Add them, then re-deploy.`,
-        };
-    }
-
-    options.logger.warn(`required secret(s) not in the wrangler vars: ${list}. ${driver.name} has no secret store; add them to \`vars\` before deploying.`);
-
-    return {};
+    return {
+        error:
+            `missing required secret(s) in the wrangler vars: ${missing.join(", ")}. ${driver.name} has no secret store, so each one must be a \`vars\` entry in the wrangler config — ` +
+            `keep real secrets in a secret manager, one bootstrap credential in vars. Add them, then re-deploy.`,
+    };
 };
 
 /**
@@ -379,21 +370,15 @@ const checkVariablesForSecrets = async (
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
-const offerMissingSecrets = async (
-    cwd: string,
-    options: DeployCommandOptions,
-    interactive: boolean,
-    driver: DeployDriver,
-    wranglerPath?: string,
-): Promise<MissingSecretsOutcome> => {
+const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
     if (options.dryRun === true || options.preview === true) {
         return {};
     }
 
     // A host with no secret store (celld) takes its secrets as `vars`, so the check
-    // is against the config's `vars`, not a remote list.
+    // is against the projection's `vars`, not a remote list.
     if (driver.toolchain?.secretList === undefined) {
-        return checkVariablesForSecrets(cwd, options, interactive, driver, wranglerPath);
+        return checkVariablesForSecrets(cwd, options, driver);
     }
 
     const { logger } = options;

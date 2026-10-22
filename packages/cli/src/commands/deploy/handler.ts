@@ -763,7 +763,9 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     if (toolchainError !== undefined) {
         options.logger.error(toolchainError);
 
-        return { error: toolchainError, target, validation: empty };
+        // Not a usage error: the project is fine and the machine is not — the same
+        // bucket the Docker check uses.
+        return { code: EXIT_CODE.MISSING_DEPENDENCY, error: toolchainError, target, validation: empty };
     }
 
     let codegen: CodegenResult | undefined;
@@ -1260,7 +1262,7 @@ const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommand
     // Non-interactive (CI): a missing required secret aborts rather than shipping
     // a worker that will crash. Best-effort detection — skips dry-run/preview and
     // stays quiet when the worker can't be queried yet (first deploy / not authed).
-    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver, validation.wranglerPath);
+    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver);
 
     if (secretAbort !== undefined) {
         options.logger.error(secretAbort);
