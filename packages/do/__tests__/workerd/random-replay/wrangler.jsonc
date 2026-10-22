@@ -1,0 +1,13 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the generated-shard
+// test Worker in workerd. It is not deployed.
+{
+    "$schema": "../../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-do-random-replay-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "RandomShard" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RandomShard"] }],
+}

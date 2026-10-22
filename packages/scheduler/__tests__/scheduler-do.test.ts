@@ -3,6 +3,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
 import { createAlarmHarness } from "./alarm-harness";
+import { BlockingScheduler, settle } from "./blocking-scheduler";
 import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state";
 
 interface ScheduleResponseBody {
@@ -637,7 +638,8 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         // the time-index deletion alone, so no `dispatched:` key should ever
         // appear, and a successful fire leaves nothing behind.
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dispatched:"))).toHaveLength(0);
-        expect(state.storageMap.size).toBe(0);
+        // Only the store's own "nothing is unindexed" marker remains.
+        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
     });
 
     it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {
@@ -786,7 +788,8 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
 
         expect(response.status).toBe(400);
         await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
-        expect([...state.storageMap.keys()]).toStrictEqual([]);
+        // No job rows — only the store's own "nothing is unindexed" marker.
+        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
     });
 
     it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
@@ -1436,6 +1439,9 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
 
         state.storageMap.delete(claimKey ?? "");
+        // The drain withdrew the store's clean marker before claiming anything,
+        // and the dead instance never wrote it back.
+        state.storageMap.delete("meta:clean");
 
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
@@ -1465,6 +1471,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
 
         state.storageMap.delete(claimKey ?? "");
+        state.storageMap.delete("meta:clean");
         await state.storage.deleteAlarm();
 
         // A FRESH instance, woken the only way anything can still wake it: a
@@ -1482,5 +1489,78 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
 
         expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
         expect(state.storageMap.has(`id:${id}`)).toBe(false);
+    });
+
+    describe("orphan walk gating", () => {
+        /** Start recording the prefix of every `storage.list()` call; read the result after the fact. */
+        const recordListedPrefixes = (state: ReturnType<typeof createFakeState>): (() => (string | undefined)[]) => {
+            const spy = vi.spyOn(state.storage, "list");
+
+            return () => spy.mock.calls.map(([options]) => options?.prefix);
+        };
+
+        it("skips the full walk on a fresh instance once a drain settled cleanly", async () => {
+            expect.assertions(2);
+
+            const state = createFakeState();
+            const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() + 60_000 }));
+            await scheduler.alarm();
+
+            const listedPrefixes = recordListedPrefixes(state);
+            const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await revived.alarm();
+
+            expect(state.storageMap.has("meta:clean")).toBe(true);
+            expect(listedPrefixes()).not.toContain("id:");
+        });
+
+        it("walks on the successor of an instance that died mid-drain", async () => {
+            expect.assertions(2);
+
+            const state = createFakeState();
+            const hanging = new BlockingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await hanging.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+            // The instance is "evicted" with this dispatch still open.
+            const draining = hanging.alarm();
+
+            await settle();
+
+            expect(hanging.started).toHaveLength(1);
+
+            const listedPrefixes = recordListedPrefixes(state);
+
+            await new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }).fetch(get("/status"));
+
+            expect(listedPrefixes()).toContain("id:");
+
+            hanging.releaseAll();
+            await draining;
+        });
+
+        it("walks on the successor of an instance that swallowed a failed header cleanup", async () => {
+            expect.assertions(1);
+
+            const state = createFakeState();
+            const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+            const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+            const innerDelete = state.storage.delete.bind(state.storage);
+
+            state.storage.delete = async (keyOrKeys: string | string[]): Promise<number> => {
+                if (Array.isArray(keyOrKeys) && keyOrKeys.includes(`id:${id}`)) {
+                    throw new Error("simulated cleanup failure");
+                }
+
+                return (await innerDelete(keyOrKeys)) as number;
+            };
+
+            await scheduler.alarm();
+
+            expect(state.storageMap.has("meta:clean")).toBe(false);
+        });
     });
 });

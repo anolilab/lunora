@@ -2936,6 +2936,7 @@ interface ShardSocketLike {
 interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
+    authenticated?: boolean;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
@@ -2949,6 +2950,7 @@ interface SocketAttachment {
     ip?: string;
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
+    pendingSince?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -3140,6 +3142,7 @@ interface SubscriptionEnvelope {
     sinceCheckpoint?: number;
     sinceChunk?: number;
     sinceEpoch?: string;
+    token?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
 }
@@ -3679,6 +3682,12 @@ const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: s
 
 ```ts
 const applyCdcChanges: (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>) => Promise<void>;
+```
+
+### `applyInsertDefaults` (const)
+
+```ts
+const applyInsertDefaults: (definition: TableDefinitionLike, document: Record<string, unknown>, auth: ServerDefaultContextLike["auth"]) => Record<string, unknown>;
 ```
 
 ### `applyOnDelete` (const)
@@ -4636,6 +4645,12 @@ const minShapePokeCursor: (sql: SqlExec) => number | undefined;
 const nextPromotionState: (current: PromotionState, subscribers: number, thresholds?: PromotionThresholds) => PromotionState;
 ```
 
+### `nextTtlExpiry` (const)
+
+```ts
+const nextTtlExpiry: (sql: SqlExec, spec: TtlSweepSpec) => number | undefined;
+```
+
 ### `normalizeCountArgument` (const)
 
 ```ts
@@ -5159,7 +5174,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, options?: RowValidatorOptions) => Record<string, unknown>;
 ```
 
 ### `runShardMigrations` (const)
@@ -5167,11 +5182,12 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 ```ts
 const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
     cdc?: boolean;
+    deferBlockedUniqueIndexes?: boolean;
     schemaSnapshot?: {
         hash: string;
         json: string;
     };
-}) => void;
+}) => ReadonlyArray<string>;
 ```
 
 ### `runSocketPool` (const)
@@ -5619,6 +5635,7 @@ type ExistsPushMode = "always" | "auto";
 
 ```ts
 interface FanoutAttachmentLike {
+    authenticated?: boolean;
     shapes?: Record<string, {
         name?: string;
     }>;
@@ -5760,6 +5777,7 @@ abstract class RelayLink {
     handleControl(request: Request): Promise<Response>;
     maxRelays(): number;
     protected canAddressSiblings(): boolean;
+    protected isAdmitted(ws: ShardSocketLike): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
     protected nextRelaySeq(): number;
@@ -5829,6 +5847,18 @@ interface ResolveContext {
 type RowPredicate = (document: Record<string, unknown>) => boolean;
 ```
 
+### `RowValidatorOptions` (interface)
+
+```ts
+interface RowValidatorOptions {
+    only?: ReadonlySet<string>;
+    previous?: () => Readonly<Record<string, unknown>> | undefined;
+    supplied?: Readonly<Record<string, unknown>>;
+    tolerateStoredNull?: boolean;
+    trusted?: boolean;
+}
+```
+
 ### `SchemaVersionRow` (interface)
 
 ```ts
@@ -5872,6 +5902,7 @@ interface SiblingStub {
 ```ts
 interface SocketAttachmentLike {
     admin?: boolean;
+    authenticated?: boolean;
     subs?: Record<string, SubscriptionInfo>;
 }
 ```

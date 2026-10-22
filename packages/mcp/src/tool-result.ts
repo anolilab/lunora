@@ -6,8 +6,10 @@
  * observability tools (`./observability-tools`). Keeping it here also keeps
  * `./observability-tools` off `./tools`, which would be an import cycle.
  */
+import { getCatalogEntry, isInternalCode, LunoraError } from "@lunora/errors";
+
 import { toBase64 } from "../../../shared/base64";
-import type { ToolResult } from "./tool-types";
+import type { ToolInputSchema, ToolOutputSchema, ToolResult } from "./tool-types";
 
 /**
  * `JSON.stringify` replacer for a decoded RPC result. `LunoraClient` decodes
@@ -74,9 +76,110 @@ const okStructured = (value: Record<string, unknown>): ToolResult => {
     return { ...ok(value), structuredContent: toJsonSafe(value) };
 };
 
-/** An error result: the message as tool output, per the MCP convention (never a rejection). */
-const errorResult = (message: string): ToolResult => {
-    return { content: [{ text: message, type: "text" }], isError: true };
+/**
+ * An error result: `isError: true`, carrying `{ code, message }` both as
+ * `structuredContent` and as one text block. Some clients render only the
+ * structured form and some only the text, so both always say the same thing.
+ *
+ * `code` is a Lunora catalog code where one fits (`NOT_FOUND`, `FORBIDDEN`,
+ * `BAD_REQUEST`, …) or a tool-specific code for the handshake refusals. The
+ * message must be safe to show a model: pass only text this package wrote, never
+ * a raw upstream error string (see {@link errorFromThrown}).
+ */
+const errorResult = (code: string, message: string): ToolResult => {
+    return {
+        content: [{ text: `${code}: ${message}`, type: "text" }],
+        isError: true,
+        structuredContent: { code, message },
+    };
 };
 
-export { errorResult, ok, okStructured };
+/** The one message a thrown error that is not a typed `LunoraError` is ever shown as. */
+const UNEXPECTED_ERROR_MESSAGE = "the tool call failed unexpectedly";
+
+/** The `Symbol.for` key the client sets on an error it rebuilt from a server verdict (see `reconstructError`). */
+const SERVER_VERDICT = Symbol.for("lunora.serverVerdict");
+
+/**
+ * The error result for a thrown value. The disclosure rule lives here, once, so
+ * no tool family can leak raw text.
+ *
+ * A `LunoraError` whose code the catalog marks `internal` shows only that
+ * code's catalog title. The server already redacts those on the wire, and the
+ * local copy must not undo it. Any other `LunoraError` shows its message: those
+ * are either written by this package (the argument and allowlist refusals a model
+ * needs to self-correct) or are the server's own public message for that code.
+ *
+ * Any other thrown value — a plain `Error`, a network failure, a string — is
+ * `INTERNAL` with a fixed message. Its `.message` is not a contract and may carry
+ * a URL, token or SQL fragment.
+ */
+const errorFromThrown = (error: unknown): ToolResult => {
+    if (error instanceof LunoraError) {
+        const { code } = error;
+
+        return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
+    }
+
+    // The client rebuilds a server's coded rejection as a plain `Error` carrying `code`, and marks it
+    // with `SERVER_VERDICT`. Only that marked error's message is the server's public verdict. A plain
+    // `Error` a caller threw with a catalog-valued `code` is untrusted text and gets the fixed message.
+    if (error instanceof Error) {
+        const { code } = error as { code?: unknown };
+
+        if (typeof code === "string" && getCatalogEntry(code) !== undefined && (error as unknown as Record<symbol, unknown>)[SERVER_VERDICT] === true) {
+            return errorResult(code, isInternalCode(code) ? (getCatalogEntry(code)?.title ?? UNEXPECTED_ERROR_MESSAGE) : error.message);
+        }
+    }
+
+    return errorResult("INTERNAL", UNEXPECTED_ERROR_MESSAGE);
+};
+
+/** The JSON-Schema property for the `code` of an error result. */
+const ERROR_CODE_PROPERTY: Record<string, unknown> = { description: "Set on an error result: the machine-readable error code.", type: "string" };
+
+/** The JSON-Schema property for the `message` of an error result. */
+const ERROR_MESSAGE_PROPERTY: Record<string, unknown> = { description: "Set on an error result: a message that is safe to show.", type: "string" };
+
+/**
+ * The schema of an error result's `{ code, message }`, on its own so it can sit
+ * beside the success shape under `anyOf`.
+ */
+const ERROR_SHAPE: ToolInputSchema = {
+    properties: { code: ERROR_CODE_PROPERTY, message: ERROR_MESSAGE_PROPERTY },
+    required: ["code", "message"],
+    type: "object",
+};
+
+/**
+ * A tool's `outputSchema`, widened to admit the `{ code, message }` object an
+ * error result carries.
+ *
+ * The MCP SDK client validates `structuredContent` against `outputSchema` even
+ * when `isError` is set, so a schema that requires the success fields would
+ * reject every failure of that tool. The root becomes `anyOf` over the success
+ * shape and the error shape, so a result validates when it matches either.
+ *
+ * The error properties are not merged into the success shape's own `properties`:
+ * a composed tool may declare its own `code` or `message` with another type, and
+ * a merge would let that type override the error's. `$defs` and `definitions` move
+ * to the root, because a `$ref` inside `anyOf` resolves against the root document.
+ */
+const withErrorShape = (output: ToolOutputSchema): ToolOutputSchema => {
+    // A definition that is already composed (the error and observability families
+    // wrap their own) is passed through, not nested under a second `anyOf`.
+    if (output.anyOf?.includes(ERROR_SHAPE) === true) {
+        return output;
+    }
+
+    const { $defs, definitions, ...success } = output;
+
+    return {
+        ...($defs === undefined ? {} : { $defs }),
+        ...(definitions === undefined ? {} : { definitions }),
+        anyOf: [success, ERROR_SHAPE],
+        type: "object",
+    };
+};
+
+export { errorFromThrown, errorResult, ok, okStructured, withErrorShape };

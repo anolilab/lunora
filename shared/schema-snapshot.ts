@@ -56,6 +56,12 @@ interface FieldSnapshot {
     nullable?: boolean;
     /** `v.array(inner)` element / `v.record(…, value)` value shape. */
     of?: FieldSnapshot;
+    /**
+     * `v.from(schema)` — the wrapped schema's inferred OUTPUT type as TS source, the
+     * type the column is stored and read as. Absent when it could not be resolved,
+     * and on baselines written before it was recorded; see {@link comparableFromOutput}.
+     */
+    output?: string;
     /** True when declared `v.optional(...)` — accepts `undefined` / absent on insert. */
     optional: boolean;
     /** `v.id("table")` — the referenced table. */
@@ -492,6 +498,9 @@ const describeShape = (field: FieldSnapshot): string => {
         case "array": {
             return `array(${field.of ? describeShape(field.of) : "?"})`;
         }
+        case "from": {
+            return field.output === undefined ? "from" : `from(${field.output})`;
+        }
         case "id": {
             return `id(${field.ref ?? "?"})`;
         }
@@ -523,6 +532,130 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
     return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type };
 };
 
+/** Union members in canonical order: the builder sorted them by their serialized form, which includes a `v.from()` output. */
+const byForm = (a: FieldSnapshot, b: FieldSnapshot): number => {
+    const left = JSON.stringify(a);
+    const right = JSON.stringify(b);
+
+    if (left === right) {
+        return 0;
+    }
+
+    return left < right ? -1 : 1;
+};
+
+/** The field with every `v.from()` output type in its subtree dropped, union members re-sorted. */
+const withoutFromOutput = (field: FieldSnapshot): FieldSnapshot => {
+    return {
+        ...field,
+        ...(field.kind === "from" ? { output: undefined } : {}),
+        ...(field.fields ? { fields: Object.fromEntries(Object.entries(field.fields).map(([name, member]) => [name, withoutFromOutput(member)])) } : {}),
+        ...(field.key ? { key: withoutFromOutput(field.key) } : {}),
+        ...(field.of ? { of: withoutFromOutput(field.of) } : {}),
+        ...(field.members ? { members: field.members.map((member) => withoutFromOutput(member)).toSorted(byForm) } : {}),
+    };
+};
+
+/** What a union contributes to a comparison: its members; anything else contributes itself. */
+const unionMembers = (field: FieldSnapshot): ReadonlyArray<FieldSnapshot> => (field.kind === "union" ? (field.members ?? []) : [field]);
+
+/**
+ * Pair the members of two unions that differ at most in a recorded `v.from()` output, and normalise each pair.
+ *
+ * Union members have no stable pairing — they are sorted by their own content, output included — so they are matched
+ * here: identical members first, then members of the same shape ignoring outputs. A pair where either side records no
+ * output compares without it; a pair that both record keeps it, so `string` → `number` stays visible next to a member
+ * whose output is unresolved. Members with no counterpart are left untouched.
+ */
+const comparableMembers = (oldMembers: ReadonlyArray<FieldSnapshot>, newMembers: ReadonlyArray<FieldSnapshot>): [FieldSnapshot[], FieldSnapshot[]] => {
+    const oldOut = [...oldMembers];
+    const newOut = [...newMembers];
+    const taken = new Set<number>();
+    const paired = new Set<number>();
+    const pairUp = (matches: (old: FieldSnapshot, member: FieldSnapshot) => boolean, normalise: boolean): void => {
+        for (const [index, old] of oldOut.entries()) {
+            if (paired.has(index)) {
+                continue;
+            }
+
+            const match = newOut.findIndex((member, position) => !taken.has(position) && matches(old, member));
+
+            if (match !== -1) {
+                taken.add(match);
+                paired.add(index);
+
+                if (normalise) {
+                    [oldOut[index], newOut[match]] = comparableFromOutput(old, newOut[match] as FieldSnapshot);
+                }
+            }
+        }
+    };
+
+    pairUp((old, member) => JSON.stringify(old) === JSON.stringify(member), false);
+    pairUp((old, member) => shapeForm(withoutFromOutput(old)) === shapeForm(withoutFromOutput(member)), true);
+
+    return [oldOut, newOut];
+};
+
+/**
+ * Both sides of a shape comparison, with a `v.from()` output type dropped
+ * wherever either side does not record one.
+ *
+ * A baseline written before the output type was snapshotted, or built where the
+ * type checker could not resolve it, simply does not know the type. Diffing it
+ * against a snapshot that does would report every `v.from()` column as changed on
+ * the first run after an upgrade — a drift nothing in the schema caused. That
+ * holds for a `v.from()` nested in an array/object/record just as for a column
+ * that is one, so corresponding children are normalised recursively. Union
+ * members are paired by {@link comparableMembers}; a union against a non-union
+ * (a widening) is paired the same way, the non-union standing for one member.
+ */
+const comparableFromOutput = (old: FieldSnapshot, field: FieldSnapshot): [FieldSnapshot, FieldSnapshot] => {
+    if (old.kind === "union" || field.kind === "union") {
+        const [oldMembers, newMembers] = comparableMembers(unionMembers(old), unionMembers(field));
+        const rebuild = (original: FieldSnapshot, members: FieldSnapshot[]): FieldSnapshot =>
+            original.kind === "union" ? { ...original, members: members.toSorted(byForm) } : (members[0] as FieldSnapshot);
+
+        return [rebuild(old, oldMembers), rebuild(field, newMembers)];
+    }
+
+    if (old.kind !== field.kind) {
+        return [old, field];
+    }
+
+    if (old.kind === "from") {
+        return old.output === undefined || field.output === undefined
+            ? [
+                  { ...old, output: undefined },
+                  { ...field, output: undefined },
+              ]
+            : [old, field];
+    }
+
+    const oldChildren: Partial<FieldSnapshot> = { ...(old.fields ? { fields: { ...old.fields } } : {}) };
+    const newChildren: Partial<FieldSnapshot> = { ...(field.fields ? { fields: { ...field.fields } } : {}) };
+
+    for (const slot of ["key", "of"] as const) {
+        if (old[slot] && field[slot]) {
+            [oldChildren[slot], newChildren[slot]] = comparableFromOutput(old[slot], field[slot]);
+        }
+    }
+
+    for (const name of Object.keys(old.fields ?? {})) {
+        const oldMember = old.fields?.[name];
+        const newMember = field.fields?.[name];
+
+        if (oldMember && newMember && oldChildren.fields && newChildren.fields) {
+            [oldChildren.fields[name], newChildren.fields[name]] = comparableFromOutput(oldMember, newMember);
+        }
+    }
+
+    return [
+        { ...old, ...oldChildren },
+        { ...field, ...newChildren },
+    ];
+};
+
 /**
  * Classify a change to the field's value SHAPE: its kind, its `v.id` target, its
  * element/member/property shapes, its literal value.
@@ -532,7 +665,9 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
  * changed array element type (which moves the storage projection), a swapped
  * union member, a different literal.
  */
-const diffFieldShape = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot, deep: boolean): DriftChange | undefined => {
+const diffFieldShape = (tableName: string, name: string, oldField: FieldSnapshot, newField: FieldSnapshot, deep: boolean): DriftChange | undefined => {
+    const [old, field] = comparableFromOutput(oldField, newField);
+
     if (old.kind === field.kind && (!deep || shapeForm(old) === shapeForm(field))) {
         return undefined;
     }

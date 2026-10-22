@@ -59,6 +59,12 @@ interface SchemaNodeReader<TNode> {
     /** Member nodes of a `union`. */
     members: (node: TNode) => ReadonlyArray<TNode>;
 
+    /**
+     * Whether the node is marked sensitive (`v.sensitive`). A sensitive node is
+     * emitted `writeOnly`, and a plain string also gets `format: "password"`.
+     */
+    sensitive: (node: TNode) => boolean;
+
     /** Property nodes of an `object`, keyed by property name. */
     shape: (node: TNode) => Record<string, TNode>;
 
@@ -68,6 +74,35 @@ interface SchemaNodeReader<TNode> {
     /** Value-child of a `record` node. May be absent on the IR side. */
     valueChild: (node: TNode) => TNode | undefined;
 }
+
+/** The JSON Schema type a literal's value has, for a sensitive literal whose `const` is dropped. */
+const literalType = (value: unknown): string | undefined => {
+    if (value === null) {
+        return "null";
+    }
+
+    if (typeof value === "number") {
+        return "number";
+    }
+
+    return typeof value === "string" || typeof value === "boolean" ? typeof value : undefined;
+};
+
+/**
+ * A `v.sensitive` node as JSON Schema: write-only, so a response never carries
+ * it. `format: "password"` marks a plain string as one; a string that already
+ * names a format keeps it.
+ */
+const markSensitive = (schema: JsonSchema): JsonSchema => {
+    // A literal's `const` is the secret itself, so a published schema keeps only the type
+    // it implies. A union's members are marked the same way.
+    const { const: literal, anyOf, ...rest } = schema;
+    const typed: JsonSchema = literal === undefined ? rest : { ...rest, type: rest["type"] ?? literalType(literal) };
+    const unionMembers = Array.isArray(anyOf) ? { anyOf: (anyOf as JsonSchema[]).map((member) => markSensitive(member)) } : {};
+    const plainString = typed["type"] === "string" && typed["format"] === undefined;
+
+    return { ...typed, ...unionMembers, writeOnly: true, ...(plainString ? { format: "password" } : {}) };
+};
 
 /**
  * The single validator→JSON-Schema mapping algorithm, shared by the runtime
@@ -196,12 +231,13 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
 
     const constraints = reader.constraints(node);
     const withConstraints = constraints === undefined ? base : { ...base, ...constraints };
+    const marked = reader.sensitive(node) ? markSensitive(withConstraints) : withConstraints;
 
     if (reader.isNullable(node)) {
-        return { anyOf: [withConstraints, { type: "null" }] };
+        return { anyOf: [marked, { type: "null" }] };
     }
 
-    return withConstraints;
+    return marked;
 };
 
 /**

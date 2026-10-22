@@ -168,7 +168,20 @@ export const ERROR_CATALOG = {
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
+    /** A live control call arrived after a later one for the same key had already applied. */
+    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "A later live control call already applied" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+
+    /**
+     * A mutation sent with `onlineOnly: true` found its connection not live, so it
+     * was refused rather than queued. Nothing was persisted or replayed: to retry,
+     * the caller issues the call again once the connection is back.
+     */
+    OFFLINE_NOT_QUEUED: {
+        hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).",
+        status: 503,
+        title: "Offline, write not queued",
+    },
     /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
     IDENTITY_MISMATCH: {
         hint: [
@@ -592,7 +605,6 @@ export const ERROR_CATALOG = {
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
-    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "A later live control call already applied" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
@@ -697,6 +709,7 @@ export const ERROR_CATALOG = {
     SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
+    STREAM_IDLE: { status: 504, title: "Stream went idle" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
     SUBSCRIPTION_RESULT_TOO_LARGE: { status: 413, title: "Subscription result too large" },
@@ -776,7 +789,22 @@ export const ERROR_CATALOG = {
     HTTP_STREAM_CALLBACK: { status: 500, title: "HTTP stream callback threw" },
     HTTP_STREAM_INTERRUPTED: { status: 502, title: "HTTP stream interrupted" },
     HTTP_STREAM_MISSING_PARAM: { status: 400, title: "HTTP stream missing path parameter" },
-    HTTP_STREAM_NO_BODY: { status: 502, title: "HTTP stream response has no body" },
+
+    /**
+     * Fires only for a `fetch` whose Response exposes neither a `body` stream
+     * nor a `text()` read — a broken substitute, not a runtime limitation. A
+     * body-less response that can still be read as text (React Native's
+     * `whatwg-fetch`) never reaches this code: `httpStream` buffers it through
+     * `text()` instead.
+     */
+    HTTP_STREAM_NO_BODY: {
+        hint: [
+            "The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.",
+            "A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.",
+        ],
+        status: 502,
+        title: "HTTP stream response has no body",
+    },
     HTTP_STREAM_STATUS: { status: 502, title: "HTTP stream request failed" },
     HTTP_STREAM_TRANSPORT: { status: 502, title: "HTTP stream transport error" },
     STREAM_BACKPRESSURE: { status: 429, title: "Stream backpressure" },

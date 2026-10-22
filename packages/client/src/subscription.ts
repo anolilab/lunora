@@ -45,6 +45,8 @@ export interface SubscriptionError {
      */
     code?: LunoraErrorCodeInput;
     message: string;
+    /** The client-visible explanation of the cause, when the frame carried one. */
+    why?: string;
 }
 
 export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
@@ -127,6 +129,14 @@ export interface SubscriptionState {
     optimisticLayers: OptimisticLayer[];
 
     /**
+     * The merged value of a delta run whose final, cursor-carrying frame has not
+     * arrived yet. Held aside so a run of k frames commits, notifies and
+     * broadcasts once. Dropped when a snapshot, a `resume`, or a new socket
+     * supersedes the run.
+     */
+    pendingDeltaRun?: { payload: unknown };
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
@@ -153,6 +163,15 @@ export interface SubscriptionState {
      */
     serverEpoch?: string;
     readonly shardKey?: string;
+
+    /**
+     * Whether a poll or the leader tab has delivered a value for this subscription on the
+     * CURRENT connection. A polling connection and a follower tab see no server `ack`, so this
+     * is their only evidence of an answer, and `serverBase` cannot stand in for it: a hydrated
+     * cache sets that before anything has arrived. A WebSocket never sets it, `acked` is its
+     * evidence.
+     */
+    valueReceived: boolean;
 
     /**
      * The wire-encoded form of `args`, computed once at `subscribe` time (so an

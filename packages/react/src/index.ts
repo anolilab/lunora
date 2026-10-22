@@ -94,7 +94,10 @@ export type {
 export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations, useSignUpInvitations } from "./use-admin-auth";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
+export type { PendingApproval, UseAgentApprovalsApi, UseAgentApprovalsOptions, UseAgentApprovalsResult } from "./use-agent-approvals";
+export { useAgentApprovals } from "./use-agent-approvals";
 export type {
+    AgentApprovalGrant,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,

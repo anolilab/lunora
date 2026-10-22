@@ -481,3 +481,68 @@ describe("raise", () => {
         expect(id).toBe("a");
     });
 });
+
+describe("lunoraError internal and why", () => {
+    // Distinctive sentinel: it must never appear in anything a client receives.
+    const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+
+    it("exposes why and internal as readonly fields, undefined when not given", () => {
+        expect.assertions(4);
+
+        const error = new LunoraError("CONFLICT", "stale");
+
+        expect(error.why).toBeUndefined();
+        expect(error.internal).toBeUndefined();
+        expect(new LunoraError("CONFLICT", "stale", { internal: { shard: "a" }, why: "row moved" })).toMatchObject({
+            internal: { shard: "a" },
+            why: "row moved",
+        });
+        expect(Object.keys(new LunoraError("CONFLICT", "stale", { why: "row moved" }))).toContain("why");
+    });
+
+    it("keeps internal non-enumerable so JSON.stringify and Object.keys never see it", () => {
+        expect.assertions(3);
+
+        const error = new LunoraError("INTERNAL", "boom", { internal: { query: SENTINEL } });
+
+        expect(error.internal).toStrictEqual({ query: SENTINEL });
+        expect(Object.keys(error)).not.toContain("internal");
+        expect(JSON.stringify(error)).not.toContain(SENTINEL);
+    });
+
+    it("keeps the client-visible fields in JSON, with why alongside hint", () => {
+        expect.assertions(2);
+
+        const serialized = JSON.stringify(new LunoraError("CONFLICT", "stale", { internal: { a: 1 }, why: "row moved" }));
+        const json = JSON.parse(serialized) as Record<string, unknown>;
+
+        expect(json.why).toBe("row moved");
+        expect(json).not.toHaveProperty("internal");
+    });
+
+    it("leaves a non-string why out of the body, so the response still serializes", () => {
+        expect.assertions(2);
+
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        const error = Object.assign(new LunoraError("CONFLICT", "stale"), { why: cyclic });
+        const { body } = toErrorBody(error);
+
+        expect(body).not.toHaveProperty("why");
+        expect(() => JSON.stringify(body)).not.toThrow();
+    });
+
+    it("ships why on a non-redacted body and never ships internal on any body", () => {
+        expect.assertions(4);
+
+        const visible = toErrorBody(new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" }));
+        const redacted = toErrorBody(new LunoraError("INTERNAL", "boom", { internal: { query: SENTINEL }, why: "row moved" }));
+
+        expect(visible.body.why).toBe("row moved");
+        expect(JSON.stringify(visible.body)).not.toContain(SENTINEL);
+        expect(redacted.body).not.toHaveProperty("why");
+        expect(JSON.stringify(redacted.body)).not.toContain(SENTINEL);
+    });
+});

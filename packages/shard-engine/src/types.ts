@@ -141,6 +141,13 @@ export interface SubscriptionEnvelope {
     sinceEpoch?: string;
 
     /**
+     * Session credential carried by the `connect` envelope, checked against
+     * `LUNORA_WS_BEARER` when the socket upgraded without one (protocol §6).
+     * Never sent in the URL.
+     */
+    token?: string;
+
+    /**
      * Topic of a `whisper`/`whisper_subscribe`/`whisper_unsubscribe` envelope —
      * an app-chosen channel name (e.g. `"room:42:cursors"`) scoped to this shard.
      */
@@ -223,6 +230,14 @@ export interface SocketAttachment {
      * refused — the gate fails closed.
      */
     adminBinding?: string;
+
+    /**
+     * `false` on a socket that upgraded without proving the session credential
+     * while `LUNORA_WS_BEARER` is set. Such a socket may send only `connect`,
+     * which must carry the matching `token`. Absent on every other socket, so the
+     * flag costs attachment bytes only when it matters.
+     */
+    authenticated?: boolean;
 
     /**
      * Stable per-client id from the `connect` envelope (the same id the client
@@ -315,6 +330,13 @@ export interface SocketAttachment {
      * socket would quietly fall back to snapshots for the rest of its life.
      */
     pageDeltas?: boolean;
+
+    /**
+     * Epoch ms the `authenticated: false` upgrade was accepted. The shard closes a
+     * pending socket that is still unauthenticated past its connect deadline; the
+     * field is dropped with the flag once `connect` proves the credential.
+     */
+    pendingSince?: number;
 
     /**
      * Live shape subscriptions registered on this socket, keyed by the

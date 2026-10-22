@@ -27,6 +27,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import { MissingBuildOutputError } from "../build-output-error";
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
@@ -297,7 +298,7 @@ const readViteBuildConfig = (projectRoot: string, main: string): string => {
     const redirectPath = join(projectRoot, VITE_DEPLOY_REDIRECT);
 
     if (!existsSync(redirectPath)) {
-        throw new Error(
+        throw new MissingBuildOutputError(
             `wrangler \`main\` is the Vite virtual module "${main}", so celld deploys the Vite build output — and there is none yet. Run the project's build (\`vite build\`) first`,
         );
     }

@@ -27,7 +27,7 @@
  *
  * Fail-loud contract: a value a stable JSON key can't faithfully encode throws a
  * `TypeError` rather than silently collapsing to a colliding key. `bigint` (which
- * `JSON.stringify` rejects) and non-plain objects (`Date`, `ArrayBuffer`, typed
+ * `JSON.stringify` rejects), functions and symbols (which it maps to `undefined`), and non-plain objects (`Date`, `ArrayBuffer`, typed
  * arrays, `Map`, `Set`, `RegExp`, class instances — all of which have no own
  * enumerable keys and would otherwise encode to `{}`) are refused, so two distinct
  * values can never share one cache key and serve each other's cached data. Keys
@@ -160,6 +160,15 @@ const stableStringify = (value: unknown): string => {
     // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
     if (typeof value === "bigint") {
         throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
+    }
+
+    // Fail loud on a function or symbol too: `JSON.stringify` returns `undefined` for
+    // both (not a string), so a key built from one would be the text "undefined"
+    // inside an object and collide with every other such value.
+    if (typeof value === "function" || typeof value === "symbol") {
+        throw new TypeError(
+            `stableStringify: cannot use a ${typeof value} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported`,
+        );
     }
 
     // Tag non-finite numbers (and `-0`) as distinct, unquoted tokens instead of

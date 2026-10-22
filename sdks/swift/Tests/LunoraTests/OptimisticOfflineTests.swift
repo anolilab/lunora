@@ -1673,3 +1673,163 @@ final class MemoryPersistence: LunoraPersistenceAdapter {
         records = []
     }
 }
+
+// MARK: - Online-only writes
+
+/// A credential-shaped argument: nothing that reaches the persistence adapter may hold it.
+private let onlineOnlySecret = "sentinel-secret-7731"
+
+private func onlineOnlyWrite() -> LunoraSubmitOptions {
+    LunoraSubmitOptions(functionPath: "auth:setPassword", args: ["token": onlineOnlySecret], onlineOnly: true)
+}
+
+extension ConformanceTests {
+    /// With the socket down, an online-only write is refused before anything is
+    /// queued, persisted or sent.
+    func caseOfflineOnlineOnlyRefusedWhenDisconnected() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a refused write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        // A subscription on the write's own path and args, primed with a server value,
+        // so an overlay the write applied would be displayed.
+        var seen: [Any] = []
+
+        client.attachSocket { _ in }
+        _ = client.subscribe("auth:setPassword", args: ["token": onlineOnlySecret], onData: { seen.append($0) })
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        client.detachSocket()
+
+        var options = onlineOnlyWrite()
+        options.optimistic = appender("c")
+
+        XCTAssertThrowsError(try client.submit(options)) { error in
+            XCTAssertEqual((error as? LunoraAPIError)?.code, LunoraOfflineCode.notQueued)
+        }
+        XCTAssertEqual(client.pendingMutationCount, 0)
+        XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+
+        for value in seen {
+            XCTAssertNotEqual(canonical(value), canonical(["a", "c"]), "a refused write's overlay was displayed")
+        }
+
+        let persisted = try JSONSerialization.data(withJSONObject: store.records)
+
+        XCTAssertFalse(String(decoding: persisted, as: UTF8.self).contains(onlineOnlySecret))
+    }
+
+    /// With the socket up, an online-only write is sent normally and commits.
+    func caseOfflineOnlineOnlySendsWhenConnected() throws {
+        let store = MemoryPersistence()
+        var sent: [Data] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                sent.append(body)
+
+                return (200, Data("{\"commitCursor\":3,\"result\":{\"ok\":true}}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+        client.attachSocket { _ in }
+
+        let outcome = try client.submit(onlineOnlyWrite())
+
+        XCTAssertEqual(outcome.status, .committed)
+        XCTAssertEqual(sent.count, 1, "one request for the write")
+        XCTAssertTrue(String(decoding: sent[0], as: UTF8.self).contains(onlineOnlySecret), "the arguments go out on the wire")
+        XCTAssertTrue(store.appended.isEmpty, "a sent write is not persisted")
+    }
+
+    /// A normal write made with the socket down still queues beside an online-only one.
+    func caseOfflineOnlineOnlyLeavesNormalWritesQueued() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a queued write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        let outcome = try client.submit(LunoraSubmitOptions(functionPath: "messages:send", args: ["text": "hi"]))
+
+        XCTAssertEqual(outcome.status, .queued)
+        XCTAssertEqual(client.pendingMutationCount, 1)
+        XCTAssertEqual(store.appended.count, 1)
+    }
+
+    /// An online-only write sent directly to a shard that never connected, whose request
+    /// got no reply, is refused as a queued write would be: nothing queued or persisted,
+    /// the overlay rolled back, the transport error kept as `underlying`. A coded rejection
+    /// surfaces as itself, and a failure while the socket is up surfaces unchanged.
+    func caseOfflineOnlineOnlyTransportFailureRefused() throws {
+        struct Unreachable: Error {}
+
+        let store = MemoryPersistence()
+        var sends = 0
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                sends += 1
+
+                throw Unreachable()
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: store)
+
+        // Primed with the server value ["a"] and no socket attached, so the write takes the direct path.
+        var seen: [Any] = []
+
+        _ = client.subscribe("auth:setPassword", args: ["token": onlineOnlySecret], onData: { seen.append($0) })
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+        var options = onlineOnlyWrite()
+        options.optimistic = appender("c")
+
+        XCTAssertThrowsError(try client.submit(options)) { error in
+            let apiError = error as? LunoraAPIError
+
+            XCTAssertEqual(apiError?.code, LunoraOfflineCode.notQueued)
+            XCTAssertNotNil(apiError?.underlying as? Unreachable, "the transport error is the cause, got \(error)")
+        }
+        XCTAssertEqual(sends, 1, "one direct send, not a queued one")
+        XCTAssertEqual(client.pendingMutationCount, 0)
+        XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+        XCTAssertTrue(
+            seen.contains { canonical($0) == canonical(["a", "c"]) },
+            "the overlay was never shown, so its rollback proves nothing"
+        )
+        XCTAssertEqual(canonical(seen.last), canonical(["a"]), "the overlay is rolled back")
+
+        let codedClient = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in (403, Data(#"{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}"#.utf8)) }
+        )
+        codedClient.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: MemoryPersistence())
+
+        XCTAssertThrowsError(try codedClient.submit(onlineOnlyWrite())) { error in
+            let apiError = error as? LunoraAPIError
+
+            XCTAssertEqual(apiError?.code, "PERMISSION_DENIED", "a coded rejection surfaces as itself, got \(error)")
+            XCTAssertNil(apiError?.underlying)
+        }
+
+        let connectedClient = LunoraClient(url: "https://app.example", post: { _, _, _ in throw Unreachable() })
+        connectedClient.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: MemoryPersistence())
+        connectedClient.attachSocket { _ in }
+
+        XCTAssertThrowsError(try connectedClient.submit(onlineOnlyWrite())) { error in
+            XCTAssertTrue(error is Unreachable, "a failure while connected surfaces unchanged, got \(error)")
+        }
+    }
+}

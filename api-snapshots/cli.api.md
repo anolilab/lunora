@@ -108,8 +108,13 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
 ```ts
 interface DeployCommandOptions {
+    allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    bundleMetaPath?: string;
+    clientBuildEnvironment?: string;
+    clientBuildOutputJson?: boolean;
+    clientBuildRan?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -119,6 +124,7 @@ interface DeployCommandOptions {
     env?: string;
     fetchImpl?: FetchLike;
     format?: OutputFormat;
+    frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
@@ -129,6 +135,7 @@ interface DeployCommandOptions {
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
+    openShardGatePassed?: boolean;
     outDir?: string;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
@@ -647,7 +654,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)

@@ -126,6 +126,10 @@ final class ConformanceTests: XCTestCase {
             case "offline_write_held_for_credential_replays_after_token_refresh":
                 try caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh()
             case "offline_unset_identity_stamps_token_digest": try caseOfflineUnsetIdentityStampsTokenDigest()
+            case "offline_online_only_refused_when_disconnected": try caseOfflineOnlineOnlyRefusedWhenDisconnected()
+            case "offline_online_only_sends_when_connected": try caseOfflineOnlineOnlySendsWhenConnected()
+            case "offline_online_only_transport_failure_refused": try caseOfflineOnlineOnlyTransportFailureRefused()
+            case "offline_online_only_leaves_normal_writes_queued": try caseOfflineOnlineOnlyLeavesNormalWritesQueued()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -1138,6 +1142,54 @@ final class ConformanceTests: XCTestCase {
 
         XCTAssertTrue(rows[0]["note"] is NSNull)
         XCTAssertEqual(rows[1]["note"] as? String, "n")
+    }
+
+    // The session credential must never ride the socket URL: not on the first
+    // open, not on a reconnect, and not when the value comes from a provider that
+    // is re-resolved on every open. The URL is built from the ticket alone; the
+    // session is read only into the connect frame.
+    func testSessionCredentialNeverRidesTheURL() {
+        let session = "sess-secret-123"
+        // The URL percent-encodes the hyphens, so a leak can show up in either form.
+        let encoded = "sess%2Dsecret%2D123"
+        let client = LunoraClient(url: "https://app.example")
+        var resolved = 0
+        // `provider` stands in for an app-supplied resolver, called fresh on every open.
+        let provider: () -> String = {
+            resolved += 1
+            return session
+        }
+
+        // The first open, then two reconnects.
+        for open in 0..<3 {
+            let value = provider()
+            for url in [client.wsURL(shardKey: "tenant_a", wsTicket: "ticket-abc"), client.wsURL()] {
+                XCTAssertFalse(url.contains(session), "open \(open): URL \(url) carries the session credential")
+                XCTAssertFalse(url.contains(encoded), "open \(open): URL \(url) carries the encoded session credential")
+            }
+            let frame = LunoraClient.buildConnectFrame(clientID: "client-test", token: value)
+            XCTAssertEqual(frame["token"] as? String, session, "open \(open): connect token")
+        }
+
+        XCTAssertEqual(resolved, 3, "the provider resolves once per open")
+    }
+
+    // The connect envelope carries the session credential as `token`, and omits
+    // the key entirely when none is held (nil or empty).
+    func testConnectFrameCarriesSessionToken() {
+        XCTAssertEqual(LunoraClient.buildConnectFrame(clientID: "client-test", token: "sess-abc")["token"] as? String, "sess-abc")
+        XCTAssertNil(LunoraClient.buildConnectFrame(clientID: "client-test", token: nil)["token"])
+        XCTAssertNil(LunoraClient.buildConnectFrame(clientID: "client-test", token: "")["token"])
+    }
+
+    // The ticket is the only thing in `?token=`, and it is that ticket exactly.
+    func testWSURLTicketIsTheOnlyToken() throws {
+        let client = LunoraClient(url: "https://app.example")
+        let url = client.wsURL(shardKey: "tenant_a", wsTicket: "ticket-abc")
+        let query = try XCTUnwrap(URLComponents(string: url)?.queryItems)
+
+        XCTAssertEqual(query.filter { $0.name == "token" }.map(\.value), ["ticket-abc"])
+        XCTAssertFalse(client.wsURL().contains("token="), "no ticket means no token parameter")
     }
 
     // MARK: - Concurrency

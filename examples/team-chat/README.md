@@ -57,7 +57,7 @@ wrangler r2 bucket create lunora-example-team-chat-files
 pnpm --filter @lunora-example/team-chat dev
 ```
 
-Open <http://localhost:5173>, create an account, create a channel, then open a
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout), create an account, create a channel, then open a
 second browser profile and watch the roster and the messages move.
 
 better-auth's tables are created on the first request by the builder's `.auth()`

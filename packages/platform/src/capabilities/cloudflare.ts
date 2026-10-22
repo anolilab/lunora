@@ -180,6 +180,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
+        secretValues: {
+            level: "native",
+            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard. Sealed with AES-256-GCM under the `LUNORA_SECRET_VALUE_KEY` Worker secret before it is stored, so the stored record is `{ keyId, iv, ciphertext }`. The reserved prefix is hidden from `ShardKvStore`. Point-in-time recovery covers key-value put() data for the last 30 days, so a restore to an earlier bookmark returns the sealed record, and it opens while the sealing key is still configured: erasure is `discard` plus rotating the key out",
+        },
         services: {
             level: "native",
             note: "Cloudflare service bindings: the bound Worker runs on the same thread of the same server, with no extra request fee. Fetch services and WorkerEntrypoint RPC both work, in deploy and in local dev (auxiliary Workers / multiple wrangler configs)",

@@ -111,8 +111,8 @@ describe("agentHarness", () => {
 
         const result = await harness.run({ input: "go", threadKey: "t1" });
 
-        expect(result.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, totalTokens: 12 });
-        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, totalTokens: 12 });
+        expect(result.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, status: "complete", totalTokens: 12 });
+        expect(harness.thread("t1")?.usage).toStrictEqual({ inputTokens: 5, outputTokens: 7, status: "complete", totalTokens: 12 });
     });
 
     it("stops at maxTurns when the model never finalizes", async () => {
@@ -186,57 +186,60 @@ describe("agentHarness", () => {
                 },
             });
 
-        it("resumes a paused tool call with the approved decision from the approvals map", async () => {
-            expect.hasAssertions();
-
-            const harness = agentHarness(gatedAgent(), {
-                approvals: { c1: { decision: "approve" } },
+        const refundHarness = (): ReturnType<typeof agentHarness> =>
+            agentHarness(gatedAgent(), {
                 functions: {
                     "billing:refund": () => {
                         return { refunded: true };
                     },
                 },
-                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Refunded.")],
+                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Done.")],
             });
 
-            const result = await harness.run({ input: "refund o_9", threadKey: "t1" });
+        const hasPendingMarker = (harness: ReturnType<typeof agentHarness>): boolean =>
+            harness.messages("t1").some((message) => message.status === "awaiting_approval");
 
-            expect(result.text).toBe("Refunded.");
+        it("pauses on the approval, then runs the tool once the approval is delivered", async () => {
+            expect.hasAssertions();
+
+            const harness = refundHarness();
+            const running = harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" });
+
+            await harness.awaitWait("run-1", "approval:c1");
+
+            expect(hasPendingMarker(harness)).toBe(true);
+
+            harness.deliver("run-1", "approval:c1", { decision: "approve" });
+
+            await expect(running).resolves.toMatchObject({ text: "Done." });
             expect(harness.dispatches.map((dispatch) => dispatch.path)).toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
         });
 
-        it("skips the tool when the approvals map rejects the call", async () => {
+        it("resolves an approval delivered before the run reaches it", async () => {
             expect.hasAssertions();
 
-            const harness = agentHarness(gatedAgent(), {
-                approvals: { c1: { decision: "reject", note: "not today" } },
-                functions: {
-                    "billing:refund": () => {
-                        return { refunded: true };
-                    },
-                },
-                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("Understood.")],
-            });
+            const harness = refundHarness();
 
-            const result = await harness.run({ input: "refund o_9", threadKey: "t1" });
+            harness.deliver("run-1", "approval:c1", { decision: "reject", note: "not today" });
 
-            expect(result.text).toBe("Understood.");
+            await expect(harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" })).resolves.toMatchObject({ text: "Done." });
             expect(harness.dispatches.map((dispatch) => dispatch.path)).not.toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
         });
 
-        it("throws a LunoraError naming the limitation when no decision is supplied, instead of hanging", async () => {
+        it("ends a never-answered approval as a rejection once its wait expires, instead of hanging", async () => {
             expect.hasAssertions();
 
-            const harness = agentHarness(gatedAgent(), {
-                functions: {
-                    "billing:refund": () => {
-                        return { refunded: true };
-                    },
-                },
-                script: [toolCallTurn("c1", "refund", { id: "o_9" }), finalTurn("unreachable")],
-            });
+            const harness = refundHarness();
+            const running = harness.run({ input: "refund o_9", threadKey: "t1" }, { instanceId: "run-1" });
 
-            await expect(harness.run({ input: "refund o_9", threadKey: "t1" })).rejects.toThrow(/paused for human approval.*"c1"/u);
+            await harness.awaitWait("run-1", "approval:c1");
+            harness.expire("run-1", "approval:c1");
+
+            await expect(running).resolves.toMatchObject({ text: "Done." });
+            expect(harness.dispatches.map((dispatch) => dispatch.path)).not.toContain("billing:refund");
+            expect(hasPendingMarker(harness)).toBe(false);
         });
     });
 });

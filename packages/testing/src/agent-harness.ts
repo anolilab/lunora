@@ -8,9 +8,17 @@ import type {
     AgentRunInput,
     AgentRunResult,
     AgentStepLike,
+    AgentTokenDelta,
 } from "@lunora/agent";
-import { DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
-import { LunoraError } from "@lunora/errors";
+import { createAgentGenerate, createStreamGenerate, DEFAULT_AGENT_FUNCTION_PATHS, runAgentLoop } from "@lunora/agent";
+import type { SecretValueHost } from "@lunora/platform";
+import type { LanguageModel } from "ai";
+
+import { createFakeSecretValues } from "./fake-secret-values";
+import WaitRegistry from "./wait-registry";
+
+/** How long a supplied value stays takeable: the agent's secret value lifetime (15 minutes). */
+const SECRET_VALUE_TTL_MS = 15 * 60 * 1000;
 
 /** A thread message as the in-memory runtime stores it (superset of {@link AgentMessageRow}). */
 interface HarnessMessage extends AgentMessageRow {
@@ -40,23 +48,18 @@ interface HarnessDispatch {
 /** Extra function-dispatch handler layered over the built-in `agents:*` runtime double. */
 type HarnessFunction = (args?: Record<string, unknown>) => unknown;
 
-/** A human's decision on one paused tool call, as a client sends it to `agents:agentResolveApproval`. */
-interface HarnessApproval {
-    decision: "approve" | "reject";
-    note?: string;
+/** One secret request the harness keeps, mirroring the component's row: its call id, slot-keyed owner, and status. */
+interface SecretRequest {
+    callId: string;
+    consumerTool: string;
+    instanceId: string;
+    ref?: string;
+    slot: string;
+    status: "consumed" | "declined" | "expired" | "pending" | "supplied";
+    threadKey: string;
 }
 
-/** The match-`type` prefix the loop waits on for a tool call's approval (`agent-approval:<toolCallId>`). */
-const APPROVAL_EVENT_PREFIX = "agent-approval:";
-
 interface AgentHarnessOptions {
-    /**
-     * Decisions for human-in-the-loop tool approvals, keyed by tool call id — the
-     * event the run would otherwise hibernate on is delivered from here. A paused
-     * call with no entry is an error (the run cannot resume), not a hang.
-     */
-    approvals?: Record<string, HarnessApproval>;
-
     /**
      * Worker `env` bindings visible to tool `execute` and a dynamic
      * `instructions` thunk. Default `{ LUNORA_TEST: true }`.
@@ -83,9 +86,17 @@ interface AgentHarnessOptions {
      * Scripted model decisions, one {@link AgentGenerateResult} per LLM turn —
      * the default script for {@link AgentHarness.run}. A terminal turn has an
      * empty `toolCalls`; a tool-calling turn lists the calls the loop then runs
-     * against the agent's own tools. Override per run via `run(..., { script })`.
+     * against the agent's own tools. Override per run via `run(..., { script })`,
+     * or replace it per run with a streamed `model` via `run(..., { model })`.
      */
-    script: AgentGenerateResult[];
+    script?: AgentGenerateResult[];
+
+    /**
+     * The secret store the agent's `requestSecretTool` values live in, shared by
+     * every run of this harness. Default: an in-memory store whose clock only moves
+     * through its `advanceClock`.
+     */
+    secrets?: SecretValueHost;
 }
 
 /** Per-run overrides for {@link AgentHarness.run}. */
@@ -93,11 +104,44 @@ interface AgentRunOverrides {
     /** The workflow instance id for this run (default: an auto-incrementing `wf-N`). */
     instanceId?: string;
 
+    /**
+     * The model for THIS run, replacing the scripted decisions. Each turn runs
+     * through the production seam over this model: `createStreamGenerate` (the
+     * `streamText` path, so a recorded stream from `recordedModel` is consumed
+     * part by part) with `onTokenDelta` as its live sink.
+     */
+    model?: LanguageModel;
+
+    /**
+     * Live token-delta sink for a `model` run — receives each text delta as the
+     * recorded stream produces it. Ignored for scripted runs.
+     */
+    onTokenDelta?: (delta: AgentTokenDelta) => void;
+
     /** The model script for THIS run, replacing the harness default. */
     script?: AgentGenerateResult[];
 }
 
 interface AgentHarness {
+    /**
+     * Resolve once the run `instanceId` has reached the wait named `name` (e.g.
+     * `secret:0:call_1`, for the first turn's call `call_1`), so a test can act on the run at a known point instead of
+     * after a delay.
+     */
+    awaitWait: (instanceId: string, name: string) => Promise<void>;
+
+    /**
+     * Decline the `requestSecretTool` call `toolCallId` on `threadKey` and wake its
+     * wait, as the owner's decline does.
+     */
+    decline: (threadKey: string, toolCallId: string) => void;
+
+    /**
+     * Deliver the event the run `instanceId` is waiting on. Delivered before that
+     * wait is reached, it is held for it.
+     */
+    deliver: (instanceId: string, name: string, payload: unknown) => void;
+
     /**
      * Every function dispatch the loop has made through `ctx.run`, in order —
      * both the `agents:*` runtime calls and the tool/memory app dispatches. Use
@@ -105,6 +149,17 @@ interface AgentHarness {
      * expected.
      */
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
+
+    /** Fail the run `instanceId`'s pending wait the way an elapsed host timeout does. */
+    expire: (instanceId: string, name: string) => void;
+
+    /**
+     * Every journal entry the runs have written, in the order they were written:
+     * each completed step's output (`{ kind: "step", name, output }`) and each
+     * delivered wait payload (`{ kind: "wait", name, type, payload }`). A test
+     * asserts a secret is absent from this, as it must be from the durable journal.
+     */
+    journalEntries: () => unknown[];
 
     /** The persisted messages of a thread, ordered by `seq`. */
     messages: (threadKey: string) => AgentMessageRow[];
@@ -117,6 +172,16 @@ interface AgentHarness {
      * distinct workflow instance.
      */
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
+
+    /** The secret store the runs use (see {@link AgentHarnessOptions.secrets}). */
+    readonly secrets: SecretValueHost;
+
+    /**
+     * Supply `value` for the `requestSecretTool` call `toolCallId` on `threadKey` and
+     * wake its wait, as the owner's supply does. The value goes to the secret store
+     * and only the request's handle reaches the run.
+     */
+    supply: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
 
     /** The stored thread record (status, error, instanceId, usage, …), or `undefined` before its first run. */
     thread: (threadKey: string) => HarnessThread | undefined;
@@ -144,16 +209,19 @@ const scriptedGenerate = (script: ReadonlyArray<AgentGenerateResult>): AgentGene
  * Faithful in-memory model of Cloudflare Workflows' `step.do` memoization: a step
  * name with a recorded output returns it WITHOUT re-invoking the callback, so
  * reusing a journal across two `runAgentLoop` calls models a crash + resume of
- * the same instance. `waitForEvent` cannot hibernate in a single synchronous
- * drive, so it resolves an approval from the `approvals` map and throws on any
- * other wait rather than never settling.
+ * the same instance. A `waitForEvent` hibernates until the test delivers its
+ * event or expires it (see {@link AgentHarness.deliver}).
  */
 class DurableStepJournal implements AgentStepLike {
     public readonly invoked: string[] = [];
 
     private readonly entries = new Map<string, { output: unknown }>();
 
-    public constructor(private readonly approvals: Readonly<Record<string, HarnessApproval>>) {}
+    public constructor(
+        private readonly waits: WaitRegistry,
+        private readonly instanceId: string,
+        private readonly journal: unknown[],
+    ) {}
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -167,30 +235,25 @@ class DurableStepJournal implements AgentStepLike {
         const output = await callback();
 
         this.entries.set(name, { output });
+        this.journal.push({ kind: "step", name, output });
 
         return output;
     }
 
-    public waitForEvent<T>(_name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
-        const { type } = options;
+    public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: Readonly<T>; type: string }> {
+        // A wait that already resolved is a recorded step: a resumed instance reads it back
+        // rather than waiting for an event that was delivered and consumed once.
+        const recorded = this.entries.get(`wait:${name}`);
 
-        if (!type.startsWith(APPROVAL_EVENT_PREFIX)) {
-            return Promise.reject(new LunoraError("INTERNAL", `agentHarness: the run waits on durable event "${type}", which the harness cannot deliver.`));
+        if (recorded) {
+            return { payload: recorded.output as Readonly<T>, type: options.type };
         }
 
-        const toolCallId = type.slice(APPROVAL_EVENT_PREFIX.length);
-        const approval = this.approvals[toolCallId];
+        const payload = await this.waits.wait(this.instanceId, name, options.type);
 
-        if (approval === undefined) {
-            return Promise.reject(
-                new LunoraError(
-                    "INTERNAL",
-                    `agentHarness: tool call "${toolCallId}" is paused for human approval. Pass \`approvals: { "${toolCallId}": { decision: "approve" } }\` to resolve it; the harness cannot otherwise pause and resume a run.`,
-                ),
-            );
-        }
+        this.entries.set(`wait:${name}`, { output: payload });
 
-        return Promise.resolve({ payload: approval as T, type });
+        return { payload: payload as Readonly<T>, type: options.type };
     }
 }
 
@@ -203,7 +266,19 @@ class DurableStepJournal implements AgentStepLike {
  */
 const createRuntime = (
     extra: Record<string, HarnessFunction>,
-): { dispatches: HarnessDispatch[]; messages: Map<string, HarnessMessage>; run: AgentRunFunction; threads: Map<string, HarnessThread> } => {
+    secrets: SecretValueHost,
+): {
+    /** The run that owns the pending request, and its slot (the wait's key); undefined when no pending request names the call. */
+    declineSecret: (threadKey: string, callId: string) => { instanceId: string; slot: string } | undefined;
+    dispatches: HarnessDispatch[];
+    /** Close the pending request of a run's secret wait, once that wait has expired. */
+    expireSecretRequest: (instanceId: string, slot: string) => void;
+    messages: Map<string, HarnessMessage>;
+    run: AgentRunFunction;
+    /** The run that owns the pending request, and its slot (the wait's key), so its wait can be woken. */
+    supplySecret: (threadKey: string, callId: string, value: string) => Promise<{ instanceId: string; slot: string }>;
+    threads: Map<string, HarnessThread>;
+} => {
     const threads = new Map<string, HarnessThread>();
     const messages = new Map<string, HarnessMessage>();
     const dispatches: HarnessDispatch[] = [];
@@ -237,6 +312,13 @@ const createRuntime = (
         return { outcome: "created" };
     };
 
+    // The loop retires an approval or secret marker by key once its wait has resolved.
+    const deleteMessage = (args?: Record<string, unknown>): unknown => {
+        messages.delete(`${args?.["threadKey"] as string}:${args?.["messageKey"] as string}`);
+
+        return undefined;
+    };
+
     const appendMessage = (args?: Record<string, unknown>): unknown => {
         const threadKey = args?.["threadKey"] as string;
         const messageKey = args?.["messageKey"] as string;
@@ -259,13 +341,6 @@ const createRuntime = (
         messages.set(id, { ...(args as unknown as HarnessMessage), seq });
 
         return { seq };
-    };
-
-    // Retires a row by key; like the real mutation it leaves the `seq` counter alone.
-    const deleteMessage = (args?: Record<string, unknown>): unknown => {
-        messages.delete(`${args?.["threadKey"] as string}:${args?.["messageKey"] as string}`);
-
-        return undefined;
     };
 
     const listMessages = (args?: Record<string, unknown>): unknown => {
@@ -313,13 +388,153 @@ const createRuntime = (
         return {};
     };
 
+    // The secret-request rows, one per `(threadKey, slot)`. The harness has no
+    // database, so the transitions below restate the component's: a pending row settles
+    // once, a supply binds its ref, and a take must name the consumer the request declared.
+    // The component's own tests pin each transition against the real mutations.
+    // Keyed on both parts as JSON, so no thread key and slot can read as another pair.
+    const requestKey = (threadKey: string, slot: string): string => JSON.stringify([threadKey, slot]);
+    const requests = new Map<string, SecretRequest>();
+    // A client answers with the call id, which a later turn can reuse; only one pending request may match it.
+    const pendingForCall = (threadKey: string, callId: string): { request: SecretRequest; slot: string } | undefined => {
+        const matches = [...requests.values()].filter(
+            (request) => request.threadKey === threadKey && request.callId === callId && request.status === "pending",
+        );
+        const [request] = matches;
+
+        if (matches.length !== 1 || request === undefined) {
+            return undefined;
+        }
+
+        return { request, slot: request.slot };
+    };
+    // Settle, take and discard act only on a row the calling instance owns; a row a later run reopened is
+    // invisible to a stale caller, as the component's mutations treat it. No instanceId keeps the slot-only lookup.
+    const requestOf = (args?: Record<string, unknown>): SecretRequest | undefined => {
+        const request = requests.get(requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string));
+        const instanceId = args?.["instanceId"] as string | undefined;
+
+        return instanceId === undefined || request?.instanceId === instanceId ? request : undefined;
+    };
+
+    // A replay of the owning run keeps its row. A row left by an earlier run that reused the
+    // tool-call id is retired first, which discards its value, and then starts over as pending.
+    const openSecretRequest = async (args?: Record<string, unknown>): Promise<unknown> => {
+        const key = requestKey(args?.["threadKey"] as string, args?.["toolCallId"] as string);
+        const existing = requests.get(key);
+
+        const owner = args?.["instanceId"] as string | undefined;
+
+        if (owner !== undefined && existing?.instanceId === owner) {
+            return undefined;
+        }
+
+        if (existing?.ref !== undefined) {
+            await secrets.discard(existing.ref);
+        }
+
+        requests.set(key, {
+            callId: (args?.["callId"] ?? args?.["toolCallId"]) as string,
+            slot: args?.["toolCallId"] as string,
+            threadKey: args?.["threadKey"] as string,
+            consumerTool: args?.["consumerTool"] as string,
+            instanceId: args?.["instanceId"] as string,
+            status: "pending",
+        });
+
+        return undefined;
+    };
+
+    const settleSecretRequest = (args?: Record<string, unknown>): { status: "declined" | "expired" | "supplied" } => {
+        const request = requestOf(args);
+
+        if (request === undefined) {
+            return { status: "expired" };
+        }
+
+        if (request.status === "pending") {
+            request.status = "expired";
+
+            return { status: "expired" };
+        }
+
+        if (request.status === "supplied" || request.status === "consumed") {
+            return { status: "supplied" };
+        }
+
+        return { status: request.status === "declined" ? "declined" : "expired" };
+    };
+
+    const takeSecret = (args?: Record<string, unknown>): Promise<unknown> => {
+        const request = requestOf(args);
+
+        if (request?.ref === undefined || (request.status !== "supplied" && request.status !== "consumed")) {
+            return Promise.resolve(undefined);
+        }
+
+        if (args?.["claimant"] !== `tool:${request.consumerTool}:${args?.["consumerCallId"] as string}`) {
+            return Promise.resolve(undefined);
+        }
+
+        return secrets.take(request.ref, { claimant: args["claimant"], scope: args["threadKey"] as string });
+    };
+
+    const discardSecret = async (args?: Record<string, unknown>): Promise<void> => {
+        const request = requestOf(args);
+
+        if (request === undefined) {
+            return;
+        }
+
+        if (request.ref !== undefined) {
+            await secrets.discard(request.ref);
+        }
+
+        if (request.status === "supplied") {
+            request.status = "consumed";
+        }
+    };
+
+    const supplySecret = async (threadKey: string, callId: string, value: string): Promise<{ instanceId: string; slot: string }> => {
+        const found = pendingForCall(threadKey, callId);
+
+        if (found === undefined) {
+            throw new Error(`agentHarness: no pending secret request for tool call "${callId}" on thread "${threadKey}"`);
+        }
+
+        // The value lives as long as the agent's supply window; a take after it refuses.
+        found.request.ref = await secrets.put(value, { scope: threadKey, ttlMs: SECRET_VALUE_TTL_MS });
+        found.request.status = "supplied";
+
+        return { instanceId: found.request.instanceId, slot: found.slot };
+    };
+
+    const declineSecret = (threadKey: string, callId: string): { instanceId: string; slot: string } | undefined => {
+        const found = pendingForCall(threadKey, callId);
+
+        if (found === undefined) {
+            return undefined;
+        }
+
+        found.request.status = "declined";
+
+        return { instanceId: found.request.instanceId, slot: found.slot };
+    };
+
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        // No approval grants are recorded by this harness: a gated tool always
+        // pauses, exactly as an ungranted one does against the real component.
+        [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, () => false],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.discardSecret, discardSecret],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
+        [DEFAULT_AGENT_FUNCTION_PATHS.openSecretRequest, openSecretRequest],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
+        [DEFAULT_AGENT_FUNCTION_PATHS.settleSecretRequest, settleSecretRequest],
+        [DEFAULT_AGENT_FUNCTION_PATHS.takeSecret, takeSecret],
         ...Object.entries(extra),
     ]);
 
@@ -337,7 +552,15 @@ const createRuntime = (
         return Promise.resolve(handler(args));
     };
 
-    return { dispatches, messages, run, threads };
+    const expireSecretRequest = (instanceId: string, slot: string): void => {
+        for (const request of requests.values()) {
+            if (request.instanceId === instanceId && request.slot === slot && request.status === "pending") {
+                request.status = "expired";
+            }
+        }
+    };
+
+    return { declineSecret, dispatches, expireSecretRequest, messages, run, supplySecret, threads };
 };
 
 /**
@@ -359,17 +582,38 @@ const createRuntime = (
  * expect(harness.messages("t1").at(-1)?.content).toBe("It shipped.");
  * ```
  *
- * A human-in-the-loop approval resolves from the `approvals` option, keyed by
- * tool call id; a paused call with no decision throws a `LunoraError` instead of
- * hanging. The harness deliberately does NOT model the concurrency guard or a
- * real pause-and-resume across calls — it is for exercising an agent's tools and
- * turn logic, not the durable orchestration itself (that is covered inside
- * `@lunora/agent`).
+ * The harness deliberately does NOT model the concurrency guard. A
+ * human-in-the-loop pause (an approval, or a `requestSecretTool` request) stops
+ * the run at its wait; the test resolves it with `deliver` or `expire`, and the
+ * harness does not route a decision through the owner-gated mutations. The
+ * harness is for exercising an agent's tools and turn logic, not the durable
+ * orchestration itself (that is covered inside `@lunora/agent`).
  */
 const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): AgentHarness => {
     const exportName = options.exportName ?? "agent";
     const env = options.env ?? { LUNORA_TEST: true };
-    const runtime = createRuntime(options.functions ?? {});
+    const secrets = options.secrets ?? createFakeSecretValues();
+    const runtime = createRuntime(options.functions ?? {}, secrets);
+    // Steps and delivered waits share one list, so the journal reads in the order the run wrote them.
+    const journal: unknown[] = [];
+    const waits = new WaitRegistry(journal);
+    // One journal per instance id: a run that reuses an id resumes that instance, so
+    // the steps it already recorded are memoized rather than run again.
+    const journals = new Map<string, DurableStepJournal>();
+
+    const journalFor = (instanceId: string): DurableStepJournal => {
+        const existing = journals.get(instanceId);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        const created = new DurableStepJournal(waits, instanceId, journal);
+
+        journals.set(instanceId, created);
+
+        return created;
+    };
 
     let runCount = 0;
 
@@ -377,7 +621,34 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
         runCount += 1;
 
         const instanceId = overrides?.instanceId ?? `wf-${String(runCount)}`;
-        const script = overrides?.script ?? options.script;
+        const { model, onTokenDelta } = overrides ?? {};
+
+        if (model !== undefined) {
+            // The production seams over a model: `agent.model` is the only thing the
+            // seams read from the definition, so the spread just swaps that one field.
+            const modelAgent = { ...agent, model };
+
+            return runAgentLoop({
+                agent,
+                env,
+                exportName,
+                generate: createAgentGenerate(modelAgent, env),
+                instanceId,
+                onTokenDelta: (event) => {
+                    // The loop's token sink also carries progress events; the harness surfaces tokens only.
+                    if (event.kind !== "progress") {
+                        onTokenDelta?.(event);
+                    }
+                },
+                params,
+                paths: DEFAULT_AGENT_FUNCTION_PATHS,
+                run: runtime.run,
+                step: journalFor(instanceId),
+                streamGenerate: createStreamGenerate(modelAgent, env),
+            });
+        }
+
+        const script = overrides?.script ?? options.script ?? [];
 
         return runAgentLoop({
             agent,
@@ -388,18 +659,45 @@ const agentHarness = (agent: AgentDefinition, options: AgentHarnessOptions): Age
             params,
             paths: DEFAULT_AGENT_FUNCTION_PATHS,
             run: runtime.run,
-            step: new DurableStepJournal(options.approvals ?? {}),
+            step: journalFor(instanceId),
         });
     };
 
     return {
+        awaitWait: (instanceId: string, name: string) => waits.awaitWait(instanceId, name),
+        deliver: (instanceId: string, name: string, payload: unknown) => {
+            waits.deliver(instanceId, name, payload);
+        },
+        decline: (threadKey: string, toolCallId: string) => {
+            const declined = runtime.declineSecret(threadKey, toolCallId);
+
+            if (declined !== undefined) {
+                waits.deliver(declined.instanceId, `secret:${declined.slot}`, {});
+            }
+        },
         dispatches: runtime.dispatches,
+        expire: (instanceId: string, name: string) => {
+            waits.expire(instanceId, name);
+
+            // A secret wait's deadline closes its request too, as the production deadline check does, so a
+            // supply made before settlement is refused rather than stored for the run to take.
+            if (name.startsWith("secret:")) {
+                runtime.expireSecretRequest(instanceId, name.slice("secret:".length));
+            }
+        },
+        journalEntries: (): unknown[] => [...journal],
         messages: (threadKey: string): AgentMessageRow[] =>
             [...runtime.messages.values()]
                 .filter((message) => message.threadKey === threadKey)
                 .toSorted((a, b) => a.seq - b.seq)
                 .map(({ messageKey: _messageKey, threadKey: _threadKey, ...row }) => row),
         run,
+        secrets,
+        supply: async (threadKey: string, toolCallId: string, value: string) => {
+            const supplied = await runtime.supplySecret(threadKey, toolCallId, value);
+
+            waits.deliver(supplied.instanceId, `secret:${supplied.slot}`, {});
+        },
         thread: (threadKey: string): HarnessThread | undefined => runtime.threads.get(threadKey),
     };
 };
@@ -414,5 +712,5 @@ const toolCallTurn = (id: string, name: string, input: unknown, text = ""): Agen
     return { text, toolCalls: [{ id, input, name }] };
 };
 
-export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessApproval, HarnessDispatch, HarnessMessage, HarnessThread };
+export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessDispatch, HarnessMessage, HarnessThread };
 export { agentHarness, finalTurn, toolCallTurn };

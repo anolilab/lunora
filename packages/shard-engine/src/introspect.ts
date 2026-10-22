@@ -1884,6 +1884,7 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
  */
 interface SocketAttachmentLike {
     admin?: boolean;
+    authenticated?: boolean;
     subs?: Record<string, SubscriptionInfo>;
 }
 
@@ -1895,7 +1896,9 @@ interface SocketAttachmentLike {
  * DO method just feeds it `getWebSockets().map(readAttachment)`.
  */
 const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): SubscriptionsResult => {
-    const connections: SubscriptionConnection[] = attachments.map((attachment, id) => {
+    // A pending socket has not sent its `connect` frame, so it is not a live connection yet.
+    const admitted = attachments.filter((attachment) => attachment.authenticated !== false);
+    const connections: SubscriptionConnection[] = admitted.map((attachment, id) => {
         const subscriptions = Object.values(attachment.subs ?? {}).map((sub): SubscriptionInfo => {
             return { args: sub.args, functionPath: sub.functionPath, table: sub.table };
         });
@@ -2037,6 +2040,7 @@ interface FanoutMetricsResult {
  * stays a pure, harness-testable function with no dependency on the DO runtime.
  */
 interface FanoutAttachmentLike {
+    authenticated?: boolean;
     shapes?: Record<string, { name?: string }>;
     whispers?: string[];
 }
@@ -2106,8 +2110,10 @@ const summarizeFanoutTopics = (
 ): { peakSubscribers: number; topics: FanoutTopicStat[]; totalConnections: number } => {
     const shapeCounts = new Map<string, number>();
     const whisperCounts = new Map<string, number>();
+    // Pending sockets carry no subscriptions yet, and they are not live connections either.
+    const admitted = attachments.filter((attachment) => attachment.authenticated !== false);
 
-    for (const attachment of attachments) {
+    for (const attachment of admitted) {
         for (const shape of Object.values(attachment.shapes ?? {})) {
             const key = shape.name ?? "(unknown shape)";
 
@@ -2135,7 +2141,7 @@ const summarizeFanoutTopics = (
     // so the global max survives the `slice(0, limit)` truncation below.
     const peakSubscribers = topics[0]?.subscribers ?? 0;
 
-    return { peakSubscribers, topics: topics.slice(0, limit), totalConnections: attachments.length };
+    return { peakSubscribers, topics: topics.slice(0, limit), totalConnections: admitted.length };
 };
 
 export {

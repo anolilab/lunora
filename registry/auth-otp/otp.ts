@@ -40,6 +40,7 @@
  * await authClient.signIn.emailOtp({ email, otp });
  * ```
  */
+import { isDevEnvironment } from "@lunora/auth";
 import { emailOTP } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
@@ -49,18 +50,6 @@ export interface EmailOtpEnv {
     MAIL_FROM?: string;
     [key: string]: unknown;
 }
-
-/**
- * Env-name values that mark a development deployment. `lunora dev` sets
- * `WORKER_ENV=development`; a real deploy that sets none of these stays
- * production (fail closed), so the dev-only console fallback below never leaks
- * live one-time codes into production Worker logs.
- */
-const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
-const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
-
-const isDevEnvironment = (env: Record<string, unknown>): boolean =>
-    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
 
 /**
  * Deliver an auth email through `@lunora/mail` — the SAME transport selection as

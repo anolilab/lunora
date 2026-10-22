@@ -42,8 +42,10 @@ development"` / `"ShardDO…not exported"` warning. That's the adapter's own emp
 
 - `lunora/schema.ts` + `lunora/messages.ts` — a sharded `messages` table with a
   sample `list` query and `send` mutation.
+- `lunora/app.ts` — the app, defined once with the generated `defineApp()`
+  builder; configure auth and the shard gate here.
 - `src/worker.ts` — the **single-worker entry**: folds SvelteKit's
-  Cloudflare-adapter handler into the generated `defineApp()` builder via
+  Cloudflare-adapter handler into the `lunora/app.ts` builder via
   `.buildFrameworkWorker(...)` (see below) and re-exports the generated
   `ShardDO`.
 - `src/routes/+layout.svelte` — publishes the `LunoraClient` on Svelte context
@@ -85,17 +87,16 @@ How it's wired here:
 
 - **`svelte.config.js`** uses `@sveltejs/adapter-cloudflare`, which builds
   SvelteKit's SSR into `.svelte-kit/cloudflare/_worker.js`.
-- **`src/worker.ts`** imports that emitted handler and folds it into the
-  generated `defineApp()` builder via `.buildFrameworkWorker(...)`:
+- **`src/worker.ts`** imports that emitted handler and folds it into the app
+  builder `lunora/app.ts` exports (the one `defineApp()` call, shared with the
+  dev entry `lunora/server.ts`) via `.buildFrameworkWorker(...)`:
 
     ```ts
     import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js";
 
-    import { defineApp } from "../lunora/_generated/app.js";
+    import { lunora } from "../lunora/app";
 
-    const app = defineApp<Env>()
-        .shard((env) => env.SHARD)
-        .buildFrameworkWorker(svelteKitWorker);
+    const app = lunora.buildFrameworkWorker(svelteKitWorker);
 
     export const ShardDO = app.ShardDO;
     export default app;

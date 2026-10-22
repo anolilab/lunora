@@ -18,6 +18,8 @@ import {
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
+const COOLDOWN_LABEL = /available again in \d+s/iu;
+
 // One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
     resetToasts();
@@ -337,5 +339,34 @@ describe("in-card links follow viewPaths, not redirects.signIn", () => {
 
         expect(link.getAttribute("href")).toBe("/auth/sign-in");
         expect(link.getAttribute("href")).not.toBe("/gate?returnTo=%2Fapp");
+    });
+});
+
+describe("resend cooldown", () => {
+    it("disables the send button with a countdown after a successful send", async () => {
+        expect.assertions(3);
+
+        const forgetPassword = vi.fn(async () => {
+            return { data: { status: true }, error: null };
+        });
+        const authClient = { forgetPassword, getSession: vi.fn() } as unknown as AuthClient;
+
+        render(
+            <AuthUIProvider authClient={authClient} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+                <ForgotPasswordCard />
+            </AuthUIProvider>,
+        );
+
+        fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.co" } });
+        fireEvent.click(screen.getByRole("button", { name: "Reset password" }));
+
+        const button = await screen.findByRole("button", { name: COOLDOWN_LABEL });
+
+        expect(button).toHaveProperty("disabled", true);
+        expect(forgetPassword).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(button);
+
+        expect(forgetPassword).toHaveBeenCalledTimes(1);
     });
 });

@@ -32,6 +32,10 @@ const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 export default defineConfig({
     test: {
         coverage,
+        // Real-D1 suites (the interleaved-patch race runs 20 writes) exceed the 5 s default under CI contention, as the
+        // DO package's workerd suites do; mirrors `packages/do/vitest.config.ts`.
+        testTimeout: 30_000,
+        hookTimeout: 30_000,
         projects: runWorkerd
             ? [
                   {

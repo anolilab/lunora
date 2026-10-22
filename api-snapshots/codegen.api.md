@@ -325,6 +325,7 @@ interface FieldSnapshot {
     members?: ReadonlyArray<FieldSnapshot>;
     nullable?: boolean;
     of?: FieldSnapshot;
+    output?: string;
     optional: boolean;
     ref?: string;
     refined?: boolean;
@@ -970,6 +971,7 @@ interface ShapeIR {
 interface SourceCapabilitySignals {
     contextReads: ReadonlySet<string>;
     dynamicImports: ReadonlySet<string>;
+    requestSecretTool: boolean;
     sandboxTools: Readonly<SandboxUsage>;
     valueImports: ReadonlySet<string>;
 }
@@ -1041,6 +1043,15 @@ interface TableSnapshot {
 }
 ```
 
+### `TargetScope` (interface)
+
+```ts
+interface TargetScope {
+    readonly origins: Map<Project, Project>;
+    readonly projects: Map<Project, Project>;
+}
+```
+
 ### `TopicIR` (interface)
 
 ```ts
@@ -1068,6 +1079,7 @@ interface ValidatorIR {
     kind: string;
     literalValue?: string;
     members?: ValidatorIR[];
+    sensitive?: boolean;
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
     stringMaxLength?: number;
@@ -1167,6 +1179,12 @@ const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads"
 
 ```ts
 const createCodegenProject: (lunoraDirectory: string) => Project;
+```
+
+### `createTargetScope` (const)
+
+```ts
+const createTargetScope: () => TargetScope;
 ```
 
 ### `describeErrorLevelFindings` (const)
@@ -1453,7 +1471,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1692,13 +1710,19 @@ const sortedUniqueNames: (names: Iterable<string>) => ReadonlyArray<string>;
 ### `sourceCapabilitySignals` (const)
 
 ```ts
-const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySignals;
+const sourceCapabilitySignals: (sourceFile: SourceFile, scope?: TargetScope) => SourceCapabilitySignals;
 ```
 
 ### `toAdvisorContext` (const)
 
 ```ts
 const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
+```
+
+### `tsconfigFingerprint` (const)
+
+```ts
+const tsconfigFingerprint: (tsconfigPath: string) => string;
 ```
 
 ### `validatorIrToJsonSchema` (const)
@@ -2561,6 +2585,8 @@ interface EmitShardOptions {
     hasFlags?: boolean;
     hasNotify?: boolean;
     hasRooms?: boolean;
+    hasSecretValues?: boolean;
+    hasSensitiveArgs?: boolean;
     hasSockets?: boolean;
     hasVectors?: boolean;
     lazyFunctions?: boolean;

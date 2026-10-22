@@ -8,10 +8,13 @@ import type { RlsPoliciesResult } from "@lunora/shard-engine";
  */
 const emitShapeFragments = ({
     hasMutators,
+    hasSensitiveShapes,
     hasShapes,
     rlsData,
 }: {
     hasMutators: boolean;
+    /** Some shape declares a `v.sensitive` argument: its resolve runs under a scope from its raw args. */
+    hasSensitiveShapes: boolean;
     hasShapes: boolean;
     rlsData: RlsPoliciesResult;
 }): {
@@ -26,22 +29,42 @@ const emitShapeFragments = ({
     // through the generated registries. Both are empty for a shape/mutator-free
     // project, so its `shard.ts` is byte-identical.
     /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
+    // Only a project with a marked shape argument scopes its resolve: the scope is opened from the RAW
+    // args, so the predicate's transformed value and any error it throws are masked at the throw site.
+    // The wrapper clears the scope on every exit. Unmarked projects keep the body they always had.
+    const shapeResultType = "{ columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined";
+    const shapeResolveEntry = hasSensitiveShapes
+        ? `        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): ${shapeResultType} {
+            const sensitive = this.openSensitiveScope(\`__shape__:\${name}\`, args);
+
+            try {
+                return this.resolveShapeWithScope(name, args, identity, sensitive);
+            } catch (error) {
+                throw this.maskSensitiveError(error, sensitive);
+            } finally {
+                sensitive.clear();
+            }
+        }
+
+        private resolveShapeWithScope(name: string, args: Record<string, unknown>, identity: SubscriptionIdentity | undefined, sensitive: SensitiveScope): ${shapeResultType} {`
+        : `        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): ${shapeResultType} {`;
+    const shapeSensitiveField = hasSensitiveShapes ? ", sensitive" : "";
     const shapeResolveOverride = hasShapes
         ? `
-        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
+${shapeResolveEntry}
             const shape = LUNORA_SHAPES[name];
 
             if (!shape) {
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // Trusted ctx from the socket's OWN verified identity — the client
             // supplies only the shape name + args; \`compileWhere\` validates the
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
-            const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
+            const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity${shapeSensitiveField} });
             // \`ownerField\` resolves an \`owner: true\` shape: only here is the table's
             // \`.ownedBy(field)\` column in scope, so the DO hands it to the shape
             // rather than every shape restating the ownership check in its \`where\`.

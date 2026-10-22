@@ -83,19 +83,20 @@ IDOR & unscoped access (a user-derived key/id reaches a resource without a serve
 
 RLS, masking & output shape:
 
-| Lint                                         | Level   | Flags                                                                                                            |
-| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table    |
-| `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant |
-| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                           |
-| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                |
-| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                           |
-| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                     |
-| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                       |
-| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                         |
-| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                      |
-| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                                |
-| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                               |
+| Lint                                         | Level   | Flags                                                                                                                            |
+| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table                    |
+| `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant                 |
+| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                                           |
+| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                                |
+| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                                           |
+| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                                     |
+| `open_shard_access`                          | `ERROR` | the open-shard option set to anything but a literal `false` in the app; `lunora deploy` refuses it without `--allow-open-shards` |
+| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                                       |
+| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                                         |
+| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                                      |
+| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                                                |
+| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                                               |
 
 Auth configuration (`createAuth`):
 

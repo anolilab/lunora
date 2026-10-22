@@ -34,7 +34,7 @@
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
- * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
+ * `scheduler`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
@@ -82,6 +82,9 @@
  * primitive, and a key every target must rate `native` forever is paperwork, not
  * a control.
  *
+ * `ctx.random` and `ctx.newId` have no key for the same reason: each draws from
+ * JavaScript on every target, with no host primitive to rate.
+ *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,
  * and the rating is still consulted by nothing. Codegen already has the shape
@@ -90,7 +93,7 @@
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `containerSandboxTools`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
+ * `relationGraph`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
@@ -621,6 +624,19 @@ export interface PlatformCapabilities {
 
         /** Secrets management. */
         secrets?: Capability;
+
+        /**
+         * Human-supplied secret values held for a single durable step — the
+         * `SecretValueHost` contract (`put` / `take` / `discard`), the agent
+         * layer's "request a secret from the human" path. Distinct from
+         * `secrets`, which is the platform's own secret store read by
+         * `ctx.secrets`: this one holds a value an end user typed, scoped to
+         * one run, readable by one claimant, and expiring.
+         *
+         * Gate-bearing through `PlatformSignals.secretValues`, set when an app
+         * imports `requestSecretTool` from `@lunora/agent`.
+         */
+        secretValues?: Capability;
 
         /**
          * `onQueryChange` reactors — server-side reactivity: a subscriber that is

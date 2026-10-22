@@ -99,6 +99,19 @@ describe(useSubscription, () => {
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
     });
 
+    it("keeps the SubscriptionError why explanation on the error ref", () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const { error } = scope.run(() => fake.provide(() => useSubscription(msgRef, args)))!;
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "CONFLICT", message: "stale", why: "row moved" });
+
+        expect((error.value as { why?: string }).why).toBe("row moved");
+
+        scope.stop();
+    });
+
     it("preserves the SubscriptionError code on the error ref", () => {
         const fake = createFakeClient();
 

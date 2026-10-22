@@ -104,7 +104,9 @@ describe("emitShard — reactive cache wiring", () => {
         // reads still happen, so nothing fails until a write does not invalidate.
         const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-        expect(emitted).toContain("headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>");
+        expect(emitted).toContain(
+            "headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown>",
+        );
         expect(emitted).toContain("onRead: options.onRead ?? this.getCtxDbReadHook(options.scope),");
         expect(emitted).toContain("...(options.onReadRange !== undefined");
         expect(emitted).toContain("? { onReadRange: options.onReadRange }");

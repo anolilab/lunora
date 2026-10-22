@@ -104,12 +104,12 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
         data: result,
         error,
         errorSource,
-        refetch,
+        poll,
     } = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { keepPreviousData: true, shardKey: queryShardKey });
 
     // No write-flush fires on socket connect/disconnect, so poll the committed
     // shard to keep the snapshot current without a manual refresh.
-    useAutoRefresh(refetch, true);
+    useAutoRefresh(poll, true);
 
     const rows = result === undefined ? [] : toRows(result.connections);
 

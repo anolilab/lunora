@@ -46,6 +46,9 @@ const (
 	// CodeOfflinePreconditionFailed marks a write whose precondition no longer
 	// held when the flush reached it.
 	CodeOfflinePreconditionFailed = "OFFLINE_PRECONDITION_FAILED"
+	// CodeOfflineNotQueued marks an online-only write refused because the
+	// connection is not live. Nothing was queued.
+	CodeOfflineNotQueued = "OFFLINE_NOT_QUEUED"
 	// CodeOfflineIdentityChanged marks a write queued under a different identity
 	// than the one now in effect.
 	CodeOfflineIdentityChanged = "OFFLINE_IDENTITY_CHANGED"
@@ -67,9 +70,15 @@ const DefaultMaxQueuedMutations = 1000
 type OfflineError struct {
 	Code    string
 	Message string
+	// Err is the cause, when one exists: the transport error that refused an
+	// online-only write. Reached through errors.Is and errors.As.
+	Err error
 }
 
 func (e OfflineError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
+
+// Unwrap returns the cause, so errors.Is and errors.As see the transport error.
+func (e OfflineError) Unwrap() error { return e.Err }
 
 // Identity stamps who made a queued write.
 //

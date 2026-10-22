@@ -2,6 +2,7 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createClientQuery } from "../src/client-query-store";
+import { TabCoordinator } from "../src/cross-tab";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
@@ -1223,7 +1224,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "fresh",
+                wsTicket: "fresh",
                 wsUrl: "wss://app.example/_lunora/ws?token=stale",
             });
 
@@ -1236,14 +1237,14 @@ describe("lunoraClient", () => {
             expect(url).toContain("token=fresh");
         });
 
-        it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
+        it("appends wsTicket to the WebSocket URL so the upgrade can authorize it", () => {
             expect.assertions(2);
 
             const client = new LunoraClient({
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "admin tok/en",
+                wsTicket: "admin tok/en",
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -1276,6 +1277,27 @@ describe("lunoraClient", () => {
 
             expect(errors).toEqual([{ message: "admin subscription requires admin authorization" }]);
             expect(data).toHaveLength(0);
+        });
+
+        it("keeps the server's why explanation on a subscription error", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const errors: { why?: string }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, { onError: (error) => errors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "CONFLICT", message: "stale", why: "row moved" }, id: firstSub(socket).id, type: "error" });
+
+            expect(errors[0]).toMatchObject({ code: "CONFLICT", why: "row moved" });
         });
 
         it("surfaces the code and nested message from a subscription error envelope", () => {
@@ -1363,7 +1385,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -1568,9 +1590,10 @@ describe("lunoraClient", () => {
 
             first.receive({ cursor: 10, data: [{ _id: "a" }, { _id: "b" }, { _id: "c" }], id: subId, type: "data" });
             // Frame 1 of a 3-frame run; the socket dies before frames 2 and 3.
-            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, type: "delta" });
+            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
 
-            expect(received.at(-1)).toStrictEqual([{ _id: "b" }, { _id: "c" }]);
+            // The half-run is held, never shown: the list stays the snapshot it was.
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }, { _id: "c" }]);
 
             first.triggerClose();
             vi.advanceTimersByTime(15);
@@ -1596,6 +1619,106 @@ describe("lunoraClient", () => {
 
             client.close();
             vi.useRealTimers();
+        });
+
+        it("commits a delta run once: one listener notification and one cross-tab broadcast", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const broadcast = vi.spyOn(TabCoordinator.prototype, "broadcastSubscriptionData");
+            const client = new LunoraClient({
+                crossTabSync: true,
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 10, data: [{ _id: "a" }, { _id: "b" }], id: subId, type: "data" });
+
+                const notifiedBefore = received.length;
+                const broadcastBefore = broadcast.mock.calls.length;
+
+                socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ cursor: 13, delta: { key: "b", op: "update", row: { _id: "b", v: 2 }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.slice(notifiedBefore)).toStrictEqual([[{ _id: "b", v: 2 }, { _id: "c" }]]);
+                expect(broadcast.mock.calls.slice(broadcastBefore).map((call) => [call[1], call[2]])).toStrictEqual([[[{ _id: "b", v: 2 }, { _id: "c" }], 13]]);
+
+                // A run cut off by a snapshot is dropped, never applied on top of it.
+                socket.receive({ delta: { key: "b", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ cursor: 20, data: [{ _id: "z" }], id: subId, type: "data" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "z" }]);
+                expect(received.slice(notifiedBefore)).toHaveLength(2);
+            } finally {
+                client.close();
+                broadcast.mockRestore();
+                vi.useRealTimers();
+            }
+        });
+
+        it("holds a run's non-final frames and commits on its last frame, cursor or not", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 10, data: [{ _id: "a" }], id: subId, type: "data" });
+
+                // A legacy broadcast carries no `more` flag: it is a whole change, applied on arrival.
+                socket.receive({ delta: { key: "b", op: "insert", row: { _id: "b" }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+                // A non-final frame of a run is held until the run's last frame arrives.
+                socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: subId, more: true, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+                // A shard that stopped stamping cursors still commits its run: the last frame has no `more`.
+                socket.receive({ delta: { key: "d", op: "insert", row: { _id: "d" }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }, { _id: "c" }, { _id: "d" }]);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
         });
 
         it("does not replay a resume cursor it holds no value behind", () => {
@@ -2833,6 +2956,45 @@ describe("lunoraClient", () => {
     // --- Scheduler admin --------------------------------------------------------
 
     describe("lunoraClient — scheduler admin", () => {
+        it("keeps the server's why explanation on an admin error", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: "row moved" } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "CONFLICT", why: "row moved" });
+        });
+
+        it("ignores a non-string why on an admin error envelope", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "stale", why: { nested: true } } }, { status: 409 }),
+            );
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            const error = await client.listScheduledJobs().catch((error_: unknown) => error_);
+
+            expect(error).toMatchObject({ code: "CONFLICT" });
+            expect(error).not.toHaveProperty("why");
+        });
+
         it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
             expect.assertions(4);
 
@@ -3617,7 +3779,7 @@ describe("lunoraClient", () => {
                 fetch: async () => jsonResponse({ result: null }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const seen: unknown[] = [];
@@ -3654,7 +3816,7 @@ describe("lunoraClient", () => {
                     fetch: async () => jsonResponse({ result: null }),
                     url: "https://app.example",
                     WebSocket: createMockWebSocket(),
-                    wsToken: "adm1n",
+                    wsTicket: "adm1n",
                 });
 
                 const seen: unknown[] = [];
@@ -3692,7 +3854,7 @@ describe("lunoraClient", () => {
                 fetch: async () => jsonResponse({ result: null }),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const seen: string[][] = [];
@@ -3728,7 +3890,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3750,7 +3912,7 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
-        it("resolves a wsToken provider per connect, re-minting on reconnect", async () => {
+        it("resolves a wsTicket provider per connect, re-minting on reconnect", async () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
@@ -3761,7 +3923,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     mints += 1;
 
                     return `eph-${String(mints)}`;
@@ -3832,7 +3994,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3867,7 +4029,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3906,7 +4068,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3950,7 +4112,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -3987,7 +4149,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 1000, jitter: false, maxDelayMs: 1000 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: "adm1n",
+                wsTicket: "adm1n",
             });
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
@@ -4033,7 +4195,7 @@ describe("lunoraClient", () => {
         });
     });
 
-    describe("lunoraClient — wsToken provider (ephemeral admin token)", () => {
+    describe("lunoraClient — wsTicket provider (ephemeral admin token)", () => {
         it("resolves the provider before the shard socket connects and appends the minted token", async () => {
             expect.assertions(3);
 
@@ -4042,7 +4204,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: provider,
+                wsTicket: provider,
             });
 
             client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
@@ -4088,7 +4250,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     mints += 1;
 
                     return `eph-${String(mints)}`;
@@ -4143,7 +4305,7 @@ describe("lunoraClient", () => {
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: async () => {
+                wsTicket: async () => {
                     attempts += 1;
 
                     if (attempts === 1) {
@@ -4669,7 +4831,7 @@ describe("lunoraClient", () => {
             // Held: the socket for the old credential has not opened yet.
             expect(room.send({ text: "for old user" })).toBe(true);
 
-            client.setWsToken("new-user-token");
+            client.setWsTicket("new-user-token");
             // The reconnect that carries the new credential is scheduled after the old socket closes.
             vi.runOnlyPendingTimers();
 
@@ -4694,7 +4856,7 @@ describe("lunoraClient", () => {
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-                wsToken: () =>
+                wsTicket: () =>
                     new Promise<string>((resolve) => {
                         resolvers.push(resolve);
                     }),
@@ -4704,7 +4866,7 @@ describe("lunoraClient", () => {
             client.whisperSubscribe("cursors", () => undefined);
 
             // The credential changes while that request is in flight, then the stale one resolves.
-            client.setWsToken("fresh-token");
+            client.setWsTicket("fresh-token");
             resolvers[0]?.("stale-token");
             await new Promise<void>((resolve) => {
                 setTimeout(resolve, 0);
@@ -6108,8 +6270,11 @@ describe("lunoraClient", () => {
             try {
                 client.subscribe(fnRef("q:list"), {}, () => undefined);
 
-                // Solo self-promotion (default 3s leaderTimeout) opens the socket.
-                await vi.advanceTimersByTimeAsync(3100);
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
 
                 expect(sockets).toHaveLength(1);
 

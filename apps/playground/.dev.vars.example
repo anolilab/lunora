@@ -23,6 +23,7 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 # it off its own env only (a caller-supplied target would be an SSRF vector), so
 # it cannot follow the request like the storage base does. wrangler.jsonc ships
 # it empty; set the deployed worker's public URL there before deploying.
+# In a linked git worktree the dev port differs: use the playground port the startup line prints.
 LUNORA_ORIGIN_URL="http://localhost:5173"
 
 # Admin token gating the studio's /_lunora/admin/* endpoints. The @lunora/vite

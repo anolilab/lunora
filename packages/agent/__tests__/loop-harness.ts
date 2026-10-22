@@ -3,11 +3,13 @@ import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentRunFunction, AgentStepLike } from "../src/types";
 
 export interface StoredMessage {
+    approvalScope?: "thread";
     content: string;
+    expiresAt?: number;
     messageKey: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     stepName?: string;
     threadKey: string;
     toolCallId?: string;
@@ -27,7 +29,14 @@ export interface StoredThread {
     summaryRebuiltSeq?: number;
     summaryThroughSeq?: number;
     title?: string;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    usage?: {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        reasoningTokens?: number;
+        totalTokens?: number;
+    };
 }
 
 /**
@@ -98,13 +107,18 @@ export const memoryRuntime = (options?: {
     memory?: { path: string; result: Record<string, unknown> | ((args?: Record<string, unknown>) => unknown) };
 }): {
     dispatches: { args: Record<string, unknown> | undefined; path: string }[];
+    /** Thread-scoped approval grants as `"<threadKey>:<toolName>"` — a test adds/removes one to model the approve / revoke mutations. */
+    grants: Set<string>;
     messages: Map<string, StoredMessage>;
     run: AgentRunFunction;
     threads: Map<string, StoredThread>;
 } => {
     const threads = new Map<string, StoredThread>();
     const messages = new Map<string, StoredMessage>();
+    const grants = new Set<string>();
     const dispatches: { args: Record<string, unknown> | undefined; path: string }[] = [];
+
+    const approvalGranted = (args?: Record<string, unknown>): unknown => grants.has(`${args?.["key"] as string}:${args?.["toolName"] as string}`);
 
     const ensureThread = (args?: Record<string, unknown>): unknown => {
         const key = args?.["key"] as string;
@@ -261,6 +275,7 @@ export const memoryRuntime = (options?: {
 
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, approvalGranted],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
@@ -285,7 +300,7 @@ export const memoryRuntime = (options?: {
         return handler(args);
     };
 
-    return { dispatches, messages, run, threads };
+    return { dispatches, grants, messages, run, threads };
 };
 
 /** A scripted LLM: pops one decision per turn. */

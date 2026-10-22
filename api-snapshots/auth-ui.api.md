@@ -1297,7 +1297,9 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                             autoComplete="email"
                             (changed)="actions.setEmail($event)"
                         />
-                        <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.emailOtp }}</lunora-auth-submit-button>
+                        <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                            t.emailOtp
+                        }}</lunora-auth-submit-button>
                     </form>
                 </lunora-auth-card>
             }
@@ -1404,7 +1406,9 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                     (changed)="actions.setField('email', $event)"
                     (blurred)="actions.blur('email')"
                 />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.forgotPassword }}</lunora-auth-submit-button>
+                <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                    t.forgotPassword
+                }}</lunora-auth-submit-button>
             </form>
             <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
         </lunora-auth-card>
@@ -1614,7 +1618,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                         (changed)="actions.setField('email', $event)"
                         (blurred)="actions.blur('email')"
                     />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                    <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">
                         {{ t.magicLink }}
                         @if (lastUsedMagicLink()) {
                             <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
@@ -2410,7 +2414,9 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                     (changed)="actions.setField('email', $event)"
                     (blurred)="actions.blur('email')"
                 />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.verifyEmailResend }}</lunora-auth-submit-button>
+                <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                    t.verifyEmailResend
+                }}</lunora-auth-submit-button>
             </form>
         </lunora-auth-card>
     `,
@@ -2974,16 +2980,30 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
     selector: "lunora-auth-submit-button",
     standalone: true,
     template: `
-        <button class="lunora-auth-button" type="submit" [disabled]="pending()">
+        <button class="lunora-auth-button" type="submit" [disabled]="pending() || wait() > 0">
             @if (pending()) {
                 <span class="lunora-auth-button__spinner" aria-hidden="true"></span>
             }
             <ng-content />
+            @if (wait() > 0) {
+                <span class="lunora-auth-button__cooldown">{{ label() }}</span>
+            }
         </button>
     `,
 })
 class SubmitButtonComponent {
+    readonly availableAt = input<number>();
     readonly pending = input.required<boolean>();
+    protected readonly wait = signal(0);
+    private readonly t = injectAuthUI().localization;
+    protected readonly label = computed(() => cooldownLabel(this.t, this.wait()));
+    constructor() {
+        effect((onCleanup) => {
+            onCleanup(watchCooldown(this.availableAt(), (seconds) => {
+                this.wait.set(seconds);
+            }));
+        });
+    }
 }
 ```
 
@@ -4004,6 +4024,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `resetAuthConfigDiscovery` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `resetCaptcha` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -5191,6 +5215,7 @@ interface EmailOtpState {
     code: FieldState;
     email: FieldState;
     formError?: string;
+    resendAvailableAt?: number;
     status: FlowStatus;
     step: "request" | "verify";
     successMessage?: string;
@@ -5273,6 +5298,7 @@ interface FormControllerOptions<TField extends string> {
     fallbackError: (localization: Localization) => string;
     fields: Record<TField, FieldSpec<TField>>;
     prefill?: (context: ControllerContext) => Promise<Partial<Record<TField, string>>>;
+    resendCooldown?: boolean;
     sessionChanging?: boolean;
     submit: (values: Record<TField, string>, context: ControllerContext) => Promise<FormSubmitResult | undefined>;
 }
@@ -5285,6 +5311,7 @@ interface FormState<TField extends string> {
     fields: Record<TField, FieldState>;
     formError?: string;
     loading: boolean;
+    resendAvailableAt?: number;
     status: FlowStatus;
     successMessage?: string;
 }
@@ -5452,6 +5479,7 @@ interface Localization {
     profile: string;
     profileSaved: string;
     remove: string;
+    resendAvailableIn: string;
     resetPassword: string;
     resetPasswordOtpDescription: string;
     revoke: string;
@@ -5751,6 +5779,7 @@ interface PhoneVerifyOptions {
 interface PhoneVerifyState {
     error?: string;
     phoneNumber: string;
+    resendAvailableAt?: number;
     status: FlowStatus;
     step: "request" | "verify";
     successMessage?: string;
@@ -6719,6 +6748,12 @@ const required: (value: string, message: string) => string | undefined;
 
 ```ts
 const resetAuthConfigDiscovery: () => void;
+```
+
+### `resetCaptcha` (const)
+
+```ts
+const resetCaptcha: () => void;
 ```
 
 ### `resetFlowWarnings` (const)
@@ -7860,7 +7895,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `SubmitButton` (const)
 
 ```ts
-const SubmitButton: ({ children, pending }: SubmitButtonProps) => ReactElement;
+const SubmitButton: ({ availableAt, children, pending }: SubmitButtonProps) => ReactElement;
 ```
 
 ### `THEME_MODES` (const)
@@ -8404,6 +8439,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `resetAuthConfigDiscovery` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `resetCaptcha` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -10091,6 +10130,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `resetCaptcha` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `resetFlowWarnings` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -11769,6 +11812,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `resetCaptcha` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `resetFlowWarnings` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -13152,6 +13199,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `resetAuthConfigDiscovery` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `resetCaptcha` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -14670,6 +14721,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `resetCaptcha` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `resetFlowWarnings` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -14892,6 +14947,7 @@ interface SocialButtonsProps {
 
 ```ts
 interface SubmitButtonProps {
+    availableAt?: number;
     children: JSX.Element;
     pending: boolean;
 }
@@ -14901,6 +14957,7 @@ interface SubmitButtonProps {
 
 ```ts
 interface SubmitButtonProps {
+    availableAt?: number;
     children: ReactNode;
     pending: boolean;
 }

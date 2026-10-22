@@ -9,7 +9,7 @@ import { ActivityIndicator, SafeAreaView, StyleSheet, View } from "react-native"
 import { authClient } from "./src/auth-client";
 import { Chat } from "./src/Chat";
 import { Login } from "./src/Login";
-import { lunoraClient } from "./src/lunora";
+import { lunoraClient, setSessionBearer } from "./src/lunora";
 
 // One QueryClient for the app. Lunora is push-driven, so live queries never go
 // stale on their own — the WebSocket subscription is the only invalidation.
@@ -20,8 +20,10 @@ function Root(): ReactElement {
     const { data: session, isPending } = authClient.useSession();
 
     // Bridge the better-auth Expo session into the Lunora client as a bearer
-    // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
-    // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
+    // token — HTTP `Authorization` (`setAuthToken`) and the socket upgrade's
+    // `Authorization` (`setSessionBearer`, so the server knows the user at
+    // connect) — re-synced whenever the session changes (sign-in/out). The
+    // session is not the shared `LUNORA_WS_BEARER`, so it never goes in `connect`.
     //
     // The user id goes with it as the STABLE subject. Without it the offline
     // queue keys identity on the token bytes, so a routine session-token refresh
@@ -46,8 +48,8 @@ function Root(): ReactElement {
                 return;
             }
 
+            setSessionBearer(token);
             lunoraClient.setAuthToken(token, session?.user.id ?? null);
-            lunoraClient.setWsToken(token ?? undefined);
         })();
 
         return () => {

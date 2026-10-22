@@ -65,9 +65,7 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
     const retryImpl = retryJob ?? (clientOwned ? (id: string) => client.retryDeadJob(id) : undefined);
     const removeImpl = removeJob ?? (clientOwned ? (id: string) => client.removeDeadJob(id) : undefined);
 
-    useAutoRefresh(() => {
-        jobsQuery.refetch();
-    }, true);
+    useAutoRefresh(() => jobsQuery.poll(), true);
 
     const act = async (operation: Promise<unknown>): Promise<void> => {
         setActionError(undefined);

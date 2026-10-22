@@ -81,6 +81,8 @@ lunora({
 });
 ```
 
+`target` must match the target the CLI resolved for the run. `lunora build` and `lunora deploy` set `LUNORA_BUILD_TARGET`, and a plugin whose target differs fails the build rather than emit an artifact for another host. Set the same target in the plugin options and `lunora.config.*`, or leave it unset to use the project's.
+
 `LUNORA_LAZY_FUNCTIONS=1` or `true` enables lazy imports even when
 `lazyFunctions` is `false`, for both dev and production builds.
 `lunora dev --lazy-functions` sets this variable for its bundler child process.

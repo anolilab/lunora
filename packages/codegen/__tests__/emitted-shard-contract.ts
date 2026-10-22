@@ -75,6 +75,20 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * Mirrors the generated sensitive `resolveShape` wrapper: a scope opened from the raw args, a
+     * thrown error scrubbed through it before the scope is cleared on every exit.
+     */
+    protected resolveShapeScopeContract(name: string, args: Record<string, unknown>): void {
+        const sensitive = this.openSensitiveScope(`__shape__:${name}`, args);
+
+        try {
+            this.maskSensitiveError(new Error(name), sensitive);
+        } finally {
+            sensitive.clear();
+        }
+    }
+
+    /**
      * Mirrors the generated `scheduleOutboxScheduler` override — the seam the
      * deferred-schedule outbox retries through. The generated body answers
      * `config.scheduler?.(env)`, so the base's return type has to admit

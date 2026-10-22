@@ -14,15 +14,15 @@ pub mod wire;
 
 pub use client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_shape_unsubscribe_frame, build_subscribe_frame, build_unsubscribe_frame,
-    parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, StreamEvent, SubscriptionError, Verb, CODE_INVALID_FRAME, RPC_BATCH_PATH,
-    RPC_PATH, WS_PATH,
+    parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, StreamEvent, SubscriptionError, TransportError, Verb, CODE_INVALID_FRAME,
+    RPC_BATCH_PATH, RPC_PATH, WS_PATH,
 };
 pub use key::{stable_stringify, stable_wire_key};
 pub use offline::{
     is_stale_version, random_id, replay_identity_verdict, token_digest, token_stamp, Discarded, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
-    ReplayVerdict, AUTH_REPLAY_ERROR_CODES, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
-    CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, DEFAULT_MAX_ITEMS, MAX_BATCH_BYTES,
-    MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
+    ReplayVerdict, AUTH_REPLAY_ERROR_CODES, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_PRECONDITION_FAILED,
+    CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED,
+    DEFAULT_MAX_ITEMS, MAX_BATCH_BYTES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 pub use optimistic::{
     apply_layer, confirm_layer, constant, drop_confirmed_layers, fold, rollback_layer, shared, OptimisticLayer, OptimisticState, SharedTransform, Transform,

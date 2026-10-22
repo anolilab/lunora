@@ -1,4 +1,5 @@
 import type { Telemetry } from "ai";
+import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 
 /**
@@ -35,6 +36,17 @@ const usageOf = (input: number, output: number): GenerateResult["usage"] => {
     return {
         inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: input, total: input },
         outputTokens: { reasoning: 0, text: output, total: output },
+    };
+};
+
+/**
+ * A V4 usage carrying exactly the counts given. An omitted field stays `undefined`
+ * (unreported), never 0, so a test can tell an absent bucket from a counted zero.
+ */
+const reportedUsage = (counts: { cacheRead?: number; cacheWrite?: number; input?: number; output?: number; reasoning?: number }): GenerateResult["usage"] => {
+    return {
+        inputTokens: { cacheRead: counts.cacheRead, cacheWrite: counts.cacheWrite, noCache: undefined, total: counts.input },
+        outputTokens: { reasoning: counts.reasoning, text: undefined, total: counts.output },
     };
 };
 
@@ -117,6 +129,24 @@ const drain = async (textStream: AsyncIterable<string>, onDelta?: (index: number
     return text;
 };
 
+/** The error finish a provider reports for an attempt it billed and then failed. */
+const FAILED_FINISH = { raw: "length", unified: "error" } as const;
+
+/** A non-streamed attempt that bills 2 input and 1 output tokens, then finishes with the error reason. */
+const failedGenerateModel = (): MockLanguageModelV4 =>
+    new MockLanguageModelV4({
+        doGenerate: () => Promise.resolve({ content: [], finishReason: FAILED_FINISH, usage: reportedUsage({ input: 2, output: 1 }), warnings: [] }),
+    });
+
+/** The streamed counterpart: its only part is the error finish, carrying the same billed usage. */
+const failedStreamModel = (): MockLanguageModelV4 =>
+    new MockLanguageModelV4({
+        doStream: () =>
+            Promise.resolve({
+                stream: simulateReadableStream({ chunks: [{ finishReason: FAILED_FINISH, type: "finish", usage: reportedUsage({ input: 2, output: 1 }) }] }),
+            }),
+    });
+
 /** Let a fire-and-forget export / detached span settle before reading what was captured. */
 const settle = async (): Promise<void> => {
     await new Promise((resolve) => {
@@ -125,4 +155,4 @@ const settle = async (): Promise<void> => {
 };
 
 export type { GenerateResult };
-export { drain, generatingModel, settle, STOP, streamingModel, usageOf, withTelemetry };
+export { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, settle, STOP, streamingModel, usageOf, withTelemetry };

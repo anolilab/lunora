@@ -1,3 +1,101 @@
+## @lunora/vue [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.280...@lunora/vue@1.0.0-alpha.281) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.162
+
+## @lunora/vue [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.279...@lunora/vue@1.0.0-alpha.280) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.161
+
+## @lunora/vue [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.278...@lunora/vue@1.0.0-alpha.279) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.159
+
+## @lunora/vue [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.277...@lunora/vue@1.0.0-alpha.278) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.238
+
+## @lunora/vue [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.276...@lunora/vue@1.0.0-alpha.277) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+
+## @lunora/vue [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.275...@lunora/vue@1.0.0-alpha.276) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+
+## @lunora/vue [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.274...@lunora/vue@1.0.0-alpha.275) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/vue [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.273...@lunora/vue@1.0.0-alpha.274) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
+## @lunora/vue [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.272...@lunora/vue@1.0.0-alpha.273) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.155
+
+## @lunora/vue [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.271...@lunora/vue@1.0.0-alpha.272) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/vue [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.270...@lunora/vue@1.0.0-alpha.271) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/vue [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.269...@lunora/vue@1.0.0-alpha.270) (2026-10-19)
 
 

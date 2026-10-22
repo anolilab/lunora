@@ -1,3 +1,31 @@
+## @lunora/browser [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.77...@lunora/browser@1.0.0-alpha.78) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/browser [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.76...@lunora/browser@1.0.0-alpha.77) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/browser [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.75...@lunora/browser@1.0.0-alpha.76) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/browser [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.74...@lunora/browser@1.0.0-alpha.75) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/browser [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.73...@lunora/browser@1.0.0-alpha.74) (2026-10-19)
 
 

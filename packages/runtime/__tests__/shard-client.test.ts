@@ -222,6 +222,19 @@ describe("createShardClient", () => {
         await expect(createShardClient(namespace, { shardKey: "u1" }).call("mcp:listNodes", {})).rejects.toThrow(/failed \(status 502/);
     });
 
+    it("keeps the shard's why explanation on the error a server-side caller throws", async () => {
+        expect.assertions(2);
+
+        const { namespace } = createNamespace(() => Response.json({ error: { code: "CONFLICT", message: "stale", why: "row moved" } }, { status: 409 }));
+
+        const error = (await createShardClient(namespace, { shardKey: "u1" })
+            .call("mcp:listNodes", {})
+            .catch((error_: unknown) => error_)) as { code?: string; why?: string };
+
+        expect(error.code).toBe("CONFLICT");
+        expect(error.why).toBe("row moved");
+    });
+
     it("surfaces a non-JSON response", async () => {
         expect.assertions(1);
 

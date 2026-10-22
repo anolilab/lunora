@@ -30,6 +30,6 @@ export type {
     Validator,
     ValidatorKind,
 } from "./v";
-export { isOrWrapsFromValidator, isStringValidator, optionalInner, v } from "./v";
+export { containsSensitive, isOrWrapsFromValidator, isStringValidator, optionalInner, sensitiveArgumentNames, v } from "./v";
 export type { CompiledValidatorMap, InferValidatorMap, ValidatorMap } from "./validator-map";
 export { DEFER_VALIDATION, installCompiledValidatorMap, parseValidatorMap } from "./validator-map";

@@ -14,6 +14,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ActionCallOptions {
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -208,6 +209,7 @@ interface ClientShapeUnsubscribeMessage {
 interface ConnectLiveStreamOptions {
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    idleTimeoutMs?: number;
     maxDelayMs?: number;
     retryDelay?: number;
     withCredentials?: boolean;
@@ -238,6 +240,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -340,6 +343,7 @@ interface HttpStreamOptions {
     baseUrl?: string;
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    idleTimeoutMs?: number;
     lastEventId?: string;
     maxBuffer?: number;
     onEventId?: (id: string) => void;
@@ -489,6 +493,7 @@ class LunoraClient {
     identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
+    setWsTicket(ticket: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
         shardKey?: string;
     }): void;
@@ -532,6 +537,8 @@ class LunoraClient {
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
+    syncStatus(): SyncStatus;
+    onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe;
     pendingCount(): number;
     debug(): ClientDebugSnapshot;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
@@ -542,7 +549,9 @@ class LunoraClient {
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
     resetClientQuery(ref: ClientQueryRef): void;
     snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean;
-    whenReady(): Promise<void>;
+    whenReady(options?: {
+        signal?: AbortSignal;
+    }): Promise<void>;
     get isReady(): boolean;
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
     peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
@@ -552,13 +561,14 @@ class LunoraClient {
     };
     query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
         shardKey?: string;
+        signal?: AbortSignal;
     }): Promise<ReturnOf<F>>;
     batch(calls: ReadonlyArray<{
         args?: Record<string, unknown>;
         fn: FunctionReference;
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
-    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
+    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>): Promise<ReturnOf<F>>;
     canQueueOffline(shardKey?: string): boolean;
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
@@ -869,6 +879,7 @@ class LunoraClient {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
         shardKey?: string;
+        signal?: AbortSignal;
     }): Unsubscribe;
     subscribeShape(shape: {
         args?: Record<string, unknown>;
@@ -900,6 +911,7 @@ type LunoraClientError = Error & {
     data?: unknown;
     docsUrl?: string;
     hint?: string | string[];
+    why?: string;
 };
 ```
 
@@ -926,8 +938,10 @@ interface LunoraClientOptions {
     };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
+    wsTicket?: string | WsTokenProvider;
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }
@@ -942,12 +956,14 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 ```ts
 interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     mutationId?: string;
+    onlineOnly?: boolean;
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
     replayCredential?: ReplayCredential;
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -1009,7 +1025,10 @@ class OfflineQueue {
     readonly queueBeforeFirstConnect: boolean;
     constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
     get size(): number;
+    get replaying(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
+    discard(id: string): void;
+    flushUnpersisted(): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
     hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
@@ -1028,6 +1047,16 @@ interface OfflineQueueOptions {
     onPersistenceError?: (context: PersistenceErrorContext) => void;
     queueBeforeFirstConnect?: boolean;
 }
+```
+
+### `OnlineOnlyOption` (type)
+
+```ts
+type OnlineOnlyOption<F> = F extends {
+    readonly sensitive: true;
+} ? {
+    onlineOnly?: true;
+} : unknown;
 ```
 
 ### `OptimisticLocalStore` (interface)
@@ -1162,12 +1191,14 @@ interface QueryCacheAdapter {
 
 ```ts
 interface QueuedMutation<T = unknown> {
+    readonly ambiguousSend?: boolean;
     readonly args: Record<string, unknown>;
     readonly baselineSeq?: number;
     clientId?: string;
     readonly functionPath: string;
     id?: string;
     identity?: string | null;
+    readonly issueSeq?: number;
     liveAwaiter?: boolean;
     readonly onCommit?: (commitCursor: number | undefined) => void;
     readonly precondition?: () => boolean;
@@ -1473,6 +1504,7 @@ type SubscriptionCallback = (data: unknown) => void;
 interface SubscriptionError {
     code?: LunoraErrorCodeInput;
     message: string;
+    why?: string;
 }
 ```
 
@@ -1512,11 +1544,26 @@ interface SubscriptionState {
     lastMutationId?: number;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
     serverBase: unknown;
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
+    valueReceived: boolean;
     readonly wireArgs: Record<string, unknown>;
+}
+```
+
+### `SyncStatus` (interface)
+
+```ts
+interface SyncStatus {
+    connection: ConnectionStatus;
+    pendingSubscriptions: number;
+    pendingWrites: number;
+    synced: boolean;
 }
 ```
 
@@ -2371,6 +2418,7 @@ interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+    token?: string;
     type: "connect";
 }
 ```
@@ -2460,6 +2508,7 @@ type NullableTimestamp = null | number | string;
 ```ts
 interface OfflineQueueDeps {
     onEvict?: EvictHandler;
+    onReplayingChange?: () => void;
     onSizeChange?: (size: number) => void;
     persistence?: PersistenceAdapter;
     version?: string;
@@ -2533,6 +2582,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```

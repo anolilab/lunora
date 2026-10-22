@@ -149,6 +149,24 @@ const BADGES: Record<BadgeName, BadgeSpec>;
 const BADGE_COLUMN_WIDTH: number;
 ```
 
+### `BUILD_ROOT_ENV` (const)
+
+```ts
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+```
+
+### `BUILD_TARGET_ENV` (const)
+
+```ts
+const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
+```
+
+### `BUNDLE_META_PATH_ENV` (const)
+
+```ts
+const BUNDLE_META_PATH_ENV = "LUNORA_BUNDLE_META_PATH";
+```
+
 ### `BadgeName` (type)
 
 ```ts
@@ -262,6 +280,12 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `DEFAULT_BUNDLE_META_PATH` (const)
+
+```ts
+const DEFAULT_BUNDLE_META_PATH: string;
 ```
 
 ### `DEFAULT_DEPLOY_TARGET` (const)
@@ -744,6 +768,7 @@ interface InferredBindings {
     usesPaymentStripe: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
+    usesRequestSecretTool: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
@@ -910,6 +935,19 @@ class LunoraReporter {
 const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 ```
 
+### `MarkedApiSpec` (type)
+
+```ts
+type MarkedApiSpec = "both" | "none" | "openapi" | "openrpc";
+```
+
+### `MissingBuildOutputError` (class)
+
+```ts
+class MissingBuildOutputError extends Error {
+}
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -999,6 +1037,12 @@ type RemotePreference = boolean | undefined;
 
 ```ts
 const STEP_BADGE_NAMES: ReadonlyArray<StepBadgeName>;
+```
+
+### `STRICT_ADVISORIES_ENV` (const)
+
+```ts
+const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
 ```
 
 ### `ScaffoldFileResult` (type)
@@ -1222,6 +1266,12 @@ const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
 ```
 
+### `assertBuildTargetMatches` (const)
+
+```ts
+const assertBuildTargetMatches: (target: string, projectRoot: string) => void;
+```
+
 ### `badgeLead` (const)
 
 ```ts
@@ -1237,13 +1287,21 @@ const badgeWidth: (_spec: BadgeSpec) => number;
 ### `blockingFindingsMessage` (const)
 
 ```ts
-const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, options?: {
+    strictAdvisories?: boolean;
+}) => string | undefined;
 ```
 
 ### `buildPackageSecretsBlock` (const)
 
 ```ts
 const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
+```
+
+### `canonicalPath` (const)
+
+```ts
+const canonicalPath: (path: string) => string;
 ```
 
 ### `claimAgentRulesHint` (const)
@@ -1270,6 +1328,12 @@ const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
 
 ```ts
 const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
+```
+
+### `clearApiSpecMarker` (const)
+
+```ts
+const clearApiSpecMarker: (projectRoot: string) => void;
 ```
 
 ### `clearDevServerState` (const)
@@ -1610,6 +1674,12 @@ const promptYesNo: (prompt: string, options?: {
 }) => Promise<boolean>;
 ```
 
+### `readApiSpecMarker` (const)
+
+```ts
+const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
+```
+
 ### `readDevServerState` (const)
 
 ```ts
@@ -1813,6 +1883,12 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 
 ```ts
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
+```
+
+### `writeApiSpecMarker` (const)
+
+```ts
+const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
 ```
 
 ### `writeDevServerState` (const)

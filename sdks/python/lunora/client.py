@@ -25,6 +25,7 @@ import contextlib
 import inspect
 import json
 import logging
+import random
 import threading
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable
@@ -144,12 +145,15 @@ def parse_rpc_response(body: Any, status: int) -> Any:
         raise decode_failed(failure) from failure
 
 
-def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None) -> dict:
+def build_connect_frame(client_id: Optional[str], context: Optional[dict] = None, token: Optional[str] = None) -> dict:
     frame: dict[str, Any] = {"id": "connect", "type": "connect"}
     if client_id is not None:
         frame["clientId"] = client_id
     if context is not None:
         frame["context"] = context
+    # The session credential (protocol/README.md 5.1, 6): it never rides the URL.
+    if token is not None:
+        frame["token"] = token
     return frame
 
 
@@ -195,7 +199,7 @@ def build_shape_subscribe_frame(
     return frame
 
 
-def _run_callbacks(calls: list) -> None:
+def _run_callbacks(calls: list, what: str) -> None:
     """Run consumer callbacks, each in its own guard.
 
     One callback raising must not stop the ones queued after it: a frame fans
@@ -206,8 +210,10 @@ def _run_callbacks(calls: list) -> None:
     """
 
     for call in calls:
-        with contextlib.suppress(Exception):
+        try:
             call()
+        except Exception:  # noqa: PERF203 - each callback needs its own guard
+            _log.exception("lunora: %s raised", what)
 
 
 def _frame_key(value: Any) -> Optional[str]:
@@ -265,6 +271,14 @@ def _join(base: str, path: str) -> str:
 # --- Client -----------------------------------------------------------------
 
 
+class WebsocketsMissingError(RuntimeError):
+    """The optional ``websockets`` package is not installed; retrying cannot help."""
+
+
+class SocketRunInProgressError(RuntimeError):
+    """Another socket run is already active on this client; retrying cannot help until it ends."""
+
+
 class _Subscription:
     def __init__(self, sub_id: str, function_path: str, args: Any, shard_key: Optional[str]) -> None:
         self.id = sub_id
@@ -315,6 +329,7 @@ class LunoraClient:
         timeout: float = DEFAULT_HTTP_TIMEOUT,
         offline_queue: Optional[OfflineQueue] = None,
         identity: Optional[str] = None,
+        ws_ticket: WsToken = None,
     ) -> None:
         self.url = url
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
@@ -327,7 +342,10 @@ class LunoraClient:
         #: it finishes. See :meth:`flush_offline_queue`.
         self._flushing: set[str] = set()
         self._flush_again: set[str] = set()
+        #: Session credential, sent as ``connect.token``; never in the URL.
         self.ws_token = ws_token
+        #: Admin ticket, the only WS credential that rides ``?token=``.
+        self.ws_ticket = ws_ticket
         #: Minted PER INSTANCE when not given, from the same helper that mints
         #: mutation ids. It is not cosmetic: the shard namespaces an anonymous
         #: caller's idempotency rows by this value, so a constant shared by every
@@ -358,6 +376,10 @@ class LunoraClient:
         self._call_later: Optional[Callable[[float, Callable[[], None]], Any]] = None
         self._was_ever_connected = False
         self._closed = False
+        # One socket run at a time: the sender is client-wide, so a second run
+        # would replace it and the first run's cleanup would clear the second's.
+        self._socket_running = False
+        self._frames_received = 0
         self._subs: dict[str, _Subscription] = {}
         self._shapes: dict[str, _ShapeSubscription] = {}
         self._poke_buffers: dict[str, dict] = {}
@@ -471,9 +493,9 @@ class LunoraClient:
             # is not consulted, and a token refresh is not a change of user.
             if previous is not None and previous != self._identity_fingerprint():
                 self._evict_session(deferred)
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
         if changed:
-            _run_callbacks(listeners)
+            _run_callbacks(listeners, "token listener")
 
     def _identity_fingerprint(self) -> Identity:
         """Who a write queued now belongs to; call with the lock held.
@@ -530,7 +552,7 @@ class LunoraClient:
             previous, self._identity = self._identity, value
             if previous is not None and previous != value:
                 self._evict_session(deferred)
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
 
     def _evict_session(self, deferred: list[Callable[[], None]]) -> None:
         """Drop every resume cursor and shape row; call with the lock held.
@@ -564,7 +586,7 @@ class LunoraClient:
         close_queue(self)
         with self._lock:
             hooks = list(self._close_hooks)
-        _run_callbacks(hooks)
+        _run_callbacks(hooks, "close hook")
 
     # --- HTTP RPC -----------------------------------------------------------
 
@@ -728,28 +750,36 @@ class LunoraClient:
 
     # --- WS credential ------------------------------------------------------
 
-    async def resolve_ws_token(self) -> Optional[str]:
-        """Resolve the WS ``?token=`` credential fresh (mirrors ``WsTokenProvider``)."""
-
-        token = self.ws_token
-        if callable(token):
-            result = token()
+    async def _resolve_ws_credential(self, provider: WsToken) -> Optional[str]:
+        if callable(provider):
+            result = provider()
             if inspect.isawaitable(result):
                 result = await result
             return result
-        return token
+        return provider
 
-    def ws_url_for(self, shard_key: Optional[str], token: Optional[str]) -> str:
-        params = []
+    async def resolve_ws_token(self) -> Optional[str]:
+        """Resolve the session credential fresh, for ``connect.token`` (mirrors ``WsTokenProvider``)."""
+        return await self._resolve_ws_credential(self.ws_token)
+
+    async def resolve_ws_ticket(self) -> Optional[str]:
+        """Resolve the admin ticket fresh, for the ``?token=`` URL parameter."""
+        return await self._resolve_ws_credential(self.ws_ticket)
+
+    def ws_url_for(self, shard_key: Optional[str], ticket: Optional[str]) -> str:
+        # Only the ticket may ride the URL. A `token` already on the configured URL is a stale credential, so it is
+        # dropped, as the TS client does; a `shard` is replaced by the one this call names.
+        base, _, query = self.ws_url.partition("?")
+        drop = {"token"} | ({"shard"} if shard_key else set())
+        kept = [piece for piece in query.split("&") if piece and piece.split("=", 1)[0] not in drop]
         # Empty is absent, matching `build_rpc_body` — see its docstring.
         if shard_key:
-            params.append("shard=" + _percent(shard_key))
-        if token is not None:
-            params.append("token=" + _percent(token))
-        if not params:
-            return self.ws_url
-        sep = "&" if "?" in self.ws_url else "?"
-        return self.ws_url + sep + "&".join(params)
+            kept.append("shard=" + _percent(shard_key))
+        if ticket is not None:
+            kept.append("token=" + _percent(ticket))
+        if not kept:
+            return base
+        return base + "?" + "&".join(kept)
 
     # --- Subscriptions ------------------------------------------------------
 
@@ -764,13 +794,15 @@ class LunoraClient:
         with self._lock:
             self._next_sub_id += 1
             sub_id = f"sub_{self._next_sub_id}"
+            # Built before registering: arguments the wire cannot encode raise here, instead
+            # of failing every reconnect's resend of a subscription that was already saved.
+            frame = build_subscribe_frame(sub_id, function_path, args)
             sub = _Subscription(sub_id, function_path, args, shard_key)
             sub.callbacks.append(on_data)
             if on_error is not None:
                 sub.error_callbacks.append(on_error)
             self._subs[sub_id] = sub
             sender = self._send
-            frame = build_subscribe_frame(sub_id, function_path, args)
 
         # Sent with the lock released: the sender writes to a socket, and holding
         # the lock across that would serialise every subscriber behind the wire.
@@ -857,13 +889,14 @@ class LunoraClient:
         with self._lock:
             self._next_shape_id += 1
             shape_id = f"shape_{self._next_shape_id}"
+            # Built before registering, for the same reason as `subscribe`.
+            frame = build_shape_subscribe_frame(shape_id, name, args)
             shape = _ShapeSubscription(shape_id, name, args, shard_key)
             shape.callbacks.append(on_rows)
             if on_error is not None:
                 shape.error_callbacks.append(on_error)
             self._shapes[shape_id] = shape
             sender = self._send
-            frame = build_shape_subscribe_frame(shape_id, name, args)
 
         if sender is not None:
             sender(frame)
@@ -917,7 +950,7 @@ class LunoraClient:
         # User callbacks run with the lock released. Holding it would let a callback
         # that subscribes deadlock the read loop, and would run arbitrary
         # application code inside the client's critical section.
-        _run_callbacks(deferred)
+        _run_callbacks(deferred, "subscription callback")
 
         return descriptor
 
@@ -1167,11 +1200,77 @@ class LunoraClient:
 
     # --- Live WebSocket loop (optional; needs the ``websockets`` package) ---
 
+    async def reconnect_forever(
+        self,
+        shard_key: Optional[str] = None,
+        context: Optional[dict] = None,
+        sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+        rand: Callable[[], float] = random.random,
+    ) -> None:
+        """Run :meth:`connect_and_run` again whenever the socket drops, until :meth:`close` or cancellation.
+
+        Waits :func:`replay_backoff_ms` between runs (exponential, capped at 60 s,
+        jittered). The backoff resets once a run received a frame from the server,
+        so a healthy connection that later drops reconnects promptly. Connection
+        errors are logged and retried; a missing ``websockets`` package raises
+        :class:`WebsocketsMissingError`.
+        """
+
+        attempts = 0
+
+        while not self._closed:
+            received = self._frames_received
+
+            try:
+                await self.connect_and_run(shard_key, context)
+            except (WebsocketsMissingError, SocketRunInProgressError):
+                raise
+            except Exception:
+                _log.warning("lunora: socket run failed, reconnecting", exc_info=True)
+
+            if self._closed:
+                return
+
+            attempts = 1 if self._frames_received > received else attempts + 1
+            await self._sleep_unless_closed(sleep(replay_backoff_ms(attempts, rand) / 1000))
+
+    async def _sleep_unless_closed(self, sleeping: Awaitable[Any]) -> None:
+        """Await ``sleeping`` but return as soon as :meth:`close` runs."""
+
+        loop = asyncio.get_running_loop()
+        closed = asyncio.Event()
+
+        def end() -> None:
+            with contextlib.suppress(RuntimeError):  # the loop is already closed
+                loop.call_soon_threadsafe(closed.set)
+
+        with self._lock:
+            self._close_hooks.append(end)
+            if self._closed:
+                end()
+
+        slept = asyncio.ensure_future(sleeping)
+        tasks = [slept, asyncio.ensure_future(closed.wait())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if slept.done():
+                slept.result()  # a failing injected sleep surfaces here instead of vanishing
+        finally:
+            for task in tasks:
+                task.cancel()
+            # Drain the losers so a sleeper's own cancellation cleanup has run
+            # before this returns, and no task exception goes unretrieved.
+            await asyncio.gather(*tasks, return_exceptions=True)
+            with self._lock:
+                self._close_hooks.remove(end)
+
     async def connect_and_run(self, shard_key: Optional[str] = None, context: Optional[dict] = None) -> None:
         """Open the live WS, announce ``connect``, resend subscriptions, and dispatch frames.
 
         Runs until the socket closes or :meth:`close` is called. Requires the
-        ``websockets`` package.
+        ``websockets`` package. Raises ``RuntimeError`` if another run is already
+        active on this client: the sender is shared, so two live runs would
+        clear each other's.
 
         Outbound frames are written WHEN THEY ARE PRODUCED, by a writer task
         running alongside the read loop. Draining them only after each inbound
@@ -1187,7 +1286,7 @@ class LunoraClient:
         try:
             import websockets  # type: ignore
         except ImportError as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError("connect_and_run requires the 'websockets' package (pip install websockets)") from exc
+            raise WebsocketsMissingError("connect_and_run requires the 'websockets' package (pip install websockets)") from exc
 
         loop = asyncio.get_running_loop()
         closed = asyncio.Event()
@@ -1200,17 +1299,24 @@ class LunoraClient:
         with self._lock:
             if self._closed:
                 return
+            if self._socket_running:
+                raise SocketRunInProgressError("a socket run is already active on this client; close it before starting another")
+            self._socket_running = True
             self._close_hooks.append(end)
 
         try:
             await self._run_socket(websockets, loop, closed, shard_key, context)
         finally:
             with self._lock:
+                self._socket_running = False
                 self._close_hooks.remove(end)
 
     async def _run_socket(self, websockets: Any, loop: Any, closed: asyncio.Event, shard_key: Optional[str], context: Optional[dict]) -> None:
-        token = await self.resolve_ws_token()
-        async with websockets.connect(self.ws_url_for(shard_key, token), max_size=MAX_WS_FRAME_BYTES) as socket:  # pragma: no cover - live I/O
+        # Both credentials are resolved on every open, so a reconnect re-mints the
+        # ticket and re-reads the session. Only the ticket may reach the URL.
+        session = await self.resolve_ws_token()
+        ticket = await self.resolve_ws_ticket()
+        async with websockets.connect(self.ws_url_for(shard_key, ticket), max_size=MAX_WS_FRAME_BYTES) as socket:  # pragma: no cover - live I/O
             outbox: asyncio.Queue = asyncio.Queue()
 
             # One FIFO drained by one writer, so frames reach the socket in the
@@ -1233,7 +1339,10 @@ class LunoraClient:
                         continue
                     try:
                         frame = json.loads(raw)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, RecursionError):
+                        # RecursionError: CPython's parser raises it on a deeply
+                        # nested frame; that is a malformed frame, not a reason
+                        # to end the read loop.
                         continue
                     # `_handle_data` already routes a codec rejection to the
                     # subscription that owns it. This is the backstop for
@@ -1241,8 +1350,15 @@ class LunoraClient:
                     # user callback that raises — because an exception out of
                     # here terminates the read loop and silently stops every
                     # subscription on the client.
-                    with contextlib.suppress(Exception):
-                        self.handle_frame(frame)
+                    try:
+                        descriptor = self.handle_frame(frame)
+                    except Exception:
+                        _log.exception("lunora: frame handler raised")
+                        continue
+                    # Only a frame the client recognised proves a live server;
+                    # `null` or an unknown `type` must not reset the backoff.
+                    if descriptor.get("kind") != "ignored":
+                        self._frames_received += 1
 
             # A new token re-flushes this shard (see `auth_token`). Scheduled on
             # the loop, since the setter may run on any thread.
@@ -1299,9 +1415,16 @@ class LunoraClient:
                 with contextlib.suppress(RuntimeError):  # the loop is already closed
                     loop.call_soon_threadsafe(start_flush)
 
+            # `connect` is enqueued before the sender is visible, so a subscribe on
+            # another thread cannot reach the server ahead of it.
+            send(build_connect_frame(self.client_id, context, session))
             self.attach_socket(send)
-            send(build_connect_frame(self.client_id, context))
-            self.resend_subscriptions()
+            try:
+                self.resend_subscriptions()
+            except BaseException:
+                # The reader and writer tasks do not exist yet, so only the sender needs undoing.
+                self.detach_socket()
+                raise
 
             writer = loop.create_task(write_outbound())
             reader = loop.create_task(read_inbound())

@@ -1,3 +1,27 @@
+## @lunora/errors [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.67...@lunora/errors@1.0.0-alpha.68) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** read body-less SSE stream responses via text() ([#1285](https://github.com/anolilab/lunora/issues/1285)) ([dc4979b](https://github.com/anolilab/lunora/commit/dc4979b52d3ea0290618955b2562b88ec81a5609))
+
+## @lunora/errors [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.66...@lunora/errors@1.0.0-alpha.67) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+## @lunora/errors [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.65...@lunora/errors@1.0.0-alpha.66) (2026-10-20)
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+## @lunora/errors [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.64...@lunora/errors@1.0.0-alpha.65) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
 ## @lunora/errors [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.63...@lunora/errors@1.0.0-alpha.64) (2026-10-19)
 
 ### Bug Fixes

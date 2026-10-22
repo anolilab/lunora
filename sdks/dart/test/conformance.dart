@@ -58,6 +58,7 @@ Future<void> main() async {
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(caseShapeSubscriptionsResendAfterReconnect);
+  await run(caseDetachedSubscriptionIsHeldUntilReattach);
   await run(caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
@@ -139,6 +140,11 @@ Future<void> main() async {
   await run(caseBatchMissingSlotIsRetried);
   await run(caseWholeBatchRejectionIsTerminal);
   await run(casePreconditionFailureDiscardsBeforeReplay);
+  await run(caseOnlineOnlyRefusedWhenDisconnected);
+  await run(caseOnlineOnlyRefusedWhenDisconnectedInCallback);
+  await run(caseOnlineOnlySendsWhenConnected);
+  await run(caseOnlineOnlyTransportFailureRefused);
+  await run(caseOnlineOnlyLeavesNormalWritesQueued);
   await run(caseHydrateRestoresAheadOfThisSession);
   await run(caseIdentityChangeDiscardsQueuedWrites);
   await run(caseTokenDigestMatchesTheReferenceClient);

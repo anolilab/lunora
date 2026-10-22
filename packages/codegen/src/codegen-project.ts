@@ -411,6 +411,22 @@ export const findTsconfig = (startPath: string): string | undefined => {
 };
 
 /**
+ * What a tsconfig resolves to once its `extends` chain is applied: the compiler settings and the file list TypeScript
+ * computes from it. A change in any config the chain reaches shows up here, where the selected file's own bytes would not.
+ */
+export const tsconfigFingerprint = (tsconfigPath: string): string => {
+    const host: ts.ParseConfigFileHost = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined };
+    const parsed = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, host);
+
+    if (parsed === undefined) {
+        return "";
+    }
+
+    // The file list keeps TypeScript's order: a reordered list merges declarations differently, so it must change the fingerprint.
+    return JSON.stringify({ fileNames: parsed.fileNames, options: parsed.options });
+};
+
+/**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
  * cross-file type resolution and path aliases work; falls back to an isolated

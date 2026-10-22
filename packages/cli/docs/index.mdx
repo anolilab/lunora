@@ -53,11 +53,11 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 # Deploy
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
                [--lazy-functions] [--no-smoke-load]
-lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
+lunora build [--out-dir <dir>] [--no-framework-build]   # bundle the worker to disk without deploying
              [--lazy-functions] [--no-smoke-load]
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
-              [--lazy-functions] [--no-smoke-load]
+              [--lazy-functions] [--no-smoke-load] [--no-framework-build]
               [--prebuilt]              #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
@@ -181,7 +181,6 @@ UNPINNED warning. Pass `-t` / `--template` to choose the starting point:
 | `tanstack-start-solid`        | TanStack Start (Solid)                                                               |
 | `vinext`                      | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental) |
 | `vinext-pages`                | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)      |
-| `react-router`                | React Router (v7, framework mode) — SSR composed into the Lunora worker              |
 | `astro`                       | Astro (islands) — single-worker, Lunora composed into the adapter worker             |
 | `analog`                      | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                          |
 | `nuxt`                        | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                  |
@@ -739,7 +738,10 @@ curl -fsS "$url/api/smoke"
 
 Pass `--lazy-functions` to generate lazy imports for the bundle. Generation is
 eager by default. Use `lunora deploy --prebuilt` to keep that generated registry
-in a later deployment.
+in a later deployment. Lazy imports do not make the upload smaller: wrangler
+bundles with a single output and no code splitting, so the `import()` targets are
+inlined, and the bundle is somewhat larger than the eager one. The change is in
+when modules are evaluated, not how many bytes are uploaded.
 
 Lazy builds also smoke-load every lazy module in workerd first (see `lunora deploy`);
 pass `--no-smoke-load` to skip it.
@@ -756,7 +758,23 @@ lunora build --out-dir dist-worker
 ```
 
 `lunora deploy --prebuilt` skips codegen + the schema-drift gate (trusting the
-prior `build` / `prepare`); wrangler still bundles the Worker.
+prior `build`, which writes the client output; `prepare` builds no client output);
+wrangler still bundles the Worker.
+
+Before wrangler runs, `build` and `deploy` run the project's client build when wrangler would
+otherwise read a stale or missing output: `rsbuild build` or `vite build`, picked
+from the `rsbuild.config.*` or `vite.config.*` file. A worker whose `main` is
+`virtual:lunora/worker` (the Vite-generated class-A entry) is always built with Vite, even
+when an rsbuild config also exists. A framework with neither config (Astro, Nuxt) runs its
+project `build` script through its package manager. It runs when `main` is
+`virtual:lunora/worker`, when the framework is class A or B, or when `assets.directory` is
+set, including in the `--env` block being deployed. A build script consumes none of the
+plugin's settings, so `--api-spec` and `--target` apply to the deploy's own codegen. Pass `--no-framework-build` to skip
+it and bundle what is already on disk. Edits the client build makes to
+`wrangler.jsonc` are rolled back, so `build` leaves the committed config alone.
+`deploy --prebuilt` never runs it, because that artifact was built earlier.
+`--api-spec` is refused when the build runs: set it in the plugin config instead.
+`--target` is refused only when it names a target other than the project's.
 
 ### `lunora link`
 

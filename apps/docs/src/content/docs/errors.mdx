@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 187 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 189 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -273,13 +273,13 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `500` — Cron expression is not statically analyzable
 
-### `CRON_JOB_NOT_FOUND`
-
-`404` — Cron job not found
-
 ### `CRON_JOBS_NOT_CONFIGURED`
 
 `400` — Cron jobs not configured
+
+### `CRON_JOB_NOT_FOUND`
+
+`404` — Cron job not found
 
 ### `CRON_NAME_NOT_STATIC`
 
@@ -421,13 +421,17 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `403` — Live topic publish forbidden
 
+### `FUNCTIONS_NOT_CONFIGURED`
+
+`400` — Functions registry not configured
+
 ### `FUNCTION_NOT_FOUND`
 
 `404` — Function not found
 
-### `FUNCTIONS_NOT_CONFIGURED`
+### `GLOBALS_NOT_CONFIGURED`
 
-`400` — Functions registry not configured
+`400` — Global-table introspector not configured
 
 ### `GLOBAL_NOT_CONFIGURED`
 
@@ -440,10 +444,6 @@ The message names each failed shard key and its error. Re-run the export once th
 ### `GLOBAL_TABLE_NOT_EDITABLE`
 
 `400` — Global table is not editable
-
-### `GLOBALS_NOT_CONFIGURED`
-
-`400` — Global-table introspector not configured
 
 ### `HTTP_STREAM_BAD_CHUNK`
 
@@ -465,6 +465,9 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `502` — HTTP stream response has no body
 
+The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.
+A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.
+
 ### `HTTP_STREAM_STATUS`
 
 `502` — HTTP stream request failed
@@ -473,14 +476,6 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `502` — HTTP stream transport error
 
-### `ID_COLLISION`
-
-`409` — Document id already belongs to another table
-
-The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.
-
-This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
-
 ### `IDENTITY_MISMATCH`
 
 `409` — Session changed since the write was queued
@@ -488,6 +483,14 @@ This is reported per row rather than aborting the import: the remaining rows sti
 A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.
 
 `@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
+
+### `ID_COLLISION`
+
+`409` — Document id already belongs to another table
+
+The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.
+
+This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
 
 ### `INVALID_INPUT`
 
@@ -521,6 +524,10 @@ Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy 
 
 `409` — A later live control call already applied
 
+### `LIVE_STREAMS_UNSUPPORTED`
+
+`501` — Live streams are not served by this worker
+
 ### `LIVE_STREAM_DUPLICATE`
 
 `500` — Duplicate live stream id or export name
@@ -532,10 +539,6 @@ Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy 
 ### `LIVE_STREAM_NOT_LITERAL`
 
 `500` — Live stream declaration is not a literal
-
-### `LIVE_STREAMS_UNSUPPORTED`
-
-`501` — Live streams are not served by this worker
 
 ### `LIVE_TOPIC_INVALID`
 
@@ -612,6 +615,12 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 ### `OFFLINE_IDENTITY_CHANGED`
 
 `409` — Offline identity changed
+
+### `OFFLINE_NOT_QUEUED`
+
+`503` — Offline, write not queued
+
+A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
 
 ### `OUT_OF_ORDER`
 
@@ -817,6 +826,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `503` — Stream disconnected
 
+### `STREAM_IDLE`
+
+`504` — Stream went idle
+
 ### `STREAM_ID_IN_USE`
 
 `409` — Stream id already in use
@@ -913,13 +926,13 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 
 `400` — Validation failed
 
-### `VECTOR_QUERY_UNSUPPORTED`
-
-`400` — Vector index querying not enabled
-
 ### `VECTORS_NOT_CONFIGURED`
 
 `400` — Vector index introspector not configured
+
+### `VECTOR_QUERY_UNSUPPORTED`
+
+`400` — Vector index querying not enabled
 
 ### `WEBHOOK_EVENT_ID_MISSING`
 

@@ -53,6 +53,10 @@ pub struct ApiError {
     /// from one. A coded envelope never sets it, whatever its HTTP status: its
     /// code is the verdict. [`crate::submit::is_transient`] reads it.
     pub transient: bool,
+    /// The transport failure an online-only write was refused over. Set only by
+    /// the `OFFLINE_NOT_QUEUED` refusal of a send that got no reply; exposed as
+    /// the error's [`std::error::Error::source`].
+    pub source: Option<TransportError>,
 }
 
 impl fmt::Display for ApiError {
@@ -61,7 +65,24 @@ impl fmt::Display for ApiError {
     }
 }
 
-impl std::error::Error for ApiError {}
+impl std::error::Error for ApiError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|cause| cause as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// The transport failure that stopped a request before any HTTP reply: the
+/// injected poster returned an error (connection refused, DNS failure, timeout).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransportError(pub String);
+
+impl fmt::Display for TransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TransportError {}
 
 /// A subscription-scoped error the server pushed.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,7 +112,16 @@ impl fmt::Display for ClientError {
     }
 }
 
-impl std::error::Error for ClientError {}
+impl std::error::Error for ClientError {
+    /// A coded error's cause is the transport failure it was refused over, if any.
+    /// Set on the `Api` variant only: the `Transport` variant is itself the cause.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ClientError::Api(inner) => inner.source(),
+            ClientError::Wire(_) | ClientError::Transport(_) => None,
+        }
+    }
+}
 
 impl From<WireError> for ClientError {
     fn from(error: WireError) -> Self {
@@ -182,6 +212,7 @@ pub(crate) fn rpc_result(body: &Value, status: u16) -> Result<&Value, ClientErro
             // (`crate::submit::is_transient`), on the single-call path and the
             // batch path alike.
             transient: false,
+            source: None,
         })));
     }
 
@@ -210,6 +241,7 @@ pub(crate) fn envelopeless_error(status: u16) -> ApiError {
             data: None,
             message: "HTTP 413 without an error envelope".to_string(),
             transient: false,
+            source: None,
         };
     }
 
@@ -218,10 +250,14 @@ pub(crate) fn envelopeless_error(status: u16) -> ApiError {
         data: None,
         message: format!("HTTP {status} without a readable Lunora response"),
         transient: true,
+        source: None,
     }
 }
 
-pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> Value {
+/// The one-shot frame sent first on every socket open. `token` is the session
+/// credential: it rides here, never in the socket URL, and is omitted when
+/// absent or empty.
+pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>, token: Option<&str>) -> Value {
     let mut frame = Map::new();
 
     frame.insert("id".into(), json!("connect"));
@@ -233,6 +269,11 @@ pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> 
 
     if let Some(inner) = context {
         frame.insert("context".into(), inner.clone());
+    }
+
+    // Empty is absent, matching `ws_url` and `build_rpc_body`.
+    if let Some(value) = token.filter(|value| !value.is_empty()) {
+        frame.insert("token".into(), json!(value));
     }
 
     Value::Object(frame)
@@ -697,6 +738,12 @@ impl Client {
         let (result, _commit_cursor) = self.rpc_raw(function_path, args, shard_key, mutation_id, None, self.auth_token())?;
 
         Ok(decode_wire(&result)?)
+    }
+
+    /// Whether an HTTP poster is configured. Without one a send fails before it
+    /// is attempted, which is not a transport failure.
+    pub(crate) fn has_poster(&self) -> bool {
+        self.post.is_some()
     }
 
     /// One round-trip, returning `(raw result, commit_cursor)`, UNDECODED.
@@ -1243,8 +1290,10 @@ impl Client {
     }
 
     /// The socket URL: the origin with its scheme swapped, plus the shard and
-    /// credential query parameters when present.
-    pub fn ws_url(&self, shard_key: Option<&str>, token: Option<&str>) -> String {
+    /// admin-ticket query parameters when present. `ws_ticket` is the ephemeral
+    /// admin sub-token; the session credential never rides the URL —
+    /// [`build_connect_frame`] carries it.
+    pub fn ws_url(&self, shard_key: Option<&str>, ws_ticket: Option<&str>) -> String {
         let joined = self.join(WS_PATH);
         let endpoint = if let Some(rest) = joined.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -1261,7 +1310,7 @@ impl Client {
             params.push(format!("shard={}", percent_encode(key)));
         }
 
-        if let Some(value) = token {
+        if let Some(value) = ws_ticket {
             params.push(format!("token={}", percent_encode(value)));
         }
 

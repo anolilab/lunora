@@ -100,7 +100,7 @@ const openManagedSocket = (
     url: string,
     options: ManagedSocketOptions,
     handlers: {
-        onClose: (event?: { code?: number }) => void;
+        onClose: (event?: { code?: number; reason?: string }) => void;
         onMessage: (event: MessageEvent) => void;
         /** Optional: the scheduled-jobs socket has nothing to do on `open` (its backoff resets on the first payload frame, not here). */
         onOpen?: () => void;
@@ -137,7 +137,7 @@ const openManagedSocket = (
     };
 
     /** The two-step disconnect sequence every trigger below runs: tear down this attempt's bookkeeping, then hand the (optional) close event to the caller. */
-    const disconnect = (event?: { code?: number }): void => {
+    const disconnect = (event?: { code?: number; reason?: string }): void => {
         teardown();
         handlers.onClose(event);
     };
@@ -245,7 +245,7 @@ const openManagedSocket = (
         }
     });
 
-    socket.addEventListener("close", (event?: { code?: number }): void => {
+    socket.addEventListener("close", (event?: { code?: number; reason?: string }): void => {
         // Ignore a late close from a socket the connection already moved past
         // (e.g. the fail-fast timeout force-closed it and a reconnect already
         // built a newer socket). Acting on it would tear down the live socket.

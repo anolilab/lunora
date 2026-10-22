@@ -50,6 +50,7 @@ import readPackageDependencies from "./discover/package-dependencies";
 import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueueDeclarations } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
+import discoverSecretValueToolUsage from "./discover/secret-value-tool";
 import { resolveServiceBindings } from "./discover/service-bindings";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
@@ -273,6 +274,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // built green on a host where no runtime dispatches one.
     const codeSignals = discoverPlatformSignals(project, lunoraDirectory, findProjectConfigFile(projectRoot));
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
+    const secretValueToolUsed = discoverSecretValueToolUsage(project, lunoraDirectory);
     const usage = discoverFeatureUsage(project, lunoraDirectory);
 
     // `@lunora/agent`'s `browserTool` drives `ctx.browser` too, so it is browser
@@ -316,6 +318,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // declaration. A schema with no foreign key declares no graph, so a host
         // that cannot serve the traversal only refuses apps that would use one.
         relationGraph: schemaDeclaresRelationGraph(schema),
+        secretValues: secretValueToolUsed,
         secrets: codeSignals.secrets,
         services: services.length > 0,
         topics: topics.length > 0,

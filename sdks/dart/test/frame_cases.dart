@@ -18,6 +18,13 @@ void caseClientFrameBuilders() {
   final frames = fixture('ws-frames.json')['clientFrames'] as Map<String, Object?>;
 
   equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect']), 'connect frame');
+  // protocol/README.md 5.1: the session credential is sent in connect, and only when held.
+  equals(
+    LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'sess-SECRET-1')['token'],
+    'sess-SECRET-1',
+    'connect carries the session credential as token',
+  );
+  check(!LunoraClient.buildConnectFrame(clientId: 'client-test').containsKey('token'), 'connect omits token when no session credential is held');
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'})),
     canonical(frames['connect-with-context']),
@@ -297,6 +304,29 @@ void caseShapeSubscriptionsResendAfterReconnect() {
   equals(canonical((resent[1]['shape']! as Map<String, Object?>)['args']), canonical(<String, Object?>{'room': 'general'}), 'and carries its args');
   equals(resent[1]['sinceCheckpoint'], 5, 'the shape resumes from the checkpoint it materialised');
   equals(resent[1]['sinceEpoch'], 'e1', 'and from the epoch it saw');
+}
+
+void caseDetachedSubscriptionIsHeldUntilReattach() {
+  // Not a manifest case: adding it to protocol/conformance-cases.json would make
+  // all 8 ports required to cover it.
+  final client = LunoraClient(url: 'https://app.example');
+  final dead = <Map<String, Object?>>[];
+  final live = <Map<String, Object?>>[];
+
+  client
+    ..attachSocket(dead.add)
+    ..detachSocket();
+
+  client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'});
+
+  equals(dead.length, 0, 'a subscription made while detached is not written to the dead socket');
+
+  client
+    ..attachSocket(live.add)
+    ..resendSubscriptions();
+
+  equals(live.length, 1, 'reattaching resends the held subscription once');
+  equals(live.isEmpty ? null : live.first['type'], 'subscribe', 'as a subscribe frame');
 }
 
 /// A payload the codec refuses must not end the socket read loop.

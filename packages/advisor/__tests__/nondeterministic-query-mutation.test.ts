@@ -56,6 +56,15 @@ describe("nondeterministic_query_mutation", () => {
         expect(finding?.detail).not.toContain("ctx.now");
     });
 
+    it("points a mutation's Math.random at ctx.random()", () => {
+        expect.assertions(2);
+
+        const [finding] = run([{ callee: "Math.random", exportName: "pickSample", file: "samples", kind: "mutation", line: 3 }]);
+
+        expect(finding?.detail).toContain("ctx.random()");
+        expect(finding?.detail).not.toContain("ctx.now");
+    });
+
     it("drops Date.now() inside a mutation handler to INFO", () => {
         expect.assertions(2);
 

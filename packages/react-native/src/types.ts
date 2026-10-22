@@ -8,7 +8,8 @@ import type { AsyncStorageLike, LunoraClientOptions } from "@lunora/client";
  *
  * For better-auth Expo sessions, prefer a **bearer** token instead: read it with
  * `@lunora/react-native/auth`'s `expoBearerToken` and feed it to
- * `client.setAuthToken` / `setWsToken` (see the package README). Either way the
+ * `client.setAuthToken` for HTTP RPC, and send it on the socket upgrade through
+ * `getAuthHeaders` (see the package README). Either way the
  * client sends `credentials: "omit"`, so the platform cookie jar never attaches a
  * session cookie the runtime's CSRF guard would reject on an `Origin`-less native
  * request.
@@ -25,7 +26,7 @@ export type AuthHeadersFactory = () => Record<string, string> | undefined;
  * stays in memory and is lost on reload). `getAuthHeaders` is a generic escape
  * hatch for a custom credential header on both the HTTP RPC path and the
  * WebSocket upgrade; for better-auth sessions prefer a bearer token
- * (`expoBearerToken` + the client's `setAuthToken` / `setWsToken`).
+ * (`expoBearerToken`, given to `setAuthToken` and to `getAuthHeaders`).
  *
  * The `persistence`, `fetch`, and `WebSocket` fields of `LunoraClientOptions`
  * are still accepted and take precedence when you need full control; the two

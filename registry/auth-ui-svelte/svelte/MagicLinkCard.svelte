@@ -47,7 +47,7 @@
         >
             <FormBanner error={$form.formError} success={$form.successMessage} />
             <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
-            <SubmitButton pending={$form.status === "submitting"}>
+            <SubmitButton availableAt={$form.resendAvailableAt} pending={$form.status === "submitting"}>
                 {t.magicLink}
                 {#if lastUsed === LAST_METHOD_MAGIC_LINK}
                     <span class="lunora-auth-social__badge">{t.lastUsed}</span>

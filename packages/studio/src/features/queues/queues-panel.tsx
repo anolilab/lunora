@@ -451,6 +451,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
         data: messagesData,
         error: messagesError,
         errorSource: messagesErrorSource,
+        poll: pollMessages,
         refetch: refetchMessages,
     } = useAdminQuery<QueueMessagesResult>(ADMIN_FUNCTIONS.getQueueMessages, { limit: messageLimit });
 
@@ -483,9 +484,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
 
     // Keep the consumed-message log live without a manual refresh — but only while
     // the Messages tab is visible, so the Declared / Send tabs don't poll the RPC.
-    useAutoRefresh(() => {
-        refetchMessages();
-    }, tab === "messages");
+    useAutoRefresh(pollMessages, tab === "messages");
 
     const send = async (): Promise<void> => {
         setActionError(null);

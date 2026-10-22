@@ -9,6 +9,9 @@ const val OFFLINE_QUEUE_OVERFLOW: String = "OFFLINE_QUEUE_OVERFLOW"
 /** The write's precondition no longer held when the flush reached it. */
 const val OFFLINE_PRECONDITION_FAILED: String = "OFFLINE_PRECONDITION_FAILED"
 
+/** An online-only write was refused because the connection is not live. Nothing was queued. */
+const val OFFLINE_NOT_QUEUED: String = "OFFLINE_NOT_QUEUED"
+
 /** The write was queued under a different identity than the one now in effect. */
 const val OFFLINE_IDENTITY_CHANGED: String = "OFFLINE_IDENTITY_CHANGED"
 
@@ -104,7 +107,7 @@ const val PAYLOAD_TOO_LARGE: String = "PAYLOAD_TOO_LARGE"
 const val DEFAULT_MAX_ITEMS: Int = 1000
 
 /** A coded, queue-scoped failure. */
-class OfflineException(val code: String, message: String) : RuntimeException(message)
+class OfflineException(val code: String, message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 /**
  * Who made a queued write.

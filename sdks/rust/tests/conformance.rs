@@ -26,11 +26,12 @@ use offline_cases::{
     batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
     offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
     offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
-    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
-    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest, offline_write_held_for_credential_replays_after_token_refresh,
-    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
-    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    offline_online_only_leaves_normal_writes_queued, offline_online_only_refused_when_disconnected, offline_online_only_sends_when_connected,
+    offline_online_only_transport_failure_refused, offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order,
+    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
+    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest,
+    offline_write_held_for_credential_replays_after_token_refresh, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -132,6 +133,10 @@ fn conformance_manifest_is_covered() {
             "offline_queue_drains_only_the_named_shard" => offline_queue_drains_only_the_named_shard(),
             "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
             "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
+            "offline_online_only_refused_when_disconnected" => offline_online_only_refused_when_disconnected(),
+            "offline_online_only_sends_when_connected" => offline_online_only_sends_when_connected(),
+            "offline_online_only_transport_failure_refused" => offline_online_only_transport_failure_refused(),
+            "offline_online_only_leaves_normal_writes_queued" => offline_online_only_leaves_normal_writes_queued(),
             "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
@@ -493,9 +498,9 @@ fn client_frame_builders() {
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None)), canonical(&frames["connect"]));
+    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None, None)), canonical(&frames["connect"]));
     assert_eq!(
-        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })))),
+        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
         canonical(&frames["connect-with-context"])
     );
     assert_eq!(
@@ -1399,4 +1404,64 @@ fn from_model_json_matches_whole_paths() {
 
     assert!(encoded.get("limit").is_none(), "the top-level path prunes");
     assert_eq!(encoded["outer"]["limit"], Value::Null, "the same key one level down is a different path");
+}
+
+// The session credential must never ride the socket URL: not on the first open,
+// not on a reconnect, and not when the value comes from a provider re-resolved
+// on every open. The URL is built from the ticket alone; the session is read only
+// into the connect frame.
+#[test]
+fn session_credential_never_rides_the_url() {
+    const SESSION: &str = "sess-secret-123";
+    // The URL percent-encodes the hyphens, so a leak can show up in either form.
+    const SESSION_ENCODED: &str = "sess%2Dsecret%2D123";
+
+    let client = Client::new("https://app.example", None);
+    let leaks = |url: &str| url.contains(SESSION) || url.contains(SESSION_ENCODED);
+    let mut resolved = 0;
+    // `provider` stands in for an app-supplied resolver, called fresh on every open.
+    let mut provider = || {
+        resolved += 1;
+        SESSION
+    };
+
+    for open in 0..3 {
+        let session = provider();
+
+        assert!(
+            !leaks(&client.ws_url(Some("tenant_a"), Some("ticket-abc"))),
+            "open {open}: the URL carries the session credential"
+        );
+        assert!(!leaks(&client.ws_url(None, None)), "open {open}: the bare URL carries the session credential");
+        assert_eq!(
+            build_connect_frame(Some("client-test"), None, Some(session))["token"],
+            json!(SESSION),
+            "open {open}: connect token"
+        );
+    }
+
+    assert_eq!(resolved, 3, "the provider resolves once per open");
+}
+
+// The connect envelope carries the session credential as `token`, and omits the
+// key when none is held (or it is empty).
+#[test]
+fn connect_frame_carries_session_token() {
+    assert_eq!(build_connect_frame(Some("client-test"), None, Some("sess-abc"))["token"], json!("sess-abc"));
+    assert!(build_connect_frame(Some("client-test"), None, None).get("token").is_none(), "absent when unset");
+    assert!(
+        build_connect_frame(Some("client-test"), None, Some("")).get("token").is_none(),
+        "absent when empty"
+    );
+}
+
+// The ticket is the only thing in `?token=`, and it is that ticket exactly.
+#[test]
+fn ws_url_ticket_is_the_only_token() {
+    let client = Client::new("https://app.example", None);
+    let url = client.ws_url(Some("tenant_a"), Some("ticket-abc"));
+
+    assert_eq!(url.matches("token=").count(), 1, "exactly one token parameter in {url}");
+    assert!(url.ends_with("&token=ticket%2Dabc"), "the ticket is the token, hyphen encoded: {url}");
+    assert!(!client.ws_url(None, None).contains("token="), "no ticket means no token parameter");
 }

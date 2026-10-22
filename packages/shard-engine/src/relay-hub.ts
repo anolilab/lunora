@@ -63,6 +63,13 @@ import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAtta
 /** Fixed relay-fan when a shard promotes (per-deployment via `LUNORA_RELAY_FAN`). */
 const DEFAULT_RELAY_FAN = 2;
 
+/** Whether the deployment gates sockets behind `LUNORA_WS_BEARER`: only then can a socket be pending. */
+const isBearerGated = (env: unknown): boolean => {
+    const bearer = (env as Record<string, unknown> | undefined)?.LUNORA_WS_BEARER;
+
+    return typeof bearer === "string" && bearer.length > 0;
+};
+
 /** Hard ceiling on relays per shard (per-deployment via `LUNORA_MAX_RELAYS`) — the cost cap a viral shard can never exceed. */
 const DEFAULT_MAX_RELAYS = 8;
 
@@ -123,6 +130,12 @@ interface CohortShapeEntry {
     cursor: number;
     key: string;
     name: string;
+
+    /**
+     * The table the shape resolved to, so a flush can skip it on the changed-table set before re-resolving. Kept in memory only: it is
+     * unset after an owner wake, and a re-point ships with a deploy, which gives the new code an empty cache rather than a stale one.
+     */
+    table?: string;
 }
 
 /**
@@ -253,8 +266,60 @@ interface RelayPokeDelivery {
 /** Build a JSON `Response` (the owner's seed reply on the control channel). */
 const jsonRelayResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" } });
 
+/** The frames whose `relayIndex` is required: each one is meaningless without the relay slot it came from. */
+const FRAMES_NAMING_A_RELAY = new Set<OwnerRelayFrame["type"]>(["relay_attach", "relay_detach", "relay_room_event", "relay_shape_unsubscribe"]);
+
+/**
+ * The frames that add relay state, so only they are bounded by `LUNORA_MAX_RELAYS`. A relay admitted under a larger cap that a
+ * deploy has since lowered must still be able to detach, unsubscribe and report room events, or its rows and sockets are stranded.
+ */
+const FRAMES_GROWING_RELAY_STATE = new Set<OwnerRelayFrame["type"]>(["relay_attach", "relay_shape_subscribe"]);
+
+/**
+ * Parse a control frame, or `undefined` when it is not JSON, or names (or omits a required) relay slot this shard cannot have.
+ * Every frame carrying `relayIndex` is checked here, once: a non-integer index would otherwise be persisted to `__lunora_relays`,
+ * and an index past the cap would let an attach or subscribe grow state beyond it.
+ */
+const parseControlFrame = (raw: string, maxRelays: number): OwnerRelayFrame | undefined => {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return undefined;
+    }
+
+    // `JSON.parse("null")` is a valid parse, and destructuring it below would throw rather than answer 400.
+    if (typeof parsed !== "object" || parsed === null) {
+        return undefined;
+    }
+
+    const message = parsed as OwnerRelayFrame;
+    const { relayIndex } = message as { relayIndex?: unknown };
+    const valid =
+        relayIndex === undefined
+            ? !FRAMES_NAMING_A_RELAY.has(message.type)
+            : Number.isSafeInteger(relayIndex) &&
+              (relayIndex as number) >= 0 &&
+              (!FRAMES_GROWING_RELAY_STATE.has(message.type) || (relayIndex as number) < maxRelays);
+
+    if (!valid) {
+        return undefined;
+    }
+
+    return message;
+};
+
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
+
+/** Once `pending` lands, cancel its body unless it is the `kept` response, so an unread cross-DO stream is released rather than held until GC. */
+const releaseUnread = (pending: Promise<Response | undefined>, kept: Response | undefined): void => {
+    pending
+        .then(async (response) => (response === kept ? undefined : response?.body?.cancel()))
+        // The request failed or the body is already released: nothing left to cancel.
+        .catch(() => undefined);
+};
 
 /**
  * How long a relay remembers the sequence of a live control call it applied. The race the sequence guards against is a late frame: a call
@@ -311,11 +376,9 @@ abstract class RelayLink {
             return new Response("forbidden", { status: 403 });
         }
 
-        let message: OwnerRelayFrame;
+        const message = parseControlFrame(raw, this.maxRelays());
 
-        try {
-            message = JSON.parse(raw) as OwnerRelayFrame;
-        } catch {
+        if (message === undefined) {
             return new Response("bad request", { status: 400 });
         }
 
@@ -406,6 +469,14 @@ abstract class RelayLink {
      */
     protected canAddressSiblings(): boolean {
         return this.siblingStub(this.roleId.ownerKey) !== undefined;
+    }
+
+    /**
+     * Whether the server has admitted this socket. A pending socket has not proved its credential, and a peer can open one
+     * freely, so promotion, drain and idle count only admitted sockets.
+     */
+    protected isAdmitted(ws: ShardSocketLike): boolean {
+        return this.host.readAttachment(ws).authenticated !== false;
     }
 
     /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
@@ -656,9 +727,11 @@ class OwnerRelay extends RelayLink {
 
         // The first non-404 answer names the holder. `Promise.any` settles on it without waiting for the other relays; a 404 rejects, so
         // the wait goes on, and only when every relay has refused to hold the socket does it settle as `undefined`.
+        const legs = [...targets].map((index) => this.liveControlAnswer(index, control));
+
         return Promise.any(
-            [...targets].map(async (index) => {
-                const response = await this.liveControlAnswer(index, control);
+            legs.map(async (leg) => {
+                const response = await leg;
 
                 if (response === undefined || response.status === 404) {
                     throw new Error("relay does not hold the socket");
@@ -666,7 +739,16 @@ class OwnerRelay extends RelayLink {
 
                 return response;
             }),
-        ).catch(() => undefined);
+        )
+            .catch(() => undefined)
+            .then((winner) => {
+                // Only the winner's answer is read: release every other leg's body, now or when it lands.
+                for (const leg of legs) {
+                    releaseUnread(leg, winner);
+                }
+
+                return winner;
+            });
     }
 
     /**
@@ -735,7 +817,10 @@ class OwnerRelay extends RelayLink {
      * threshold. Advances the promotion latch, so it is not a pure read.
      */
     public override relayCount(): number {
-        const subscribers = this.host.getWebSockets().length;
+        // A pending socket has not proved its credential, and a peer can open one freely, so it must not promote the owner.
+        // Pending sockets exist only behind the bearer gate, so an ungated owner counts without reading any attachment.
+        const sockets = this.host.getWebSockets();
+        const subscribers = isBearerGated(this.host.env()) ? sockets.filter((ws) => this.isAdmitted(ws)).length : sockets.length;
         const tUp = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
         const tDownRaw = envPositiveInt(this.host.env(), "LUNORA_RELAY_COLLAPSE_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tDown);
 
@@ -927,6 +1012,11 @@ class OwnerRelay extends RelayLink {
         frameCursor: number,
         epoch: string | undefined,
     ): RelayShapePoke | undefined {
+        // The seed already resolved this shape: when its table did not change, skip it without re-resolving.
+        if (entry.table !== undefined && !changed.has(entry.table)) {
+            return undefined;
+        }
+
         let resolved: ResolvedShape | undefined;
 
         try {
@@ -935,13 +1025,19 @@ class OwnerRelay extends RelayLink {
             return undefined;
         }
 
-        if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
+        if (resolved === undefined || resolved.global === true) {
             return undefined;
         }
 
-        // Alias so the cursor advance mutates a local binding, not the
-        // parameter (no-param-reassign) — same pattern as `createGeoBuilder`.
+        // Alias so the cursor advance and the remembered table mutate a local
+        // binding, not the parameter (no-param-reassign) — same pattern as `createGeoBuilder`.
         const staged = entry;
+        staged.table = resolved.table;
+
+        if (!changed.has(resolved.table)) {
+            return undefined;
+        }
+
         const fromCursor = staged.cursor;
         const rowsPatch = this.host.buildShapeDiff(resolved, fromCursor, frameCursor);
 
@@ -1161,7 +1257,7 @@ class OwnerRelay extends RelayLink {
             let entry = cohort.get(routingKey);
 
             if (entry === undefined) {
-                entry = { args: request.args, cursor, key: routingKey, name: request.name };
+                entry = { args: request.args, cursor, key: routingKey, name: request.name, table: resolved.table };
                 cohort.set(routingKey, entry);
                 // Register durably on the SEED path — once per cohort, not per
                 // write — so the registry survives the owner eviction a
@@ -1181,6 +1277,7 @@ class OwnerRelay extends RelayLink {
                 key,
                 name: request.name,
                 relayIndex: request.relayIndex,
+                table: resolved.table,
             };
 
             proxies.set(key, proxy);
@@ -1641,9 +1738,18 @@ class OwnerRelay extends RelayLink {
             }, RELAY_LIVE_CONTROL_TIMEOUT_MS);
         });
 
-        return Promise.race([answer, deadline]).finally(() => {
-            clearTimeout(timer);
-        });
+        return Promise.race([answer, deadline])
+            .then((response) => {
+                // Past the deadline the answer is dropped unread; release its body whenever it lands.
+                if (response === undefined) {
+                    releaseUnread(answer, undefined);
+                }
+
+                return response;
+            })
+            .finally(() => {
+                clearTimeout(timer);
+            });
     }
 }
 
@@ -1911,7 +2017,7 @@ class RelayMember extends RelayLink {
      * that cannot reach its owner still owns its own table.
      */
     public override async announceDrain(closing: ShardSocketLike): Promise<void> {
-        if (this.host.getWebSockets().some((ws) => ws !== closing)) {
+        if (this.host.getWebSockets().some((ws) => ws !== closing && this.isAdmitted(ws))) {
             return;
         }
 
@@ -2020,7 +2126,7 @@ class RelayMember extends RelayLink {
      * forgets its own attach, so the next socket attaches again rather than trust a registration the owner is about to drop.
      */
     protected override refusesAsIdle(): boolean {
-        if (this.host.getWebSockets().length > 0) {
+        if (this.host.getWebSockets().some((ws) => this.isAdmitted(ws))) {
             return false;
         }
 
