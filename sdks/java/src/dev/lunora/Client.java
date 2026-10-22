@@ -539,10 +539,11 @@ public final class Client {
 
         sender.send(buildConnectFrame(clientId, context, resolve(provider)));
 
-        List<String> topics;
-
         // A detach or a newer attach during the send supersedes this one: installing this sender
-        // would undo it, so it is not installed and its whisper joins are not sent.
+        // would undo it, so it is not installed and its whisper joins are not sent. The joins are
+        // written under the lock, so a last-listener leave cannot unsubscribe between this snapshot
+        // and its join. Whisper joins follow connect and precede the resubscribe, as any frame on
+        // the socket does. A join that throws leaves the client offline, and the error propagates.
         synchronized (lock) {
             if (generation != this.attachGeneration) {
                 return;
@@ -551,14 +552,18 @@ public final class Client {
             this.sender = sender;
             this.socketGeneration = credential;
             this.wasEverConnected = true;
-            topics = new ArrayList<>(whisperListeners.keySet());
-        }
 
-        // Whisper joins follow connect and precede the resubscribe, the same as any frame on the
-        // socket. The topics are snapshotted with the sender, so a join registered meanwhile either
-        // is in this list or sees the sender and sends its own.
-        for (String topic : topics) {
-            sender.send(buildWhisperSubscribeFrame(topic));
+            try {
+                for (String topic : new ArrayList<>(whisperListeners.keySet())) {
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                }
+            } catch (RuntimeException failure) {
+                if (this.sender == sender) {
+                    this.sender = null;
+                }
+
+                throw failure;
+            }
         }
     }
 
