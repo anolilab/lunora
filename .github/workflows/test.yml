@@ -557,7 +557,8 @@
 
     "templates":
         "name": "Template scaffold (${{ matrix.template }})"
-        "if": "needs.files-changed.outputs.templates == 'true'"
+        # An empty matrix is an error in its own right: when no template is listed, the listing step has already failed, so skip here.
+        "if": "needs.files-changed.outputs.templates == 'true' && needs.templates-matrix.outputs.list != '[]'"
         "needs": ["files-changed", "templates-matrix"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 60
