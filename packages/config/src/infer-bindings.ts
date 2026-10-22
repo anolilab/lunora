@@ -373,43 +373,8 @@ interface InferredBindings {
  */
 type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
-/**
- * Creates the project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. It reads
- * the app from disk, so a file's relative re-export (a barrel of the secret tool) resolves against the app's own files.
- */
-type ScanProject = () => Project;
-
-const createScanProject = (): ScanProject => {
-    let project: Project | undefined;
-
-    return () => {
-        project ??= new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
-
-        return project;
-    };
-};
-
-/**
- * The signals of one file, read by `@lunora/codegen`'s own per-file probe
- * ({@link sourceCapabilitySignals}) over a parsed AST — so a type-only import, or
- * a `ctx.kv` inside a comment or a string, implies nothing here exactly as it
- * implies nothing to codegen, while a re-export, a destructured `const { r2sql } =
- * ctx` or a renamed context does. `fileName` picks the parser's script kind
- * (`.tsx` / `.jsx` vs `.ts` / `.js`); the TypeScript parser recovers from a
- * mid-edit syntax error.
- */
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
-
-const parseSourceSignals = (code: string, fileName: string, scanProject: ScanProject): SourceCapabilitySignals => {
-    const project = scanProject();
-    const sourceFile = project.createSourceFile(fileName, code, { overwrite: true });
-    const signals = sourceCapabilitySignals(sourceFile);
-
-    project.removeSourceFile(sourceFile);
-
-    return signals;
-};
 
 /** Recursively collect scannable source files under `directory`. */
 const collectSourceFiles = (directory: string, accumulator: string[]): void => {
@@ -482,8 +447,9 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: Disco
  * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
-    const scanProject = createScanProject();
     const lunoraRoot = join(projectRoot, lunoraDirectory);
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const candidates: { file: string; inLunora: boolean }[] = [];
     const lunoraFiles: SourceCapabilitySignals[] = [];
     const otherFiles: SourceCapabilitySignals[] = [];
     let usesEnvAi = false;
@@ -510,9 +476,19 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
             if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))) {
-                (inLunora ? lunoraFiles : otherFiles).push(parseSourceSignals(code, file, scanProject));
+                // Registered now, while the program is not built, so the text is not kept for the signal pass.
+                project.createSourceFile(file, code, { overwrite: true });
+                candidates.push({ file, inLunora });
             }
         }
+    }
+
+    // Each file's signals come from `@lunora/codegen`'s own per-file probe over a parsed AST, so a type-only import, or a
+    // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen. Every candidate
+    // is in the project before any is read: removing a file after its own read made the next relative import re-resolve
+    // against a rebuilt program, which took minutes on a backend with a few hundred files.
+    for (const { file, inLunora } of candidates) {
+        (inLunora ? lunoraFiles : otherFiles).push(sourceCapabilitySignals(project.getSourceFileOrThrow(file)));
     }
 
     const lunora = foldCapabilitySignals(lunoraFiles);
