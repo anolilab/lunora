@@ -8056,7 +8056,13 @@ abstract class ShardDO {
                 // would have closed this socket, and the client reads only the reason to tell them apart.
                 if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
                     this.dropLiveSocket(attachment.connectionId);
-                    ws.close?.(4003, "connect deadline");
+
+                    // A half-closed peer can make close throw; that must not escape as a socket error.
+                    try {
+                        ws.close?.(4003, "connect deadline");
+                    } catch {
+                        /* socket already gone */
+                    }
 
                     return;
                 }

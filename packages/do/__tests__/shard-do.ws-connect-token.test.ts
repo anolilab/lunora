@@ -178,6 +178,20 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(cleanup).toHaveBeenCalledTimes(1);
     });
 
+    it("does not surface a late connect as a socket error when the peer has already gone", async () => {
+        expect.assertions(1);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+
+        ws.close = () => {
+            throw new Error("socket already closed");
+        };
+        shard.registerSocket(ws, { ...unauthenticated(), pendingSince: Date.now() - 11_000 });
+
+        await expect(shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" })).resolves.toBeUndefined();
+    });
+
     it("refuses a connect whose token does not match, and sends no identity", async () => {
         expect.assertions(3);
 
