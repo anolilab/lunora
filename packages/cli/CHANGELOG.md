@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.423](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.422...@lunora/cli@1.0.0-alpha.423) (2026-10-22)
+
+### Performance Improvements
+
+* **cli:** reuse the codegen project across watch runs ([#1300](https://github.com/anolilab/lunora/issues/1300)) ([9a1e612](https://github.com/anolilab/lunora/commit/9a1e612b1b6de6c7834d4a5a3fdfc327d197cf50))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.251
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.347
+* **@lunora/config:** upgraded to 1.0.0-alpha.399
+* **@lunora/d1:** upgraded to 1.0.0-alpha.202
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.256
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.232
+* **@lunora/seed:** upgraded to 1.0.0-alpha.249
+* **@lunora/testing:** upgraded to 1.0.0-alpha.296
+
 ## @lunora/cli [1.0.0-alpha.422](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.421...@lunora/cli@1.0.0-alpha.422) (2026-10-22)
 
 
