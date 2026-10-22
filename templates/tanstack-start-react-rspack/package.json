@@ -10,7 +10,7 @@
         "dev": "rsbuild dev",
         "build": "rsbuild build",
         "codegen": "lunora codegen",
-        "deploy": "rsbuild build && lunora deploy"
+        "deploy": "lunora deploy"
     },
     "dependencies": {
         "@lunora/ratelimit": "^0.0.0",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentComponent, agentExtension } from "../src/component";
+import approvalMarkerFields from "./approval-fixtures";
 import { assertNoExplicitUndefined } from "./loop-harness";
 
 const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
@@ -42,12 +43,22 @@ interface FakeRow extends Record<string, unknown> {
  * `query(t).withIndex(name, (q) => q.eq(...).eq(...)).first()/.collect()`,
  * `insert`, `patch`.
  */
-/** Collect the `.eq(...)` conditions a `withIndex` callback declares. */
-const collectConditions = (build: (q: unknown) => unknown): [string, unknown][] => {
-    const conditions: [string, unknown][] = [];
+/** Collect the `.eq`/`.gte`/`.lt` conditions a `withIndex` callback declares, as row predicates. */
+const collectConditions = (build: (q: unknown) => unknown): ((row: FakeRow) => boolean)[] => {
+    const conditions: ((row: FakeRow) => boolean)[] = [];
     const builder = {
         eq: (field: string, value: unknown) => {
-            conditions.push([field, value]);
+            conditions.push((row) => row[field] === value);
+
+            return builder;
+        },
+        gte: (field: string, value: unknown) => {
+            conditions.push((row) => String(row[field]) >= String(value));
+
+            return builder;
+        },
+        lt: (field: string, value: unknown) => {
+            conditions.push((row) => String(row[field]) < String(value));
 
             return builder;
         },
@@ -72,13 +83,14 @@ interface IndexQuery {
  */
 const INDEX_ORDER_FIELDS: Record<string, string> = {
     byOwnerCreatedAt: "createdAt",
+    byOwnerStatus: "updatedAt",
     byOwnerUpdatedAt: "updatedAt",
     byThread: "seq",
 };
 
 const makeIndexQuery = (candidates: FakeRow[], indexName: string, build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
-    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
+    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every((predicate) => predicate(row)));
     const ordered = (direction: "asc" | "desc"): FakeRow[] => {
         const field = INDEX_ORDER_FIELDS[indexName];
 
@@ -1254,6 +1266,163 @@ describe("approval resolution", () => {
         // type twice, so a `step.waitForEvent` pending on one call.id's type can
         // never be woken by an event meant for a different call.
         expect(sent.map((entry) => entry.event.type)).toStrictEqual(["agent-approval:call_A", "agent-approval:call_B"]);
+    });
+});
+
+type ComponentFunctions = ReturnType<typeof agentComponent>["functions"];
+
+/** Insert a raw messages row shaped like the loop's approval marker (`status` is what the inbox filters on). */
+const insertMarker = async (
+    ctx: { db: unknown },
+    marker: { expiresAt?: number; instanceId: string; seq: number; status: "approved" | "awaiting_approval"; threadKey: string; toolCallId: string },
+): Promise<void> => {
+    await (ctx.db as { insert: (table: string, document: Record<string, unknown>) => Promise<string> }).insert("agent_messages", {
+        ...approvalMarkerFields({ expiresAt: marker.expiresAt, instanceId: marker.instanceId, toolCallId: marker.toolCallId }),
+        createdAt: marker.seq,
+        seq: marker.seq,
+        status: marker.status,
+        threadKey: marker.threadKey,
+    });
+};
+
+/** Park a thread the way the loop does: start it, write the approval marker, then move it to `awaiting_input`. */
+const parkRun = async (
+    functions: ComponentFunctions,
+    ctx: { db: unknown },
+    run: { key: string; owner?: string; status?: "awaiting_input" | "running"; threadInstanceId: string; toolCallId: string },
+): Promise<void> => {
+    await callMutation(functions.agentEnsureThread, ctx, {
+        agent: "support",
+        instanceId: run.threadInstanceId,
+        key: run.key,
+        ...(run.owner === undefined ? {} : { owner: run.owner }),
+    });
+    await insertMarker(ctx, { instanceId: run.threadInstanceId, seq: 1, status: "awaiting_approval", threadKey: run.key, toolCallId: run.toolCallId });
+    await callMutation(functions.agentPatchThread, ctx, { key: run.key, status: run.status ?? "awaiting_input" });
+};
+
+/** The inbox as `userId` sees it (no `userId` means an anonymous caller). */
+const pendingFor = async (functions: ComponentFunctions, ctx: { db: unknown }, userId?: string): Promise<Record<string, unknown>[]> =>
+    (await callMutation(functions.agentPendingApprovals, { ...ctx, auth: userId === undefined ? {} : { userId } }, {})) as Record<string, unknown>[];
+
+describe("approvals inbox", () => {
+    it("lists the caller's own paused approvals and never another owner's", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-a", owner: "user-a", threadInstanceId: "wf-a", toolCallId: "call_a" });
+        await parkRun(functions, ctx, { key: "t-b", owner: "user-b", threadInstanceId: "wf-b", toolCallId: "call_b" });
+
+        const pending = await pendingFor(functions, ctx, "user-a");
+
+        expect(pending.map((item) => item["threadKey"])).toStrictEqual(["t-a"]);
+        expect(pending[0]).toMatchObject({ agent: "support", instanceId: "wf-a", toolCallId: "call_a", toolName: "refund" });
+    });
+
+    it("clamps a zero or fractional limit to a usable count", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-a", owner: "user-a", threadInstanceId: "wf-a", toolCallId: "call_a" });
+        await parkRun(functions, ctx, { key: "t-b", owner: "user-a", threadInstanceId: "wf-b", toolCallId: "call_b" });
+
+        const inbox = (limit: number) => callMutation(functions.agentPendingApprovals, { ...ctx, auth: { userId: "user-a" } }, { limit });
+
+        // A zero limit floors to one thread; a fractional one truncates.
+        await expect(inbox(0)).resolves.toHaveLength(1);
+        await expect(inbox(1.9)).resolves.toHaveLength(1);
+        await expect(inbox(2.7)).resolves.toHaveLength(2);
+    });
+
+    it("returns nothing for an anonymous caller", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-a", owner: "user-a", threadInstanceId: "wf-a", toolCallId: "call_a" });
+
+        await expect(pendingFor(functions, ctx)).resolves.toStrictEqual([]);
+    });
+
+    it("never lists an ownerless thread, even to an authenticated caller", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-open", threadInstanceId: "wf-open", toolCallId: "call_open" });
+
+        await expect(pendingFor(functions, ctx, "user-a")).resolves.toStrictEqual([]);
+    });
+
+    it("skips an owned paused thread that has no instance to match markers against", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-bare", owner: "user-a" });
+        await callMutation(functions.agentPatchThread, ctx, { key: "t-bare", status: "awaiting_input" });
+
+        await expect(pendingFor(functions, ctx, "user-a")).resolves.toStrictEqual([]);
+    });
+
+    it("excludes a marker minted by an earlier instance of the thread", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        // The thread now belongs to wf-2; wf-1's marker is left over from before.
+        await parkRun(functions, ctx, { key: "t-1", owner: "user-a", threadInstanceId: "wf-2", toolCallId: "call_new" });
+        await insertMarker(ctx, { instanceId: "wf-1", seq: 0, status: "awaiting_approval", threadKey: "t-1", toolCallId: "call_old" });
+
+        const pending = await pendingFor(functions, ctx, "user-a");
+
+        expect(pending.map((item) => item["toolCallId"])).toStrictEqual(["call_new"]);
+    });
+
+    it("hides a marker past its deadline while keeping one still open", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-1", owner: "user-a", threadInstanceId: "wf-1", toolCallId: "call_open" });
+        await insertMarker(ctx, {
+            expiresAt: Date.now() - 1000,
+            instanceId: "wf-1",
+            seq: 2,
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_lapsed",
+        });
+
+        const pending = await pendingFor(functions, ctx, "user-a");
+
+        expect(pending.map((item) => item["toolCallId"])).toStrictEqual(["call_open"]);
+    });
+
+    it("drops resolved markers and threads that are no longer paused", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await parkRun(functions, ctx, { key: "t-done", owner: "user-a", threadInstanceId: "wf-done", toolCallId: "call_done" });
+        await insertMarker(ctx, { instanceId: "wf-done", seq: 2, status: "approved", threadKey: "t-done", toolCallId: "call_resolved" });
+        await parkRun(functions, ctx, { key: "t-live", owner: "user-a", status: "running", threadInstanceId: "wf-live", toolCallId: "call_live" });
+
+        const pending = await pendingFor(functions, ctx, "user-a");
+
+        expect(pending.map((item) => item["toolCallId"])).toStrictEqual(["call_done"]);
+    });
+
+    it("round-trips a listed item into agentResolveApproval", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+
+        await parkRun(functions, ctx, { key: "t-1", owner: "user-a", threadInstanceId: "wf-1", toolCallId: "call_1" });
+
+        const [item] = await pendingFor(functions, ctx, "user-a");
+        const result = await callMutation(
+            functions.agentResolveApproval,
+            { ...ctx, agents, auth: { userId: "user-a" } },
+            { decision: "approve", instanceId: item?.["instanceId"], threadKey: item?.["threadKey"], toolCallId: item?.["toolCallId"] },
+        );
+
+        expect(result).toStrictEqual({ resolved: true });
+        expect(sent.map((entry) => [entry.id, entry.event.type])).toStrictEqual([["wf-1", "agent-approval:call_1"]]);
     });
 });
 

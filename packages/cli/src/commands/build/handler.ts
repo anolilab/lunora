@@ -42,6 +42,8 @@ interface BuildCommandOptions {
     emitBindings?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+    /** `false` skips the vite/rsbuild client build even when wrangler reads its output. */
+    frameworkBuild?: boolean;
     /** Opt into per-module lazy function imports. */
     lazyFunctions?: boolean;
     logger: Logger;
@@ -119,16 +121,17 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     // the bundle measurement below is what a CI consumer runs this command for,
     // and the deploy result has no field to carry it.
     const { logger } = options;
-
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift,
         apiSpec: options.apiSpec,
+        frameworkBuild: options.frameworkBuild,
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         // So the drift gate names `build` and offers only the flags `build`
         // registers — it does NOT accept `--update-schema-baseline`, because it
         // publishes nothing and re-blessing a baseline for an artifact that never
         // shipped is what lets a breaking change through on the retry.
         commandName: "build",
+        clientBuildOutputJson: jsonMode,
         cwd: options.cwd,
         dryRun: true,
         // The requirements document has to describe the PROVISIONED config, so
@@ -185,6 +188,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildC
         cwd,
         emitBindings: options.emitBindings,
         format,
+        frameworkBuild: options.frameworkBuild,
         logger,
         outDir: options.outDir,
         smokeLoad: options.smokeLoad,

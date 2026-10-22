@@ -7071,6 +7071,26 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/server/drizzle`
 
+### `AnySQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncRelationalQuery` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `AnySQLiteColumn` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7103,7 +7123,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `BaseSQLiteDatabase` (class)
+### `AnySQLiteView` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7135,11 +7155,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `CustomTypeValues` (type)
+### `CustomTypeValues` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `DBResult` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `DrizzleSQLiteConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7191,6 +7215,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `NoDuplicateColumns` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `NoUnknownKeysInInsertSelection` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `OnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7227,7 +7259,143 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteAsyncDialect` (class)
+### `SQLiteAliasType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilder` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilderKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDatabase` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeletePrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQuery` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRaw` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQuery` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSession` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncTransaction` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdatePrepare` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7247,19 +7415,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBlobBuffer` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteBlobBufferBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteBlobBufferBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7271,10 +7431,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBlobJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBoolean` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7283,7 +7439,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBooleanBuilderInitial` (type)
+### `SQLiteBuildRelationalQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteCodecs` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7295,7 +7455,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteColumnBuilderBase` (interface)
+### `SQLiteColumnType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteColumns` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7331,11 +7495,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeleteExecute` (type)
+### `SQLiteDeleteHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeletePrepare` (type)
+### `SQLiteDeleteKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteDeleteQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7379,6 +7547,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteInsertBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteInsertConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7387,7 +7559,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertExecute` (type)
+### `SQLiteInsertHKTBase` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertOnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7395,7 +7575,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertPrepare` (type)
+### `SQLiteInsertQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7407,7 +7587,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertSelectQueryBuilder` (type)
+### `SQLiteInsertSelection` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7427,10 +7607,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteIntegerBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumeric` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7443,15 +7619,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumericBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteNumericBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7467,11 +7635,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericNumberBuilderInitial` (type)
+### `SQLitePreparedQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLitePreparedQuery` (class)
+### `SQLiteQueryExecutors` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7483,19 +7651,19 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteRealBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelect` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectBase` (class+interface)
+### `SQLiteSelectBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSelectBuilderConstructor` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7512,10 +7680,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectExecute` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7539,15 +7703,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectPrepare` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelectQueryBuilder` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectQueryBuilderBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7579,7 +7735,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSyncDialect` (class)
+### `SQLiteSyncCountBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSyncRelationalQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7611,10 +7771,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTextConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7627,10 +7783,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTimestamp` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7639,15 +7791,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTimestampBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteTransaction` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTransactionConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteType` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7663,6 +7811,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteUpdateBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteUpdateConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7671,7 +7823,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdateExecute` (type)
+### `SQLiteUpdateHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7679,7 +7831,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdatePrepare` (type)
+### `SQLiteUpdateKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteUpdateQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7704,6 +7860,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteView` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteViewFn` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7759,6 +7919,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `ValidateInsertSelectionKey` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `ViewBuilder` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7787,6 +7951,46 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `booleanFromInteger` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinary` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinaryIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytes` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytesIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bytesFromUtf8` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `camelCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToText` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `check` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7795,15 +7999,31 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `dateFromMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `except` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `extractUsedTable` (function)
+### `foreignKey` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `foreignKey` (function)
+### `genericSQLiteCodecs` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7831,6 +8051,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `migrateAsync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `migrateSync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `numeric` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7843,6 +8071,22 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `refineSqliteCodecs` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveSQLiteTypeAlias` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveUnionType` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `snakeCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `sqliteTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7851,7 +8095,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `sqliteView` (function)
+### `sqliteView` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7864,6 +8108,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `unionAll` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `unionsTypeTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 

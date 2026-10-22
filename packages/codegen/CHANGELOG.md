@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.341...@lunora/codegen@1.0.0-alpha.342) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.248
+* **@lunora/agent:** upgraded to 1.0.0-alpha.238
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **@lunora/payment:** upgraded to 1.0.0-alpha.231
+* **@lunora/server:** upgraded to 1.0.0-alpha.229
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/codegen [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.340...@lunora/codegen@1.0.0-alpha.341) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.237
+
 ## @lunora/codegen [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.339...@lunora/codegen@1.0.0-alpha.340) (2026-10-20)
 
 ### Bug Fixes

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { FindingLogger } from "@lunora/config";
-import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings } from "@lunora/config";
+import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings, STRICT_ADVISORIES_ENV, writeApiSpecMarker } from "@lunora/config";
 import { reconcileWranglerExtras, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 
@@ -12,6 +12,14 @@ import type { ResolvedLunoraRspackOptions } from "./types";
 /** The three channels this module reports through — `console` satisfies it, as does Rspack's `Logger`. */
 interface CodegenLogger extends FindingLogger {
     info: (message: string) => void;
+}
+
+/** {@link runCodegenPass}'s result: each field is set only when that step failed or escalates. */
+interface CodegenPassResult {
+    /** An ERROR-level advisory or platform diagnostic; the caller decides whether it stops a build. */
+    blockingMessage?: string;
+    /** `.lunora/api-spec.json` could not be written. Output exists anyway, so dev logs it and keeps going. */
+    markerFailure?: string;
 }
 
 /**
@@ -29,13 +37,13 @@ interface CodegenLogger extends FindingLogger {
  *
  * Returns the blocking message, or `undefined` when nothing is ERROR-level.
  */
-const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLogger, project?: Project): string | undefined => {
+const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLogger, project?: Project): CodegenPassResult => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         logger.warn(`${LUNORA_TAG} no schema found at ${schemaPath} — run \`lunora init\` or create it, then rebuild.`);
 
-        return undefined;
+        return {};
     }
 
     const result = runCodegen({
@@ -49,9 +57,25 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
     });
 
     reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
+
+    // Outside the throw path above: the output is already written, so a marker that cannot be recorded must not stop the
+    // post-codegen hook from running. The caller decides whether it fails the build.
+    let markerFailure: string | undefined;
+
+    try {
+        writeApiSpecMarker(options.projectRoot, options.apiSpec);
+    } catch (error: unknown) {
+        markerFailure = `${LUNORA_TAG} could not write the API spec marker: ${error instanceof Error ? error.message : String(error)}`;
+
+        logger.error(markerFailure);
+    }
+
     reportCodegenFindings(result, logger);
 
-    return blockingFindingsMessage(result);
+    return {
+        blockingMessage: blockingFindingsMessage(result, { strictAdvisories: process.env[STRICT_ADVISORIES_ENV] !== "0" }),
+        markerFailure,
+    };
 };
 
 /**
