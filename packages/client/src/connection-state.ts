@@ -61,10 +61,12 @@ interface ShardConnection {
 
     /**
      * The `LunoraClient.identityQuestions` id this connection's CURRENT
-     * socket was upgraded under, when the cookie was its only credential (no
-     * session credential or ticket held). `undefined` otherwise: the `identity`
-     * frame such a socket gets answers for the token, not for the cookie session
-     * this client's identity tracks, and is ignored.
+     * socket was upgraded under, when the cookie was its only subject (no ticket
+     * or auth token held). The server takes the subject from the upgrade, and a
+     * session credential sent in `connect` only clears the shared gate, so the
+     * `identity` frame still describes the cookie session this client tracks.
+     * `undefined` otherwise: the frame answers for the ticket or the auth token,
+     * not for that cookie session, and is ignored.
      */
     identityQuestion?: number;
 

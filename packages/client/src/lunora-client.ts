@@ -555,11 +555,6 @@ interface WhisperWaiter {
     timer: ReturnType<typeof setTimeout> | undefined;
 }
 
-/**
- * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
- * the POST is sent, not when it was queued, and covers the body read too: a stalled response
- * must not hold the chain behind it.
- */
 /** The two WebSocket credentials a shard socket opens under: the session (`connect` frame) and the URL ticket. */
 interface ShardSocketCredentials {
     session: string | undefined;
@@ -573,6 +568,11 @@ type WsCredentialSource = string | undefined | WsTokenProvider;
 const resolveWsCredential = async (credential: WsCredentialSource): Promise<string | undefined> =>
     typeof credential === "function" ? await credential() : credential;
 
+/**
+ * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
+ * the POST is sent, not when it was queued, and covers the body read too: a stalled response
+ * must not hold the chain behind it.
+ */
 const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<number> => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -6942,7 +6942,7 @@ class LunoraClient {
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         conn.identity = this.identityFingerprint();
 
-        if (credentials.session === undefined && credentials.ticket === undefined && this.authToken === null) {
+        if (credentials.ticket === undefined && this.authToken === null) {
             this.identityQuestions += 1;
             conn.identityQuestion = this.identityQuestions;
         } else {
@@ -8639,9 +8639,9 @@ class LunoraClient {
      * since changed hands, and is still delivering that user's rows: the
      * session it belongs to is retired, which replaces the socket.
      *
-     * Ignored for a socket that authenticated with a token rather than the
-     * cookie (see `ShardConnection.identityQuestion`) — its answer is about that
-     * token, not about the cookie session this client's identity tracks.
+     * Ignored for a socket that authenticated with a ticket or an auth token rather
+     * than the cookie (see `ShardConnection.identityQuestion`) — its answer is about
+     * that credential, not about the cookie session this client's identity tracks.
      */
     private handleIdentityFrame(message: ServerIdentityMessage, shardKey: string | undefined): void {
         const question = this.getConnection(shardKey)?.identityQuestion;
