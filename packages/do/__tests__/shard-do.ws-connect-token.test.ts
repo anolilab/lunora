@@ -55,6 +55,10 @@ class GateShard extends ShardDO {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(frame));
     }
 
+    public driveRaw(ws: FakeWebSocket, text: string): Promise<void> {
+        return this.webSocketMessage(ws as unknown as WebSocket, text);
+    }
+
     public driveClose(ws: FakeWebSocket): Promise<void> {
         return this.webSocketClose(ws as unknown as WebSocket, 1000, "", true);
     }
@@ -107,6 +111,31 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(ws.closes).toStrictEqual([{ code: 4003, reason: "unauthenticated" }]);
         expect(shard.dispatched).toStrictEqual([]);
         expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(false);
+    });
+
+    it("refuses a pending socket whose first frame is not JSON, instead of waiting for a later connect", async () => {
+        expect.assertions(2);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveRaw(ws, "{not json");
+
+        expect(ws.closes).toStrictEqual([{ code: 4003, reason: "unauthenticated" }]);
+        expect(shard.dispatched).toStrictEqual([]);
+    });
+
+    it("refuses a pending socket whose first frame is oversized, instead of waiting for a later connect", async () => {
+        expect.assertions(1);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveRaw(ws, "x".repeat(1024 * 1024 + 1));
+
+        expect(ws.closes).toStrictEqual([{ code: 4003, reason: "unauthenticated" }]);
     });
 
     it("refuses a connect whose token does not match, and sends no identity", async () => {

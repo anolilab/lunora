@@ -7954,6 +7954,12 @@ abstract class ShardDO {
         const rawSize = typeof message === "string" ? message.length : message.byteLength;
 
         if (rawSize > MAX_WS_FRAME_UNITS) {
+            if (inboundAttachment.authenticated === false) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
             this.sendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }), "control");
 
             return;
@@ -7981,6 +7987,12 @@ abstract class ShardDO {
         try {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
+            if (inboundAttachment.authenticated === false) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
             this.sendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }), "control");
 
             return;
