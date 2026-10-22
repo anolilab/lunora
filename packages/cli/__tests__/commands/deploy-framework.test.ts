@@ -420,6 +420,28 @@ describe("lunora deploy — a service's client build", () => {
         expect(deploy?.descriptor.args.join(" ")).not.toContain("generated.jsonc");
     });
 
+    it("refuses before any service deploys when a later service's target differs, so no earlier service is left deployed alone", async () => {
+        expect.assertions(2);
+
+        // A second service that names another host: refused. It sorts after parser, so parser would deploy first if nothing checked ahead.
+        writeFileSync(
+            join(workdir, "lunora.config.ts"),
+            `export default { services: { parser: { dir: "./services/parser" }, zed: { dir: "./services/zed" } } };\n`,
+            "utf8",
+        );
+        mkdirSync(join(workdir, "services", "zed"), { recursive: true });
+        writeFileSync(join(workdir, "services", "zed", "wrangler.jsonc"), wranglerWith({ assets: { directory: "./dist" }, main: "src/index.ts" }), "utf8");
+        writeFileSync(join(workdir, "services", "zed", "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+        writeFileSync(join(workdir, "services", "zed", "vite.config.ts"), "export default {};\n", "utf8");
+
+        const serviceDirectory = join(workdir, "services", "parser");
+        const { calls, spawner } = createRecordingSpawner();
+        const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger(), spawner, secretLister: noSecretList });
+
+        expect(result.code).not.toBe(0);
+        expect(calls.some((call) => call.descriptor.cwd === serviceDirectory)).toBe(false);
+    });
+
     it("refuses a service whose own target differs from the parent deploy, rather than building for another host", async () => {
         expect.assertions(2);
 
