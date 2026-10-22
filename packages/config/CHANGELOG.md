@@ -1,3 +1,20 @@
+## @lunora/config [1.0.0-alpha.398](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.397...@lunora/config@1.0.0-alpha.398) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** skip lib loading in the validator syntax check ([#1303](https://github.com/anolilab/lunora/issues/1303)) ([ebb62f6](https://github.com/anolilab/lunora/commit/ebb62f61520c9b60ab79c9ba2a9389f609b76172))
+
+## @lunora/config [1.0.0-alpha.397](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.396...@lunora/config@1.0.0-alpha.397) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** reuse codegen project for studio edits ([#1301](https://github.com/anolilab/lunora/issues/1301)) ([a990bb3](https://github.com/anolilab/lunora/commit/a990bb3015c27921863d32a329faaa43f30601d7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.345
+
 ## @lunora/config [1.0.0-alpha.396](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.395...@lunora/config@1.0.0-alpha.396) (2026-10-22)
 
 ### Performance Improvements
