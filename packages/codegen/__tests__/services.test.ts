@@ -24,6 +24,12 @@ const write = (relative: string, source: string): void => {
 const generated = (name: string): string => readFileSync(join(workdir, "lunora", "_generated", name), "utf8");
 
 /** A fetch service (`parser`) and an RPC service (`llmGateway`), each in its own folder with its own wrangler config. */
+/** The declaration snapshot the llmGateway service emits, from the workdir's current sources. */
+const emitLlmGateway = (): Record<string, string> | undefined =>
+    resolveServiceBindings(workdir)
+        .filter(({ name }) => name === "llmGateway")
+        .map((service) => emitServiceDeclarations(service, join(workdir, "lunora", "_generated")))[0];
+
 const writeServices = (): void => {
     write(
         "lunora.config.ts",
@@ -124,25 +130,65 @@ export class Gateway {
         expect(() => generated("services")).toThrow(/ENOENT/u);
     });
 
+    it("re-emits a service's snapshot when a file is added to its tree", () => {
+        expect.assertions(2);
+
+        writeServices();
+
+        const first = emitLlmGateway();
+
+        // A new file that nothing in the program imports yet still changes what the tree resolves to.
+        write("services/llm-gateway/src/shadow.ts", "export const shadow = 1;\n");
+
+        expect(emitLlmGateway()).not.toBe(first);
+        expect(emitLlmGateway()).toBe(emitLlmGateway());
+    });
+
+    it("re-emits a service's snapshot when a package it imports retargets its types", () => {
+        expect.assertions(2);
+
+        writeServices();
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+
+export class Gateway {
+    async complete(prompt: string): Promise<{ usage: Usage; text: string }> {
+        return { text: prompt, usage: { tokens: prompt.length } };
+    }
+}
+`,
+        );
+
+        const first = emitLlmGateway();
+
+        // The old declaration file keeps its bytes; only the manifest's `types` target moves.
+        write("services/llm-gateway/node_modules/llm-kit/other.d.ts", "export interface Usage { tokens: string }\n");
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "other.d.ts" }\n`);
+
+        const second = emitLlmGateway();
+
+        expect(second).not.toBe(first);
+        expect(second?.[join("services", "llmGateway", "src", "index.d.ts")]).toBeDefined();
+    });
+
     it("reuses a service's declaration snapshot until a file in its program changes", () => {
         expect.assertions(3);
 
         writeServices();
 
-        const emit = (): Record<string, string> | undefined =>
-            resolveServiceBindings(workdir)
-                .filter(({ name }) => name === "llmGateway")
-                .map((service) => emitServiceDeclarations(service, join(workdir, "lunora", "_generated")))[0];
-        const first = emit();
+        const first = emitLlmGateway();
 
-        expect(emit()).toBe(first);
+        expect(emitLlmGateway()).toBe(first);
 
         write(
             "services/llm-gateway/src/index.ts",
             `export class Gateway {\n    async complete(prompt: string): Promise<number> {\n        return prompt.length;\n    }\n}\n`,
         );
 
-        const second = emit();
+        const second = emitLlmGateway();
 
         expect(second).not.toBe(first);
         expect(second?.[join("services", "llmGateway", "src", "index.d.ts")]).toContain("Promise<number>");
