@@ -5629,6 +5629,7 @@ type ExistsPushMode = "always" | "auto";
 
 ```ts
 interface FanoutAttachmentLike {
+    authenticated?: boolean;
     shapes?: Record<string, {
         name?: string;
     }>;
@@ -5895,6 +5896,7 @@ interface SiblingStub {
 ```ts
 interface SocketAttachmentLike {
     admin?: boolean;
+    authenticated?: boolean;
     subs?: Record<string, SubscriptionInfo>;
 }
 ```
