@@ -349,6 +349,17 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).not.toMatch(/placeholder database_id/u);
     });
 
+    it("keeps the placeholder D1 id on node, so a later Cloudflare deploy still finds it", () => {
+        expect.assertions(2);
+
+        reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "node" });
+        const cloudflare = reconcileWranglerBindings(root, baseInferred({ needsD1: true }));
+
+        // The deploy gate refuses only this literal; a name-derived id would ship an unbound DB.
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-app" }]);
+        expect(cloudflare.changed).toBe(false);
+    });
+
     it("adds the parameterless ai binding when @lunora/ai is inferred", () => {
         expect.assertions(2);
 

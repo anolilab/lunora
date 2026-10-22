@@ -236,9 +236,10 @@ const placeholderWarnings = (added: ReadonlyArray<string>, target: string | unde
         : [];
 
 /**
- * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. On Cloudflare
- * the id is a placeholder `wrangler d1 create` replaces; any other target (celld)
- * takes whatever id it is given, so the database name serves as one.
+ * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. celld takes
+ * whatever id it is given, so the database name serves as one. Every other target
+ * keeps the placeholder `wrangler d1 create` replaces: the binding outlives a later
+ * switch to Cloudflare, whose deploy gate recognises only the placeholder.
  */
 const reconcileD1 = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
     const d1Bindings = parsed.d1_databases ?? [];
@@ -248,7 +249,7 @@ const reconcileD1 = (text: string, parsed: WranglerShape, target: string | undef
     }
 
     const databaseName = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
-    const databaseId = createsCloudflareResources(target) ? D1_PLACEHOLDER_ID : databaseName;
+    const databaseId = target === "celld" ? databaseName : D1_PLACEHOLDER_ID;
     const nextD1 = [...d1Bindings, { binding: "DB", database_id: databaseId, database_name: databaseName }];
 
     return { added: ["DB (D1)"], text: applyModify(text, ["d1_databases"], nextD1) };
