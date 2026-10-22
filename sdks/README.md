@@ -150,6 +150,8 @@ change that adds or removes a capability.
 | Session credential on connect | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Connection context on attach  | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Token expiry from close codes | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Identity frame adopted        | ➖¹²   | ➖¹² | ➖¹² | ➖¹² | ➖¹²  | ➖¹² | ➖¹²   | ➖¹² |
+| 503 at upgrade retried        | ✅¹¹   | ➖¹¹ | ➖¹¹ | ➖¹¹ | ➖¹¹  | ➖¹¹ | ➖¹¹   | ➖¹¹ |
 | Multi-tab leader election     | ❌     | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³  | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -311,6 +313,14 @@ asserted by the reference (`protocol-conformance.test.ts`) and by all eight
 under `offline_unset_identity_stamps_token_digest`, which also replays
 `accountSwitch`: a write queued under one token and flushed under another sends
 nothing and is rejected.
+
+¹¹ **A 503 at upgrade is the caller's to retry, except in python.** The seven ports that take an injected
+socket never see the upgrade response, so their reconnect loop retries any failure with jittered backoff, as
+the README example does. Python owns its socket, and `reconnect_forever` retries any failure of the upgrade with backoff,
+a 503 included. `test_a_503_at_upgrade_is_retried_with_backoff_and_refuses_no_credential` pins it.
+
+¹² **The identity frame is not adopted.** `identity` (protocol/README.md §5.2) names the user a cookie session
+runs as. Each port states its own session credential, which §5.2 allows, so each ignores the frame.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
