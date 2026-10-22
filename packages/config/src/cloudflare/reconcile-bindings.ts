@@ -411,11 +411,13 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
         return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
     }
 
-    const entry = createsCloudflareResources(target)
-        ? { binding: "KV" }
-        : { binding: "KV", id: `${typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora"}-kv` };
+    if (createsCloudflareResources(target)) {
+        return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
+    }
 
-    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [entry]) };
+    const id = `${typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora"}-kv`;
+
+    return { added: [`KV (Workers KV, namespace ${id})`], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV", id }]) };
 };
 
 /**
