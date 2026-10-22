@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.239...@lunora/do@1.0.0-alpha.240) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
 ## @lunora/do [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.238...@lunora/do@1.0.0-alpha.239) (2026-10-22)
 
 ### Features
