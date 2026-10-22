@@ -218,6 +218,22 @@ extension ConformanceTests {
         }
     }
 
+    func testClosedRoomRefusesSends() throws {
+        let client = LunoraClient(url: "https://app.example")
+        client.clientID = "client-test"
+
+        var sent: [[String: Any]] = []
+
+        client.attachSocket { sent.append($0) }
+
+        let room = client.connectRoom("general") { _ in }
+        _ = client.whisperSubscribe("room:general") { _ in }
+        room.close()
+
+        XCTAssertFalse(try room.send("after close"), "a closed room must report its send as not sent")
+        XCTAssertFalse(sent.contains { $0["type"] as? String == "whisper" }, "and must write no whisper frame")
+    }
+
     func testWhisperTopicsRejoinAfterReconnect() throws {
         let block = try XCTUnwrap(fixture("ws-frames.json")["whisperFrames"] as? [String: Any])
         let rejoin = try XCTUnwrap(block["rejoinOnReconnect"] as? [String])

@@ -75,12 +75,38 @@ public struct LunoraRoom {
     let client: LunoraClient
     let topic: String
     let leave: LunoraUnsubscribe
+    /// Shared by every copy of this handle, so closing one closes them all.
+    private let state = LunoraRoomState()
 
-    /// Relays `message` to the room. False when no socket is attached; nothing is queued.
-    public func send(_ message: Any) throws -> Bool { try client.whisper(topic, data: message) }
+    /// Relays `message` to the room. False when no socket is attached, or the room is closed; nothing is queued.
+    public func send(_ message: Any) throws -> Bool {
+        guard !state.isClosed else { return false }
+        return try client.whisper(topic, data: message)
+    }
 
     /// Leaves the room. Safe to call more than once.
-    public func close() { leave() }
+    public func close() {
+        state.markClosed()
+        leave()
+    }
+}
+
+/// The closed flag of a room, behind a lock: a struct copy cannot carry a mutable flag on its own.
+final class LunoraRoomState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+
+    var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return closed
+    }
+
+    func markClosed() {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+    }
 }
 
 /// Performs one POST. Injected rather than assumed so the conformance suite runs
