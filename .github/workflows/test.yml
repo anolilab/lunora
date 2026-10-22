@@ -528,33 +528,41 @@
     #
     # One matrix leg per template (Expo has its own job below). A single leg ran every
     # template in sequence and hit the job time limit; the script takes one template name
-    # as its positional argument, so each leg scaffolds only its own template.
+    # as its positional argument, so each leg scaffolds only its own template. The legs are
+    # read from templates/ by `templates-matrix`, so a new template gets one without an edit here.
+    "templates-matrix":
+        "name": "Template matrix"
+        "if": "needs.files-changed.outputs.templates == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "outputs":
+            "list": "${{ steps.list.outputs.list }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "id": "list"
+              "name": "List the templates"
+              "run": |
+                  list=$(cd templates && ls -d */ | sed 's#/$##' | grep -vx expo | jq -R -s -c 'split("\n") | map(select(length > 0))')
+                  echo "list=$list" >> "$GITHUB_OUTPUT"
+
     "templates":
         "name": "Template scaffold (${{ matrix.template }})"
         "if": "needs.files-changed.outputs.templates == 'true'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "templates-matrix"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
-                "template":
-                    [
-                        "analog",
-                        "astro",
-                        "next",
-                        "nuxt",
-                        "react-router",
-                        "rspack-react",
-                        "solid-v2",
-                        "standalone",
-                        "sveltekit",
-                        "tanstack-start-react-rspack",
-                        "tanstack-start-react",
-                        "tanstack-start-solid",
-                        "vinext-pages",
-                        "vinext",
-                    ]
+                "template": "${{ fromJSON(needs.templates-matrix.outputs.list) }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -991,6 +999,7 @@
                 "test-celld",
                 "test-mysql",
                 "e2e",
+                "templates-matrix",
                 "templates",
                 "templates-expo",
                 "worker-size",

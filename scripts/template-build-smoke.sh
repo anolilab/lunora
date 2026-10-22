@@ -633,6 +633,12 @@ authui_file_re() {
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
+# A named template that does not exist would match nothing below and report PASS over zero templates.
+if [[ -n "$ONLY_TEMPLATE" && ! -d "$REPO_ROOT/templates/$ONLY_TEMPLATE" ]]; then
+    echo "FAILED — no template named '$ONLY_TEMPLATE' under templates/"
+    exit 1
+fi
+
 TEMPLATES=()
 SKIPPED=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
