@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.342...@lunora/codegen@1.0.0-alpha.343) (2026-10-22)
+
+### Features
+
+* **do:** add ctx.random, seeded by the replay key ([#1288](https://github.com/anolilab/lunora/issues/1288)) ([7130f4e](https://github.com/anolilab/lunora/commit/7130f4e136732fe39198ad989f4e6a1f3460fe94))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.249
+* **@lunora/agent:** upgraded to 1.0.0-alpha.239
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/queue:** upgraded to 1.0.0-alpha.124
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.146
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+* **@lunora/do:** upgraded to 1.0.0-alpha.239
+* **@lunora/payment:** upgraded to 1.0.0-alpha.232
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
 ## @lunora/codegen [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.341...@lunora/codegen@1.0.0-alpha.342) (2026-10-22)
 
 
