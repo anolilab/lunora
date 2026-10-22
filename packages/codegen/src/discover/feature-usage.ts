@@ -343,7 +343,10 @@ const targetProjectOf = (scope: TargetScope, project: Project): Project => {
 const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | ExportDeclaration, specifier: string): SourceFile | undefined => {
     const file = declaration.getSourceFile();
     const project = file.getProject();
-    const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), project.getCompilerOptions(), project.getModuleResolutionHost());
+    // Every hop resolves with the declaring project's options. A target project forces `allowJs` so it can parse a JS
+    // file; that must not change which modules a hop finds.
+    const declaring = scope.origins.get(project) ?? project;
+    const { resolvedModule } = ts.resolveModuleName(specifier, file.getFilePath(), declaring.getCompilerOptions(), declaring.getModuleResolutionHost());
     const path = resolvedModule?.resolvedFileName;
 
     if (path === undefined) {
@@ -351,7 +354,6 @@ const relativeTargetOf = (scope: TargetScope, declaration: ImportDeclaration | E
     }
 
     // A hop from a target looks in the declaring project first, so an edit made there is seen rather than the disk copy.
-    const declaring = scope.origins.get(project) ?? project;
     const known = declaring.getSourceFile(path) ?? project.getSourceFile(path);
 
     if (known !== undefined) {

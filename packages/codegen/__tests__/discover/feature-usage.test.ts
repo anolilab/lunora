@@ -540,6 +540,21 @@ describe("discover/feature-usage", () => {
             expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
         });
 
+        it("resolves a JS-only module the same from a barrel as from the importing file", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+            const fileSystem = project.getFileSystem();
+
+            fileSystem.writeFileSync("/app/lunora/tools.js", TOOLS_EXPORT);
+            fileSystem.writeFileSync("/app/lunora/barrel.ts", `export * from "./tools.js";`);
+
+            const direct = project.createSourceFile("/app/lunora/direct.ts", agentsSource("./tools.js"));
+            const viaBarrel = project.createSourceFile("/app/lunora/via.ts", agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(viaBarrel).requestSecretTool).toBe(sourceCapabilitySignals(direct).requestSecretTool);
+        });
+
         it("prefers the declaring project's copy of a helper that a barrel loaded from disk re-exports", () => {
             expect.assertions(1);
 
