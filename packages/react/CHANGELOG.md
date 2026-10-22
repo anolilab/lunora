@@ -1,3 +1,9 @@
+## @lunora/react [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.252...@lunora/react@1.0.0-alpha.253) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
 ## @lunora/react [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.251...@lunora/react@1.0.0-alpha.252) (2026-10-20)
 
 
