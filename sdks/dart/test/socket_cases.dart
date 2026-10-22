@@ -225,6 +225,19 @@ void caseClosedRoomRefusesSends() {
   check(sent.every((frame) => frame['type'] != 'whisper'), 'and must write no whisper frame after close');
 }
 
+/// A listener that throws does not stop the others on its topic from receiving the frame.
+void caseThrowingWhisperListenerDoesNotEndDispatch() {
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+  final received = <Object?>[];
+
+  client
+    ..whisperSubscribe('room:general', (_) => throw StateError('a listener that fails'))
+    ..whisperSubscribe('room:general', received.add);
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'whisper', 'topic': 'room:general', 'data': 'hi'}));
+
+  equals(canonical(received), canonical(<Object?>['hi']), 'the listener after a throwing one still receives the whisper');
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');

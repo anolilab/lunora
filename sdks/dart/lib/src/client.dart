@@ -942,7 +942,12 @@ class LunoraClient {
         // A copy, so a listener that leaves its topic mid-delivery does not
         // change the list being walked.
         for (final listener in List<LunoraDataCallback>.of(listeners)) {
-          listener(value);
+          // An app listener must not end frame handling, nor skip the listeners after it.
+          try {
+            listener(value);
+          } on Object {
+            // Deliberately not rethrown: see above.
+          }
         }
 
         return kind;
