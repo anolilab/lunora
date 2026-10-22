@@ -105,6 +105,22 @@ export default defineConfig({
                       test: {
                           name: "workerd",
                           include: ["__tests__/workerd/**/*.test.ts"],
+                          exclude: ["**/node_modules/**", "**/dist/**", "__tests__/workerd/random-replay/**"],
+                      },
+                  },
+                  {
+                      extends: true,
+                      plugins: [
+                          cloudflareTest({
+                              main: "__tests__/workerd/random-replay/test-worker.ts",
+                              wrangler: {
+                                  configPath: "./__tests__/workerd/random-replay/wrangler.jsonc",
+                              },
+                          }),
+                      ],
+                      test: {
+                          name: "workerd-random-replay",
+                          include: ["__tests__/workerd/random-replay/**/*.test.ts"],
                       },
                   },
               ]
