@@ -184,6 +184,34 @@ describe("runExport", () => {
         expect(store.rows.get(opened.id)?.status).toBe("cancelled");
         expect(files.files.has(`${opened.id}/parts/notes.json`)).toBe(false);
     });
+
+    it("fails rather than finishing under the tombstone key when an erasure completes between two collect steps", async () => {
+        const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
+        const { port } = memoryData({});
+        const collectedFor: string[] = [];
+        let erase: () => Promise<unknown> = async () => undefined;
+        const interrupting: DataPort = {
+            ...port,
+            collect: async (dataset, subjectId) => {
+                collectedFor.push(subjectId);
+                await erase();
+                erase = async () => undefined;
+
+                return port.collect(dataset, subjectId);
+            },
+        };
+        const { files, privacy, store } = setup({ data: interrupting, datasets: [tasks, second], erasure: NO_GRACE });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        erase = async () => privacy.runErasure(erasure.id);
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect(collectedFor).toStrictEqual(["u1"]);
+        expect(files.files.has(`${exported.id}/export.zip`)).toBe(false);
+    });
 });
 
 describe("runErasure", () => {
