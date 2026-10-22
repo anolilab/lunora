@@ -349,7 +349,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
                 socket = _FakeSocket()
                 fake._socket = socket
                 run = asyncio.ensure_future(client.connect_and_run())
-                await _wait_for(lambda sock=socket: sock.sent)
+                await asyncio.wait_for(socket.sent_at_least(1).wait(), TIMEOUT)
                 self.assertEqual([frame["type"] for frame in socket.sent], ["connect"])
                 socket.close(code, reason)
                 with self.assertRaises(_FakeConnectionClosedError):
@@ -381,7 +381,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         client.on_token_expired(lambda: notified.append(1))
         with self.assertLogs("lunora", level="WARNING"):
             run = asyncio.ensure_future(client.reconnect_forever(sleep=sleep, rand=lambda: 1.0))
-            await _wait_for(lambda: socket.sent)
+            await asyncio.wait_for(socket.sent_at_least(1).wait(), TIMEOUT)
 
         self.assertEqual(len(attempts), 2)
         self.assertEqual(len(delays), 1)
