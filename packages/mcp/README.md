@@ -253,6 +253,7 @@ Requirements and behaviour:
 - **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A bigint inside a union (`anyOf`) is not converted.
 - **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. A function with no `.output()` has no `outputSchema`.
 - **Sensitive arguments** (`v.sensitive`) are masked in a write proposal and sent on a reference that the client never queues offline.
+- **Over stdio, for an editor:** `connectFunctionStdio(options)` builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
 - **Not yet supported:** progress notifications for stream functions (they are not in the document), and `shardKey` is always accepted even for an unsharded function.
 
 ## Expose an agent

@@ -95,6 +95,8 @@ const runWrite = async (
         { args, functionPath: route.path, idempotencyKey: confirmation.idempotencyKey, kind, shardKey, tool },
         confirmation,
         route.sensitiveArgs,
+        // The function is named by the tool, so the second call resends only what the input carries.
+        ["args", "shardKey", "idempotencyKey"],
     );
 
     if (gate !== undefined) {

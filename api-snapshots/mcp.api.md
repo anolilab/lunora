@@ -262,6 +262,12 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
+### `connectFunctionStdio` (const)
+
+```ts
+const connectFunctionStdio: (options: FunctionMcpServerOptions) => Promise<Server>;
+```
+
 ### `connectLocalStdio` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.

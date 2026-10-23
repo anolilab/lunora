@@ -4,7 +4,9 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createFunctionMcpServer } from "../src/function-server";
+import { serveStateless } from "../src/serve-stateless";
 import method from "./_helpers/openrpc";
+import { openRpcSpec as codegenSpec } from "./fixtures/messages-openrpc";
 
 /**
  * A real SDK client talks to `createFunctionMcpServer` over an in-memory transport,
@@ -34,13 +36,13 @@ interface Reply {
 
 /** A deployment double. `reply` decides each response from the function path, and every call is recorded. */
 const deployment = (reply: (functionPath: string) => Reply) => {
-    const calls: { authorization: string | null; functionPath: string }[] = [];
+    const calls: { args: unknown; authorization: string | null; functionPath: string; shardKey: unknown }[] = [];
     const fetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
         const sent: unknown = init?.body;
-        const body = JSON.parse(typeof sent === "string" ? sent : "null") as { functionPath: string };
+        const body = JSON.parse(typeof sent === "string" ? sent : "null") as { args: unknown; functionPath: string; shardKey: unknown };
         const authorization = new Headers(init?.headers).get("authorization");
 
-        calls.push({ authorization, functionPath: body.functionPath });
+        calls.push({ args: body.args, authorization, functionPath: body.functionPath, shardKey: body.shardKey });
 
         const { body: payload, status } = reply(body.functionPath);
 
@@ -117,7 +119,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
     });
 
     it("delivers a write's proposal without a client-side validation error, and runs nothing", async () => {
-        expect.assertions(3);
+        expect.assertions(5);
 
         const deployed = deployment(() => {
             return { body: { result: { id: "m1" } }, status: 200 };
@@ -125,9 +127,12 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const client = await connected(serverFor(deployed.fetch));
         const result = await client.callTool({ arguments: { args: { text: "hi" } }, name: "messages_send" });
         const [first] = result.content as { text: string }[];
+        const { nextStep } = JSON.parse(first?.text ?? "{}") as { nextStep: string };
 
         expect(result.isError ?? false).toBe(false);
         expect(first?.text).toContain("action_required");
+        expect(nextStep).toContain("IDENTICAL args, shardKey and idempotencyKey");
+        expect(nextStep).not.toContain("functionPath");
         expect(deployed.calls).toHaveLength(0);
 
         await client.close();
@@ -148,10 +153,81 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         });
 
         expect(result.structuredContent).toEqual({ id: "m1" });
-        expect(deployed.calls).toEqual([{ authorization: `Bearer ${CALLER_TOKEN}`, functionPath: "messages:send" }]);
+        expect(deployed.calls).toMatchObject([{ authorization: `Bearer ${CALLER_TOKEN}`, functionPath: "messages:send" }]);
         expect(result.isError ?? false).toBe(false);
 
         await client.close();
+    });
+
+    it("sends the shard key with the call", async () => {
+        expect.assertions(1);
+
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const client = await connected(serverFor(deployed.fetch));
+
+        await client.callTool({ arguments: { args: { id: "b1" }, shardKey: "tenant-a" }, name: "billing_get" });
+
+        expect(deployed.calls[0]?.shardKey).toBe("tenant-a");
+
+        await client.close();
+    });
+
+    it("sends a bigint argument in the wire form, and returns a bigint result as its decimal string", async () => {
+        expect.assertions(2);
+
+        const counter = { methods: [method("counter:add", "query", { args: { amount: { format: "int64", type: "string" } }, argsRequired: true })] };
+        const deployed = deployment(() => {
+            return { body: { result: ["$lunora.wire$", "bigint", "7"] }, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: counter, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+        const result = await client.callTool({ arguments: { args: { amount: "42" } }, name: "counter_add" });
+        const [first] = result.content as { text: string }[];
+
+        expect(deployed.calls[0]?.args).toEqual({ amount: ["$lunora.wire$", "bigint", "42"] });
+        expect(JSON.parse(first?.text ?? "null")).toBe("7");
+
+        await client.close();
+    });
+
+    it("serves the tools of a document the codegen emitted", async () => {
+        expect.assertions(2);
+
+        const deployed = deployment(() => {
+            return { body: {}, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ allowWrites: true, fetch: deployed.fetch, openRpcSpec: codegenSpec, url: "https://app.example" }),
+        );
+        const { tools } = await client.listTools();
+
+        expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["messages_list", "messages_send"]));
+        expect(tools.find((tool) => tool.name === "messages_send")?.inputSchema.properties?.["args"]).toMatchObject({
+            required: ["channelId", "text", "kind", "tags"],
+        });
+
+        await client.close();
+    });
+
+    it("serves the tools over stateless HTTP, from a server built for the request", async () => {
+        expect.assertions(2);
+
+        const deployed = deployment(() => {
+            return { body: {}, status: 200 };
+        });
+        const request = new Request("https://worker.example/mcp", {
+            body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }),
+            headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+            method: "POST",
+        });
+        const response = await serveStateless(serverFor(deployed.fetch), request);
+        const body = (await response.json()) as { result: { tools: { name: string }[] } };
+
+        expect(response.status).toBe(200);
+        expect(body.result.tools.map((tool) => tool.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["billing_get", "messages_send"]);
     });
 
     it("refuses to build a server from a document that is not OpenRPC, or whose names collide", () => {

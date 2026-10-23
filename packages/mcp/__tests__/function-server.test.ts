@@ -19,7 +19,7 @@ const SPEC = {
 const textOf = (result: ToolResult): unknown => JSON.parse(result.content[0]?.text ?? "null");
 
 /** A client that records every call. Each method resolves to a value the test controls. */
-const mockClient = () => {
+const mockClient = (token: string | null = "caller-token") => {
     const query = vi.fn<() => Promise<unknown>>(async () => {
         return { total: 7 };
     });
@@ -31,7 +31,7 @@ const mockClient = () => {
     });
     const client = {
         action,
-        getAuthToken: () => "caller-token",
+        getAuthToken: () => token,
         mutation,
         query,
         url: "https://app.example.workers.dev",
@@ -150,5 +150,15 @@ describe("callFunctionTool — writes", () => {
         await callFunctionTool(client, routes, "billing_charge", { args, actionDigest: proposal.actionDigest, confirmed: true }, true);
 
         expect(mutation).toHaveBeenCalledWith({ __lunoraRef: "billing:charge", sensitive: true }, args, { onlineOnly: true, shardKey: undefined });
+    });
+
+    it("refuses a write without a bearer token, and names the bearer rather than an admin token", async () => {
+        expect.assertions(2);
+
+        const { client, mutation } = mockClient(null);
+        const result = await callFunctionTool(client, routesFor(true), "messages_send", { args: { text: "hi" } }, true);
+
+        expect(result.content[0]?.text).toContain("bearer token");
+        expect(mutation).not.toHaveBeenCalled();
     });
 });
