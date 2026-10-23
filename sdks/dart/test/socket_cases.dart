@@ -288,6 +288,19 @@ void caseTopicRegisteredDuringConnectIsJoined() {
   );
 }
 
+/// A sender that closes the client during connect leaves it closed: nothing is sent afterwards.
+void caseCloseDuringConnectLeavesTheClientClosed() {
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+
+  client.attachSocket((frame) {
+    if (frame['type'] == 'connect') {
+      client.close();
+    }
+  });
+
+  check(!client.whisper('room:general', 'after close'), 'a client closed during connect must not send');
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');

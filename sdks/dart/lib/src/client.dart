@@ -240,6 +240,10 @@ class LunoraClient {
     _send = null;
     final attachGeneration = ++_attachGeneration;
 
+    if (_closed) {
+      return;
+    }
+
     // The credential generation is read with the frames, before any sender callback can change it, so the
     // socket is tagged with the credential it presented.
     final credential = _credentialGeneration;
@@ -467,6 +471,8 @@ class LunoraClient {
   /// discard writes the next session will restore.
   void close() {
     _closed = true;
+    // An attach still in flight is superseded, so its sender is never installed after shutdown.
+    _attachGeneration++;
     _connectedShards.clear();
     _replayer.cancelRetries(all: true);
     _send = null;

@@ -163,6 +163,7 @@ Future<void> main() async {
   await run(caseFailedConnectLeavesTheClientOffline);
   await run(caseSupersededAttachWritesNoMoreJoins);
   await run(caseTopicRegisteredDuringConnectIsJoined);
+  await run(caseCloseDuringConnectLeavesTheClientClosed);
 
   // The after-all hook. Adding a name to protocol/conformance-cases.json turns
   // this leg red until a case actually executes under it — the evidence is the
