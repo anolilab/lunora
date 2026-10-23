@@ -64,6 +64,46 @@ describe("a declared live stream, mounted by the worker", () => {
         });
     });
 
+    it("serves the stream ahead of an explicit route at the same path", async () => {
+        expect.assertions(2);
+
+        const seen: string[] = [];
+        const worker = createWorker({
+            httpRouter: liveStreamRouter([{ id: "feed", load: () => Promise.resolve(feed) }], httpRouter()),
+            liveStreamRoutes: ["GET /live/feed/connect", "POST /live/feed/control"],
+            routes: { "GET /live/feed/connect": () => new Response("explicit", { status: 200 }) },
+            shardDO: recordingShards(seen),
+        });
+
+        const connect = await worker.fetch(connectRequest(), {}, executionContext);
+
+        expect(await connect.text()).toBe("from shard");
+        expect(seen).toStrictEqual(["GET /_lunora/live/connect"]);
+    });
+
+    it("runs the app's own middleware on the stream routes", async () => {
+        expect.assertions(2);
+
+        const seen: string[] = [];
+        const app = httpRouter();
+
+        app.use("*", async (c, next) => {
+            await next();
+
+            c.res.headers.set("x-app", "1");
+        });
+
+        const worker = createWorker({
+            httpRouter: liveStreamRouter([{ id: "feed", load: () => Promise.resolve(feed) }], app),
+            shardDO: recordingShards(seen),
+        });
+
+        const connect = await worker.fetch(connectRequest(), {}, executionContext);
+
+        expect(connect.headers.get("x-app")).toBe("1");
+        expect(seen).toStrictEqual(["GET /_lunora/live/connect"]);
+    });
+
     it("serves its routes through a framework host, which keeps the host's own triggers", async () => {
         expect.assertions(3);
 

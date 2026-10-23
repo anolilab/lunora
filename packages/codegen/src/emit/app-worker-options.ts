@@ -89,6 +89,22 @@ const buildHttpRouterLines = (options: ResolvedAppOptions): string[] => {
 };
 
 /**
+ * The `"METHOD path"` keys of the declared stream routes, so the runtime dispatches them ahead of the app's explicit
+ * `.route()` entries. The paths are the ones `@lunora/server` derives from each stream's `id`.
+ */
+const buildLiveStreamRouteLines = (options: ResolvedAppOptions): string[] =>
+    hasLiveStreamMounts(options)
+        ? [
+              `            liveStreamRoutes: [`,
+              ...(options.liveStreamDeclarations ?? []).flatMap((stream) => [
+                  `                ${JSON.stringify(`GET /live/${stream.id}/connect`)},`,
+                  `                ${JSON.stringify(`POST /live/${stream.id}/control`)},`,
+              ]),
+              `            ],`,
+          ]
+        : [];
+
+/**
  * The router a framework host is composed with, as an expression. The live-stream routes come first, so `/live/...`
  * reaches the worker before the host's own handler sees it. Without live streams the host is used as it is.
  */
@@ -497,6 +513,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // explicitly `undefined` — `createWorker` treats the two the same, but the
     // emitted options object reads as "not configured" either way.
     ...buildHttpRouterLines(options),
+    ...buildLiveStreamRouteLines(options),
     `            routes: this.routeMap,`,
     ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,

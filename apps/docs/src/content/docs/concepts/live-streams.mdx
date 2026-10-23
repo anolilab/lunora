@@ -49,11 +49,18 @@ no string to split.
 
 Codegen mounts each stream's two routes on the worker: `GET /live/posts/connect` for the
 SSE connection and `POST /live/posts/control` for subscribe and unsubscribe. You write no
-`app.get` or `app.post` for them. The routes are matched before your own
+`app.get` or `app.post` for them. The routes are answered before your own
 [HTTP endpoints](/docs/concepts/http-endpoints) and before a framework's routes, so a route
-of yours at one of those two paths never runs. Any other request goes to your router, or to
-your framework's handler, unchanged. A stream's module is loaded on the first request that
-reaches it.
+of yours or an explicit `.route()` at one of those two paths never runs. Any other request
+goes to your router, or to your framework's handler, unchanged. A stream's module is loaded
+on the first request that reaches it.
+
+On an app built with `httpRouter()`, the stream routes are added to your router when the
+worker is built. Middleware you register with `app.use(...)`, such as CORS, runs for them. A
+catch-all on that router, such as `app.all("*", ...)`, is registered before them and answers
+first, so keep catch-alls off the app router when you use live streams. Under a framework host, the host's own
+middleware does not run for these two routes, because they are answered before the host sees
+the request.
 
 If you compose a framework worker by hand with `withLunora` rather than through the generated
 `.buildFrameworkWorker(host)`, codegen does not wrap the host for you. Wrap it with

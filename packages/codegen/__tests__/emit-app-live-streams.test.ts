@@ -43,6 +43,16 @@ describe("emitApp — live stream routes", () => {
         expect(output).toContain("...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),");
     });
 
+    it("lists the stream's routes, so the runtime serves them ahead of an explicit route at the same path", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, liveStreamDeclarations: [posts], liveStreams: true });
+
+        expect(output).toContain(
+            'liveStreamRoutes: [\n                "GET /live/posts/connect",\n                "POST /live/posts/control",\n            ],',
+        );
+    });
+
     it("wraps a framework host with the live-stream routes, so /live/... never reaches the host unmounted", () => {
         expect.assertions(2);
 

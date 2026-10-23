@@ -110,6 +110,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { isStringValidator, parseValidatorMap } from "@lunora/values";
 import type { ExecutionContext } from "hono";
+import { Hono } from "hono";
 
 import {
     isLiveIdentifier,
@@ -431,8 +432,6 @@ interface LiveHostTriggers {
 type LiveRouterFallback =
     (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
 
-type LiveStreamApp = ReturnType<typeof httpRouter>;
-
 /**
  * A framework host's triggers, copied by name as the runtime reads them. Spreading the host instead would also copy
  * the own properties of a class-instance host, which the router has no use for.
@@ -449,74 +448,78 @@ const hostTriggersOf = (host: LiveRouterFallback | undefined): LiveHostTriggers 
     };
 };
 
+/** Hono apps that already carry their stream routes. Registering them again would add duplicate routes on every build. */
+const mountedApps = new WeakSet<object>();
+
 /**
- * Serve each declared stream's connect and control routes, and hand every other request to `fallback`. Codegen
- * emits this as the worker's `httpRouter`, or around a framework host, so a stream needs no `app.get` / `app.post`
- * of its own.
+ * Register each stream's connect and control routes on `app`. A route loads its stream on the first request and then
+ * runs the stream's own handler, so the middleware `app` already has runs for these routes as well.
+ */
+const mountStreams = (app: Pick<ReturnType<typeof httpRouter>, "get" | "post">, mounts: ReadonlyArray<LiveStreamMount>): void => {
+    for (const mount of mounts) {
+        let loaded: Promise<Pick<LiveStream, "connect" | "control">> | undefined;
+        const stream = (): Promise<Pick<LiveStream, "connect" | "control">> => {
+            loaded ??= mount.load().catch((error: unknown) => {
+                // A failed load is forgotten, so the next request retries it rather than replaying the rejection.
+                loaded = undefined;
+
+                throw error;
+            });
+
+            return loaded;
+        };
+
+        app.get(liveConnectPath(mount.id), async (context) => {
+            const { connect } = await stream();
+
+            return connect(context);
+        });
+        app.post(liveControlPath(mount.id), async (context) => {
+            const { control } = await stream();
+
+            return control(context);
+        });
+    }
+};
+
+/**
+ * Serve each declared stream's connect and control routes. Codegen emits this as the worker's `httpRouter`, or wraps
+ * a framework host with it, so a stream needs no `app.get` / `app.post` of its own.
  *
- * Only the exact method and path of a stream's two routes are taken. A user route at one of those paths is
- * shadowed, because the stream is matched first. With no `fallback`, an unmatched request gets the 404 a worker
- * with no router gives.
+ * A Hono `fallback` (the app's `httpRouter()`) gets the stream routes registered on it, so its middleware runs for
+ * them, and it is returned as the router. Any other `fallback` is a framework host: the stream routes are matched
+ * first on a router of their own, and every other request goes to the host. With no `fallback`, the router is the
+ * stream routes alone.
  *
- * A framework host is a `fallback` too, and its own properties (the `scheduled`, `queue` and `email` triggers it may
- * carry) are kept on the returned router, so the host's triggers still reach the worker when it is composed.
+ * Only the exact method and path of a stream's two routes are taken. Calling this again with the same Hono app adds
+ * nothing, so the same app can be passed on every build.
  */
 const liveStreamRouter = (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback): LiveRouterApp => {
-    const routes = new Map<string, LiveStreamMount>();
+    if (fallback instanceof Hono) {
+        if (!mountedApps.has(fallback)) {
+            mountStreams(fallback, mounts);
+            mountedApps.add(fallback);
+        }
 
-    for (const mount of mounts) {
-        routes.set(`GET ${liveConnectPath(mount.id)}`, mount);
-        routes.set(`POST ${liveControlPath(mount.id)}`, mount);
+        return fallback;
     }
 
-    // A failed load is forgotten, so the next request retries it rather than replaying the rejection forever.
-    const routers = new Map<LiveStreamMount, Promise<LiveStreamApp>>();
-    const routerFor = (mount: LiveStreamMount): Promise<LiveStreamApp> => {
-        let router = routers.get(mount);
+    const streams = httpRouter();
 
-        if (router === undefined) {
-            router = mount.load().then(
-                ({ connect, control }) => {
-                    const app = httpRouter();
+    mountStreams(streams, mounts);
 
-                    app.get(liveConnectPath(mount.id), connect);
-                    app.post(liveControlPath(mount.id), control);
+    if (fallback === undefined) {
+        return streams;
+    }
 
-                    return app;
-                },
-                (error: unknown) => {
-                    routers.delete(mount);
-
-                    throw error;
-                },
-            );
-            routers.set(mount, router);
-        }
-
-        return router;
-    };
-
-    const delegate = (request: Request, env: Record<string, unknown> | undefined, context: ExecutionContext | undefined): Promise<Response> | Response => {
-        if (fallback === undefined) {
-            return new Response("Not found", { status: 404 });
-        }
-
-        return typeof fallback === "function" ? fallback(request, env, context) : fallback.fetch(request, env, context);
-    };
+    const streamKeys = new Set(mounts.flatMap((mount) => [`GET ${liveConnectPath(mount.id)}`, `POST ${liveControlPath(mount.id)}`]));
+    const delegate = (request: Request, env: Record<string, unknown> | undefined, context: ExecutionContext | undefined): Promise<Response> | Response =>
+        typeof fallback === "function" ? fallback(request, env, context) : fallback.fetch(request, env, context);
 
     return {
         ...hostTriggersOf(fallback),
-        fetch: async (request, env, context) => {
-            const mount = routes.get(`${request.method} ${new URL(request.url).pathname}`);
-
-            if (mount === undefined) {
-                return delegate(request, env, context);
-            }
-
-            const app = await routerFor(mount);
-
-            return app.fetch(request, env, context);
-        },
+        fetch: (request, env, context) =>
+            streamKeys.has(`${request.method} ${new URL(request.url).pathname}`) ? streams.fetch(request, env, context) : delegate(request, env, context),
     };
 };
 

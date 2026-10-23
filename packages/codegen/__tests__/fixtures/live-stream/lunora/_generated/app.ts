@@ -204,6 +204,10 @@ class AppBuilder<Env extends object> {
             httpRouter: liveStreamRouter([
                 { id: "feed", load: () => import("../live.js").then((m) => m.feed) },
             ], this.httpRouterApp),
+            liveStreamRoutes: [
+                "GET /live/feed/connect",
+                "POST /live/feed/control",
+            ],
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
