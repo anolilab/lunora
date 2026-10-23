@@ -486,12 +486,17 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
 };
 
 /**
- * The nested `path` of a filter clause: absent or empty means the field itself.
+ * The nested `path` of a filter clause: an absent key or an empty list means the
+ * field itself; `null` or any non-list is refused.
  * @returns the field names under the column, or `undefined` when the clause is not nested
  * @throws LunoraError `BAD_REQUEST` when `raw` is present but is not a list of strings
  */
 const parseClausePath = (column: string, raw: unknown): string[] | undefined => {
-    if (raw === undefined || raw === null) {
+    // Only an absent key means "no path". An explicit `null` is a request for a
+    // nested field the caller failed to name, and dropping it would test the
+    // parent column instead — under "delete matching", that deletes rows the
+    // caller never asked for.
+    if (raw === undefined) {
         return undefined;
     }
 
