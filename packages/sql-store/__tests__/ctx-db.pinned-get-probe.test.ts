@@ -125,6 +125,20 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         expect(second?.["title"]).toBe("in b");
     });
 
+    it("does not confuse an explicit id containing the pin delimiter with a pinned lookup", async () => {
+        expect.assertions(2);
+
+        // `x` lives in `a`. The id `a\u0000x` lives in `b`, and is an ordinary explicit id.
+        await writer.insert("a", { _id: "x", title: "in a" }, { allowExplicitId: true });
+        await writer.insert("b", { _id: "a\u0000x", title: "in b" }, { allowExplicitId: true });
+
+        const pinned = await writer.get("x", "a");
+        const unpinned = await writer.get("a\u0000x");
+
+        expect(pinned?.["title"]).toBe("in a");
+        expect(unpinned?.["title"]).toBe("in b");
+    });
+
     it("treats an id owned by another table as absent under a pin", async () => {
         expect.assertions(2);
 

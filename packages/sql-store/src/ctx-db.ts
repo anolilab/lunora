@@ -471,10 +471,14 @@ const createTableNameCache = (): {
 };
 
 /**
- * Cache key for a successful pinned resolution. It includes the table, so a pinned answer never stands in for the id's
- * unpinned first match, and a pinned lookup of another table still probes its own table.
+ * Cache keys for resolved ids. The two kinds sit under different prefixes, so an unpinned key can never equal a pinned
+ * one, whatever characters an explicit id holds. A pinned key separates the table from the id with a NUL, which no table
+ * name can contain, so it parses back unambiguously.
+ *
+ * A pinned resolution is cached on its own, because it saw one table and may not be the id's first match in schema order.
  */
-const pinnedCacheKey = (tableName: string, id: string): string => `${tableName}\u0000${id}`;
+const unpinnedCacheKey = (id: string): string => `u${id}`;
+const pinnedCacheKey = (tableName: string, id: string): string => `p${tableName}\u0000${id}`;
 
 /**
  * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
@@ -495,7 +499,7 @@ const tableNameFromId = async (
     cache: ReturnType<typeof createTableNameCache>,
     expectedTable?: string,
 ): Promise<string | undefined> => {
-    const key = expectedTable === undefined ? id : pinnedCacheKey(expectedTable, id);
+    const key = expectedTable === undefined ? unpinnedCacheKey(id) : pinnedCacheKey(expectedTable, id);
     const cached = cache.get(key);
 
     if (cached !== undefined) {
@@ -3284,7 +3288,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // The id no longer lives in `tableName`; drop the stale cache entry
             // so a later re-insert of the same id into a different global table
             // re-probes instead of resolving to the now-empty original table.
-            tableNameCache.delete(id);
+            tableNameCache.delete(unpinnedCacheKey(id));
 
             for (const table of Object.keys(schema.tables)) {
                 tableNameCache.delete(pinnedCacheKey(table, id));
@@ -3652,7 +3656,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // random and never pre-seeded, so this only matters for the
             // explicit-id import path.)
             if (usedExplicitId) {
-                tableNameCache.set(id, tableName);
+                tableNameCache.set(unpinnedCacheKey(id), tableName);
             }
 
             await syncAggregates(tableName, undefined, documentWithMeta);
