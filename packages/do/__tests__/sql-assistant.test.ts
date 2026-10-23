@@ -263,6 +263,26 @@ describe("generateFilter", () => {
         expect(result.degraded).toBe(true);
     });
 
+    it("passes a nested path through unchanged", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"address","operator":"eq","path":["geo","city"],"value":"Berlin"}]');
+        const result = await generateFilter(ai, { prompt: "berlin" }, ["id", "address"]);
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" }]);
+    });
+
+    it("drops a clause whose path is not a list of non-empty field names, rather than testing the parent column", async () => {
+        expect.assertions(1);
+
+        const ai = binding(
+            '[{"column":"address","operator":"eq","path":"city","value":"Berlin"},{"column":"address","operator":"eq","path":["", "city"],"value":"Berlin"},{"column":"status","operator":"eq","value":"open"}]',
+        );
+        const result = await generateFilter(ai, { prompt: "x" }, ["id", "address", "status"]);
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
+    });
+
     it("keeps the valid clauses when only some are bad", async () => {
         expect.assertions(1);
 
