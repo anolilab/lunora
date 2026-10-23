@@ -410,6 +410,30 @@ const sendImport = async (
         return { failure: { message: t("The CSV has no data rows after the header."), rows: 0 }, total };
     }
 
+    // The first pass has the server check every chunk and write nothing. Its answer covers the whole file: a bad row in the last chunk
+    // refuses the import before the first chunk lands, where a single pass would have written every chunk before it. The check covers the
+    // shape only. An `_id` already in use, a cross-table collision and a foreign-key or unique failure are found by the real pass.
+    const check: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+
+    onProgress(t("Checking {total} rows before writing…", { total: rowCount }));
+
+    try {
+        await forEachRowChunk(source(), async (rows, startLine) => {
+            const result = (await client.query(IMPORT_SHARD, { dryRun: true, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+
+            check.errors.push(...result.errors);
+        });
+    } catch (error_) {
+        return { failure: { message: errorMessage(error_), rows: 0 }, total };
+    }
+
+    if (check.errors.length > 0) {
+        return {
+            failure: { message: t("Nothing was written, because some rows would be refused. Fix the rows listed below and import again."), rows: 0 },
+            total: check,
+        };
+    }
+
     let sent = 0;
 
     const sendChunk = async (rows: ExportRow[], startLine: number): Promise<void> => {
@@ -421,7 +445,7 @@ const sendImport = async (
             }),
         );
 
-        const result = (await client.query(IMPORT_SHARD, { rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+        const result = (await client.query(IMPORT_SHARD, { dryRun: false, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
         total.conflicts += result.conflicts;
         total.errors.push(...result.errors);
@@ -537,6 +561,11 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 }),
             );
         } else {
+            // A refused file names its bad rows, so the errors are shown with the message that says nothing was written.
+            if (total.errors.length > 0) {
+                setImportResult(total);
+            }
+
             setError(failure.message);
         }
 

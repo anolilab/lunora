@@ -93,8 +93,49 @@ const importCsv = async (text: string, table: string): Promise<void> => {
 };
 
 /** The rows and first line of each `importShard` call, in order. */
-const importCalls = (mock: MockClientHooks): { rows: ExportRow[]; startLine: number }[] =>
-    callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => call[1] as { rows: ExportRow[]; startLine: number });
+type ImportArgs = { dryRun?: boolean; rows: ExportRow[]; startLine: number };
+
+/** The `importShard` calls that wrote rows: the panel sends `dryRun: false` on each, so a check can never be counted as a write. */
+const importCalls = (mock: MockClientHooks): ImportArgs[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard)
+        .map((call) => call[1] as ImportArgs)
+        .filter((args) => args.dryRun === false);
+
+/** The `importShard` calls that only checked their rows, in the order the panel sent them. */
+const dryChecks = (mock: MockClientHooks): ImportArgs[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard)
+        .map((call) => call[1] as ImportArgs)
+        .filter((args) => args.dryRun === true);
+
+/**
+ * A server that answers `importShard` for a 1200-row file. A check (`dryRun: true`) refuses the row on `badLine` when a chunk holds it, and
+ * a write inserts every row it is sent.
+ */
+const createCheckingClient = (badLine?: number): MockClientHooks =>
+    createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: 0 }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.importShard) {
+                const { dryRun, rows, startLine } = args as ImportArgs;
+                const refused = badLine !== undefined && badLine >= startLine && badLine < startLine + rows.length;
+
+                if (dryRun === true && refused) {
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION_ERROR", line: badLine, message: "text must be a string", table: "messages" }],
+                        inserted: {},
+                    };
+                }
+
+                return { conflicts: 0, errors: [], inserted: { messages: rows.length } };
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+    });
 
 /** Click Download and capture the Blob handed to `URL.createObjectURL`. */
 const downloadBlob = (): { blobs: Blob[] } => {
@@ -193,9 +234,7 @@ describe("exportImportPanel", () => {
         const importResult = await screen.findByTestId("ei-import-result");
 
         expect(importResult.textContent).toContain("Inserted 1200");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { rows: unknown[]; startLine: number }).startLine)).toStrictEqual([
-            1, 501, 1001,
-        ]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
     });
 
     it("cuts a chunk early when its rows would exceed the byte ceiling, so wide rows stay under the body limit", async () => {
@@ -213,7 +252,7 @@ describe("exportImportPanel", () => {
         const importResult = await screen.findByTestId("ei-import-result");
 
         expect(importResult.textContent).toContain("Inserted 4");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 3]);
     });
 
     it("refuses a row whose wire encoding is too wide, even when its NDJSON line is short", async () => {
@@ -245,7 +284,7 @@ describe("exportImportPanel", () => {
 
         await screen.findByTestId("ei-import-result");
 
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 3]);
     });
 
     it("refuses a single row too wide for any request before writing a chunk", async () => {
@@ -288,8 +327,12 @@ describe("exportImportPanel", () => {
         let imports = 0;
 
         const mock = createMockClient({
-            query: (reference): unknown => {
+            query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
+                    if ((args as { dryRun?: boolean }).dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
                     imports += 1;
 
                     if (imports === 2) {
@@ -314,7 +357,7 @@ describe("exportImportPanel", () => {
 
         expect(error.textContent).toContain("Import stopped after 500 rows: connection reset");
         expect(importResult.textContent).toContain("Inserted 500");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(2);
+        expect(importCalls(mock)).toHaveLength(2);
     });
 
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
@@ -335,6 +378,11 @@ describe("exportImportPanel", () => {
 
                 if (reference === ADMIN_FUNCTIONS.exportShard) {
                     return { rows: [{ doc: { __id__: "l1", amount: 42n, blob }, table: "ledger" }] };
+                }
+
+                // The check the panel sends first is not a write, so it is not part of the round trip.
+                if ((args as { dryRun?: boolean }).dryRun === true) {
+                    return { conflicts: 0, errors: [], inserted: {} };
                 }
 
                 imported.push(...(args as { rows: ExportRow[] }).rows);
@@ -575,5 +623,40 @@ describe("exportImportPanel", () => {
 
         expect(Object.keys(row?.doc ?? {})).toStrictEqual(["kind", "__proto__"]);
         expect(Object.getOwnPropertyDescriptor(row?.doc, "__proto__")?.value).toBe("surprise");
+    });
+
+    it("checks every chunk before writing, and writes nothing when a row in the last chunk would be refused", async () => {
+        expect.assertions(4);
+
+        const mock = createCheckingClient(1101);
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const errors = await screen.findByTestId("ei-import-errors");
+        const error = await screen.findByTestId("ei-error");
+
+        expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
+        expect(importCalls(mock)).toHaveLength(0);
+        expect(errors.textContent).toBe("line 1101 (messages): text must be a string");
+        expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
+    });
+
+    it("checks every chunk in order, then writes the same chunks", async () => {
+        expect.assertions(2);
+
+        const mock = createCheckingClient();
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
     });
 });
