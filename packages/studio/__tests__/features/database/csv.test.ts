@@ -153,6 +153,7 @@ describe("coerceCsvDocuments", () => {
         ["active", "boolean"],
         ["amount", "bigint"],
         ["count", "number"],
+        ["day", "date"],
         ["label", "string"],
         ["payload", "object"],
         ["stamp", "timestamp"],
@@ -178,6 +179,28 @@ describe("coerceCsvDocuments", () => {
             expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,count\nm1,${text}\n`), kinds))).toStrictEqual({
                 column: "count",
                 expected: "number",
+                kind: "cell-type",
+                record: 2,
+                value: text,
+            });
+        }
+    });
+
+    it("reads an ISO-8601 date as midnight UTC, and an ISO date-time as the instant its offset names", () => {
+        expect.assertions(3);
+
+        expect(coerced("day", "2026-10-23")).toBe(Date.UTC(2026, 9, 23));
+        expect(coerced("day", "2026-10-23T08:00:00Z")).toBe(Date.UTC(2026, 9, 23, 8));
+        expect(coerced("day", "2026-10-23T08:00:00+02:00")).toBe(Date.UTC(2026, 9, 23, 6));
+    });
+
+    it("rejects a date cell that is neither ISO-8601 nor epoch milliseconds, including a date that does not exist", () => {
+        expect.assertions(4);
+
+        for (const text of ["23/10/2026", "2026-02-30", "2026-10-23T08:00:00", "next tuesday"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,day\nm1,${text}\n`), kinds))).toStrictEqual({
+                column: "day",
+                expected: "date",
                 kind: "cell-type",
                 record: 2,
                 value: text,

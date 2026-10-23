@@ -14,7 +14,7 @@ type CsvProblem =
     | { kind: "unterminated-quote"; record: number };
 
 /** The column kinds a CSV cell is coerced into. Every other kind keeps its text. */
-type CellType = "bigint" | "boolean" | "number";
+type CellType = "bigint" | "boolean" | "date" | "number";
 
 /** A value a CSV cell can take after coercion. */
 type CsvValue = bigint | boolean | number | string;
@@ -210,7 +210,16 @@ const INTEGER_TEXT = /^-?\d+$/u;
  */
 const DECIMAL_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 
-/** The text, trimmed of surrounding whitespace, as a finite decimal number, or `undefined`. */
+/** `YYYY-MM-DD`. */
+const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
+
+/**
+ * `hh:mm`, optionally `:ss` with a fraction, then `Z` or a `±hh:mm` offset. The offset is required: a time without one names a different
+ * instant on every machine that reads the file.
+ */
+const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/u;
+
+/** The text as a finite decimal number, or `undefined`. */
 const parseDecimal = (text: string): number | undefined => {
     const trimmed = text.trim();
 
@@ -223,10 +232,57 @@ const parseDecimal = (text: string): number | undefined => {
     return Number.isFinite(number) ? number : undefined;
 };
 
+/** Whether `year-month-day` names a day the calendar has. `Date.parse` would roll `2026-02-30` over into March instead. */
+const isRealDay = (year: number, month: number, day: number): boolean => {
+    const calendar = new Date(0);
+
+    calendar.setUTCFullYear(year, month - 1, day);
+
+    return calendar.getUTCMonth() === month - 1 && calendar.getUTCDate() === day;
+};
+
+/** Whether the clock fields are in range, and the offset (when there is one) names a real UTC offset. */
+const isRealClock = (hour: string, minute: string, second: string, offset: string): boolean =>
+    Number(hour) <= 23 &&
+    Number(minute) <= 59 &&
+    Number(second) <= 59 &&
+    (offset === "Z" || (Number(offset.slice(1, 3)) <= 23 && Number(offset.slice(4, 6)) <= 59));
+
 /**
- * Read one cell's text as its column kind. Numbers, timestamps and dates take a decimal, trimmed of surrounding whitespace. Booleans take
- * `true` or `false` in any case. Bigints take the integer text and keep it exact. Any other kind stays text, and the server validator
- * decides what it accepts.
+ * The epoch milliseconds of an ISO-8601 date or date-time, or `undefined` when the text is not one. A date with no time is midnight UTC,
+ * which is what `Date.parse` reads it as and what a `date` column stores. The text is split on its `T` and each half is matched on its own,
+ * so `Date.parse` only ever reads text whose fields have been checked.
+ */
+const parseIsoDate = (text: string): number | undefined => {
+    const [dayText = "", clockText, ...rest] = text.split("T");
+    const day = ISO_DAY_TEXT.exec(dayText);
+    const clock = clockText === undefined ? undefined : ISO_CLOCK_TEXT.exec(clockText);
+
+    if (day === null || rest.length > 0 || (clockText !== undefined && clock === null)) {
+        return undefined;
+    }
+
+    const [, year = "", month = "", dayOfMonth = ""] = day;
+
+    if (!isRealDay(Number(year), Number(month), Number(dayOfMonth))) {
+        return undefined;
+    }
+
+    const [, hour = "0", minute = "0", second = "0", offset = "Z"] = clock ?? [];
+
+    if (!isRealClock(hour, minute, second, offset)) {
+        return undefined;
+    }
+
+    const millis = Date.parse(text);
+
+    return Number.isFinite(millis) ? millis : undefined;
+};
+
+/**
+ * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes epoch milliseconds or an ISO-8601
+ * date. Both are trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take the integer text and
+ * keep it exact. Any other kind stays text, and the server validator decides what it accepts.
  */
 const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     if (kind === "bigint") {
@@ -243,10 +299,16 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
         return { expected: "boolean", kind: "rejected" };
     }
 
-    if (kind === "date" || kind === "number" || kind === "timestamp") {
+    if (kind === "number") {
         const number = parseDecimal(text);
 
         return number === undefined ? { expected: "number", kind: "rejected" } : { kind: "ok", value: number };
+    }
+
+    if (kind === "date" || kind === "timestamp") {
+        const millis = parseIsoDate(text.trim()) ?? parseDecimal(text);
+
+        return millis === undefined ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
     }
 
     return { kind: "ok", value: text };

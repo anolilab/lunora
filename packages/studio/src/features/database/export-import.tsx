@@ -287,6 +287,14 @@ const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
             });
         }
 
+        if (problem.expected === "date") {
+            return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
+                column: problem.column,
+                line: problem.record,
+                value: problem.value,
+            });
+        }
+
         return t("line {line}: column “{column}” must be a number, got “{value}”.", { column: problem.column, line: problem.record, value: problem.value });
     }
 
