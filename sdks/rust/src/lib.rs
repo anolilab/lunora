@@ -14,7 +14,8 @@ pub mod wire;
 
 pub use client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_shape_unsubscribe_frame, build_subscribe_frame, build_unsubscribe_frame,
-    parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, StreamEvent, SubscriptionError, TransportError, Verb, CODE_INVALID_FRAME,
+    build_whisper_frame, build_whisper_subscribe_frame, build_whisper_unsubscribe_frame, parse_rpc_response, ApiError, Client, ClientError, FrameSender,
+    HttpPoster, ListenerId, Room, StreamEvent, SubscriptionError, TokenExpiredHandler, TransportError, Verb, WhisperHandler, CODE_INVALID_FRAME,
     RPC_BATCH_PATH, RPC_PATH, WS_PATH,
 };
 pub use key::{stable_stringify, stable_wire_key};
