@@ -231,10 +231,17 @@ describe("coerceCsvDocuments", () => {
         expect(coerced("day", "2026-10-23T08:00:00+02:00")).toBe(Date.UTC(2026, 9, 23, 6));
     });
 
+    it("reads an ISO date-time with no offset as UTC, whatever zone the reader runs in", () => {
+        expect.assertions(2);
+
+        expect(coerced("day", "2026-10-23T08:00:00")).toBe(Date.UTC(2026, 9, 23, 8));
+        expect(coerced("day", "2026-10-23T08:30")).toBe(Date.UTC(2026, 9, 23, 8, 30));
+    });
+
     it("rejects a date cell that is neither ISO-8601 nor epoch milliseconds, including a date that does not exist", () => {
         expect.assertions(4);
 
-        for (const text of ["23/10/2026", "2026-02-30", "2026-10-23T08:00:00", "next tuesday"]) {
+        for (const text of ["23/10/2026", "2026-02-30", "2026-13-01", "next tuesday"]) {
             expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,day\nm1,${text}\n`), kinds))).toStrictEqual({
                 column: "day",
                 expected: "date",

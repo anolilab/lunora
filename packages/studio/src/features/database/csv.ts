@@ -224,10 +224,9 @@ const DECIMAL_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 /**
- * `hh:mm`, optionally `:ss` with a fraction, then `Z` or a `±hh:mm` offset. The offset is required: a time without one names a different
- * instant on every machine that reads the file.
+ * `hh:mm`, optionally `:ss` with a fraction, then an optional `Z` or `±hh:mm` offset. A time with no offset is read as UTC; see `parseIsoDate`.
  */
-const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/u;
+const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/u;
 
 /** The text as a finite decimal number, or `undefined`. */
 const parseDecimal = (text: string): number | undefined => {
@@ -260,7 +259,7 @@ const isRealClock = (hour: string, minute: string, second: string, offset: strin
 
 /**
  * The epoch milliseconds of an ISO-8601 date or date-time, or `undefined` when the text is not one. A date with no time is midnight UTC,
- * which is what `Date.parse` reads it as and what a `date` column stores. The text is split on its `T` and each half is matched on its own,
+ * and a date-time with no offset is UTC too, which is what a `date` column stores. The text is split on its `T` and each half is matched on its own,
  * so `Date.parse` only ever reads text whose fields have been checked.
  */
 const parseIsoDate = (text: string): number | undefined => {
@@ -278,13 +277,15 @@ const parseIsoDate = (text: string): number | undefined => {
         return undefined;
     }
 
-    const [, hour = "0", minute = "0", second = "0", offset = "Z"] = clock ?? [];
+    const [, hour = "0", minute = "0", second = "0", offset] = clock ?? [];
 
-    if (!isRealClock(hour, minute, second, offset)) {
+    if (!isRealClock(hour, minute, second, offset ?? "Z")) {
         return undefined;
     }
 
-    const millis = Date.parse(text);
+    // A time with no offset would be read in the machine's own zone, so it is marked UTC before Date.parse sees it. Date-only text is
+    // already midnight UTC and is passed through unchanged.
+    const millis = Date.parse(clock !== undefined && offset === undefined ? `${text}Z` : text);
 
     return Number.isFinite(millis) ? millis : undefined;
 };
