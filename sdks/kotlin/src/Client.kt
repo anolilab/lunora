@@ -27,6 +27,15 @@ const val WS_PATH: String = "/_lunora/ws"
  */
 const val MAX_PENDING_POKES: Int = 64
 
+/** The close code the server sends when the session credential has expired (protocol §5.2). */
+private const val CLOSE_TOKEN_EXPIRED: Int = 4001
+
+/** The close code for a refused credential (protocol §6). */
+private const val CLOSE_REFUSED: Int = 4003
+
+/** The 4003 reason that marks a socket which never sent `connect`: it refused no credential. */
+private const val CONNECT_DEADLINE_REASON: String = "connect deadline"
+
 /**
  * Which RPC method a call dispatches to. Generated code emits these entries
  * rather than raw strings, so a typo in a target template is a compile error
@@ -132,9 +141,19 @@ class Client(
     /**
      * Supplies the session credential, read on every socket open and sent as
      * `connect.token`. It never enters the socket URL. Null sends none.
+     *
+     * Assigning it starts a new credential generation, which re-arms the one 4003
+     * refusal report [onTokenExpired] makes per generation. A provider that reads a
+     * mutable token needs a fresh assignment to re-arm it.
      */
     @Volatile
     var wsToken: (() -> String?)? = null
+        set(value) {
+            synchronized(lock) {
+                field = value
+                credentialGeneration++
+            }
+        }
 
     /**
      * Supplies the ephemeral admin ticket, read on every [wsUrl] call and sent as
@@ -412,6 +431,13 @@ class Client(
 
         fun buildUnsubscribeFrame(id: String): Map<String, Any?> = linkedMapOf("id" to id, "type" to "unsubscribe")
 
+        fun buildWhisperSubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_subscribe")
+
+        fun buildWhisperUnsubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_unsubscribe")
+
+        fun buildWhisperFrame(topic: String, data: WireValue): Map<String, Any?> =
+            linkedMapOf("data" to Wire.encode(data), "topic" to topic, "type" to "whisper")
+
         fun buildShapeSubscribeFrame(
             id: String,
             name: String,
@@ -491,9 +517,31 @@ class Client(
     internal var flushNotBefore = 0L
     internal val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
 
+    /** Bumped by every assignment to [wsToken]; see [detachSocket]. */
+    private var credentialGeneration = 0L
+
+    /** The generation the open socket's `connect` was sent under. */
+    private var socketGeneration = 0L
+
+    /** The generation of the last 4003 refusal reported to [onTokenExpired]; null before any. */
+    private var refusedGeneration: Long? = null
+
+    private val tokenExpiredListeners = mutableListOf<TokenExpiredListener>()
+
+    /** Joined topics and their listeners. A topic is present while it has at least one. */
+    private val whisperTopics = LinkedHashMap<String, MutableList<WhisperListener>>()
+
+    /** Topics whose join write failed; the next listener on one of them sends the join again. Guarded by [lock]. */
+    private val unjoinedTopics = mutableSetOf<String>()
+
+    private class WhisperListener(val onValue: (WireValue) -> Unit)
+
+    /** One token-expiry registration: its own object, so its handle removes only it. */
+    private class TokenExpiredListener(val run: () -> Unit)
+
     /**
-     * Registers the sender used for subscription frames. Call once the socket is
-     * open.
+     * Registers the sender for this socket and writes its `connect` frame first. Call
+     * it once per socket open, before [resendSubscriptions].
      *
      * It also latches "has connected at least once", which is what the write queue
      * gates on: a write made before the FIRST connect fails fast by default, so a
@@ -502,36 +550,191 @@ class Client(
      *
      * It sends the `connect` frame first, carrying [wsToken] resolved now, so every
      * open and every reconnect presents the session credential before any
-     * subscription. The app must not send `connect` itself.
+     * subscription. The app must not send `connect` itself. [context], when given,
+     * rides that frame: the server records it for the `onConnect` hooks, so it applies
+     * to every open and reconnect. Pass nothing, or `null`, when there is none.
+     *
+     * After `connect`, every registered whisper topic is joined again. Subscriptions
+     * are not: [resendSubscriptions] sends those, and the app calls it after attaching.
      */
-    fun attachSocket(sender: (Map<String, Any?>) -> Unit) = attachSocket(null, sender)
-
-    /**
-     * [attachSocket] with a connection [context] on the `connect` frame. The server
-     * records it for the `onConnect` hooks, so it applies to every open and reconnect.
-     */
-    fun attachSocket(context: Map<String, Any?>?, sender: (Map<String, Any?>) -> Unit) {
+    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit) {
         // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
-        val generation = synchronized(lock) {
+        // The credential generation is read with the attach generation: a rotation racing this attach
+        // must not tag the socket with a generation newer than the credential it presents.
+        // The provider is read with the generation, so a rotation racing this attach cannot tag the
+        // socket with a generation newer than the credential it presents.
+        val (generation, credential, provider) = synchronized(lock) {
             send = null
-            ++attachGeneration
+            Triple(++attachGeneration, credentialGeneration, wsToken)
         }
-        sender(buildConnectFrame(clientId = clientId, context = context, token = wsToken?.invoke()))
-        // A detach or a newer attach during the send supersedes this one: installing this sender would undo it.
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke()))
+        // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
+        // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
+        // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
+        // the client offline, and the error propagates.
         synchronized(lock) {
-            if (generation == attachGeneration) {
-                send = sender
-                wasEverConnected = true
+            if (generation != attachGeneration) return
+            send = sender
+            socketGeneration = credential
+            wasEverConnected = true
+            try {
+                for (topic in whisperTopics.keys.toList()) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach.
+                    if (generation != attachGeneration) return
+                    sender(buildWhisperSubscribeFrame(topic))
+                }
+                unjoinedTopics.clear()
+            } catch (failure: Throwable) {
+                if (send === sender) send = null
+                throw failure
             }
         }
     }
 
-    /** Forgets the sender, so subsequent writes queue rather than fail. */
-    fun detachSocket() {
-        synchronized(lock) {
+    /**
+     * Forgets the sender, so subsequent writes queue rather than fail. Every detach
+     * leaves the client offline.
+     *
+     * [closeCode] and [reason] are the close frame the socket ended with, when the
+     * socket library reports one; null means none. They decide whether
+     * [onTokenExpired] listeners hear of it:
+     *  - 4001 (token expired): always.
+     *  - 4003 (refused credential): once per credential generation, and only for a
+     *    socket that opened under the current one: a socket opened under a superseded
+     *    credential refused a credential no longer in force. A reason of exactly
+     *    "connect deadline" refuses no credential, so it notifies nothing.
+     *  - anything else: nothing.
+     */
+    fun detachSocket(closeCode: Int? = null, reason: String? = null) {
+        val expired = synchronized(lock) {
             send = null
             attachGeneration++
+
+            when {
+                closeCode == CLOSE_TOKEN_EXPIRED -> true
+                closeCode == CLOSE_REFUSED && reason != CONNECT_DEADLINE_REASON &&
+                    socketGeneration == credentialGeneration && refusedGeneration != socketGeneration -> {
+                    refusedGeneration = socketGeneration
+
+                    true
+                }
+
+                else -> false
+            }
         }
+
+        if (expired) notifyTokenExpired()
+    }
+
+    /**
+     * Observes token expiry: a 4001 close, a `TOKEN_EXPIRED` error frame, or a 4003
+     * refusal (see [detachSocket]). Returns an unregister.
+     */
+    fun onTokenExpired(listener: () -> Unit): () -> Unit {
+        // Each registration is its own entry, so two registrations of one function keep separate handles.
+        val entry = TokenExpiredListener(listener)
+
+        synchronized(lock) { tokenExpiredListeners.add(entry) }
+
+        return { synchronized(lock) { tokenExpiredListeners.remove(entry) } }
+    }
+
+    private fun notifyTokenExpired() {
+        val listeners = synchronized(lock) { tokenExpiredListeners.toList() }
+
+        for (listener in listeners) {
+            try {
+                listener.run()
+            } catch (error: Exception) {
+                // One bad observer must not stop the rest, nor the socket teardown or
+                // frame handling that reported the expiry.
+            }
+        }
+    }
+
+    /**
+     * Joins [topic] and hands each relayed `whisper` value to [listener]. The join is
+     * sent now when a socket is attached and again after every reconnect. Returns the
+     * leave: removing the topic's last listener sends `whisper_unsubscribe`.
+     */
+    fun whisperSubscribe(topic: String, listener: (WireValue) -> Unit): () -> Unit {
+        val entry = WhisperListener(listener)
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave cannot overtake
+        // it. A join that fails is retried by the next listener on the topic.
+        synchronized(lock) {
+            val listeners = whisperTopics.getOrPut(topic) { mutableListOf() }
+            val join = listeners.isEmpty() || topic in unjoinedTopics
+
+            listeners.add(entry)
+
+            val socket = send
+
+            if (join && socket != null) {
+                try {
+                    socket(buildWhisperSubscribeFrame(topic))
+                    unjoinedTopics.remove(topic)
+                } catch (failure: Throwable) {
+                    unjoinedTopics.add(topic)
+                    throw failure
+                }
+            }
+        }
+
+        return {
+            synchronized(lock) {
+                val listeners = whisperTopics[topic]
+
+                if (listeners != null && entry in listeners) {
+                    if (listeners.size == 1) {
+                        // The unsubscribe goes out before the topic is forgotten, so a write that throws leaves the
+                        // leave retryable: the membership is not stranded on the server.
+                        send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                        whisperTopics.remove(topic)
+                        unjoinedTopics.remove(topic)
+                    } else {
+                        listeners.remove(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Relays [data] to [topic] over the attached socket. Returns false, and queues
+     * nothing, when no socket is attached.
+     */
+    fun whisper(topic: String, data: WireValue): Boolean {
+        val socket = synchronized(lock) { send } ?: return false
+
+        socket(buildWhisperFrame(topic, data))
+
+        return true
+    }
+
+    /** A joined room: [send] relays a message to it, [close] leaves it. */
+    class Room internal constructor(private val relay: (WireValue) -> Boolean, private val leave: () -> Unit) {
+        @Volatile
+        private var closed = false
+
+        /** Relays [message]; false when no socket is attached, or the room is closed. */
+        fun send(message: WireValue): Boolean = !closed && relay(message)
+
+        fun close() {
+            closed = true
+            leave()
+        }
+    }
+
+    /**
+     * Joins the room `room:<name>` and hands its messages to [listener]. Does not wait
+     * for an ack: a room topic is never acknowledged.
+     */
+    fun connectRoom(name: String, listener: (WireValue) -> Unit): Room {
+        val topic = "room:$name"
+        val leave = whisperSubscribe(topic, listener)
+
+        return Room({ message -> whisper(topic, message) }, leave)
     }
 
     /** Whether a socket is currently attached. */
@@ -982,6 +1185,17 @@ class Client(
             }
             "error" -> {
                 val envelope = frame["error"] as? Map<*, *> ?: emptyMap<String, Any?>()
+
+                // Token expiry is the socket's signal, not a subscription's failure: the
+                // server sends it just before closing 4001, and routing it would hand the
+                // subscription an error the credential refresh is about to cure. Checked
+                // before the id lookup, so an id-less frame still notifies.
+                if (envelope["code"] == "TOKEN_EXPIRED") {
+                    notifyTokenExpired()
+
+                    return kind
+                }
+
                 val error = SubscriptionError(
                     envelope["code"] as? String,
                     frame["message"] as? String ?: envelope["message"] as? String ?: "subscription error",
@@ -1021,6 +1235,28 @@ class Client(
             }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
+            "whisper" -> {
+                // A frame with no topic names no listeners, and a payload the codec refuses
+                // is one bad frame, not a reason to end the read loop. Both are ignored.
+                val topic = frame["topic"] as? String
+
+                if (!topic.isNullOrEmpty()) {
+                    val value = try {
+                        Wire.decode(frame["data"])
+                    } catch (error: WireFormatException) {
+                        return kind
+                    }
+                    val listeners = synchronized(lock) { whisperTopics[topic]?.toList().orEmpty() }
+
+                    for (listener in listeners) {
+                        try {
+                            listener.onValue(value)
+                        } catch (error: Exception) {
+                            // An app listener must not end the read loop, nor skip the listeners after it.
+                        }
+                    }
+                }
+            }
         }
 
         return kind

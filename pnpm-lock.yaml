@@ -5897,6 +5897,9 @@ importers:
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler

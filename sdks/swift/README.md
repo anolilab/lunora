@@ -69,11 +69,34 @@ differs from the shape's — re-seeds instead: the view is emptied, its checkpoi
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint.
-Send `buildConnectFrame(clientID:context:token:)` as the first frame on every open,
-before `resendSubscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
-whose first frame is not that `connect` with a matching `token` (close code 4003). The
-session credential never goes in the socket URL; `wsURL(shardKey:wsTicket:)` carries only
-an admin ticket.
+`attachSocket(_:context:)` sends `connect` as the first frame of every open: the client
+id, `context` when one is given, and `token` from `sessionToken` when one is set. Do not
+send `connect` yourself. A caller that still does opens the socket with two. A deployment
+with `LUNORA_WS_BEARER` closes a socket whose first frame is not `connect` with a matching
+`token` (close code 4003). `sessionToken` never goes in the socket URL, and
+`wsURL(shardKey:wsTicket:)` carries only an admin ticket. `authToken`, the RPC bearer, is
+never sent on the socket.
+
+`detachSocket(closeCode:reason:)` takes the close frame that ended the socket; pass nil
+(the default) when there was none. A 4001 always notifies the listeners `onTokenExpired(_:)`
+registers. A 4003 refuses the session credential: it notifies once per credential generation,
+and a new generation starts each
+time `sessionToken` changes. It notifies nothing for a socket that opened under an earlier
+generation, or for a reason of exactly `connect deadline`. A `TOKEN_EXPIRED` error frame
+notifies and is not routed to its subscription; `UNAUTHENTICATED` routes like any other
+error. A listener that throws is contained and its error discarded, so it cannot break the
+read loop.
+
+Whispers relay ephemeral data on a topic. `whisperSubscribe(_:_:)` joins a topic on its
+first listener and returns a handle that leaves it when the last listener goes; every
+attach rejoins each topic right after `connect`. `whisper(_:data:)` returns false when no
+socket is attached, and never queues. `connectRoom(_:_:)` joins `room:<name>` and returns a
+`LunoraRoom` with `send(_:)` and `close()`. A room is never acknowledged, so `send` may be
+used at once.
+
+`attachSocket` and the whisper paths write to the socket while holding the client's lock,
+so a sender on those paths, and any socket-library callback that fires during `send` or
+`close`, must never call back into the client. Hand the call to another queue instead.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type). The sender cannot throw, so a failed write
@@ -84,40 +107,47 @@ schedule its own retry, or those writes wait for the next reconnect: the retry i
 `Task` that is cancelled when the socket run ends.
 
 ```swift
+// The WebSocket session credential, sent as `connect.token`. Refresh it when the server
+// refuses it; the listener runs on the read loop, so it hands the fetch to a task.
+client.sessionToken = session
+_ = client.onTokenExpired {
+    Task { if let fresh = try? await fetchSession() { client.sessionToken = fresh } }
+}
+
 var attempt = 0
 let shard: String? = nil // this socket's shard key; nil is the default shard
 while !Task.isCancelled {
     if let socket = try? await connect() { // your socket library
         var flushRetry: Task<Void, Never>?
-        // connect goes out before the sender is attached, so a subscribe on another task cannot write ahead of it.
-        if (try? socket.send(Wire.stableStringify(LunoraClient.buildConnectFrame(clientID: client.clientID, token: session)))) != nil {
-            // A failed write closes the socket: the receive below then throws, ending the run.
-            client.attachSocket { frame in
-                do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
-            }
-            client.resendSubscriptions()
-            let report = client.flushOfflineQueue(shardKey: shard)
-            if !report.requeued.isEmpty || report.retryAfterMs != nil {
-                flushRetry = Task {
-                    var backoff = 1.0
-                    var wait = report.retryAfterMs.map { Double($0) / 1000 }
-                    while !Task.isCancelled {
-                        let pause = wait ?? Double.random(in: backoff / 2 ... backoff)
-                        try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
-                        guard !Task.isCancelled else { return }
-                        let next = client.flushOfflineQueue(shardKey: shard)
-                        if next.requeued.isEmpty && next.retryAfterMs == nil { return }
-                        wait = next.retryAfterMs.map { Double($0) / 1000 }
-                        backoff = min(30, backoff * 2)
-                    }
+        // attachSocket writes `connect` first, then the whisper joins, under the client's lock, so a
+        // subscribe on another task cannot write ahead of it. A failed write closes the socket: the
+        // receive below then throws, ending the run.
+        client.attachSocket { frame in
+            do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
+        }
+        client.resendSubscriptions()
+        let report = client.flushOfflineQueue(shardKey: shard)
+        if !report.requeued.isEmpty || report.retryAfterMs != nil {
+            flushRetry = Task {
+                var backoff = 1.0
+                var wait = report.retryAfterMs.map { Double($0) / 1000 }
+                while !Task.isCancelled {
+                    let pause = wait ?? Double.random(in: backoff / 2 ... backoff)
+                    try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    let next = client.flushOfflineQueue(shardKey: shard)
+                    if next.requeued.isEmpty && next.retryAfterMs == nil { return }
+                    wait = next.retryAfterMs.map { Double($0) / 1000 }
+                    backoff = min(30, backoff * 2)
                 }
             }
-            while let raw = try? await socket.receive() {
-                if client.handleFrame(raw) == "ack" { attempt = 0 }
-            }
+        }
+        while let raw = try? await socket.receive() {
+            if client.handleFrame(raw) == "ack" { attempt = 0 }
         }
         flushRetry?.cancel()
-        client.detachSocket()
+        // The close frame that ended the socket, if your library reports one; nil when none.
+        client.detachSocket(closeCode: socket.closeCode, reason: socket.closeReason)
         socket.close() // your socket library: without this each reconnect leaks a connection
     }
     let delay = min(30.0, pow(2.0, Double(min(attempt, 5))))

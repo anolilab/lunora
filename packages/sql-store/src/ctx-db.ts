@@ -64,6 +64,7 @@ import {
     assertFlatPredicate,
     assertNoExplicitUndefined,
     assertPatchAllowed,
+    assertStorableRowId,
     assertValidClientId,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
@@ -471,6 +472,16 @@ const createTableNameCache = (): {
 };
 
 /**
+ * Cache keys for resolved ids. The two kinds sit under different prefixes, so an unpinned key can never equal a pinned
+ * one, whatever characters an explicit id holds. A pinned key separates the table from the id with a NUL, which no table
+ * name can contain, so it parses back unambiguously.
+ *
+ * A pinned resolution is cached on its own, because it saw one table and may not be the id's first match in schema order.
+ */
+const unpinnedCacheKey = (id: string): string => `u${id}`;
+const pinnedCacheKey = (tableName: string, id: string): string => `p${tableName}\u0000${id}`;
+
+/**
  * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
  * resolution. The schema handed in is the global-table subset, so this is a
  * small fixed scan — we fan the probes out in parallel and return on the first
@@ -487,8 +498,10 @@ const tableNameFromId = async (
     schema: SchemaLike,
     id: string,
     cache: ReturnType<typeof createTableNameCache>,
+    expectedTable?: string,
 ): Promise<string | undefined> => {
-    const cached = cache.get(id);
+    const key = expectedTable === undefined ? unpinnedCacheKey(id) : pinnedCacheKey(expectedTable, id);
+    const cached = cache.get(key);
 
     if (cached !== undefined) {
         return cached;
@@ -500,9 +513,11 @@ const tableNameFromId = async (
     // before the `.global()` flag existed don't set shardMode at all — preserve
     // the legacy "probe every table" behaviour there so existing fixtures keep
     // working.)
+    // A pinned `expectedTable` narrows the probe to that one table; the caller still rejects any other owner.
     const candidates = Object.entries(schema.tables)
         .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
-        .map(([tableName]) => tableName);
+        .map(([tableName]) => tableName)
+        .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
 
     // Fire every probe at once; the first non-empty result wins.
     const probes = await Promise.all(
@@ -515,7 +530,9 @@ const tableNameFromId = async (
 
     for (const result of probes) {
         if (result.found) {
-            cache.set(id, result.tableName);
+            // A pinned resolution is cached under its own key: it saw one table, so it may not be the id's first match in
+            // schema order, and an unpinned read must not take it.
+            cache.set(key, result.tableName);
 
             return result.tableName;
         }
@@ -1762,6 +1779,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
     // {@link createTableNameCache} for the size cap rationale.
     const tableNameCache = createTableNameCache();
+    // Only the tables an id is probed against can hold a pinned entry for it, so a physical delete clears just these.
+    const probedTables = Object.entries(schema.tables)
+        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
+        .map(([tableName]) => tableName);
 
     let triggerDepth = 0;
 
@@ -1835,7 +1856,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
         await ensureMigrated();
 
-        const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache);
+        const tableName = await tableNameFromId(exec, dialect, schema, id, tableNameCache, expectedTable);
 
         // When the caller pins a table (the `ctx.db.<table>.get/delete/...`
         // by-id facade forwards its bound name), an id that resolves to a
@@ -3272,7 +3293,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // The id no longer lives in `tableName`; drop the stale cache entry
             // so a later re-insert of the same id into a different global table
             // re-probes instead of resolving to the now-empty original table.
-            tableNameCache.delete(id);
+            tableNameCache.delete(unpinnedCacheKey(id));
+
+            for (const table of probedTables) {
+                tableNameCache.delete(pinnedCacheKey(table, id));
+            }
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
@@ -3601,6 +3626,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
             } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                assertStorableRowId(withDefaults["_id"]);
                 id = withDefaults["_id"];
             } else {
                 id = generateId();
@@ -3636,7 +3662,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // random and never pre-seeded, so this only matters for the
             // explicit-id import path.)
             if (usedExplicitId) {
-                tableNameCache.set(id, tableName);
+                tableNameCache.set(unpinnedCacheKey(id), tableName);
             }
 
             await syncAggregates(tableName, undefined, documentWithMeta);

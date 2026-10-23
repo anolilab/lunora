@@ -213,6 +213,46 @@ const assertValidClientId = (clientId: string): void => {
     }
 };
 
+/**
+ * Refuse a trusted-import row id holding U+0000. An id is a key: the SQL writers cache resolved ids under a key with a NUL
+ * between the table and the id, and some SQLite builds truncate text at a NUL on read, so a row stored under such an id
+ * cannot be read back by it. Refused on every store, so one import does not behave differently by store.
+ */
+const assertStorableRowId = (id: string): void => {
+    if (id.includes("\0")) {
+        throw new LunoraError("BAD_REQUEST", `invalid row id ${JSON.stringify(id)}: a row id cannot hold a NUL character (U+0000)`);
+    }
+};
+
+/**
+ * Refuse every trusted-import id in a global batch before any row is written: a global batch writes D1 row by row, and D1
+ * cannot roll back what it already wrote. A shard-local batch is checked in its row builder instead.
+ */
+const assertBatchRowIds = (
+    definition: TableDefinitionLike | undefined,
+    documents: ReadonlyArray<Record<string, unknown>>,
+    allowExplicitId: boolean | undefined,
+    auth: Parameters<typeof applyInsertDefaults>[2],
+): void => {
+    if (allowExplicitId !== true) {
+        return;
+    }
+
+    // A supplied `_id` survives column defaults, except that a server default on the `_id` column always overwrites it.
+    // Only then does the stored id differ from the supplied one, so only then are the defaults applied here (and the
+    // defaults are not invoked twice for every row of an ordinary trusted import).
+    const overridesId = definition !== undefined && "serverDefault" in (definition.shape["_id"]?._meta?.column ?? {});
+
+    for (const document of documents) {
+        // The id each row is stored under: the value the single-row insert checks.
+        const id = overridesId ? applyInsertDefaults(definition, document, auth)["_id"] : document["_id"];
+
+        if (typeof id === "string") {
+            assertStorableRowId(id);
+        }
+    }
+};
+
 /** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
 interface WriteEvent {
     doc?: Record<string, unknown>;
@@ -3883,6 +3923,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
             } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                assertStorableRowId(withDefaults["_id"]);
                 id = withDefaults["_id"];
             } else {
                 id = generateId();
@@ -3941,6 +3982,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // No raw multi-row path across the D1 boundary — fall back to the
                 // per-row global writer (the throughput win is shard-local only).
                 const globalIds: string[] = [];
+
+                assertBatchRowIds(schema.tables[tableName], documents, batchOptions?.allowExplicitId, auth);
 
                 // Charge the WHOLE batch before writing any of it, the way the
                 // shard-local branch below does. These rows land in D1, which the
@@ -4010,7 +4053,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const rows = documents.map((document, index) => {
                 const defaulted = applyInsertDefaults(definition, document, auth);
                 const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
-                const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
+                const explicitId = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : undefined;
+
+                // Checked on the value stored: the rows are all built before any is written, so a refusal writes nothing.
+                if (explicitId !== undefined) {
+                    assertStorableRowId(explicitId);
+                }
+
+                const id = explicitId ?? generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
                 const creationTime =
@@ -4830,7 +4880,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         : writer;
 };
 
-export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export { assertStorableRowId, assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
 export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";

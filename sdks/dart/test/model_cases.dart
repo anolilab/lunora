@@ -30,7 +30,8 @@ void caseWireValuePassesModelJsonThrough() {
 /// cannot leave a live subscription behind.
 Future<void> caseWatchStreamUnsubscribesOnCancel() async {
   final sent = <Map<String, Object?>>[];
-  final client = LunoraClient(url: 'https://app.example')..attachSocket(sent.add);
+  final client = LunoraClient(url: 'https://app.example');
+  attachRecording(client, sent);
 
   equals(sent.length, 0, 'watch must not subscribe before it is listened to');
 
@@ -60,7 +61,8 @@ Future<void> caseWatchStreamUnsubscribesOnCancel() async {
 /// subscription instead.
 Future<void> caseWatchSupportsManyListenersAndReListening() async {
   final sent = <Map<String, Object?>>[];
-  final client = LunoraClient(url: 'https://app.example')..attachSocket(sent.add);
+  final client = LunoraClient(url: 'https://app.example');
+  attachRecording(client, sent);
   final stream = client.watch('messages:list');
   final first = <Object?>[];
   final second = <Object?>[];
