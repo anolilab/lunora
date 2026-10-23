@@ -82,7 +82,7 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
         slots[entry.id] = "error" in inner ? failed(inner) : { ok: true, value: decodeWire(inner.result) };
     }
 
-    return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
+    return slots.map((slot) => slot ?? { error: withResponseHeaders(new Error("batch call returned no result"), responseHeaders), ok: false });
 };
 
 /**

@@ -125,6 +125,14 @@ describe("demuxBatchResults", () => {
 
         expect(slots[0]?.ok).toBe(false);
     });
+
+    it("attaches the reply headers to a slot the batch reply never returned", () => {
+        expect.assertions(1);
+
+        const slots = demuxBatchResults([], 1, new Headers({ "retry-after": "3" }));
+
+        expect(slots[0]?.ok === false ? slots[0].error : undefined).toHaveProperty("headers", { "retry-after": "3" });
+    });
 });
 
 describe("encodeCallArgs", () => {
