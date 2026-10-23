@@ -660,7 +660,6 @@ const MESSAGE_IDS = [
     "breaking",
     "safe",
     "{count} rows",
-    "{ms} ms",
     "Showing the first {max} rows.",
     "Showing the {n} most common values.",
     "No rows returned.",

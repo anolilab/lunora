@@ -726,4 +726,51 @@ describe("sqlEditorPanel", () => {
 
         expect(screen.getByTestId("sql-rows").textContent).toContain("slow-result");
     });
+
+    it("drops a run still in flight when its draft is replaced, so the tab shows neither its result nor its time", async () => {
+        expect.assertions(4);
+
+        let finishRun: ((value: SqlConsoleResult) => void) | undefined;
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return new Promise<SqlConsoleResult>((resolve) => {
+                        finishRun = resolve;
+                    });
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        // A reading pair for the one run, so a stale duration would have a value to show.
+        const readings = [1000, 1034];
+        const now = (): number => readings.shift() ?? Number.NaN;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <SqlEditorPanel initialShardKey="shard-a" now={now} />
+            </LunoraProvider>,
+        );
+
+        // Start the run, then load a template into the same tab while it is in flight.
+        fireEvent.click(screen.getByTestId("sql-run"));
+        fireEvent.click(screen.getByText("Table row count"));
+
+        finishRun?.({ columns: ["rows"], rowCount: 1, rows: [{ rows: 42 }], truncated: false });
+
+        // The run records its shard just before it writes its output, so the record is
+        // the milestone that the stale run has finished.
+        await waitFor(() => {
+            if (sessionStorage.getItem("lunora-studio-recent-shards")?.includes("shard-a") !== true) {
+                throw new Error("the run has not finished yet");
+            }
+        });
+
+        expect(screen.queryByTestId("sql-result")).toBeNull();
+        expect(screen.queryByTestId("sql-count")).toBeNull();
+        expect(screen.getByTestId("sql-empty")).toBeDefined();
+        expect(screen.getByTestId<HTMLButtonElement>("sql-run").disabled).toBe(false);
+    });
 });
