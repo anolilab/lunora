@@ -395,14 +395,16 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
                 return { archiveKey, status };
             }
 
-            await deleteRunFiles(scope.ports.files, requestId, ownId);
-
-            // Another run of this export that claimed ready first answers with its own archive.
+            // The ready request answers with its archive. When that archive is this run's own (a retried step
+            // whose claim had already landed), the files stay; any other run's archive was never this run's to keep.
             const current = await requireRequest(scope.ports.store, requestId);
+            const live = current.status === "ready" ? current.storageKey : undefined;
 
-            return current.status === "ready" && current.storageKey !== undefined
-                ? { archiveKey: current.storageKey, status: current.status }
-                : { status: current.status };
+            if (live?.includes(`/${ownId}/`) !== true) {
+                await deleteRunFiles(scope.ports.files, requestId, ownId);
+            }
+
+            return live === undefined ? { status: current.status } : { archiveKey: live, status: current.status };
         });
 
         return ready.value ?? { status: ready.status };
