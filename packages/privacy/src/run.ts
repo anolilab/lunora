@@ -363,9 +363,12 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
                 return status;
             }
 
-            await deleteRequestFiles(scope.ports.files, { ...request, storageKey: archiveKey });
-
             const current = await requireRequest(scope.ports.store, requestId);
+
+            // A second run of this export that claimed ready first points at the same archive key, so it stays.
+            if (current.status !== "ready") {
+                await deleteRequestFiles(scope.ports.files, { ...request, storageKey: archiveKey });
+            }
 
             return current.status;
         });

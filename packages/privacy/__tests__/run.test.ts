@@ -249,6 +249,53 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("deletes the archive when the export was failed between the ready step's read and its claim", async () => {
+        const store = memoryRequests();
+        let failFirst = true;
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const row = store.rows.get(id);
+
+                if (patch.status === "ready" && failFirst && row !== undefined) {
+                    failFirst = false;
+                    store.rows.set(id, { ...row, status: "failed" });
+                }
+
+                return store.claim(id, from, patch);
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, store: racing });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
+    });
+
+    it("keeps the archive when another run of the same export claimed ready first", async () => {
+        const store = memoryRequests();
+        let sibling = true;
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const row = store.rows.get(id);
+
+                if (patch.status === "ready" && sibling && row !== undefined) {
+                    sibling = false;
+                    store.rows.set(id, { ...row, ...patch });
+                }
+
+                return store.claim(id, from, patch);
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, store: racing });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ archiveKey: `${opened.id}/export.zip`, status: "ready" });
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+        expect(files.files.has(`${opened.id}/export.zip`)).toBe(true);
+    });
+
     it("expires an export that turned ready after the erasure's files step", async () => {
         const store = memoryRequests();
         const { files, privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store });
