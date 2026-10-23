@@ -167,6 +167,11 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
     return `lunora mcp serve: ready — deployment at ${deployment.url} (${why})\n`;
 };
 
+/** Diagnostics go to stderr: stdout is the MCP wire. */
+const writeToStderr = (message: string): void => {
+    process.stderr.write(message);
+};
+
 /**
  * `--functions`: one MCP tool per function of this app, from the OpenRPC document
  * codegen wrote to `lunora/_generated/openrpc.json`.
@@ -176,11 +181,7 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
  * caller, and handing them the admin bearer would turn each one into an admin call.
  */
 const serveFunctions = async (options: McpServeOptions, connect: (options: FunctionMcpServerOptions) => Promise<ClosableServer>): Promise<McpServeResult> => {
-    const writeError =
-        options.writeError ??
-        ((message: string): void => {
-            process.stderr.write(message);
-        });
+    const writeError = options.writeError ?? writeToStderr;
     const specPath = join(options.cwd, "lunora", "_generated", "openrpc.json");
 
     if (!existsSync(specPath)) {
@@ -240,11 +241,7 @@ const runMcpServe = async (
         return serveFunctions(options, connectFunctions);
     }
 
-    const writeError =
-        options.writeError ??
-        ((message: string): void => {
-            process.stderr.write(message);
-        });
+    const writeError = options.writeError ?? writeToStderr;
 
     let server: ClosableServer;
 
