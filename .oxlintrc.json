@@ -1,0 +1,17 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "extends": ["./node_modules/@anolilab/oxlint-config/.oxlintrc.json"],
+    "ignorePatterns": [
+        "**/_generated/**",
+        "**/.source/**",
+        "**/*.gen.ts",
+        "api-snapshots/**",
+        "**/__fixtures__/**",
+        "**/__tests__/fixtures/**",
+        ".agents/**",
+        ".claude/skills/**"
+    ],
+    "options": {
+        "typeAware": true
+    }
+}
