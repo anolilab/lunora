@@ -222,6 +222,14 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
         return { kind: "restart", requestId };
     }
 
+    // An erasure rewrote this export's subject to the tombstone key; a run now would collect under that key and
+    // publish an archive without the subject's data. The completed erasure shares the key, so the log shows it.
+    const subjectRequests = await scope.ports.store.listForSubject(record.subjectId);
+
+    if (subjectRequests.some((request) => request.type === "erasure" && request.status === "completed")) {
+        throw new LunoraError("UNPROCESSABLE", "This export's subject was erased; it cannot be retried.");
+    }
+
     return { kind: "ran", outcome: await exportRun(scope, inlineSteps, requestId) };
 };
 

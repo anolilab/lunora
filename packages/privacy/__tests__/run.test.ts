@@ -216,6 +216,30 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("refuses an operator retry of an export an erasure failed, and leaves it failed", async () => {
+        const { port } = memoryData({});
+        let erase: () => Promise<unknown> = async () => undefined;
+        const interrupting: DataPort = {
+            ...port,
+            collect: async (dataset, subjectId) => {
+                await erase();
+                erase = async () => undefined;
+
+                return port.collect(dataset, subjectId);
+            },
+        };
+        const { files, operator, privacy, store } = setup({ data: interrupting, erasure: NO_GRACE });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        erase = async () => privacy.runErasure(erasure.id);
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        await expect(codeOf(operator.admin.retry(exported.id))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
     it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
         const store = memoryRequests();
         let erase: (() => Promise<unknown>) | undefined;
