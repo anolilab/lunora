@@ -2359,6 +2359,40 @@ describe("dataBrowser — filter by cell value", () => {
         expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
     });
 
+    it("filters on the stored value of a cell whose edit is staged, not the typed one", async () => {
+        expect.assertions(2);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.doubleClick(screen.getByTestId("db-cell-m1-text"));
+
+        const input = await screen.findByTestId<HTMLInputElement>("db-cell-input-m1-text");
+
+        fireEvent.change(input, { target: { value: "edited" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByTestId("db-staged");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-text")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("stored-value filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "text", operator: "eq", value: "hello" }]);
+        // The staged text still shows on the row: the filter addressed the stored value, not the edit.
+        expect(screen.getByTestId("db-row").textContent).toContain("edited");
+    });
+
     it("withholds the filter action on an object value, which no equality clause can match", async () => {
         expect.assertions(1);
 
