@@ -40,6 +40,18 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(new Set(rows.map((row) => `${String(row.weight)}|${row.code as string}`)).size).toBe(5);
     });
 
+    it("counts a column named twice in an index once", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            flags: defineTable({ flag: v.boolean() }).index("by_flag_flag", ["flag", "flag"], { unique: true }),
+        });
+        const flags = rowsOf(seedPlan(schema, { counts: { flags: 2 } }), "flags").map((row) => row.flag);
+
+        expect(new Set(flags).size).toBe(2);
+        expect(() => seedPlan(schema, { counts: { flags: 3 } })).toThrow(/by_flag_flag/u);
+    });
+
     it("never counts a constant array member towards a composite's capacity", () => {
         expect.hasAssertions();
 

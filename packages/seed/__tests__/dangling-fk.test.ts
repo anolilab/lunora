@@ -128,4 +128,45 @@ describe("seedPlan — dangling foreign keys", () => {
             expect(() => seedPlan(schema, { counts: { authors: 3, books: 2 } })).toThrow(/"latestBookId" has only 2/u);
         });
     });
+
+    it("plans a unique cycle-edge FK against the parent's completed pool, not only its existing ids", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            authors: defineTable({ latestBookId: v.id("books").unique() }),
+            books: defineTable({ authorId: v.id("authors") }),
+        });
+        const plan = seedPlan(schema, { counts: { authors: 2, books: 3 }, existingIds: { books: ["b-old"] } });
+        const latest = rowsOf(plan, "authors").map((row) => row.latestBookId as string);
+        const bookIds = new Set(["b-old", ...rowsOf(plan, "books").map((row) => row._id as string)]);
+
+        expect(new Set(latest).size).toBe(2);
+        expect(latest.every((id) => bookIds.has(id))).toBe(true);
+    });
+
+    describe("a composite unique index on a table hanging off a cycle", () => {
+        const a = defineTable({ bId: v.id("b") });
+        const b = defineTable({ aId: v.id("a") });
+        const c = defineTable({ aId: v.id("a"), bId: v.id("b") }).index("by_a_b", ["aId", "bId"], { unique: true });
+        const counts = { a: 2, b: 2, c: 4 };
+        const childFirst = seedPlan(defineSchema({ c, a, b }), { counts });
+        const parentsFirst = seedPlan(defineSchema({ a, b, c }), { counts });
+
+        it.each([
+            ["declared before the cycle", childFirst],
+            ["declared after the cycle", parentsFirst],
+        ])("is dealt distinct pairs when %s", (_label, plan) => {
+            expect.hasAssertions();
+
+            const pairs = new Set(rowsOf(plan, "c").map((row) => `${row.aId as string}|${row.bId as string}`));
+
+            expect(pairs.size).toBe(4);
+        });
+
+        it("does not depend on declaration order", () => {
+            expect.hasAssertions();
+
+            expect(rowsOf(childFirst, "c")).toStrictEqual(rowsOf(parentsFirst, "c"));
+        });
+    });
 });
