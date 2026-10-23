@@ -69,8 +69,12 @@ const shardKeyOf = (input: Record<string, unknown>): string | undefined =>
  */
 const resultOf = (route: FunctionRoute, value: unknown): ToolResult => {
     if (route.outputMode === "object") {
-        // `.output()` already validated this value on the server (`applyOutput`), so the
-        // object shape the schema promises is the one the caller receives.
+        // An optional output that returned `undefined` has no object to send, so it goes out as
+        // the empty object the output schema admits. Any other value was validated by `applyOutput`.
+        if (value === undefined) {
+            return { ...ok(value), structuredContent: {} };
+        }
+
         return okStructured(value as Record<string, unknown>);
     }
 
@@ -137,13 +141,20 @@ interface StreamCallContext {
 }
 
 /**
+ * The most chunks one stream call collects. Chunks are held in memory until the stream
+ * completes, so an endless stream has to be cut off by count. Only the count is capped:
+ * a stream of very large chunks, or a slow one, is not.
+ */
+const MAX_STREAM_CHUNKS = 10_000;
+
+/**
  * The read half of a stream: open it, report each chunk as progress, and return every
  * chunk once it completes. A mid-stream error throws out of the loop, and the caller's
  * `try` turns it into an error result.
  *
- * Breaking out of the loop (a throwing progress send) cancels the stream through the
- * iterator's `return()`. A normal completion needs no cancel, because the client sends
- * an `unsubscribe` on cancel and the server already ended the run.
+ * Breaking out of the loop (a throwing progress send, or the chunk cap) cancels the
+ * stream through the iterator's `return()`. A normal completion needs no cancel, because
+ * the client sends an `unsubscribe` on cancel and the server already ended the run.
  */
 const runStream = async (
     client: LunoraClient,
@@ -169,6 +180,16 @@ const runStream = async (
 
     try {
         for await (const chunk of iterable) {
+            // Refused on the chunk past the cap, so a stream of exactly the cap still completes.
+            if (chunks.length === MAX_STREAM_CHUNKS) {
+                iterable.cancel();
+
+                return errorResult(
+                    "PAYLOAD_TOO_LARGE",
+                    `the stream "${route.path}" yielded more than ${MAX_STREAM_CHUNKS.toString()} chunks, so it was cancelled and no chunks are returned.`,
+                );
+            }
+
             chunks.push(chunk);
             await progress?.(chunks.length - 1);
         }
@@ -233,14 +254,23 @@ const callFunctionTool = async (
  * The client for the deployment the server should call now. It is built when a call
  * first sees a URL, and rebuilt when the URL moves. The bearer is set on both the HTTP
  * client and the WebSocket one, because a stream authenticates through the latter.
+ * `release` closes the cached client, which ends any stream socket it opened.
  */
-const clientFor = (options: FunctionMcpServerOptions): (() => LunoraClient | undefined) => {
+const clientFor = (options: FunctionMcpServerOptions): { clientOf: () => LunoraClient | undefined; release: () => void } => {
     let current: { client: LunoraClient; url: string } | undefined;
 
-    return () => {
+    const release = (): void => {
+        current?.client.close();
+        current = undefined;
+    };
+
+    const clientOf = (): LunoraClient | undefined => {
         const url = typeof options.url === "function" ? options.url() : options.url;
 
+        // A URL that returns later gets a fresh client, even when it is the same string.
         if (url === undefined || url.length === 0) {
+            release();
+
             return undefined;
         }
 
@@ -259,6 +289,8 @@ const clientFor = (options: FunctionMcpServerOptions): (() => LunoraClient | und
 
         return current.client;
     };
+
+    return { clientOf, release };
 };
 
 /**
@@ -272,16 +304,33 @@ const clientFor = (options: FunctionMcpServerOptions): (() => LunoraClient | und
 const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
     const { definitions, routes } = functionToolsFromOpenRpc(options.openRpcSpec, { allowWrites });
-    const clientOf = clientFor(options);
+    const { clientOf, release } = clientFor(options);
     // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
     const server = new Server({ name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
+
+    // `serveStateless` closes the server after every request, and the SDK has no hook on
+    // close that a caller does not already own (`onclose` is set by the CLI). So the
+    // cached client is released by wrapping `close`.
+    const closeServer = server.close.bind(server);
+
+    server.close = async (): Promise<void> => {
+        release();
+        await closeServer();
+    };
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
         return { tools: [...definitions] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
-        const client = clientOf();
+        let client: LunoraClient | undefined;
+
+        try {
+            client = clientOf();
+        } catch (error: unknown) {
+            // A URL resolver that throws is a failed call, not a failed request.
+            return errorFromThrown(error);
+        }
 
         if (client === undefined) {
             return errorResult(
@@ -309,4 +358,4 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
 };
 
 export type { FunctionMcpServerOptions };
-export { callFunctionTool, createFunctionMcpServer };
+export { callFunctionTool, createFunctionMcpServer, MAX_STREAM_CHUNKS };

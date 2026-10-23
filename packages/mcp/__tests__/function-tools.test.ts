@@ -135,18 +135,17 @@ describe("functionToolsFromOpenRpc", () => {
 
         expect(tool?.outputSchema?.anyOf?.[0]).toEqual({
             properties: { result: { items: { type: "string" }, type: "array" } },
-            required: ["result"],
             type: "object",
         });
     });
 
-    it("admits an error result under the outputSchema, so an SDK client does not reject it", () => {
+    it("admits an error result, and the empty object an optional output sends, under the outputSchema", () => {
         expect.assertions(1);
 
         const output = { properties: { id: { type: "string" } }, required: ["id"], type: "object" };
         const [tool] = functionToolsFromOpenRpc(spec(method("messages:get", "query", { result: output })), { allowWrites: false }).definitions;
 
-        expect(tool?.outputSchema?.anyOf).toHaveLength(2);
+        expect(tool?.outputSchema?.anyOf).toHaveLength(3);
     });
 
     it("gives a write no outputSchema, because its first call returns a proposal", () => {

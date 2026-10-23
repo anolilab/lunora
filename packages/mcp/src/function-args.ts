@@ -60,12 +60,62 @@ const acceptsJsonType = (branch: Schema, value: unknown): boolean => {
 };
 
 /**
- * The one `anyOf` branch that fits a non-null value by JSON type. Zero or several
- * fitting branches return `undefined`: the value is then sent as it is, and the
- * validator decides.
+ * A canonical base64 string: whole four-character groups, with `=` padding only at
+ * the end. A decimal string whose length is a multiple of four also matches.
+ */
+const BASE64_CANONICAL = /^(?:[\dA-Z+/]{4})*(?:[\dA-Z+/]{2}==|[\dA-Z+/]{3}=)?$/i;
+
+/**
+ * Whether a string is in the carrier its branch names. Selection is stricter than
+ * decoding on purpose: `atob` also takes unpadded base64, which would make a short
+ * decimal string look like bytes.
+ */
+const carrierFits = (branch: Schema, value: string): boolean => {
+    if (branch["format"] === "int64" && !INT64_DECIMAL.test(value)) {
+        return false;
+    }
+
+    return branch["contentEncoding"] !== "base64" || BASE64_CANONICAL.test(value);
+};
+
+/** Whether every discriminator property the branch fixes with `const` matches the object's value. */
+const discriminatorsFit = (properties: Schema, value: Schema): boolean =>
+    Object.entries(properties).every(([key, property]) => {
+        if (!isSchema(property) || !Object.hasOwn(property, "const") || !Object.hasOwn(value, key)) {
+            return true;
+        }
+
+        return value[key] === property["const"];
+    });
+
+/**
+ * Whether a branch can take the value: its JSON type, its `const`, the discriminators
+ * of an object, and the carrier of a string all agree with it.
+ */
+const acceptsValue = (branch: Schema, value: unknown): boolean => {
+    if (!acceptsJsonType(branch, value)) {
+        return false;
+    }
+
+    if (Object.hasOwn(branch, "const") && branch["const"] !== value) {
+        return false;
+    }
+
+    if (isSchema(value) && isSchema(branch["properties"]) && !discriminatorsFit(branch["properties"], value)) {
+        return false;
+    }
+
+    return typeof value !== "string" || carrierFits(branch, value);
+};
+
+/**
+ * The one `anyOf` branch that accepts a non-null value (see {@link acceptsValue}).
+ * Zero or several fitting branches return `undefined`: the value is then sent as it
+ * is, and the validator decides. A decimal string of a length divisible by four is
+ * both an int64 and a base64 carrier, so a bigint-or-bytes union leaves it that way.
  */
 const branchFor = (branches: unknown[], value: unknown): Schema | undefined => {
-    const fitting = branches.filter((branch): branch is Schema => isSchema(branch) && acceptsJsonType(branch, value));
+    const fitting = branches.filter((branch): branch is Schema => isSchema(branch) && acceptsValue(branch, value));
 
     return fitting.length === 1 ? fitting[0] : undefined;
 };
@@ -122,10 +172,10 @@ const coerce = (schema: Schema, value: unknown, path: string): unknown => {
  * string into the typed value, so a bare `"5"` would fail `v.bigint()`.
  *
  * Walks `properties`, `additionalProperties` (a record's values) and `items`. A
- * union or nullable (`anyOf`) is decoded through the one branch whose JSON type
- * fits the value. A value that fits several branches is sent as it is: picking one
- * would guess, and the validator is the place that decides. Throws `BAD_REQUEST`
- * for a string that does not decode.
+ * union or nullable (`anyOf`) is decoded through the one branch the value fits: by
+ * JSON type, `const`, discriminator property and string carrier. A value that fits
+ * several branches is sent as it is: picking one would guess, and the validator is
+ * the place that decides. Throws `BAD_REQUEST` for a string that does not decode.
  */
 const coerceArgs = (argsSchema: Schema, args: Record<string, unknown>): Record<string, unknown> => coerce(argsSchema, args, "args") as Record<string, unknown>;
 

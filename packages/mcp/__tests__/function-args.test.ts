@@ -84,6 +84,45 @@ describe("coerceArgs", () => {
         expect(coerceArgs(schema, { totals: { a: "1", b: "2" } })).toEqual({ totals: { a: 1n, b: 2n } });
     });
 
+    it("narrows a union of bigint literals by const, so the matching literal is decoded", () => {
+        expect.assertions(1);
+
+        const literal = (value: string): Record<string, unknown> => {
+            return { ...INT64, const: value };
+        };
+        const schema = schemaOf({ pick: { anyOf: [literal("5"), literal("7")] } });
+
+        expect(coerceArgs(schema, { pick: "7" })).toEqual({ pick: 7n });
+    });
+
+    it("narrows a discriminated object union by its const discriminator, then decodes that branch's bigint", () => {
+        expect.assertions(1);
+
+        const variant = (kind: string): Record<string, unknown> => schemaOf({ amount: INT64, kind: { const: kind, type: "string" } });
+        const schema = schemaOf({ event: { anyOf: [variant("credit"), variant("debit")] } });
+
+        expect(coerceArgs(schema, { event: { amount: "9", kind: "debit" } })).toEqual({ event: { amount: 9n, kind: "debit" } });
+    });
+
+    it("decodes a decimal and a base64 string through a bigint-or-bytes union, each by the carrier it is in", () => {
+        expect.assertions(2);
+
+        const schema = schemaOf({ value: { anyOf: [INT64, BYTES] } });
+        const { value: decimal } = coerceArgs(schema, { value: "42" }) as { value: unknown };
+        const { value: bytes } = coerceArgs(schema, { value: "AQID" }) as { value: ArrayBuffer };
+
+        expect(decimal).toBe(42n);
+        expect([...new Uint8Array(bytes)]).toEqual([1, 2, 3]);
+    });
+
+    it("sends a string that is both a decimal and a canonical base64 carrier as it is, because it still fits two branches", () => {
+        expect.assertions(1);
+
+        const schema = schemaOf({ value: { anyOf: [INT64, BYTES] } });
+
+        expect(coerceArgs(schema, { value: "12345678" })).toEqual({ value: "12345678" });
+    });
+
     it("leaves a number as sent, since the schema already describes it as a number", () => {
         expect.assertions(1);
 

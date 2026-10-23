@@ -1,7 +1,7 @@
 import type { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { callFunctionTool } from "../src/function-server";
+import { callFunctionTool, MAX_STREAM_CHUNKS } from "../src/function-server";
 import { functionToolsFromOpenRpc } from "../src/function-tools";
 import type { ToolResult } from "../src/tool-types";
 import method from "./_helpers/openrpc";
@@ -257,5 +257,35 @@ describe("callFunctionTool — streams", () => {
         });
 
         expect(result.content[0]?.text).toContain("after 1 chunk(s)");
+    });
+
+    it("returns every chunk of a stream that yields exactly the cap", async () => {
+        expect.assertions(2);
+
+        const stream = streamOf(
+            Array.from({ length: MAX_STREAM_CHUNKS }, (_, index) => {
+                return { index };
+            }),
+        );
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false);
+
+        expect(result.isError).toBeUndefined();
+        expect(JSON.parse(result.content[0]?.text ?? "null")).toHaveLength(MAX_STREAM_CHUNKS);
+    });
+
+    it("cancels a stream that yields one chunk past the cap, and refuses it with PAYLOAD_TOO_LARGE", async () => {
+        expect.assertions(2);
+
+        const stream = streamOf(
+            Array.from({ length: MAX_STREAM_CHUNKS + 1 }, (_, index) => {
+                return { index };
+            }),
+        );
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false);
+
+        expect(result).toMatchObject({ isError: true, structuredContent: { code: "PAYLOAD_TOO_LARGE" } });
+        expect(stream.cancel).toHaveBeenCalledTimes(1);
     });
 });

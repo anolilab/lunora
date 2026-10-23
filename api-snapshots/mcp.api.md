@@ -49,7 +49,17 @@ const DEFAULT_MAX_REQUEST_BYTES: number;
 
 ### `FunctionMcpServerOptions` (interface)
 
-Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
+```ts
+interface FunctionMcpServerOptions {
+    allowWrites?: boolean;
+    fetch?: typeof fetch;
+    name?: string;
+    openRpcSpec: unknown;
+    token?: string;
+    url: string | (() => string | undefined);
+    version?: string;
+}
+```
 
 ### `LOCAL_SERVER_NAME` (const)
 
@@ -211,6 +221,7 @@ interface ToolInputSchema {
 ```ts
 interface ToolOutputSchema {
     $defs?: Record<string, unknown>;
+    additionalProperties?: boolean;
     anyOf?: ReadonlyArray<object>;
     definitions?: Record<string, unknown>;
     properties?: Record<string, unknown>;
@@ -254,9 +265,7 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `connectFunctionStdio` (const)
 
-```ts
-const connectFunctionStdio: (options: FunctionMcpServerOptions) => Promise<Server>;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `connectLocalStdio` (const)
 
@@ -272,7 +281,9 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createFunctionMcpServer` (const)
 
-Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
+```ts
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
+```
 
 ### `createLocalMcpServer` (const)
 
@@ -579,6 +590,12 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 ```
 
+### `connectFunctionStdio` (const)
+
+```ts
+const connectFunctionStdio: (options: FunctionMcpServerOptions) => Promise<Server>;
+```
+
 ### `connectLocalStdio` (const)
 
 ```ts
@@ -647,17 +664,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `FunctionMcpServerOptions` (interface)
 
-```ts
-interface FunctionMcpServerOptions {
-    allowWrites?: boolean;
-    fetch?: typeof fetch;
-    name?: string;
-    openRpcSpec: unknown;
-    token?: string;
-    url: string | (() => string | undefined);
-    version?: string;
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `McpAccessTokenClaims` (interface)
 
@@ -823,9 +830,7 @@ const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => Mc
 
 ### `createFunctionMcpServer` (const)
 
-```ts
-const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 

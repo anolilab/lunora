@@ -1,3 +1,4 @@
+import { LunoraClient } from "@lunora/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -80,7 +81,7 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         const { tools } = await client.listTools();
 
         expect(tools.map((tool) => tool.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["billing_get", "messages_send"]);
-        expect(tools.find((tool) => tool.name === "billing_get")?.outputSchema?.anyOf).toHaveLength(2);
+        expect(tools.find((tool) => tool.name === "billing_get")?.outputSchema?.anyOf).toHaveLength(3);
         expect(tools.find((tool) => tool.name === "messages_send")).not.toHaveProperty("outputSchema");
 
         await client.close();
@@ -99,6 +100,43 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         expect(result.structuredContent).toEqual({ id: "b1", total: 3 });
         expect(deployed.calls[0]?.functionPath).toBe("billing:get");
         expect(deployed.calls[0]?.authorization).toBe(`Bearer ${CALLER_TOKEN}`);
+
+        await client.close();
+    });
+
+    it("delivers an optional output that returned undefined as an empty result, not a client-side validation error", async () => {
+        expect.assertions(3);
+
+        const optional = { methods: [method("notes:find", "query", { result: { type: "string" } })] };
+        const deployed = deployment(() => {
+            return { body: {}, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+        const result = await client.callTool({ name: "notes_find" });
+
+        expect(result.isError ?? false).toBe(false);
+        expect(result.structuredContent).toEqual({});
+        expect(deployed.calls[0]?.functionPath).toBe("notes:find");
+
+        await client.close();
+    });
+
+    it("delivers an optional object output that returned undefined as an empty structured result", async () => {
+        expect.assertions(2);
+
+        const optional = { methods: [method("notes:get", "query", { result: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } })] };
+        const deployed = deployment(() => {
+            return { body: {}, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: optional, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+        const result = await client.callTool({ name: "notes_get" });
+
+        expect(result.isError ?? false).toBe(false);
+        expect(result.structuredContent).toEqual({});
 
         await client.close();
     });
@@ -287,6 +325,80 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
         expect(deployed.fetch.mock.calls[1]?.[0]).toStrictEqual(expect.stringContaining("second.example"));
         expect(deployed.calls[1]?.authorization).toBe(`Bearer ${CALLER_TOKEN}`);
 
+        await client.close();
+    });
+
+    it("answers a call with an error result when the URL resolver throws, rather than failing the request", async () => {
+        expect.assertions(1);
+
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({
+                fetch: deployed.fetch,
+                openRpcSpec: SPEC,
+                token: CALLER_TOKEN,
+                url: () => {
+                    throw new Error("resolver failed");
+                },
+            }),
+        );
+        const result = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        expect(result).toMatchObject({ isError: true, structuredContent: { code: "INTERNAL" } });
+
+        await client.close();
+    });
+
+    it("closes the cached client when the server closes, so a per-request server leaves no socket behind", async () => {
+        expect.assertions(2);
+
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const server = serverFor(deployed.fetch);
+        const client = await connected(server);
+
+        await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        const close = vi.spyOn(LunoraClient.prototype, "close");
+
+        await server.close();
+
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(deployed.fetch).toHaveBeenCalledTimes(1);
+
+        close.mockRestore();
+        await client.close();
+    });
+
+    it("closes the cached client when the URL goes away, and calls again through a fresh one when it returns", async () => {
+        expect.assertions(4);
+
+        let url: string | undefined = "https://app.example";
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const close = vi.spyOn(LunoraClient.prototype, "close");
+        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+
+        await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        url = undefined;
+        const gone = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+        const closedWhenGone = close.mock.calls.length;
+
+        url = "https://app.example";
+
+        const back = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        expect(gone).toMatchObject({ isError: true, structuredContent: { code: "SERVICE_UNAVAILABLE" } });
+        expect(closedWhenGone).toBe(1);
+        expect(back.structuredContent).toEqual({ id: "b1", total: 3 });
+        expect(deployed.fetch).toHaveBeenCalledTimes(2);
+
+        close.mockRestore();
         await client.close();
     });
 });

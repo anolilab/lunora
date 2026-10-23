@@ -146,7 +146,9 @@ const outputShapeOf = (result: unknown): FunctionShape["output"] => {
         return { mode: "object", schema: { ...schema, type: "object" } };
     }
 
-    return { mode: "wrapped", schema: { properties: { result: schema }, required: ["result"], type: "object" } };
+    // `result` is not required: a handler whose output is optional returns `undefined`, which
+    // serializes to no `result` key. The document does not say whether the output can be absent.
+    return { mode: "wrapped", schema: { properties: { result: schema }, type: "object" } };
 };
 
 /** The function's `args` parameter. An absent one means the function declares no arguments. */
@@ -233,19 +235,40 @@ const inputSchemaOf = (shape: FunctionShape, write: boolean): ToolInputSchema =>
     };
 };
 
+/**
+ * The `{}` an optional object output sends when its handler returned `undefined`. The
+ * document does not say whether an output can be absent, so every object output admits it.
+ */
+const EMPTY_RESULT_SHAPE: ToolOutputSchema = { additionalProperties: false, properties: {}, type: "object" };
+
+/**
+ * The `outputSchema` of a query with a declared output. The error shape is always admitted.
+ * An object output also admits `{}` (see {@link EMPTY_RESULT_SHAPE}). A wrapped output needs
+ * no extra branch, because its `result` is not required.
+ */
+const outputSchemaOf = (output: FunctionShape["output"]): ToolOutputSchema | undefined => {
+    if (output.mode === "none") {
+        return undefined;
+    }
+
+    const schema = withErrorShape(output.schema);
+
+    return output.mode === "object" ? { ...schema, anyOf: [...(schema.anyOf ?? []), EMPTY_RESULT_SHAPE] } : schema;
+};
+
 const toolDefinitionOf = (name: string, shape: FunctionShape): ToolDefinition => {
     const write = isWrite(shape.kind);
     const title = `${shape.kind} ${shape.path}`;
+    // A write's first call returns a proposal, which is not the function's output shape, so
+    // a write carries no outputSchema, as the generic write tools do.
+    const outputSchema = write ? undefined : outputSchemaOf(shape.output);
 
     return {
         annotations: write ? { ...WRITE_ANNOTATIONS, title } : { ...READ_ONLY_ANNOTATIONS, title },
         description: descriptionOf(shape, write),
         inputSchema: inputSchemaOf(shape, write),
         name,
-        // A write's first call returns a proposal, which is not the function's output shape, so
-        // a write carries no outputSchema, as the generic write tools do. A query's schema is
-        // widened to admit the error shape: the SDK client checks structuredContent even on errors.
-        ...(write || shape.output.mode === "none" ? {} : { outputSchema: withErrorShape(shape.output.schema) }),
+        ...(outputSchema === undefined ? {} : { outputSchema }),
     };
 };
 
