@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Project, SourceFile, VariableStatement } from "ts-morph";
 import { Node } from "ts-morph";
 
 import declaredOutputWins from "../../declared-output";
@@ -204,6 +204,20 @@ const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): Discove
     };
 };
 
+/**
+ * The JSDoc description of the statement that declares a registration, so the
+ * spec can describe the function to a model. Read from the doc comment placed
+ * above `export const name = query(...)`; tags are dropped. `export default`
+ * carries no statement JSDoc, so it yields nothing.
+ */
+const documentDescriptionOf = (call: CallExpression): string | undefined => {
+    const statement = call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor));
+
+    const text = statement?.getJsDocs().at(-1)?.getDescription().trim();
+
+    return text === "" ? undefined : text;
+};
+
 /** Build a {@link FunctionIR} entry from one classified registration call, or `undefined` when it isn't a Lunora registration. */
 const functionIrFromCall = (call: CallExpression, exportName: string, relativePath: string, lazyFunctions: boolean): FunctionIR | undefined => {
     const discovered = discoverFromCall(call, lazyFunctions);
@@ -212,8 +226,11 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         return undefined;
     }
 
+    const description = documentDescriptionOf(call);
+
     return {
         args: discovered.args,
+        ...(description ? { description } : {}),
         exportName,
         filePath: relativePath,
         kind: discovered.kind as FunctionIR["kind"],

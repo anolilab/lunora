@@ -77,6 +77,9 @@ const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown>
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,
+        // The method `description` above is the generic RPC envelope text, so the author's
+        // doc comment travels in its own extension. Present only when the export has one.
+        ...(definition.description ? { "x-lunora-description": definition.description } : {}),
         // OpenRPC has no first-class tag grouping; surface the file namespace as
         // an `x-tags` extension so tooling can group methods by module (or source file).
         "x-tags": [{ name: tag }],
