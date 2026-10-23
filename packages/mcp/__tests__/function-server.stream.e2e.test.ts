@@ -261,14 +261,10 @@ describe("a stream tool through the stateless HTTP transport", () => {
         });
         const response = await serveStateless(serverFor(), request);
         const body = (await response.json()) as { id: number; method?: string; result: { content: { text: string }[] } };
-        const progress = send.mock.calls
-            .map(([message, options]) => {
-                return { message, options };
-            })
-            .filter(({ message }) => (message as { method?: string }).method === "notifications/progress");
+        const progress = send.mock.calls.filter(([message]) => (message as { method?: string }).method === "notifications/progress");
 
-        expect(progress.map(({ message }) => (message as unknown as { params: { progress: number } }).params.progress)).toStrictEqual([0, 1, 2]);
-        expect(progress.every(({ options }) => (options as { relatedRequestId?: unknown } | undefined)?.relatedRequestId !== undefined)).toBe(true);
+        expect(progress.map(([message]) => (message as unknown as { params: { progress: number } }).params.progress)).toStrictEqual([0, 1, 2]);
+        expect(progress.every(([, options]) => (options as { relatedRequestId?: unknown } | undefined)?.relatedRequestId !== undefined)).toBe(true);
         expect(response.headers.get("content-type")).toContain("application/json");
         expect(body.method).toBeUndefined();
         expect(body.id).toBe(1);

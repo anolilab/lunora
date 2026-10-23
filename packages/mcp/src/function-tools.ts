@@ -229,10 +229,9 @@ const toolDefinitionOf = (name: string, shape: FunctionShape): ToolDefinition =>
         inputSchema: inputSchemaOf(shape, write),
         name,
         // A write's first call returns a proposal, which is not the function's output shape, so
-        // a write carries no outputSchema, as the generic write tools do. A stream has no single
-        // result to describe. A query's schema is widened to admit the error shape: the SDK client
-        // checks structuredContent even on errors.
-        ...(write || shape.kind === "stream" || shape.output.mode === "none" ? {} : { outputSchema: withErrorShape(shape.output.schema) }),
+        // a write carries no outputSchema, as the generic write tools do. A query's schema is
+        // widened to admit the error shape: the SDK client checks structuredContent even on errors.
+        ...(write || shape.output.mode === "none" ? {} : { outputSchema: withErrorShape(shape.output.schema) }),
     };
 };
 
