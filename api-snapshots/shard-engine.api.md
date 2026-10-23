@@ -3744,6 +3744,12 @@ const assertReadonly: (query: string) => void;
 const assertShapeShardable: (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string) => void;
 ```
 
+### `assertStorableRowId` (const)
+
+```ts
+const assertStorableRowId: (id: string) => void;
+```
+
 ### `assertValidClientId` (const)
 
 ```ts
