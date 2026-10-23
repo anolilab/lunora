@@ -157,10 +157,10 @@ export default defineConfig({
     },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
-        // diff/blame/review), then Prettier-format every staged file, repo-wide.
-        // `--ignore-unknown`: Prettier has no TOML parser here, so a staged
-        // `.toml` would otherwise fail the hook instead of just the NUL check.
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write --ignore-unknown"],
+        // diff/blame/review), then format the staged code and data files with oxfmt.
+        // oxfmt skips TOML and Markdown by config, so those stay out of its glob.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs"],
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,json,json5,jsonc,svelte}": ["pnpm exec oxfmt"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.
@@ -170,8 +170,6 @@ export default defineConfig({
         // plugin set and break rules + disable directives.
         "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
-        // Svelte needs prettier-plugin-svelte (wired in prettier.config.js).
-        "**/*.svelte": ["pnpm exec prettier --write"],
     },
     secrets: {
         config: {
