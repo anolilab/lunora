@@ -110,6 +110,21 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         expect(unpinned?.["title"]).toBe("in a");
     });
 
+    it("does not probe again for a repeated pinned read of the same table", async () => {
+        expect.assertions(3);
+
+        const id = await writer.insert("b", { title: "in b" });
+
+        probes = [];
+
+        const first = await writer.get(id, "b");
+        const second = await writer.get(id, "b");
+
+        expect(probes).toStrictEqual(["b"]);
+        expect(first?.["title"]).toBe("in b");
+        expect(second?.["title"]).toBe("in b");
+    });
+
     it("treats an id owned by another table as absent under a pin", async () => {
         expect.assertions(2);
 

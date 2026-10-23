@@ -471,6 +471,12 @@ const createTableNameCache = (): {
 };
 
 /**
+ * Cache key for a successful pinned resolution. It includes the table, so a pinned answer never stands in for the id's
+ * unpinned first match, and a pinned lookup of another table still probes its own table.
+ */
+const pinnedCacheKey = (tableName: string, id: string): string => `${tableName}\u0000${id}`;
+
+/**
  * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
  * resolution. The schema handed in is the global-table subset, so this is a
  * small fixed scan — we fan the probes out in parallel and return on the first
@@ -489,11 +495,10 @@ const tableNameFromId = async (
     cache: ReturnType<typeof createTableNameCache>,
     expectedTable?: string,
 ): Promise<string | undefined> => {
-    const cached = cache.get(id);
+    const key = expectedTable === undefined ? id : pinnedCacheKey(expectedTable, id);
+    const cached = cache.get(key);
 
-    // A cached table answers only the lookups it is right for: a pinned read asks about one table, so another table's
-    // cached answer is not the answer it wants.
-    if (cached !== undefined && (expectedTable === undefined || cached === expectedTable)) {
+    if (cached !== undefined) {
         return cached;
     }
 
@@ -520,11 +525,9 @@ const tableNameFromId = async (
 
     for (const result of probes) {
         if (result.found) {
-            // Only an unpinned resolution is cached. A pinned probe saw one table, so it may not be the id's first match in
-            // schema order, and caching it would change what later unpinned reads return.
-            if (expectedTable === undefined) {
-                cache.set(id, result.tableName);
-            }
+            // A pinned resolution is cached under its own key: it saw one table, so it may not be the id's first match in
+            // schema order, and an unpinned read must not take it.
+            cache.set(key, result.tableName);
 
             return result.tableName;
         }
@@ -3282,6 +3285,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // so a later re-insert of the same id into a different global table
             // re-probes instead of resolving to the now-empty original table.
             tableNameCache.delete(id);
+
+            for (const table of Object.keys(schema.tables)) {
+                tableNameCache.delete(pinnedCacheKey(table, id));
+            }
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
