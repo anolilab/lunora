@@ -1400,4 +1400,4 @@ const useDataBrowser = ({
  */
 export type { DataBrowserModel };
 export type { FacetState } from "./use-facets";
-export { useDataBrowser };
+export { serializeView, useDataBrowser };
