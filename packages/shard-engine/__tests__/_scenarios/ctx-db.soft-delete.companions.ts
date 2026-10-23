@@ -226,7 +226,8 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             // assertion cannot drift from the companion's real naming rule.
             const companion = aggregateTableName("invoices", "maxLooseByCurrency");
             const usd = harness.sql.exec(`SELECT __value__ AS value FROM ${companion} WHERE __key__ = ?`, JSON.stringify({ currency: "usd" })).toArray()[0] as
-                undefined | { value: number };
+                | undefined
+                | { value: number };
 
             expect(usd?.value).toBe(9);
         });

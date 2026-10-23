@@ -20,7 +20,8 @@ import type { CallExpression, Node as TsNode, SourceFile } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 type InsertSchemaExtensionResult =
-    { ok: true; text: string } | { ok: false; reason: "already-applied" | "invalid-identifier" | "no-define-schema" | "non-object-argument" };
+    | { ok: true; text: string }
+    | { ok: false; reason: "already-applied" | "invalid-identifier" | "no-define-schema" | "non-object-argument" };
 
 /**
  * A valid JavaScript identifier. The item key is spliced into `schema.ts` as a

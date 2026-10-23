@@ -14,7 +14,16 @@
  * Bundler-inlined; zero dependencies.
  */
 export type NodeKind =
-    "array" | "builtin-array-buffer" | "builtin-date" | "builtin-error" | "builtin-map" | "builtin-set" | "builtin-url" | "builtin-view" | "other" | "plain";
+    | "array"
+    | "builtin-array-buffer"
+    | "builtin-date"
+    | "builtin-error"
+    | "builtin-map"
+    | "builtin-set"
+    | "builtin-url"
+    | "builtin-view"
+    | "other"
+    | "plain";
 
 const brand = (check: () => unknown): boolean => {
     try {

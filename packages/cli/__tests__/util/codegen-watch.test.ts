@@ -401,7 +401,8 @@ describe("startCodegenWatch", () => {
             // The config folder's watch is registered with its listener. The listener is the observable point at which a save is
             // reported, so the test drives it directly rather than racing a real folder watch.
             const configListener = vi.mocked(watch).mock.calls.find((call) => call[0] === workdir && call.length === 2)?.[1] as
-                ((event: string, filename: string) => void) | undefined;
+                | ((event: string, filename: string) => void)
+                | undefined;
 
             expect(configListener).toBeDefined();
 
@@ -437,7 +438,8 @@ describe("startCodegenWatch", () => {
             await handle.ready;
 
             const configListener = vi.mocked(watch).mock.calls.find((call) => call[0] === workdir && call.length === 2)?.[1] as
-                ((event: string, filename: string | null) => void) | undefined;
+                | ((event: string, filename: string | null) => void)
+                | undefined;
 
             expect(configListener).toBeDefined();
 
