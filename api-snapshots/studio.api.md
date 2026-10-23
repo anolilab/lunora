@@ -1644,6 +1644,7 @@ const MESSAGE_IDS: readonly [
     "line {line}: column “{column}” must be a number, got “{value}”.",
     "line {line}: column “{column}” must be true or false, got “{value}”.",
     "line {line}: column “{column}” must be an integer, got “{value}”.",
+    "line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.",
     "List",
     "Live",
     "Live — changes stream in automatically",
