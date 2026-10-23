@@ -145,24 +145,28 @@ describe("@lunora/x402 pay ↔ charge round trip (workerd)", () => {
         SIGNING_TIMEOUT_MS,
     );
 
-    it("sends a request that already carries a payment as-is, reserving nothing", async () => {
-        expect.hasAssertions();
+    it(
+        "sends a request that already carries a payment as-is, reserving nothing",
+        async () => {
+            expect.hasAssertions();
 
-        stubFacilitator({ settles: true });
+            stubFacilitator({ settles: true });
 
-        const seen: Request[] = [];
-        // The cap admits exactly one $0.01 payment.
-        const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.01" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
+            const seen: Request[] = [];
+            // The cap admits exactly one $0.01 payment.
+            const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.01" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
 
-        // A stale, caller-made payment: the worker answers 402 and the rail hands it back.
-        const stale = await rail.fetch(PAID_URL, { headers: { "PAYMENT-SIGNATURE": "stale" } });
+            // A stale, caller-made payment: the worker answers 402 and the rail hands it back.
+            const stale = await rail.fetch(PAID_URL, { headers: { "PAYMENT-SIGNATURE": "stale" } });
 
-        expect(stale.status).toBe(402);
+            expect(stale.status).toBe(402);
 
-        // Nothing was reserved for it, so the one payment the cap allows still goes through.
-        const paid = await rail.fetch(PAID_URL);
+            // Nothing was reserved for it, so the one payment the cap allows still goes through.
+            const paid = await rail.fetch(PAID_URL);
 
-        expect(paid.status).toBe(200);
-        expect(seen.map((request) => request.headers.get("payment-signature") === "stale")).toStrictEqual([true, false, false]);
-    });
+            expect(paid.status).toBe(200);
+            expect(seen.map((request) => request.headers.get("payment-signature") === "stale")).toStrictEqual([true, false, false]);
+        },
+        SIGNING_TIMEOUT_MS,
+    );
 });
