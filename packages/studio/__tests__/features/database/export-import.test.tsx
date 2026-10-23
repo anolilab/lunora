@@ -54,6 +54,27 @@ const importText = (text: string): void => {
     fireEvent.click(screen.getByTestId("ei-import-confirm"));
 };
 
+/**
+ * Choose a base-ui select item. The item commits a mouse selection only after a pointer-down on it, so a bare click is ignored.
+ */
+const pickOption = (option: HTMLElement): void => {
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+};
+
+/** Pick `text` as a CSV file, choose `table` in the target-table picker, then confirm the import. */
+const importCsv = async (text: string, table: string): Promise<void> => {
+    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([text], "rows.csv", { type: "text/csv" })] } });
+    fireEvent.click(await screen.findByTestId("ei-csv-table"));
+    pickOption(await screen.findByRole("option", { name: table }));
+    fireEvent.click(screen.getByTestId("ei-import"));
+    fireEvent.click(screen.getByTestId("ei-import-confirm"));
+};
+
+/** The rows and first line of each `importShard` call, in order. */
+const importCalls = (mock: MockClientHooks): { rows: ExportRow[]; startLine: number }[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => call[1] as { rows: ExportRow[]; startLine: number });
+
 /** Click Download and capture the Blob handed to `URL.createObjectURL`. */
 const downloadBlob = (): { blobs: Blob[] } => {
     const createObjectURL = vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue("blob:fake");
@@ -319,5 +340,134 @@ describe("exportImportPanel", () => {
 
         expect((row?.doc as Record<string, unknown>)["amount"]).toBe(42n);
         expect(new Uint8Array((row?.doc as Record<string, unknown>)["blob"] as ArrayBuffer)).toStrictEqual(new Uint8Array([1, 2, 3, 4]));
+    });
+
+    it("imports a CSV file into the picked table, keying each row by the header and omitting empty cells", async () => {
+        expect.assertions(1);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv('id,text\nm3,"again, twice"\nm4,\n', "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows).toStrictEqual([
+            { doc: { id: "m3", text: "again, twice" }, table: "messages" },
+            { doc: { id: "m4" }, table: "messages" },
+        ]);
+    });
+
+    it("keeps import disabled for a CSV file until a target table is picked", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File(["id\n1\n"], "rows.csv", { type: "text/csv" })] } });
+
+        await screen.findByTestId("ei-csv-table");
+
+        expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(true);
+
+        fireEvent.click(await screen.findByTestId("ei-csv-table"));
+        pickOption(await screen.findByRole("option", { name: "messages" }));
+
+        expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("writes nothing when any CSV record is malformed, and names the record", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        // The header is record 1, so index 1000 is record 1001.
+        const lines = ["id,text", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},hello`)];
+
+        lines[1000] = "m999";
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: line 1001: expected 2 cells, found 1.");
+    });
+
+    it("numbers a large CSV import by record, the header being record 1, across chunks", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        const lines = ["id,text", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},hello`)];
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("Inserted 1200");
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([2, 502, 1002]);
+    });
+
+    it("rejects a CSV whose header repeats a name before writing, naming the header", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text,id\n1,a,2\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: The header “id” appears more than once.");
+    });
+
+    it("refuses a header-only CSV without calling the server", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text\r\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("The CSV has no data rows after the header.");
+    });
+
+    it("shows a server row error against its record number", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION", line: 3, message: "text must be a string", table: "messages" }],
+                        inserted: { messages: 2 },
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text\n1,a\n2,b\n", "messages");
+
+        const errors = await screen.findByTestId("ei-import-errors");
+
+        expect(errors.textContent).toBe("line 3 (messages): text must be a string");
     });
 });
