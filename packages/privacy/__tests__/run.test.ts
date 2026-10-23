@@ -445,6 +445,49 @@ describe("runExport", () => {
         expect(winnerKey === undefined ? false : files.files.has(winnerKey)).toBe(true);
     });
 
+    it("finishes a failed export's cleanup when the erasure's complete step is retried", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        let failDelete = true;
+        const flaky: MemoryFiles = {
+            ...files,
+            delete: async (key) => {
+                if (failDelete && key.includes("/late/")) {
+                    failDelete = false;
+
+                    throw new Error("storage unavailable");
+                }
+
+                await files.delete(key);
+            },
+        };
+        const { privacy, runErasureWorkflow } = setup({ erasure: NO_GRACE, files: flaky, store });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+        const { listForSubject } = store;
+        let lists = 0;
+
+        store.rows.set(exported.id, { ...exported, status: "processing" });
+
+        // The export writes a part after the erasure's files step and before its complete step lists the requests.
+        store.listForSubject = async (subjectId) => {
+            lists += 1;
+
+            if (lists === 2) {
+                await files.put(exported.id, { data: "{}", name: "late/parts/tasks.json" });
+            }
+
+            return listForSubject(subjectId);
+        };
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(failDelete).toBe(false);
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
     it("expires an export that turned ready after the erasure's files step", async () => {
         const store = memoryRequests();
         const { files, privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store });

@@ -457,24 +457,22 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
     const requests = await ports.store.listForSubject(subjectId);
     const others = requests.filter((request) => request.id !== requestId);
 
+    // The rekey is each request's last write: until its cleanup has succeeded the request stays under the subject's
+    // id, so a retried erasure lists it again and finishes the cleanup, which is safe to repeat.
     await Promise.all(
         others.map(async (request) => {
-            if (
-                request.status === "processing" &&
-                (await ports.store.claim(request.id, "processing", { status: transition("processing", "failed"), subjectId: key }))
-            ) {
+            if (request.status === "processing" && (await ports.store.claim(request.id, "processing", { status: transition("processing", "failed") }))) {
                 await ports.store.addEvent(request.id, ports.now(), "failed", "UNPROCESSABLE: the subject was erased while the export ran");
-                // Every run of this export is stopped by the claim, so all of its files go; a run still writing removes its own.
-                await deleteRequestFiles(ports.files, request);
-
-                return;
             }
 
-            // An export that went ready after the files step holds data this erasure removed, so it expires here.
-            const current = request.status === "processing" ? await ports.store.get(request.id) : request;
+            const current = (await ports.store.get(request.id)) ?? request;
 
-            if (current?.status === "ready") {
+            if (current.status === "ready") {
+                // An export that went ready after the files step holds data this erasure removed, so it expires here.
                 await expireRequestFiles(ports, current);
+            } else if (current.type === "export" && current.status === "failed") {
+                // A failed export's runs are stopped, so all of its files go; a run still writing removes its own.
+                await deleteRequestFiles(ports.files, current);
             }
 
             await ports.store.update(request.id, { subjectId: key });
