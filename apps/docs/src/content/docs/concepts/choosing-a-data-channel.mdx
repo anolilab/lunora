@@ -128,8 +128,8 @@ post without that query.
   publisher, the shard and the hook all use it, so a typo in a topic or a payload of the
   wrong shape is a type error, and a publish that gets past the types anyway (a queue
   message body, say) is refused by the payload validator.
-- **You mount the routes.** `defineLiveStream` returns handlers; you mount them on
-  your HTTP router.
+- **The routes are mounted for you.** Codegen serves each stream's connect and control
+  routes, so there is nothing to register by hand.
 - **Stock React Native `fetch` does not stream**, so events do not arrive without
   a streaming `fetch` such as `expo/fetch`.
 

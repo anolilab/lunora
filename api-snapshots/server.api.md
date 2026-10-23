@@ -1132,6 +1132,20 @@ interface LivePublisher {
 }
 ```
 
+### `LiveRouterApp` (interface)
+
+```ts
+interface LiveRouterApp {
+    fetch(request: Request, env?: Record<string, unknown>, context?: ExecutionContext): Promise<Response> | Response;
+}
+```
+
+### `LiveRouterFallback` (type)
+
+```ts
+type LiveRouterFallback = (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+```
+
 ### `LiveStream` (interface)
 
 ```ts
@@ -1154,6 +1168,15 @@ interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
     id: string;
     onSubscribe?: LiveSubscribeHandler<Topics>;
     topics: Topics;
+}
+```
+
+### `LiveStreamMount` (interface)
+
+```ts
+interface LiveStreamMount {
+    id: string;
+    load: () => Promise<Pick<LiveStream, "connect" | "control">>;
 }
 ```
 
@@ -3743,6 +3766,12 @@ const isSafeHeaderValue: (value: string) => boolean;
 
 ```ts
 const lastEventId: (request: Request) => string | undefined;
+```
+
+### `liveStreamRouter` (const)
+
+```ts
+const liveStreamRouter: (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback) => LiveRouterApp;
 ```
 
 ### `mask` (const)
@@ -6684,6 +6713,16 @@ interface Link {
 type ListFilterShape<TDocument> = {
     [K in keyof TDocument & string]?: Validator<TDocument[K]>;
 };
+```
+
+### `LiveHostTriggers` (interface)
+
+```ts
+interface LiveHostTriggers {
+    email?: unknown;
+    queue?: unknown;
+    scheduled?: unknown;
+}
 ```
 
 ### `LoadRelation` (type)
