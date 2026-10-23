@@ -67,6 +67,36 @@ describe("sqlEditorPanel", () => {
         expect(screen.getByTestId("sql-count").textContent).toContain("2 rows");
     });
 
+    it("shows the run time as the clock delta from sending the query to its result landing", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return { columns: ["name"], rowCount: 2, rows: [{ name: "messages" }, { name: "users" }], truncated: false };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        // One reading before the request is sent, one once its result has landed.
+        const readings = [1000, 1034];
+        const now = (): number => readings.shift() ?? Number.NaN;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <SqlEditorPanel now={now} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await screen.findByTestId("sql-rows");
+
+        expect(screen.getByTestId("sql-count").textContent).toBe("2 rows · 34 ms");
+    });
+
     it("surfaces a server rejection (e.g. a write) inline", async () => {
         expect.assertions(1);
 

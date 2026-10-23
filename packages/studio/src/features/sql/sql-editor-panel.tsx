@@ -27,6 +27,8 @@ import { makeTab } from "./sql-tabs";
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+    /** Clock the run timer reads. Injected by tests so a duration is asserted, not measured. */
+    readonly now?: () => number;
 }
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
@@ -36,6 +38,10 @@ const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
+// Wrapped rather than passing `performance.now` itself: the browser throws
+// "Illegal invocation" when the method is called detached from `performance`.
+const defaultNow = (): number => performance.now();
+
 /**
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
@@ -44,7 +50,7 @@ const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
  * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
  * tables (use the Data grid's inline edit for mutations).
  */
-export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
+export const SqlEditorPanel = ({ initialShardKey, now = defaultNow }: SqlEditorPanelProps): ReactElement => {
     const client = useLunora();
 
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query it
@@ -60,7 +66,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // `script` too: without it the previous run's statement strip survives into
         // a new draft, and selecting one of its entries shows a result belonging to
         // a query the editor no longer holds.
-        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null, script: undefined });
+        patchActiveOutput({ chart: undefined, durationMs: undefined, error: null, failed: undefined, result: null, script: undefined });
     };
 
     const library = useSqlLibrary({ loadIntoActiveTab, unlinkQuery });
@@ -109,12 +115,15 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     /** Run one statement, never a script: the gate refuses a `;`-joined string. */
     const runOne = async (sql: string): Promise<ScriptRun> => {
+        const started = now();
+
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
+            const durationMs = now() - started;
 
             recordHistory(sql);
 
-            return { error: null, result: next, sql };
+            return { durationMs, error: null, result: next, sql };
         } catch (error_: unknown) {
             return { error: errorMessage(error_), result: null, sql };
         }
@@ -176,6 +185,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown?.durationMs,
             error: shown?.error ?? null,
             failed: shown?.error === null || shown === undefined ? undefined : { error: shown.error, sql: shown.sql },
             pane: mode,
@@ -196,6 +206,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown.durationMs,
             error: shown.error,
             failed: shown.error === null ? undefined : { error: shown.error, sql: shown.sql },
             result: shown.result,
@@ -305,6 +316,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         assistant={assistant}
                         chart={inferredChart}
                         className={resultsClass}
+                        durationMs={output.durationMs}
                         error={error}
                         onFormat={formatDraft}
                         onInferChart={inferChart}

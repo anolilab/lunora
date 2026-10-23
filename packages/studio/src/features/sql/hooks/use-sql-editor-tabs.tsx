@@ -21,6 +21,8 @@ type BulkClose = "all" | "others" | "right";
  */
 /** One statement of a script and how it went. */
 interface ScriptRun {
+    /** Client-side wall time of this statement's round trip; absent unless the statement ran to a result. */
+    readonly durationMs?: number;
     readonly error: null | string;
     readonly result: null | SqlConsoleResult;
     readonly sql: string;
@@ -29,6 +31,8 @@ interface ScriptRun {
 interface TabOutput {
     /** Model-inferred chart for THIS tab's result, or undefined for the manual one. */
     readonly chart?: AssistantChartConfig;
+    /** Round-trip time of the result currently shown; tracks `result`, so it follows a statement picked from the strip. */
+    readonly durationMs?: number;
     readonly error: null | string;
     /** THIS tab's last FAILED statement, frozen at failure time — see `run`. */
     readonly failed?: { error: string; sql: string };
