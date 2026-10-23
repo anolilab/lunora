@@ -11,20 +11,30 @@
  * editor spawns this process when the project opens — routinely before
  * `lunora dev` is running — and keeps it alive across every restart afterwards.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { readLiveDevServerState } from "@lunora/config";
 import { resolveAdminToken } from "@lunora/config/studio-host";
-import type { LocalDeployment, LocalMcpServerOptions } from "@lunora/mcp";
-import { connectLocalStdio } from "@lunora/mcp";
+import type { FunctionMcpServerOptions, LocalDeployment, LocalMcpServerOptions } from "@lunora/mcp";
+import { connectFunctionStdio, connectLocalStdio } from "@lunora/mcp";
 
 import { devTools } from "./dev-tools";
 
 interface McpServeOptions {
     /** Expose the deployment write tools (mutations/actions). Default: read-only. */
     allowWrites?: boolean;
+
     /** The project directory to serve. */
     cwd: string;
     /** Docs site origin backing the documentation tools. */
     docsUrl?: string;
+
+    /**
+     * Serve one tool per function of this app instead of the generic deployment tools.
+     * Needs `lunora/_generated/openrpc.json`, which codegen writes for `apiSpec: "openrpc"`.
+     */
+    functions?: boolean;
     /** Omit the documentation tools. */
     noDocs?: boolean;
     /** Bearer token override; defaults to the project's resolved admin token. */
@@ -158,6 +168,63 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
 };
 
 /**
+ * `--functions`: one MCP tool per function of this app, from the OpenRPC document
+ * codegen wrote to `lunora/_generated/openrpc.json`.
+ *
+ * Identity is the caller's, so the bearer is the explicit `--token` and nothing
+ * else. The project's admin token is never used here: these tools run as the
+ * caller, and handing them the admin bearer would turn each one into an admin call.
+ */
+const serveFunctions = async (options: McpServeOptions, connect: (options: FunctionMcpServerOptions) => Promise<ClosableServer>): Promise<McpServeResult> => {
+    const writeError =
+        options.writeError ??
+        ((message: string): void => {
+            process.stderr.write(message);
+        });
+    const specPath = join(options.cwd, "lunora", "_generated", "openrpc.json");
+
+    if (!existsSync(specPath)) {
+        writeError(`lunora mcp serve --functions: ${specPath} is missing. Run \`lunora codegen --api-spec openrpc\` first.\n`);
+
+        return { code: 1, deployment: undefined };
+    }
+
+    const url = options.url ?? readLiveDevServerState(options.cwd)?.url;
+
+    if (url === undefined || url.length === 0) {
+        writeError("lunora mcp serve --functions: no deployment URL. Start `lunora dev` or pass --url.\n");
+
+        return { code: 1, deployment: undefined };
+    }
+
+    let server: ClosableServer;
+
+    try {
+        server = await connect({
+            allowWrites: options.allowWrites === true,
+            openRpcSpec: JSON.parse(readFileSync(specPath, "utf8")) as unknown,
+            url,
+            version: options.version,
+            ...(options.token === undefined || options.token.length === 0 ? {} : { token: options.token }),
+        });
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        writeError(`lunora mcp serve --functions: failed to start — ${message}\n`);
+
+        return { code: 1, deployment: undefined };
+    }
+
+    const withoutBearer = options.token === undefined || options.token.length === 0;
+
+    writeError(`lunora mcp serve --functions: ready — ${url}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}\n`);
+
+    await waitForClose(server);
+
+    return { code: 0, deployment: undefined };
+};
+
+/**
  * Start the stdio server and serve until the client disconnects.
  *
  * Diagnostics go to **stderr**, never stdout: stdout is the MCP wire, and a
@@ -167,7 +234,12 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
 const runMcpServe = async (
     options: McpServeOptions,
     connect: (options: LocalMcpServerOptions) => Promise<ClosableServer> = connectLocalStdio,
+    connectFunctions: (options: FunctionMcpServerOptions) => Promise<ClosableServer> = connectFunctionStdio,
 ): Promise<McpServeResult> => {
+    if (options.functions === true) {
+        return serveFunctions(options, connectFunctions);
+    }
+
     const writeError =
         options.writeError ??
         ((message: string): void => {

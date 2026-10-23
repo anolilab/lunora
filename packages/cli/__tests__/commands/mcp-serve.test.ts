@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { LocalMcpServerOptions } from "@lunora/mcp";
+import type { FunctionMcpServerOptions, LocalMcpServerOptions } from "@lunora/mcp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { devTools, MAX_LOG_LINES } from "../../src/commands/mcp/dev-tools";
@@ -158,6 +158,41 @@ describe("lunora mcp serve", () => {
             recordDevServer();
 
             expect((passed?.deployment as () => unknown)()).toStrictEqual({ url: "http://localhost:8787" });
+        });
+
+        it("--functions asks for the generated OpenRPC document when it is missing", async () => {
+            expect.assertions(2);
+
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(1);
+            expect(written.join("")).toContain("lunora codegen --api-spec openrpc");
+        });
+
+        it("--functions serves the caller's token only, never the project's admin token", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_ADMIN_TOKEN", "admin-from-env");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), JSON.stringify({ methods: [] }), "utf8");
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: () => undefined },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(0);
+            expect(connect.mock.calls[0]?.[0].openRpcSpec).toStrictEqual({ methods: [] });
+            expect(connect.mock.calls[0]?.[0]).not.toHaveProperty("token");
         });
 
         it("is read-only unless --allow-writes is passed", async () => {
