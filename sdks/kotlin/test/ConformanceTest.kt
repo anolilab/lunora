@@ -573,6 +573,46 @@ private fun supersededAttachStopsWritingJoins() {
     check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a detach during the joins must stop the remaining joins")
 }
 
+private fun failedWhisperUnsubscribeCanBeRetried() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    var refuse = true
+    val client = Client("https://app.example")
+
+    client.attachSocket { frame ->
+        if (frame["type"] == "whisper_unsubscribe" && refuse) {
+            refuse = false
+            throw IllegalStateException("write refused")
+        }
+
+        sent.add(frame)
+    }
+
+    val leave = client.whisperSubscribe("room:general") { }
+    val refused = runCatching { leave() }.isFailure
+
+    check(refused, "the refused unsubscribe must surface to the caller")
+
+    leave()
+
+    check(sent.any { it["type"] == "whisper_unsubscribe" }, "the retried leave must write whisper_unsubscribe")
+}
+
+private fun duplicateTokenExpiryRegistrationsUnregisterSeparately() {
+    var notified = 0
+    val listener: () -> Unit = { notified++ }
+    val client = Client("https://app.example")
+
+    val first = client.onTokenExpired(listener)
+
+    client.onTokenExpired(listener)
+    first()
+    first()
+    client.attachSocket { }
+    client.detachSocket(4001, null)
+
+    check(notified == 1, "a second registration of the same function must survive the first handle being called twice")
+}
+
 private fun closedRoomRefusesSends() {
     val sent = mutableListOf<Map<String, Any?>>()
     val client = Client("https://app.example")
@@ -1533,6 +1573,8 @@ fun main() {
     whisperFramesJoinSendAndDeliver()
     whisperTopicsRejoinAfterReconnect()
     closedRoomRefusesSends()
+    duplicateTokenExpiryRegistrationsUnregisterSeparately()
+    failedWhisperUnsubscribeCanBeRetried()
     supersededAttachStopsWritingJoins()
     rpcRequestBodies()
     rpcResponses()

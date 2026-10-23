@@ -526,7 +526,7 @@ class Client(
     /** The generation of the last 4003 refusal reported to [onTokenExpired]; null before any. */
     private var refusedGeneration: Long? = null
 
-    private val tokenExpiredListeners = mutableListOf<() -> Unit>()
+    private val tokenExpiredListeners = mutableListOf<TokenExpiredListener>()
 
     /** Joined topics and their listeners. A topic is present while it has at least one. */
     private val whisperTopics = LinkedHashMap<String, MutableList<WhisperListener>>()
@@ -535,6 +535,9 @@ class Client(
     private val unjoinedTopics = mutableSetOf<String>()
 
     private class WhisperListener(val onValue: (WireValue) -> Unit)
+
+    /** One token-expiry registration: its own object, so its handle removes only it. */
+    private class TokenExpiredListener(val run: () -> Unit)
 
     /**
      * Registers the sender for this socket and writes its `connect` frame first. Call
@@ -628,9 +631,12 @@ class Client(
      * refusal (see [detachSocket]). Returns an unregister.
      */
     fun onTokenExpired(listener: () -> Unit): () -> Unit {
-        synchronized(lock) { tokenExpiredListeners.add(listener) }
+        // Each registration is its own entry, so two registrations of one function keep separate handles.
+        val entry = TokenExpiredListener(listener)
 
-        return { synchronized(lock) { tokenExpiredListeners.remove(listener) } }
+        synchronized(lock) { tokenExpiredListeners.add(entry) }
+
+        return { synchronized(lock) { tokenExpiredListeners.remove(entry) } }
     }
 
     private fun notifyTokenExpired() {
@@ -638,7 +644,7 @@ class Client(
 
         for (listener in listeners) {
             try {
-                listener()
+                listener.run()
             } catch (error: Exception) {
                 // One bad observer must not stop the rest, nor the socket teardown or
                 // frame handling that reported the expiry.
@@ -679,10 +685,16 @@ class Client(
             synchronized(lock) {
                 val listeners = whisperTopics[topic]
 
-                if (listeners != null && listeners.remove(entry) && listeners.isEmpty()) {
-                    whisperTopics.remove(topic)
-                    unjoinedTopics.remove(topic)
-                    send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                if (listeners != null && entry in listeners) {
+                    if (listeners.size == 1) {
+                        // The unsubscribe goes out before the topic is forgotten, so a write that throws leaves the
+                        // leave retryable: the membership is not stranded on the server.
+                        send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                        whisperTopics.remove(topic)
+                        unjoinedTopics.remove(topic)
+                    } else {
+                        listeners.remove(entry)
+                    }
                 }
             }
         }
