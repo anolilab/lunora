@@ -234,6 +234,16 @@ extension ConformanceTests {
         XCTAssertFalse(sent.contains { $0["type"] as? String == "whisper" }, "and must write no whisper frame")
     }
 
+    func testAWhisperWithoutDataIsDropped() throws {
+        let client = LunoraClient(url: "https://app.example")
+        var delivered: [Any] = []
+
+        _ = client.whisperSubscribe("room:general") { delivered.append($0) }
+        client.handleFrame(#"{"type":"whisper","topic":"room:general"}"#)
+
+        XCTAssertTrue(delivered.isEmpty, "a whisper with no data key must not reach a listener as null")
+    }
+
     func testWhisperTopicsRejoinAfterReconnect() throws {
         let block = try XCTUnwrap(fixture("ws-frames.json")["whisperFrames"] as? [String: Any])
         let rejoin = try XCTUnwrap(block["rejoinOnReconnect"] as? [String])

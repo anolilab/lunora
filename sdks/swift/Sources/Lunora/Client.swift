@@ -1327,7 +1327,9 @@ public final class LunoraClient {
 
             let listeners = withLock { whispers[topic]?.map { $0.listener } ?? [] }
 
-            guard !listeners.isEmpty, let value = try? Wire.decode(frame["data"]) else { return kind }
+            // A frame with no data key is refused. An explicit null is a value, because the wire decoder reads
+            // a missing key as null, so the key itself is what is tested.
+            guard !listeners.isEmpty, frame["data"] != nil, let value = try? Wire.decode(frame["data"]) else { return kind }
 
             for listener in listeners {
                 listener(value)
