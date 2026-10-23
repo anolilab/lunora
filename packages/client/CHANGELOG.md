@@ -1,3 +1,14 @@
+## @lunora/client [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.243...@lunora/client@1.0.0-alpha.244) (2026-10-23)
+
+### Bug Fixes
+
+* **client:** pace the SSE resubscribe burst ([#1311](https://github.com/anolilab/lunora/issues/1311)) ([547c97e](https://github.com/anolilab/lunora/commit/547c97eb7ee830cba216d5a3a149b9c7a619e945))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
 ## @lunora/client [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.242...@lunora/client@1.0.0-alpha.243) (2026-10-22)
 
 ### Performance Improvements
