@@ -238,9 +238,14 @@ const assertBatchRowIds = (
         return;
     }
 
+    // A supplied `_id` survives column defaults, except that a server default on the `_id` column always overwrites it.
+    // Only then does the stored id differ from the supplied one, so only then are the defaults applied here (and the
+    // defaults are not invoked twice for every row of an ordinary trusted import).
+    const overridesId = definition !== undefined && "serverDefault" in (definition.shape["_id"]?._meta?.column ?? {});
+
     for (const document of documents) {
-        // The id each row is stored under, after column defaults: the value the single-row insert checks.
-        const id = definition === undefined ? document["_id"] : applyInsertDefaults(definition, document, auth)["_id"];
+        // The id each row is stored under: the value the single-row insert checks.
+        const id = overridesId ? applyInsertDefaults(definition, document, auth)["_id"] : document["_id"];
 
         if (typeof id === "string") {
             assertStorableRowId(id);

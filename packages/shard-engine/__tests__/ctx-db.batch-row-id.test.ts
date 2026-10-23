@@ -47,3 +47,49 @@ describe("insertManyUnsafe checks the id each row is stored under", () => {
         expect(ids).toStrictEqual(["stored-id"]);
     });
 });
+
+describe("insertManyUnsafe applies column defaults once per row", () => {
+    it("does not run an ordinary server default twice for a trusted batch", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        const countingSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: {
+                        owner: col("string", {
+                            serverDefault: () => {
+                                calls += 1;
+
+                                return "owner";
+                            },
+                        }),
+                        title: col("string"),
+                    },
+                },
+            },
+        };
+        const harness2 = createSqliteExec();
+
+        try {
+            runShardMigrations(harness2.sql, countingSchema);
+
+            const writer = createShardCtxDb({ clock: () => 1, schema: countingSchema, sql: harness2.sql });
+
+            await writer.insertManyUnsafe!(
+                "notes",
+                [
+                    { _id: "n1", title: "a" },
+                    { _id: "n2", title: "b" },
+                ],
+                { allowExplicitId: true },
+            );
+
+            expect(calls).toBe(2);
+            await expect(writer.get("n2")).resolves.toMatchObject({ owner: "owner" });
+        } finally {
+            harness2.close();
+        }
+    });
+});
