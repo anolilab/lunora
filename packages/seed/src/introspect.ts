@@ -133,10 +133,10 @@ const introspectSchema = (schema: Schema): ReadonlyArray<TableSpec> => {
  * self-references and edges into unselected tables are ignored for ordering
  * (the plan resolves those FKs against whatever rows exist, or refuses). A
  * table cycle is broken at the first pending table that lies ON a cycle; the plan
- * fills that table's cycle-edge cells in a second pass once every table has ids.
- * A table that only hangs off a cycle is never the one emitted early: its parents
- * would then all be deferred, and a composite unique index over them could not be
- * dealt, so the result would depend on declaration order.
+ * assigns the ids of the parents its cycle edges point at ahead of their rows.
+ * A table that only hangs off a cycle is never the one emitted early, so which
+ * table breaks the cycle — and with it the result — does not depend on
+ * declaration order.
  */
 const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<string>): ReadonlyArray<string> => {
     const byName = new Map(specs.map((spec) => [spec.name, spec]));

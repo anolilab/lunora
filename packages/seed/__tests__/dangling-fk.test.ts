@@ -71,6 +71,47 @@ describe("seedPlan — dangling foreign keys", () => {
         expect(rowsOf(plan, "books").every((row) => authorIds.has(row.authorId as string))).toBe(true);
     });
 
+    describe.each([
+        ["authors first", true],
+        ["books first", false],
+    ])("overrides on a cycle, %s", (_label, authorsFirst) => {
+        const authors = defineTable({ latestBookId: v.id("books"), latestEcho: v.string() });
+        const books = defineTable({ authorId: v.id("authors"), authorEcho: v.string() });
+        const schema = defineSchema(authorsFirst ? { authors, books } : { books, authors });
+        const plan = seedPlan(schema, {
+            counts: { authors: 3, books: 4 },
+            overrides: {
+                authors: { latestEcho: ({ row }: { row: Record<string, unknown> }) => String(row.latestBookId) },
+                books: {
+                    authorEcho: ({ index, store }: { index: number; store: Record<string, ReadonlyArray<Record<string, unknown>>> }) =>
+                        String(store.authors?.[index % 3]?.latestBookId),
+                },
+            },
+        });
+
+        it("see the cycle foreign key already on the row", () => {
+            expect.hasAssertions();
+
+            const bookIds = new Set(rowsOf(plan, "books").map((row) => row._id));
+
+            for (const row of rowsOf(plan, "authors")) {
+                expect(bookIds.has(row.latestBookId as string)).toBe(true);
+                expect(row.latestEcho).toBe(row.latestBookId);
+            }
+        });
+
+        it("see the cycle foreign key on rows in the store", () => {
+            expect.hasAssertions();
+
+            const authorRows = rowsOf(plan, "authors");
+
+            // Only rows already generated are in the store, so a books-first plan sees no authors.
+            for (const [index, row] of rowsOf(plan, "books").entries()) {
+                expect(row.authorEcho).toBe(authorsFirst ? authorRows[index % 3]!.latestBookId : "undefined");
+            }
+        });
+    });
+
     it("passes allowOrphans through the seed client", async () => {
         expect.hasAssertions();
 
