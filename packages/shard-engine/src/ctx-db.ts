@@ -225,8 +225,8 @@ const assertStorableRowId = (id: string): void => {
 };
 
 /**
- * Refuse every trusted-import id in a batch before any row is written: a global batch writes D1 row by row, and D1 cannot
- * roll back what it already wrote.
+ * Refuse every trusted-import id in a global batch before any row is written: a global batch writes D1 row by row, and D1
+ * cannot roll back what it already wrote. A shard-local batch is checked in its row builder instead.
  */
 const assertBatchRowIds = (
     definition: TableDefinitionLike | undefined,
@@ -3972,8 +3972,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async insertManyUnsafe(tableName, documents, batchOptions) {
             assertBatchLimit(documents.length, batchOptions?.limit, "insertManyUnsafe");
 
-            assertBatchRowIds(schema.tables[tableName], documents, batchOptions?.allowExplicitId, auth);
-
             if (documents.length === 0) {
                 return [];
             }
@@ -3984,6 +3982,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // No raw multi-row path across the D1 boundary — fall back to the
                 // per-row global writer (the throughput win is shard-local only).
                 const globalIds: string[] = [];
+
+                assertBatchRowIds(schema.tables[tableName], documents, batchOptions?.allowExplicitId, auth);
 
                 // Charge the WHOLE batch before writing any of it, the way the
                 // shard-local branch below does. These rows land in D1, which the
@@ -4053,7 +4053,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const rows = documents.map((document, index) => {
                 const defaulted = applyInsertDefaults(definition, document, auth);
                 const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
-                const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
+                const explicitId = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : undefined;
+
+                // Checked on the value stored: the rows are all built before any is written, so a refusal writes nothing.
+                if (explicitId !== undefined) {
+                    assertStorableRowId(explicitId);
+                }
+
+                const id = explicitId ?? generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
                 const creationTime =

@@ -93,3 +93,42 @@ describe("insertManyUnsafe applies column defaults once per row", () => {
         }
     });
 });
+
+describe("insertManyUnsafe checks the id it stores, from one evaluation of its default", () => {
+    it("stores the id it checked when the _id default is stateful", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        const statefulSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: {
+                        _id: col("string", {
+                            serverDefault: () => {
+                                calls += 1;
+
+                                return calls === 1 ? "good-id" : "bad\u0000id";
+                            },
+                        }),
+                        title: col("string"),
+                    },
+                },
+            },
+        };
+        const harness3 = createSqliteExec();
+
+        try {
+            runShardMigrations(harness3.sql, statefulSchema);
+
+            const writer = createShardCtxDb({ clock: () => 1, schema: statefulSchema, sql: harness3.sql });
+
+            const ids = await writer.insertManyUnsafe!("notes", [{ _id: "x", title: "a" }], { allowExplicitId: true });
+
+            expect(ids).toStrictEqual(["good-id"]);
+            expect(calls).toBe(1);
+        } finally {
+            harness3.close();
+        }
+    });
+});
