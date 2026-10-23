@@ -63,7 +63,8 @@ const toOperation = (method: OpenRpcMethod): ApiOperation => {
  */
 const parseOpenRpc = (raw: unknown): ApiModel => {
     const document = (raw ?? {}) as OpenRpcDocument;
-    const operations = (document.methods ?? []).map((method) => toOperation(method));
+    // A `stream` is not an RPC operation: it opens a WebSocket, so the POST /_lunora/rpc reference would be wrong.
+    const operations = (document.methods ?? []).filter((method) => method["x-lunora-function-kind"] !== "stream").map((method) => toOperation(method));
 
     const byNamespace = new Map<string, ApiOperation[]>();
 
