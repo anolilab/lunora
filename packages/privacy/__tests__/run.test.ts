@@ -352,6 +352,29 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
     });
 
+    it("keeps the archive of a ready export when the run throws after the ready write", async () => {
+        const store = memoryRequests();
+        const throwing = {
+            ...store,
+            addEvent: async (requestId: string, at: Date, kind: string, detail?: string) => {
+                if (kind === "ready") {
+                    throw new Error("event log unavailable");
+                }
+
+                await store.addEvent(requestId, at, kind, detail);
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, store: throwing });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "ready" });
+
+        const storageKey = store.rows.get(opened.id)?.storageKey;
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+        expect(storageKey === undefined ? false : files.files.has(storageKey)).toBe(true);
+    });
+
     it("never deletes the winner's archive when the loser's status read is stale", async () => {
         const store = memoryRequests();
         let failLoser = true;

@@ -340,7 +340,9 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
     const stop = async (status: RequestStatus): Promise<ExportOutcome> => {
         const id = runId;
 
-        if (id !== undefined) {
+        // A ready request may point at this run's archive: a throw after the ready write lands here as `ready`.
+        // The export's expiry removes the files then.
+        if (id !== undefined && status !== "ready") {
             await steps.do("discard", async () => deleteRunFiles(scope.ports.files, requestId, id));
         }
 
