@@ -31,6 +31,16 @@ class TestSocketSession < Minitest::Test
     assert_equal(%w[connect], installed.map { |frame| frame["type"] })
   end
 
+  def test_a_close_made_during_the_connect_write_leaves_the_client_closed
+    client = Lunora::Client.new("https://app.example", client_id: "client-test")
+    client.attach_socket(lambda do |frame|
+      client.close if frame["type"] == "connect"
+    end)
+
+    refute client.online?, "a close made by the connect sender must not be undone by the attach"
+    refute client.whisper("room:general", "hi"), "a closed client sends nothing"
+  end
+
   def test_connect_frame_first_and_carries_session_token
     ConformanceManifest.covers("connect_frame_first_and_carries_session_token")
     golden = ws_fixture["clientFrames"]

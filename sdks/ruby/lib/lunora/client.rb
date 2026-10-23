@@ -572,6 +572,8 @@ module Lunora
     def close
       discarded, streams = @mutex.synchronize do
         @closed = true
+        # An attach still in flight is superseded, so its sender is never installed after shutdown.
+        @attach_generation += 1
         @send = nil
         [@offline_queue.clear, @streams.slice!(0..)]
       end
