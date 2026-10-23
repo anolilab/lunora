@@ -2,16 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { ErasureOptions } from "../src/define";
 import type { DataPort } from "../src/ports";
-import { codeOf, memoryData, setup } from "./harness";
+import { codeOf, exportFileOf, memoryData, setup } from "./harness";
 
 describe("downloadUrl", () => {
     it("returns a fifteen-minute link to a finished export for its subject", async () => {
-        const { privacy } = setup();
+        const { files, privacy } = setup();
         const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
 
-        await expect(privacy.downloadUrl({ requestId: opened.id })).resolves.toBe(`https://files.test/${opened.id}/export.zip?ttl=900`);
+        await expect(privacy.downloadUrl({ requestId: opened.id })).resolves.toBe(`https://files.test/${exportFileOf(files, opened.id, "export.zip")}?ttl=900`);
     });
 
     it("answers not found for another subject, so a caller cannot probe ids", async () => {
@@ -171,7 +171,7 @@ describe("admin", () => {
 
         await expect(privacy.admin.sweep()).resolves.toStrictEqual({ expired: [], purged: 0 });
         expect(store.rows.get(opened.id)?.status).toBe("ready");
-        expect(files.files.has(`${opened.id}/export.zip`)).toBe(true);
+        expect(files.files.has(exportFileOf(files, opened.id, "export.zip"))).toBe(true);
     });
 
     it("lets the subject open a new export once the old one expired", async () => {

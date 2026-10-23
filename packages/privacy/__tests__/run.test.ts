@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
-import { codeOf, memoryRequests, setup } from "./harness";
+import { codeOf, exportFileOf, memoryRequests, setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -67,7 +67,7 @@ describe("runExport", () => {
 
         await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
 
-        const text = new TextDecoder().decode(unzipSync(files.files.get("r1/export.zip") as Uint8Array)["data/tasks/tasks.json"]);
+        const text = new TextDecoder().decode(unzipSync(files.files.get(exportFileOf(files, "r1", "export.zip")) as Uint8Array)["data/tasks/tasks.json"]);
 
         expect(text).toContain('"12345678901234567890"');
         expect(text).toContain('"AAH+/w=="');
@@ -79,8 +79,10 @@ describe("runExport", () => {
         const opened = await privacy.requestExport();
         const outcome = await privacy.runExport(opened.id);
 
-        expect(outcome).toMatchObject({ archiveKey: "r1/export.zip", status: "ready" });
-        expect([...files.files.keys()]).toStrictEqual(expect.arrayContaining(["r1/export.zip", "r1/summary.pdf"]));
+        expect(outcome).toMatchObject({ archiveKey: exportFileOf(files, "r1", "export.zip"), status: "ready" });
+        expect([...files.files.keys()]).toStrictEqual(
+            expect.arrayContaining([exportFileOf(files, "r1", "export.zip"), exportFileOf(files, "r1", "summary.pdf")]),
+        );
     });
 
     it("writes the table rows and a manifest that tags each dataset's articles", async () => {
@@ -89,7 +91,7 @@ describe("runExport", () => {
 
         await privacy.runExport(opened.id);
 
-        const extracted = unzipSync(files.files.get("r1/export.zip") as Uint8Array);
+        const extracted = unzipSync(files.files.get(exportFileOf(files, "r1", "export.zip")) as Uint8Array);
         const manifest = JSON.parse(new TextDecoder().decode(extracted["manifest.json"])) as { datasets: { articles: string[]; id: string }[] };
 
         expect(Object.keys(extracted).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
@@ -182,7 +184,7 @@ describe("runExport", () => {
 
         await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "cancelled" });
         expect(store.rows.get(opened.id)?.status).toBe("cancelled");
-        expect(files.files.has(`${opened.id}/parts/notes.json`)).toBe(false);
+        expect([...files.files.keys()].some((key) => key.endsWith("/parts/notes.json"))).toBe(false);
     });
 
     it("fails rather than finishing under the tombstone key when an erasure completes between two collect steps", async () => {
@@ -210,7 +212,7 @@ describe("runExport", () => {
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(store.rows.get(exported.id)?.status).toBe("failed");
         expect(collectedFor).toStrictEqual(["u1"]);
-        expect(files.files.has(`${exported.id}/export.zip`)).toBe(false);
+        expect([...files.files.keys()].some((key) => key.startsWith(`${exported.id}/`) && key.endsWith("/export.zip"))).toBe(false);
     });
 
     it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
@@ -272,17 +274,18 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
     });
 
-    it("keeps the archive when another run of the same export claimed ready first", async () => {
+    it("keeps the winner's archive when a second run of the same export loses the ready claim", async () => {
         const store = memoryRequests();
-        let sibling = true;
+        let runWinner: (() => Promise<unknown>) | undefined;
         const racing = {
             ...store,
             claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
-                const row = store.rows.get(id);
+                const run = runWinner;
 
-                if (patch.status === "ready" && sibling && row !== undefined) {
-                    sibling = false;
-                    store.rows.set(id, { ...row, ...patch });
+                // The first ready claim is the loser's: the other run finishes and claims ready before it lands.
+                if (patch.status === "ready" && run !== undefined) {
+                    runWinner = undefined;
+                    await run();
                 }
 
                 return store.claim(id, from, patch);
@@ -291,9 +294,61 @@ describe("runExport", () => {
         const { files, privacy } = setup({ data: memoryData({}).port, store: racing });
         const opened = await privacy.requestExport();
 
-        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ archiveKey: `${opened.id}/export.zip`, status: "ready" });
+        runWinner = async () => privacy.runExport(opened.id);
+
+        const loser = await privacy.runExport(opened.id);
+        const winnerKey = store.rows.get(opened.id)?.storageKey;
+
         expect(store.rows.get(opened.id)?.status).toBe("ready");
-        expect(files.files.has(`${opened.id}/export.zip`)).toBe(true);
+        expect(loser).toStrictEqual({ archiveKey: winnerKey, status: "ready" });
+        expect(winnerKey === undefined ? false : files.files.has(winnerKey)).toBe(true);
+        expect([...files.files.keys()].filter((key) => key.endsWith("/export.zip"))).toStrictEqual([winnerKey]);
+    });
+
+    it("never deletes the winner's archive when the loser's status read is stale", async () => {
+        const store = memoryRequests();
+        let failLoser = true;
+        let afterLostClaim: (() => Promise<unknown>) | undefined;
+        let runWinner: (() => Promise<unknown>) | undefined;
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const row = store.rows.get(id);
+
+                // Another run's failure lands first, so the loser's ready claim fails.
+                if (patch.status === "ready" && failLoser && row !== undefined) {
+                    failLoser = false;
+                    store.rows.set(id, { ...row, status: "failed" });
+                    afterLostClaim = runWinner;
+                }
+
+                return store.claim(id, from, patch);
+            },
+            get: async (id: string) => {
+                const row = await store.get(id);
+                const run = afterLostClaim;
+
+                // The loser reads `failed`; an operator retry then runs to ready before the loser acts on that read.
+                if (run !== undefined && row !== undefined) {
+                    afterLostClaim = undefined;
+                    store.rows.set(id, { ...row, status: "processing" });
+                    await run();
+                }
+
+                return row;
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, store: racing });
+        const opened = await privacy.requestExport();
+
+        runWinner = async () => privacy.runExport(opened.id);
+
+        await privacy.runExport(opened.id);
+
+        const winnerKey = store.rows.get(opened.id)?.storageKey;
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+        expect(winnerKey === undefined ? false : files.files.has(winnerKey)).toBe(true);
     });
 
     it("expires an export that turned ready after the erasure's files step", async () => {
@@ -448,7 +503,7 @@ describe("omitted columns", () => {
 
         await privacy.runExport(opened.id);
 
-        const archive = unzipSync(files.files.get(`${opened.id}/export.zip`) as Uint8Array);
+        const archive = unzipSync(files.files.get(exportFileOf(files, opened.id, "export.zip")) as Uint8Array);
         const session = new TextDecoder().decode(archive["data/auth/session.json"]);
 
         expect(session).not.toContain("live-secret");

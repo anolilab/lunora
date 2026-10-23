@@ -334,46 +334,56 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return { status: started };
         }
 
-        for (const dataset of scope.datasets) {
-            // Each dataset is one step: its rows go to storage, so the step returns nothing large.
-            // eslint-disable-next-line no-await-in-loop -- steps run in order by design
-            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request));
+        // Every file this run writes is named under its own id, journaled so a replay keeps it. A second run of the
+        // same export writes elsewhere, so a run that loses the ready claim deletes only what it wrote.
+        const runId = await steps.do("run", () => Promise.resolve(scope.ports.newId()));
+        const written: string[] = [];
 
-            if (collected.status !== "processing") {
+        for (const dataset of scope.datasets) {
+            // Each dataset is one step: its rows go to storage, so the step returns only the part's key.
+            // eslint-disable-next-line no-await-in-loop -- steps run in order by design
+            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request, runId));
+
+            if (collected.value === undefined) {
                 return { status: collected.status };
             }
+
+            written.push(collected.value);
         }
 
-        const assembled = await step("assemble", async (request) => assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId)));
-        const archiveKey = assembled.value;
+        const assemble = async (request: RequestRecord): ReturnType<typeof assembleExport> =>
+            assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId), runId);
+        const assembled = await step("assemble", assemble);
 
-        if (archiveKey === undefined) {
+        if (assembled.value === undefined) {
             return { status: assembled.status };
         }
 
+        const { archiveKey, summaryKey } = assembled.value;
+
         // A claim, not an update: an erasure that fails this export after the step's read must not be written
-        // over, and the archive it would point at holds data that erasure removed, so it goes too.
-        const ready = await step("ready", async (request): Promise<RequestStatus> => {
+        // over, and the archive this run wrote holds data that erasure removed, so its files go too.
+        const ready = await step("ready", async (): Promise<ExportOutcome> => {
             const status = transition("processing", "ready");
             const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), status, storageKey: archiveKey };
 
             if (await scope.ports.store.claim(requestId, "processing", patch)) {
                 await scope.ports.store.addEvent(requestId, scope.ports.now(), status, archiveKey);
 
-                return status;
+                return { archiveKey, status };
             }
 
+            await Promise.all([...written, archiveKey, summaryKey].map(async (key) => scope.ports.files.delete(key)));
+
+            // Another run of this export that claimed ready first answers with its own archive.
             const current = await requireRequest(scope.ports.store, requestId);
 
-            // A second run of this export that claimed ready first points at the same archive key, so it stays.
-            if (current.status !== "ready") {
-                await deleteRequestFiles(scope.ports.files, { ...request, storageKey: archiveKey });
-            }
-
-            return current.status;
+            return current.status === "ready" && current.storageKey !== undefined
+                ? { archiveKey: current.storageKey, status: current.status }
+                : { status: current.status };
         });
 
-        return ready.value === "ready" ? { archiveKey, status: "ready" } : { status: ready.value ?? ready.status };
+        return ready.value ?? { status: ready.status };
     } catch (error) {
         return { status: await failStep(scope, steps, requestId, failureDetail(error)) };
     }

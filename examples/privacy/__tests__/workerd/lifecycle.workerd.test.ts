@@ -103,12 +103,12 @@ describe("privacy example lifecycle (workerd)", () => {
             await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
             const rows = await db.query("exportFiles").collect();
-            const part = rows.find((row) => row.requestId === request.id && row.name === "parts/tasks.json");
+            const part = rows.find((row) => row.requestId === request.id && (row.name as string).endsWith("/parts/tasks.json"));
             const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: { tasks: { title: string }[] } };
 
             expect(stored.tables.tasks.map((row) => row.title).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["book flights", "renew passport"]);
 
-            const archive = rows.find((row) => row.requestId === request.id && row.name === "export.zip");
+            const archive = rows.find((row) => row.requestId === request.id && (row.name as string).endsWith("/export.zip"));
 
             expect(archive?.encoding).toBe("base64");
 

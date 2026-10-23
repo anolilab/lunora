@@ -7,7 +7,7 @@ import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
 import { tombstoneKeyOf } from "../src/tombstones";
 import { dispatchPort, remotePorts } from "../src/workflow";
-import { codeOf, durableStep, memoryData, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, SUBJECT, tasksDataset } from "./harness";
+import { codeOf, durableStep, exportFileOf, memoryData, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, SUBJECT, tasksDataset } from "./harness";
 
 /** A port call's payload as `remotePorts` writes it. */
 const payloadOf = (args: ReadonlyArray<unknown>): string => JSON.stringify(encodeWire(args));
@@ -244,7 +244,9 @@ describe("an export over the wire", () => {
 
         expect(local.store.rows.get(opened.id)?.status).toBe("ready");
 
-        const text = new TextDecoder().decode(unzipSync(local.files.files.get(`${opened.id}/export.zip`) as Uint8Array)["data/tasks/tasks.json"]);
+        const text = new TextDecoder().decode(
+            unzipSync(local.files.files.get(exportFileOf(local.files, opened.id, "export.zip")) as Uint8Array)["data/tasks/tasks.json"],
+        );
 
         expect(decodeWire(JSON.parse(text))).toStrictEqual([row]);
     });

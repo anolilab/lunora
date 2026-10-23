@@ -12,7 +12,7 @@ import { requireTables, retainedTables } from "./dataset";
 import type { PrivacyPorts } from "./ports";
 import type { RequestRecord } from "./requests";
 
-const partName = (dataset: Dataset): string => `parts/${dataset.id}.json`;
+const partName = (runId: string, dataset: Dataset): string => `${runId}/parts/${dataset.id}.json`;
 
 /** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
 const isRestricted = (dataset: Dataset): boolean => retainedTables(dataset).length > 0;
@@ -36,30 +36,37 @@ const withoutColumns = (
 };
 
 /**
- * Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent.
+ * Collect one dataset's rows and write them to storage under the run's id, returning the part's key. A retry
+ * overwrites the part, so it is idempotent.
  * The rows go through the Lunora wire codec, which plain JSON cannot replace: a `bigint` column would
  * throw and a bytes column would be written as `{}`. The codec writes them as tagged leaves, a bigint
  * as its decimal string and bytes as base64, and the archive keeps that form.
  */
-const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
+const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord, runId: string): Promise<string> => {
     const rows = await ports.data.collect(dataset, request.subjectId);
 
     requireTables(rows, dataset, "collect");
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
-    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(dataset) });
+    return ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(runId, dataset) });
 };
 
-/** Assemble the archive and the summary from the stored parts, then store both. */
-const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Dataset>, request: RequestRecord, subjectKey: string): Promise<string> => {
+/** Assemble the archive and the summary from the run's stored parts, then store both under the run's id. */
+const assembleExport = async (
+    ports: PrivacyPorts,
+    datasets: ReadonlyArray<Dataset>,
+    request: RequestRecord,
+    subjectKey: string,
+    runId: string,
+): Promise<{ readonly archiveKey: string; readonly summaryKey: string }> => {
     const files: { data: string; path: string }[] = [];
     const manifestDatasets: ManifestDataset[] = [];
 
     for (const dataset of datasets) {
         // Parts are read in order, so the archive lists datasets in the order they were declared.
         // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-        const text = await ports.files.read(request.id, partName(dataset));
+        const text = await ports.files.read(request.id, partName(runId, dataset));
 
         if (text === undefined) {
             throw new Error(`Export part for "${dataset.id}" is missing; collect it again.`);
@@ -96,11 +103,10 @@ const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Datas
         subjectKey,
         title: "Your data",
     });
-    const archiveKey = await ports.files.put(request.id, { data: zip, name: "export.zip" });
+    const archiveKey = await ports.files.put(request.id, { data: zip, name: `${runId}/export.zip` });
+    const summaryKey = await ports.files.put(request.id, { data: pdf, name: `${runId}/summary.pdf` });
 
-    await ports.files.put(request.id, { data: pdf, name: "summary.pdf" });
-
-    return archiveKey;
+    return { archiveKey, summaryKey };
 };
 
 export { assembleExport, collectPart };
