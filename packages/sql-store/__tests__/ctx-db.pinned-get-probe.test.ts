@@ -83,6 +83,33 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         expect(row?.["title"]).toBe("in b");
     });
 
+    it("reads the id's own table under a pin even when another table's answer is cached for it", async () => {
+        expect.assertions(3);
+
+        // The same id names a row in `a` (written first) and in `b` (written through a writer with a cold cache).
+        const id = await writer.insert("a", { title: "in a" });
+        const otherWriter = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec: harness.exec,
+            schema,
+        });
+
+        await otherWriter.insert("b", { title: "in b" }, { clientId: id });
+
+        // Looked up through `b` first, on a writer that has never resolved this id.
+        const throughB = await writer.get(id, "b");
+
+        expect(throughB?.["title"]).toBe("in b");
+
+        // A pinned read of `a` must not be answered by the cached `b`, and an unpinned read keeps the first match in schema order.
+        const throughA = await writer.get(id, "a");
+        const unpinned = await writer.get(id);
+
+        expect(throughA?.["title"]).toBe("in a");
+        expect(unpinned?.["title"]).toBe("in a");
+    });
+
     it("treats an id owned by another table as absent under a pin", async () => {
         expect.assertions(2);
 

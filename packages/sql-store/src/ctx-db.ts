@@ -491,7 +491,9 @@ const tableNameFromId = async (
 ): Promise<string | undefined> => {
     const cached = cache.get(id);
 
-    if (cached !== undefined) {
+    // A cached table answers only the lookups it is right for: a pinned read asks about one table, so another table's
+    // cached answer is not the answer it wants.
+    if (cached !== undefined && (expectedTable === undefined || cached === expectedTable)) {
         return cached;
     }
 
@@ -518,7 +520,11 @@ const tableNameFromId = async (
 
     for (const result of probes) {
         if (result.found) {
-            cache.set(id, result.tableName);
+            // Only an unpinned resolution is cached. A pinned probe saw one table, so it may not be the id's first match in
+            // schema order, and caching it would change what later unpinned reads return.
+            if (expectedTable === undefined) {
+                cache.set(id, result.tableName);
+            }
 
             return result.tableName;
         }
