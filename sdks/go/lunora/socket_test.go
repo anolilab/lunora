@@ -473,3 +473,19 @@ func TestAFailedJoinIsRetriedByTheNextListener(t *testing.T) {
 		t.Fatalf("whisper_subscribe frames written after a refused join = %d, want 1 from the second listener", joins)
 	}
 }
+
+// TestAFailedConnectNeverMakesA4003ARefusal pins that a socket whose connect write failed belongs to no
+// credential generation, so the 4003 that closes it is not reported as a refusal of the current credential.
+func TestAFailedConnectNeverMakesA4003ARefusal(t *testing.T) {
+	client := NewClient("https://app.example", nil)
+
+	notified := 0
+	client.OnTokenExpired(func() { notified++ })
+
+	client.AttachSocket(func(map[string]any) error { return errors.New("connect write failed") }, nil)
+	client.DetachSocket(4003, "refused")
+
+	if notified != 0 {
+		t.Fatalf("token-expiry notified %d times for a socket that never attached, want 0", notified)
+	}
+}

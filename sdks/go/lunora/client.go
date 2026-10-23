@@ -465,8 +465,10 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	defer c.mu.Unlock()
 
 	// A new socket replaces the previous one; until this attach succeeds, nothing
-	// is attached.
+	// is attached, and no credential generation belongs to the socket yet, so a close of a
+	// socket whose connect failed is never a refusal of the current credential.
 	c.send = nil
+	c.socketGeneration = -1
 
 	if send(BuildConnectFrame(c.clientID, context, c.sessionToken)) != nil {
 		return
