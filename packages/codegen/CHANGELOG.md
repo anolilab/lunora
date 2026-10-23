@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.348](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.347...@lunora/codegen@1.0.0-alpha.348) (2026-10-23)
+
+### Features
+
+* **server:** mount declared live streams without app routes ([#1314](https://github.com/anolilab/lunora/issues/1314)) ([45f31b6](https://github.com/anolilab/lunora/commit/45f31b6781c3e0bfe300264b9d8f59175424d47a)), closes [#1204](https://github.com/anolilab/lunora/issues/1204)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.252
+* **@lunora/agent:** upgraded to 1.0.0-alpha.242
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/payment:** upgraded to 1.0.0-alpha.235
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+
 ## @lunora/codegen [1.0.0-alpha.347](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.346...@lunora/codegen@1.0.0-alpha.347) (2026-10-22)
 
 
