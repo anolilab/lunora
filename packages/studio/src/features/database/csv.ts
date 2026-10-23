@@ -120,7 +120,10 @@ const readField = (text: string, start: number, record: number): Field => {
 
 /**
  * RFC 4180 records, CRLF or LF. A quoted field may hold commas, doubled quotes and newlines. A leading byte-order mark is dropped, since
- * spreadsheet exports write one. Blank lines are not records.
+ * spreadsheet exports write one.
+ *
+ * A record whose every field is an unquoted empty field is blank and is not a record, whatever its column count: a line of commas, or a
+ * one-column empty line. A quoted `""` is a value, so it is kept.
  *
  * A quote inside an unquoted field is kept as text rather than rejected: spreadsheets write that for values like `5" disk`, and the
  * server validator is the place that judges the value.
@@ -138,8 +141,7 @@ const parseCsv = (input: string): CsvCell[][] => {
         index = field.next;
 
         if (field.end !== "comma") {
-            // A single empty field is the bytes of a blank line, so it is not a record either.
-            if (cells.length > 1 || cells[0] !== undefined) {
+            if (cells.some((cell) => cell !== undefined)) {
                 records.push(cells);
             }
 
@@ -148,6 +150,14 @@ const parseCsv = (input: string): CsvCell[][] => {
     } while (field.end !== "end");
 
     return records;
+};
+
+/**
+ * Set an own data property. A plain assignment to `__proto__` sets the prototype instead, so a column named that way would be dropped
+ * without a word, and the server would never see it.
+ */
+const setField = (target: Record<string, unknown>, key: string, value: unknown): void => {
+    Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
 };
 
 /**
@@ -190,7 +200,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
             const cell = cells[column];
 
             if (cell !== undefined) {
-                fields[name] = cell;
+                setField(fields, name, cell);
             }
         });
 
@@ -331,7 +341,7 @@ const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string,
                 throw new CsvFormatError({ column, expected: cell.expected, kind: "cell-type", record, value: text });
             }
 
-            coerced[column] = cell.value;
+            setField(coerced, column, cell.value);
         }
 
         return { doc: coerced, record };

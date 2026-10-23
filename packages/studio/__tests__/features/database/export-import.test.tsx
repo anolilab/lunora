@@ -556,4 +556,24 @@ describe("exportImportPanel", () => {
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
         expect(error.textContent).toBe("Invalid CSV: line 1001: column “count” must be a number, got “x”.");
     });
+
+    it("sends a column named __proto__ to the server as a field of its own, beside the others", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, [
+            { name: "kind", optional: false, type: "string" },
+            { name: "__proto__", optional: false, type: "string" },
+        ]);
+
+        render(renderPanel(mock));
+
+        await importCsv("kind,__proto__\na,surprise\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        const [row] = importCalls(mock)[0]?.rows ?? [];
+
+        expect(Object.keys(row?.doc ?? {})).toStrictEqual(["kind", "__proto__"]);
+        expect(Object.getOwnPropertyDescriptor(row?.doc, "__proto__")?.value).toBe("surprise");
+    });
 });

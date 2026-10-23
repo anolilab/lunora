@@ -55,6 +55,31 @@ describe("parseCsv", () => {
         expect(parseCsv("a,b,\n")).toStrictEqual([["a", "b", undefined]]);
     });
 
+    it("skips a record of unquoted empty fields, whatever its column count", () => {
+        expect.assertions(2);
+
+        expect(parseCsv(",,,\na,b,c\n")).toStrictEqual([["a", "b", "c"]]);
+        expect(parseCsv(",\na\n")).toStrictEqual([["a"]]);
+    });
+
+    it("skips a one-column empty line", () => {
+        expect.assertions(1);
+
+        expect(parseCsv("a\n\n\nb\n")).toStrictEqual([["a"], ["b"]]);
+    });
+
+    it("keeps a quoted empty field as a value, even alone on its line", () => {
+        expect.assertions(1);
+
+        expect(parseCsv('""\n"",""\n')).toStrictEqual([[""], ["", ""]]);
+    });
+
+    it("keeps a record with a value among its empty unquoted fields", () => {
+        expect.assertions(1);
+
+        expect(parseCsv(",x,\n")).toStrictEqual([[undefined, "x", undefined]]);
+    });
+
     it("skips blank lines and drops a leading byte-order mark", () => {
         expect.assertions(1);
 
@@ -145,6 +170,18 @@ describe("parseCsvDocuments", () => {
         expect.assertions(1);
 
         expect(parseCsvDocuments("id, title \n1,hello\n")).toStrictEqual([{ doc: { id: "1", title: "hello" }, record: 2 }]);
+    });
+});
+
+describe("parseCsvDocuments own properties", () => {
+    it("keeps a column named __proto__ as an own property rather than setting the prototype", () => {
+        expect.assertions(3);
+
+        const [document] = parseCsvDocuments("kind,__proto__\na,surprise\n");
+
+        expect(Object.keys(document?.doc ?? {})).toStrictEqual(["kind", "__proto__"]);
+        expect(Object.getOwnPropertyDescriptor(document?.doc, "__proto__")?.value).toBe("surprise");
+        expect(Object.getPrototypeOf(document?.doc)).toBe(Object.prototype);
     });
 });
 
