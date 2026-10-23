@@ -190,13 +190,9 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         return { code: 1, deployment: undefined };
     }
 
-    const url = options.url ?? readLiveDevServerState(options.cwd)?.url;
-
-    if (url === undefined || url.length === 0) {
-        writeError("lunora mcp serve --functions: no deployment URL. Start `lunora dev` or pass --url.\n");
-
-        return { code: 1, deployment: undefined };
-    }
+    // Resolved on every call, not once: the editor starts this process before `lunora dev`
+    // is running, and the server keeps the URL current when the dev server moves.
+    const deploymentUrl = (): string | undefined => options.url ?? readLiveDevServerState(options.cwd)?.url;
 
     let server: ClosableServer;
 
@@ -204,7 +200,7 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         server = await connect({
             allowWrites: options.allowWrites === true,
             openRpcSpec: JSON.parse(readFileSync(specPath, "utf8")) as unknown,
-            url,
+            url: deploymentUrl,
             version: options.version,
             ...(options.token === undefined || options.token.length === 0 ? {} : { token: options.token }),
         });
@@ -217,8 +213,12 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     }
 
     const withoutBearer = options.token === undefined || options.token.length === 0;
+    const url = deploymentUrl();
+    const target = url === undefined || url.length === 0 ? "no deployment yet (start `lunora dev` or pass --url; calls fail until one runs)" : url;
 
-    writeError(`lunora mcp serve --functions: ready — ${url}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}\n`);
+    writeError(
+        `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}\n`,
+    );
 
     await waitForClose(server);
 

@@ -169,6 +169,25 @@ describe("functionToolsFromOpenRpc", () => {
         expect(routes.get("billing_charge")?.sensitiveArgs).toEqual(["card"]);
     });
 
+    it("marks an argument sensitive when the writeOnly value sits inside it, at any depth", () => {
+        expect.assertions(1);
+
+        const { routes } = functionToolsFromOpenRpc(
+            spec(
+                method("billing:charge", "mutation", {
+                    args: {
+                        card: { properties: { number: { type: "string", writeOnly: true } }, type: "object" },
+                        plans: { items: { anyOf: [{ type: "string" }, { type: "string", writeOnly: true }] }, type: "array" },
+                        region: { type: "string" },
+                    },
+                }),
+            ),
+            { allowWrites: true },
+        );
+
+        expect(routes.get("billing_charge")?.sensitiveArgs).toEqual(["card", "plans"]);
+    });
+
     it("keeps a closed write's route, so a direct call can be refused rather than reported unknown", () => {
         expect.assertions(2);
 

@@ -14,7 +14,7 @@ import { decodeWire } from "@lunora/wire";
 import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
 import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
-import { responseHeadersRecord, retryAfterHeaderMs, slotError } from "./wire-errors";
+import { responseHeadersRecord, retryAfterHeaderMs, slotError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -245,13 +245,17 @@ export type ReplaySlotVerdict =
     | { commitCursor: number | undefined; kind: "committed"; value: unknown }
     | { kind: "unanswered" };
 
-export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
+/**
+ * `responseHeaders` are the headers of the reply the slot came in, so an `errored`
+ * verdict carries them as a single call's error would (see `withResponseHeaders`).
+ */
+export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHeaders: Headers): ReplaySlotVerdict => {
     if (inner === undefined) {
         return { kind: "unanswered" };
     }
 
     if ("error" in inner) {
-        return { error: slotError(inner), kind: "errored" };
+        return { error: withResponseHeaders(slotError(inner), responseHeaders), kind: "errored" };
     }
 
     try {

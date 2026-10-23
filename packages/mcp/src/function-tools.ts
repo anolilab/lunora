@@ -99,8 +99,22 @@ const invalidSpec = (): LunoraError =>
 const toolNameOf = (path: string): string => path.replaceAll(UNSAFE_NAME_CHARACTERS, "_");
 
 /**
- * Argument names whose schema is `writeOnly`. Codegen emits `writeOnly` for a
- * `v.sensitive` argument, so these are the names a write proposal masks.
+ * Whether a schema node, or any node beneath it, is `writeOnly`. A `v.sensitive`
+ * value can sit inside an object, array, record or union argument, and codegen
+ * marks only the sensitive node itself.
+ */
+const hasWriteOnly = (node: unknown): boolean => {
+    if (Array.isArray(node)) {
+        return node.some((child: unknown) => hasWriteOnly(child));
+    }
+
+    return isSchema(node) && (node["writeOnly"] === true || Object.values(node).some((child: unknown) => hasWriteOnly(child)));
+};
+
+/**
+ * Top-level argument names that hold a sensitive value anywhere inside them. A
+ * write proposal masks the whole argument, so a secret nested in an object is
+ * not shown to the model or the human reviewing the proposal.
  */
 const sensitiveArgumentNames = (argsSchema: Schema): ReadonlyArray<string> => {
     const { properties } = argsSchema;
@@ -110,7 +124,7 @@ const sensitiveArgumentNames = (argsSchema: Schema): ReadonlyArray<string> => {
     }
 
     return Object.entries(properties)
-        .filter(([, property]) => isSchema(property) && property["writeOnly"] === true)
+        .filter(([, property]) => hasWriteOnly(property))
         .map(([name]) => name);
 };
 

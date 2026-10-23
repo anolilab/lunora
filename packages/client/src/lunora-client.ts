@@ -4816,7 +4816,7 @@ class LunoraClient {
             }
         }
 
-        return demuxBatchResults(body.results ?? [], calls.length);
+        return demuxBatchResults(body.results ?? [], calls.length, response.headers);
     }
 
     /**
@@ -10038,7 +10038,7 @@ class LunoraClient {
             return this.settleWholeBatchError(items, error, shardKey, authToken);
         }
 
-        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey, authToken), stop: false };
+        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey, authToken, response.headers), stop: false };
     }
 
     /**
@@ -10112,6 +10112,7 @@ class LunoraClient {
         results: { body?: RpcEnvelopeBody; id?: number }[],
         shardKey: string | undefined,
         authToken: null | string,
+        responseHeaders: Headers,
     ): QueuedMutation[] {
         const bySlot = indexReplaySlots(results);
         const requeue: QueuedMutation[] = [];
@@ -10119,7 +10120,7 @@ class LunoraClient {
         let refused = false;
 
         for (const [index, item] of items.entries()) {
-            const verdict = replaySlotVerdict(bySlot.get(index));
+            const verdict = replaySlotVerdict(bySlot.get(index), responseHeaders);
 
             switch (verdict.kind) {
                 case "committed": {

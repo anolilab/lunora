@@ -49,17 +49,7 @@ const DEFAULT_MAX_REQUEST_BYTES: number;
 
 ### `FunctionMcpServerOptions` (interface)
 
-```ts
-interface FunctionMcpServerOptions {
-    allowWrites?: boolean;
-    fetch?: typeof fetch;
-    name?: string;
-    openRpcSpec: unknown;
-    token?: string;
-    url: string;
-    version?: string;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `LOCAL_SERVER_NAME` (const)
 
@@ -282,9 +272,7 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createFunctionMcpServer` (const)
 
-```ts
-const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createLocalMcpServer` (const)
 
@@ -657,6 +645,20 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
+### `FunctionMcpServerOptions` (interface)
+
+```ts
+interface FunctionMcpServerOptions {
+    allowWrites?: boolean;
+    fetch?: typeof fetch;
+    name?: string;
+    openRpcSpec: unknown;
+    token?: string;
+    url: string | (() => string | undefined);
+    version?: string;
+}
+```
+
 ### `McpAccessTokenClaims` (interface)
 
 ```ts
@@ -817,6 +819,12 @@ const callTool: (client: LunoraClient, name: string, input: Record<string, unkno
 
 ```ts
 const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
+```
+
+### `createFunctionMcpServer` (const)
+
+```ts
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
 ```
 
 ### `createMcpFetchHandler` (const)

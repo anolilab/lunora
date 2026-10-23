@@ -116,4 +116,25 @@ describe("rpc error response headers", () => {
         await expect(client(notJson).batch([{ fn: fnRef("docs:read") }])).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
         await expect(client(noEnvelope).batch([{ fn: fnRef("docs:read") }])).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
     });
+
+    it("carries the reply's headers on one failed slot of a batch that succeeded as a whole", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            Response.json(
+                {
+                    results: [
+                        { body: { error: { code: "TOO_MANY_REQUESTS", message: "slow down" } }, id: 0 },
+                        { body: { result: 1 }, id: 1 },
+                    ],
+                },
+                { headers: { "retry-after": "3" }, status: 200 },
+            ),
+        );
+
+        const [failed, succeeded] = await client(fetchMock).batch([{ fn: fnRef("docs:read") }, { fn: fnRef("docs:read") }]);
+
+        expect(failed?.ok === false ? failed.error : undefined).toHaveProperty("headers.retry-after", "3");
+        expect(succeeded).toStrictEqual({ ok: true, value: 1 });
+    });
 });

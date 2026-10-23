@@ -40,6 +40,7 @@ describe("demuxBatchResults", () => {
                 { body: { result: "b" }, id: 1 },
             ],
             3,
+            new Headers(),
         );
 
         expect(slots).toEqual([
@@ -52,7 +53,7 @@ describe("demuxBatchResults", () => {
     it("marks a slot the server never returned as an error", () => {
         expect.assertions(3);
 
-        const slots = demuxBatchResults([{ body: { result: 1 }, id: 0 }], 2);
+        const slots = demuxBatchResults([{ body: { result: 1 }, id: 0 }], 2, new Headers());
         const missing = slots[1];
 
         expect(missing?.ok).toBe(false);
@@ -69,6 +70,7 @@ describe("demuxBatchResults", () => {
                 { body: { result: 7 }, id: 1 },
             ],
             2,
+            new Headers(),
         );
         const failed = slots[0];
 
@@ -81,7 +83,7 @@ describe("demuxBatchResults", () => {
     it("wire-decodes a successful result", () => {
         expect.assertions(1);
 
-        const slots = demuxBatchResults([{ body: { result: encodeWire(5n) }, id: 0 }], 1);
+        const slots = demuxBatchResults([{ body: { result: encodeWire(5n) }, id: 0 }], 1, new Headers());
 
         expect(slots[0]).toEqual({ ok: true, value: 5n });
     });
@@ -89,17 +91,37 @@ describe("demuxBatchResults", () => {
     it("reconstructs the code on a failing call", () => {
         expect.assertions(2);
 
-        const slots = demuxBatchResults([{ body: { error: { code: "CONFLICT", message: "stale" } }, id: 0 }], 1);
+        const slots = demuxBatchResults([{ body: { error: { code: "CONFLICT", message: "stale" } }, id: 0 }], 1, new Headers());
         const failed = slots[0];
 
         expect(failed?.ok === false ? failed.error.code : undefined).toBe("CONFLICT");
         expect(failed?.ok === false ? failed.error.message : undefined).toBe("stale");
     });
 
+    it("carries the batch reply's headers on each failed slot, and leaves a successful one alone", () => {
+        expect.assertions(3);
+
+        const headers = new Headers({ "retry-after": "3" });
+        const slots = demuxBatchResults(
+            [
+                { body: { error: { code: "UNAVAILABLE", message: "busy" } }, id: 0 },
+                { body: { result: 1 }, id: 1 },
+                { body: null, id: 2 },
+            ],
+            3,
+            headers,
+        );
+        const [busy, , unreadable] = slots;
+
+        expect(busy?.ok === false ? busy.error : undefined).toHaveProperty("headers", { "retry-after": "3" });
+        expect(unreadable?.ok === false ? unreadable.error : undefined).toHaveProperty("headers", { "retry-after": "3" });
+        expect(slots[1]).toEqual({ ok: true, value: 1 });
+    });
+
     it("ignores entries with an out-of-range or non-numeric id", () => {
         expect.assertions(1);
 
-        const slots = demuxBatchResults([{ body: { result: 1 }, id: 5 }, { body: { result: 2 }, id: -1 }, { body: { result: 3 } }], 1);
+        const slots = demuxBatchResults([{ body: { result: 1 }, id: 5 }, { body: { result: 2 }, id: -1 }, { body: { result: 3 } }], 1, new Headers());
 
         expect(slots[0]?.ok).toBe(false);
     });

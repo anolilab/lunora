@@ -231,7 +231,7 @@ const server = createFunctionMcpServer({
 For a Worker that serves MCP over HTTP, build the server per request, with the signed-in user's token, and hand it to `serveStateless`:
 
 ```ts
-import { createFunctionMcpServer, serveStateless } from "@lunora/mcp";
+import { createFunctionMcpServer, serveStateless } from "@lunora/mcp/worker";
 
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -250,11 +250,12 @@ Requirements and behaviour:
 - **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
 - **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
 - **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
-- **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A bigint inside a union (`anyOf`) is not converted.
+- **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A nullable or union argument is decoded through the one branch whose JSON type fits the value. A value that fits several branches (`v.union(v.string(), v.bigint())` with `"5"`) is sent as it is, because picking one would guess.
 - **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. A function with no `.output()` has no `outputSchema`.
 - **A stream is a read-only tool that collects its chunks.** The call runs the stream to completion and returns every chunk, in order, as the text block, with no `outputSchema` and no wrapping. A mid-stream error is an error result. When the caller aborts, the stream is cancelled on the Lunora socket.
-- **Sensitive arguments** (`v.sensitive`) are masked in a write proposal and sent on a reference that the client never queues offline.
-- **Over stdio, for an editor:** `connectFunctionStdio(options)` builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
+- **Sensitive arguments** (`v.sensitive`) are masked in a write proposal, whole argument at a time, wherever the sensitive value sits inside it. The call is sent on a reference that the client never queues offline.
+- **The deployment URL can resolve late.** `url` may be a function, read on every call. While it returns `undefined`, a call returns `SERVICE_UNAVAILABLE` and the server keeps running. A stream cancelled by the caller returns a `CANCELLED` error, not the chunks it had.
+- **Over stdio, for an editor:** `connectFunctionStdio(options)` builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`, and it starts before `lunora dev` is running. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
 - **Stream progress** is one `notifications/progress` per chunk (the progress value is the chunk's index, with no total), sent only when the request carries a `progressToken`. It reaches the caller only over a transport that delivers notifications during the call. `serveStateless` answers each request as a single JSON body, so there the chunks still arrive in the result, but no progress does.
 - **Not yet supported:** `shardKey` is always accepted even for an unsharded function.
 

@@ -35,8 +35,62 @@ const decodeString = (schema: Schema, value: string, path: string): unknown => {
     return value;
 };
 
+/** Whether a branch's JSON Schema `type` accepts the value. */
+const acceptsJsonType = (branch: Schema, value: unknown): boolean => {
+    const { type } = branch;
+
+    // A branch that names no single type (a list, or none at all) cannot be ruled out from the value.
+    if (typeof type !== "string") {
+        return true;
+    }
+
+    if (type === "integer" || type === "number") {
+        return typeof value === "number";
+    }
+
+    if (type === "array") {
+        return Array.isArray(value);
+    }
+
+    if (type === "object") {
+        return isSchema(value);
+    }
+
+    return type === typeof value;
+};
+
+/**
+ * The one `anyOf` branch that fits a non-null value by JSON type. Zero or several
+ * fitting branches return `undefined`: the value is then sent as it is, and the
+ * validator decides.
+ */
+const branchFor = (branches: unknown[], value: unknown): Schema | undefined => {
+    const fitting = branches.filter((branch): branch is Schema => isSchema(branch) && acceptsJsonType(branch, value));
+
+    return fitting.length === 1 ? fitting[0] : undefined;
+};
+
+/** The schema a key's value is decoded with: its named property, else the record's `additionalProperties` schema. */
+const childSchemaOf = (schema: Schema, key: string): Schema | undefined => {
+    const { additionalProperties, properties } = schema;
+    const named: unknown = isSchema(properties) && Object.hasOwn(properties, key) ? properties[key] : additionalProperties;
+
+    return isSchema(named) ? named : undefined;
+};
+
 const coerce = (schema: Schema, value: unknown, path: string): unknown => {
-    const { items, properties } = schema;
+    const { anyOf, items } = schema;
+
+    // Null carries no carrier, whatever the schema, so it is never decoded.
+    if (value === null) {
+        return value;
+    }
+
+    if (Array.isArray(anyOf)) {
+        const branch = branchFor(anyOf, value);
+
+        return branch === undefined ? value : coerce(branch, value, path);
+    }
 
     if (typeof value === "string") {
         return decodeString(schema, value, path);
@@ -46,12 +100,12 @@ const coerce = (schema: Schema, value: unknown, path: string): unknown => {
         return value.map((item: unknown, index) => coerce(items, item, `${path}[${index.toString()}]`));
     }
 
-    if (isSchema(value) && isSchema(properties)) {
+    if (isSchema(value)) {
         return Object.fromEntries(
             Object.entries(value).map(([key, child]) => {
-                const childSchema: unknown = Object.hasOwn(properties, key) ? properties[key] : undefined;
+                const childSchema = childSchemaOf(schema, key);
 
-                return [key, isSchema(childSchema) ? coerce(childSchema, child, `${path}.${key}`) : child];
+                return [key, childSchema === undefined ? child : coerce(childSchema, child, `${path}.${key}`)];
             }),
         );
     }
@@ -67,9 +121,11 @@ const coerce = (schema: Schema, value: unknown, path: string): unknown => {
  * real `bigint` or `ArrayBuffer` into its tagged wire form, but nothing turns the
  * string into the typed value, so a bare `"5"` would fail `v.bigint()`.
  *
- * Walks `properties` and `items` only. A union (`anyOf`) is left as sent: the
- * branch cannot be chosen from the value alone, so a bigint inside one is not
- * coerced. Throws `BAD_REQUEST` for a string that does not decode.
+ * Walks `properties`, `additionalProperties` (a record's values) and `items`. A
+ * union or nullable (`anyOf`) is decoded through the one branch whose JSON type
+ * fits the value. A value that fits several branches is sent as it is: picking one
+ * would guess, and the validator is the place that decides. Throws `BAD_REQUEST`
+ * for a string that does not decode.
  */
 const coerceArgs = (argsSchema: Schema, args: Record<string, unknown>): Record<string, unknown> => coerce(argsSchema, args, "args") as Record<string, unknown>;
 

@@ -12,6 +12,15 @@ const SPEC = {
         method("messages:send", "mutation", { args: { text: { type: "string" } }, argsRequired: true }),
         method("messages:list", "query", { result: { items: { type: "string" }, type: "array" } }),
         method("billing:charge", "mutation", { args: { card: { type: "string", writeOnly: true } }, argsRequired: true }),
+        method("ledger:credit", "mutation", {
+            args: { amount: { format: "int64", type: "string" }, payload: { contentEncoding: "base64", type: "string" } },
+            argsRequired: true,
+        }),
+        method("billing:nested", "mutation", {
+            args: { card: { properties: { number: { type: "string", writeOnly: true } }, type: "object" } },
+            argsRequired: true,
+        }),
+        method("feed:tail", "stream", { args: { room: { type: "string" } }, argsRequired: true }),
     ],
     openrpc: "1.3.2",
 };
@@ -160,5 +169,93 @@ describe("callFunctionTool — writes", () => {
 
         expect(result.content[0]?.text).toContain("bearer token");
         expect(mutation).not.toHaveBeenCalled();
+    });
+
+    it("runs a mutation with bigint and bytes arguments through both handshake steps, with the decoded values", async () => {
+        expect.assertions(4);
+
+        const { client, mutation } = mockClient();
+        const routes = routesFor(true);
+        const args = { amount: "9007199254740993", payload: "AQID" };
+        const proposal = await callFunctionTool(client, routes, "ledger_credit", { args }, true);
+
+        expect(proposal.isError).toBeUndefined();
+
+        const { actionDigest } = textOf(proposal) as { actionDigest: string };
+
+        await callFunctionTool(client, routes, "ledger_credit", { args, actionDigest, confirmed: true }, true);
+
+        const [, sent] = mutation.mock.calls[0] as unknown as [unknown, { amount: bigint; payload: ArrayBuffer }];
+        const { amount, payload } = sent;
+
+        expect(amount).toBe(9_007_199_254_740_993n);
+        expect(payload).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(payload)]).toEqual([1, 2, 3]);
+    });
+
+    it("masks a sensitive value nested inside an argument in the proposal, not only one at the top level", async () => {
+        expect.assertions(2);
+
+        const { client } = mockClient();
+        const result = await callFunctionTool(client, routesFor(true), "billing_nested", { args: { card: { number: "4242-4242" } } }, true);
+
+        expect(result.content[0]?.text).not.toContain("4242");
+        expect(textOf(result)).toMatchObject({ status: "action_required" });
+    });
+});
+
+describe("callFunctionTool — streams", () => {
+    /** A stream that honours `cancel()` the way the client does: it stops yielding once cancelled. */
+    const streamOf = (chunks: unknown[]) => {
+        let cancelled = false;
+
+        return {
+            cancel: vi.fn<() => void>(() => {
+                cancelled = true;
+            }),
+            [Symbol.asyncIterator]() {
+                const pending = [...chunks];
+
+                return {
+                    next: async () => {
+                        const value = pending.shift();
+
+                        return cancelled || value === undefined ? { done: true, value: undefined } : { done: false, value };
+                    },
+                };
+            },
+        };
+    };
+
+    it("reports a stream cancelled before its first chunk as an error, not an empty success", async () => {
+        expect.assertions(2);
+
+        const stream = streamOf([{ n: 1 }]);
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        const controller = new AbortController();
+
+        controller.abort();
+
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false, { signal: controller.signal });
+
+        expect(result).toMatchObject({ isError: true, structuredContent: { code: "CANCELLED" } });
+        expect(stream.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a stream cancelled after a chunk as an error that says how many chunks arrived", async () => {
+        expect.assertions(1);
+
+        const stream = streamOf([{ n: 1 }, { n: 2 }]);
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        const controller = new AbortController();
+
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false, {
+            progress: async () => {
+                controller.abort();
+            },
+            signal: controller.signal,
+        });
+
+        expect(result.content[0]?.text).toContain("after 1 chunk(s)");
     });
 });

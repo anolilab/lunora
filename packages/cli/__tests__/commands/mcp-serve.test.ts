@@ -176,6 +176,28 @@ describe("lunora mcp serve", () => {
             expect(written.join("")).toContain("lunora codegen --api-spec openrpc");
         });
 
+        it("--functions starts before lunora dev is running, and finds the deployment on a later call", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), JSON.stringify({ methods: [] }), "utf8");
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(0);
+            expect(written.join("")).toContain("no deployment yet");
+
+            recordDevServer({ url: "http://localhost:8790" });
+
+            expect((connect.mock.calls[0]?.[0].url as () => string | undefined)()).toBe("http://localhost:8790");
+        });
+
         it("--functions serves the caller's token only, never the project's admin token", async () => {
             expect.assertions(3);
 

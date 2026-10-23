@@ -55,12 +55,33 @@ describe("coerceArgs", () => {
         expect(coerceArgs(schema, { entries: [{ amount: "1" }, { amount: "2" }] })).toEqual({ entries: [{ amount: 1n }, { amount: 2n }] });
     });
 
-    it("leaves a union branch and an unknown key as sent", () => {
+    it("decodes a union or nullable argument through the one branch whose JSON type fits the value", () => {
+        expect.assertions(3);
+
+        const schema = schemaOf({
+            either: { anyOf: [INT64, { type: "number" }] },
+            maybe: { anyOf: [INT64, { type: "null" }] },
+        });
+
+        expect(coerceArgs(schema, { either: "7", maybe: "8" })).toEqual({ either: 7n, maybe: 8n });
+        expect(coerceArgs(schema, { either: 7, maybe: null })).toEqual({ either: 7, maybe: null });
+        expect(coerceArgs(schema, { either: "7", extra: "kept", maybe: null })).toEqual({ either: 7n, extra: "kept", maybe: null });
+    });
+
+    it("sends a value that fits several branches as it is, because choosing one would guess", () => {
         expect.assertions(1);
 
-        const schema = schemaOf({ either: { anyOf: [INT64, { type: "number" }] }, note: { type: "string" } });
+        const schema = schemaOf({ either: { anyOf: [INT64, { type: "string" }] } });
 
-        expect(coerceArgs(schema, { either: "7", extra: "kept", note: "hi" })).toEqual({ either: "7", extra: "kept", note: "hi" });
+        expect(coerceArgs(schema, { either: "7" })).toEqual({ either: "7" });
+    });
+
+    it("decodes the values of a record through its additionalProperties schema", () => {
+        expect.assertions(1);
+
+        const schema = schemaOf({ totals: { additionalProperties: INT64, type: "object" } });
+
+        expect(coerceArgs(schema, { totals: { a: "1", b: "2" } })).toEqual({ totals: { a: 1n, b: 2n } });
     });
 
     it("leaves a number as sent, since the schema already describes it as a number", () => {

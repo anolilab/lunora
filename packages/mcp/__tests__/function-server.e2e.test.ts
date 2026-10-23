@@ -242,3 +242,51 @@ describe("createFunctionMcpServer over a real SDK client", () => {
         ).toThrow(/both map to the MCP tool name "a_b_c"/);
     });
 });
+
+describe("createFunctionMcpServer when the deployment URL resolves per call", () => {
+    it("answers that no deployment is available until the URL appears, then serves the call", async () => {
+        expect.assertions(4);
+
+        let url: string | undefined;
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+
+        const before = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        expect(before).toMatchObject({ isError: true, structuredContent: { code: "SERVICE_UNAVAILABLE" } });
+        expect(deployed.fetch).not.toHaveBeenCalled();
+
+        url = "https://app.example";
+
+        const after = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        expect(after.structuredContent).toEqual({ id: "b1", total: 3 });
+        expect(deployed.fetch).toHaveBeenCalledTimes(1);
+
+        await client.close();
+    });
+
+    it("sends the call to the new deployment when the URL moves, with the caller's bearer still attached", async () => {
+        expect.assertions(3);
+
+        let url = "https://first.example";
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const client = await connected(createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: () => url }));
+
+        await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        url = "https://second.example";
+
+        await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+
+        expect(deployed.fetch.mock.calls[0]?.[0]).toStrictEqual(expect.stringContaining("first.example"));
+        expect(deployed.fetch.mock.calls[1]?.[0]).toStrictEqual(expect.stringContaining("second.example"));
+        expect(deployed.calls[1]?.authorization).toBe(`Bearer ${CALLER_TOKEN}`);
+
+        await client.close();
+    });
+});

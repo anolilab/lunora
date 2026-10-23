@@ -43,8 +43,13 @@ interface FunctionMcpServerOptions {
     openRpcSpec: unknown;
     /** The CALLER's bearer. Writes need one: the confirmation digest is keyed by it. */
     token?: string;
-    /** The Lunora deployment URL the app talks to. */
-    url: string;
+
+    /**
+     * The Lunora deployment URL the app talks to. A function is resolved on every
+     * call, so a server started before `lunora dev` picks the URL up once it exists.
+     * `undefined` means no deployment is running yet, and the call says so.
+     */
+    url: string | (() => string | undefined);
     version?: string;
 }
 
@@ -79,20 +84,28 @@ const resultOf = (route: FunctionRoute, value: unknown): ToolResult => {
 /**
  * The write half: the confirmation handshake, then the call. A proposal is
  * returned in place of the call until its digest is confirmed.
+ *
+ * The proposal carries the arguments as sent. A decoded bigint or ArrayBuffer
+ * cannot be canonicalised into the digest, so decoding waits for the gate. The
+ * carriers are still checked first, so a malformed value is refused before a
+ * proposal is minted.
  */
 const runWrite = async (
     client: LunoraClient,
     route: FunctionRoute,
     tool: string,
     input: Record<string, unknown>,
-    args: Record<string, unknown>,
+    rawArgs: Record<string, unknown>,
     shardKey: string | undefined,
 ): Promise<ToolResult> => {
     const kind: Extract<FunctionKind, "action" | "mutation"> = route.kind === "action" ? "action" : "mutation";
+
+    coerceArgs(route.argsSchema, rawArgs);
+
     const confirmation = readConfirmation(input);
     const gate = await screenWriteConfirmation(
         client,
-        { args, functionPath: route.path, idempotencyKey: confirmation.idempotencyKey, kind, shardKey, tool },
+        { args: rawArgs, functionPath: route.path, idempotencyKey: confirmation.idempotencyKey, kind, shardKey, tool },
         confirmation,
         route.sensitiveArgs,
         // The function is named by the tool, so the second call resends only what the input carries.
@@ -103,6 +116,7 @@ const runWrite = async (
         return gate;
     }
 
+    const args = coerceArgs(route.argsSchema, rawArgs);
     // A sensitive argument travels on a sensitive reference, so the client never queues
     // the call offline. This mirrors the generic write path in `./tools`.
     const target = route.sensitiveArgs.length === 0 ? reference(route.path) : { __lunoraRef: route.path, sensitive: true as const };
@@ -162,6 +176,12 @@ const runStream = async (
         signal?.removeEventListener("abort", onAbort);
     }
 
+    // A cancel ends the iterator as a normal completion, so the chunks are a prefix of the
+    // stream, not all of it. Reporting them as the result would present a partial read as complete.
+    if (signal?.aborted === true) {
+        return errorResult("CANCELLED", `the stream "${route.path}" was cancelled before it completed, after ${chunks.length.toString()} chunk(s).`);
+    }
+
     return ok(chunks);
 };
 
@@ -192,21 +212,53 @@ const callFunctionTool = async (
     }
 
     try {
-        const args = coerceArgs(route.argsSchema, readArgumentsBag(input["args"]));
+        const rawArgs = readArgumentsBag(input["args"]);
         const shardKey = shardKeyOf(input);
 
         if (route.kind === "query") {
-            return resultOf(route, await client.query(reference(route.path), args, { shardKey }));
+            return resultOf(route, await client.query(reference(route.path), coerceArgs(route.argsSchema, rawArgs), { shardKey }));
         }
 
         if (route.kind === "stream") {
-            return await runStream(client, route, args, shardKey, context);
+            return await runStream(client, route, coerceArgs(route.argsSchema, rawArgs), shardKey, context);
         }
 
-        return await runWrite(client, route, name, input, args, shardKey);
+        return await runWrite(client, route, name, input, rawArgs, shardKey);
     } catch (error: unknown) {
         return errorFromThrown(error);
     }
+};
+
+/**
+ * The client for the deployment the server should call now. It is built when a call
+ * first sees a URL, and rebuilt when the URL moves. The bearer is set on both the HTTP
+ * client and the WebSocket one, because a stream authenticates through the latter.
+ */
+const clientFor = (options: FunctionMcpServerOptions): (() => LunoraClient | undefined) => {
+    let current: { client: LunoraClient; url: string } | undefined;
+
+    return () => {
+        const url = typeof options.url === "function" ? options.url() : options.url;
+
+        if (url === undefined || url.length === 0) {
+            return undefined;
+        }
+
+        if (current?.url !== url) {
+            current?.client.close();
+
+            const client = new LunoraClient({ fetch: options.fetch, url });
+
+            if (options.token !== undefined) {
+                client.setAuthToken(options.token);
+                client.setWsToken(options.token);
+            }
+
+            current = { client, url };
+        }
+
+        return current.client;
+    };
 };
 
 /**
@@ -218,14 +270,9 @@ const callFunctionTool = async (
  */
 // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
 const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
-    const client = new LunoraClient({ fetch: options.fetch, url: options.url });
-
-    if (options.token !== undefined) {
-        client.setAuthToken(options.token);
-    }
-
     const allowWrites = options.allowWrites ?? false;
     const { definitions, routes } = functionToolsFromOpenRpc(options.openRpcSpec, { allowWrites });
+    const clientOf = clientFor(options);
     // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
     const server = new Server({ name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
 
@@ -234,6 +281,15 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
+        const client = clientOf();
+
+        if (client === undefined) {
+            return errorResult(
+                "SERVICE_UNAVAILABLE",
+                "no Lunora deployment URL is available yet. Start `lunora dev` or set the deployment URL, then call the tool again.",
+            );
+        }
+
         const { progressToken } = extra._meta ?? {};
         const context: StreamCallContext = {
             signal: extra.signal,

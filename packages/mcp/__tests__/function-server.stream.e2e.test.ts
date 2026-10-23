@@ -113,7 +113,10 @@ const connected = async (server: Server): Promise<Client> => {
     return client;
 };
 
-const serverFor = (): Server => createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: SPEC, url: "https://app.example" });
+const CALLER_TOKEN = "caller-token";
+
+const serverFor = (token?: string): Server =>
+    createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: SPEC, url: "https://app.example", ...(token === undefined ? {} : { token }) });
 
 /** The text block of a tool result, parsed. A stream returns its chunks here, not as structured content. */
 const chunksOf = (content: unknown): unknown => JSON.parse((content as { text: string }[])[0]!.text) as unknown;
@@ -141,6 +144,24 @@ describe("a stream tool over a real SDK client", () => {
         expect(tail).toBeDefined();
         expect(tail).not.toHaveProperty("outputSchema");
         expect(tail?.annotations?.readOnlyHint).toBe(true);
+
+        await client.close();
+    });
+
+    it("authenticates the stream's socket with the caller's token, in its connect frame", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal("WebSocket", StreamSocket);
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            { id, type: "complete" },
+        ];
+
+        const client = await connected(serverFor(CALLER_TOKEN));
+
+        await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" });
+
+        expect(StreamSocket.sent.find((frame) => frame["type"] === "connect")).toMatchObject({ token: CALLER_TOKEN });
 
         await client.close();
     });
