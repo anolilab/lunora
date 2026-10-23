@@ -4,6 +4,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraSubscriptionRegistry } from "../src/cache";
+import { keyHash } from "../src/query-key";
 
 const KEY: QueryKey = ["lunora", "posts:list", {}, null];
 
@@ -40,5 +41,27 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
         controller.abort(new Error("unmounted"));
 
         await expect(registry.liveValue(new QueryClient(), KEY, controller.signal, async () => "snapshot")).rejects.toThrow("unmounted");
+    });
+
+    it("returns a null pushed while the HTTP fallback was in flight, not the snapshot", async () => {
+        expect.assertions(1);
+
+        const registry = new LunoraSubscriptionRegistry(silentClient);
+        const queryClient = new QueryClient();
+        const result = registry.liveValue(
+            queryClient,
+            KEY,
+            new AbortController().signal,
+            async () => {
+                // A push lands while the fallback runs: the subscription now holds `null`.
+                registry["liveFor"](keyHash(KEY)).pushed = true;
+                queryClient.setQueryData(KEY, null);
+
+                return "snapshot";
+            },
+            false,
+        );
+
+        await expect(result).resolves.toBeNull();
     });
 });

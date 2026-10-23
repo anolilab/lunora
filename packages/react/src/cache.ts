@@ -232,7 +232,16 @@ class LunoraSubscriptionRegistry {
 
         const snapshot = await fetch();
 
-        return live.pushed ? (queryClient.getQueryData<T>(queryKey) ?? snapshot) : snapshot;
+        // A push that landed during the fetch wins, `null` included: `??` would read a pushed null as missing.
+        if (live.pushed) {
+            const pushedDuringFetch = queryClient.getQueryData<T>(queryKey);
+
+            if (pushedDuringFetch !== undefined) {
+                return pushedDuringFetch;
+            }
+        }
+
+        return snapshot;
     }
 
     /**

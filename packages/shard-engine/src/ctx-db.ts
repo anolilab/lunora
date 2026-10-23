@@ -3543,13 +3543,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // The D1 writer has no batch delete; delete per id, as the local path does.
                     for (const id of ids) {
                         // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
-                        await global.delete(id);
+                        await global.delete(id, tableName);
                     }
 
                     return { deleted: ids.length };
                 }
 
-                return global.deleteMany(ids, batchOptions);
+                return global.deleteMany(ids, batchOptions, tableName);
             }
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and

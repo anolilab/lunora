@@ -189,6 +189,53 @@ describe("ctx-db.deleteAll", () => {
         expect(probes()).toBe(0);
     });
 
+    it("scopes a .global() deleteWhere to the requested table on both delete paths", async () => {
+        expect.assertions(2);
+
+        const batchTables: (string | undefined)[] = [];
+        const batchDb = {
+            deleteMany: async (ids: ReadonlyArray<string>, _options?: unknown, expectedTable?: string) => {
+                batchTables.push(expectedTable);
+
+                return { deleted: ids.length };
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [{ _id: "p1", userId: "u1" }] };
+            },
+        } as unknown as DatabaseWriterLike;
+        const perIdTables: (string | undefined)[] = [];
+        const perIdDb = {
+            delete: async (_id: string, expectedTable?: string) => {
+                perIdTables.push(expectedTable);
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [{ _id: "p1", userId: "u1" }] };
+            },
+        } as unknown as DatabaseWriterLike;
+
+        const deleteWhereThrough = async (globalDb: DatabaseWriterLike): Promise<void> => {
+            const { sql } = createSqliteExec();
+
+            runShardMigrations(sql, messagesSchema);
+
+            const writer = createShardContextDatabase({
+                broadcast: () => undefined,
+                clock: () => fixedTime,
+                globalDb,
+                schema: messagesSchema,
+                sql,
+            }) as EraseWriter & Required<Pick<DatabaseWriterLike, "deleteWhere">>;
+
+            await writer.deleteWhere("profiles", { userId: "u1" });
+        };
+
+        await deleteWhereThrough(batchDb);
+        await deleteWhereThrough(perIdDb);
+
+        expect(batchTables).toStrictEqual(["profiles"]);
+        expect(perIdTables).toStrictEqual(["profiles"]);
+    });
+
     it("rejects an unknown table", async () => {
         expect.assertions(1);
 

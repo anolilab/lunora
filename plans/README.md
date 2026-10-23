@@ -33,10 +33,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                                   | Title                                                                  | Notes                                                                                  |
 | ------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [532](./532-client-adapter-audit-fixes.md)             | Client and adapter fixes from the 2026-10-19 audit                     | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
-| [533](./533-addon-audit-fixes.md)                      | Add-on package fixes from the 2026-10-19 audit                         | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
-| [534](./534-cli-config-audit-fixes.md)                 | CLI and config tooling fixes from the 2026-10-19 audit                 | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
-| [535](./535-shard-engine-write-path-fixes.md)          | Shard-engine and observability write-path fixes from the audit         | DONE: in PR `fix/audit-2026-10-19` (#1271)                                             |
 | [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | A to D shipped; E (auto-mount the routes) open                                         |
 | [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                    |

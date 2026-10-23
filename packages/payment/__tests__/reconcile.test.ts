@@ -256,16 +256,27 @@ describe("reconcile", () => {
     it("bounds the provider reads in flight during a sweep", async () => {
         expect.assertions(2);
 
+        // Each provider read parks until eight are in flight at once, so the peak is the pool's bound, reached, not a timing accident.
+        const POOL = 8;
+        let entered = 0;
         let inFlight = 0;
         let peak = 0;
+        let openGate: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            openGate = resolve;
+        });
         const adapter = {
             ...truthAdapter(),
             getSubscriptionStatus: async (id: string) => {
                 inFlight += 1;
+                entered += 1;
                 peak = Math.max(peak, inFlight);
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 1);
-                });
+
+                if (entered === POOL) {
+                    openGate();
+                }
+
+                await gate;
                 inFlight -= 1;
 
                 return { ...subscription("active"), id };
@@ -275,7 +286,7 @@ describe("reconcile", () => {
 
         const result = await reconcile({ adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
 
-        expect(peak).toBeLessThanOrEqual(8);
+        expect(peak).toBe(POOL);
         expect(result.updatedSubscriptions).toBe(20);
     });
 
