@@ -1034,7 +1034,7 @@ interface ShardMetricsResult {
 ### `SqlEditorPanel` (const)
 
 ```ts
-const SqlEditorPanel: ({ initialShardKey }: SqlEditorPanelProps) => ReactElement;
+const SqlEditorPanel: ({ initialShardKey, now }: SqlEditorPanelProps) => ReactElement;
 ```
 
 ### `SqlEditorPanelProps` (interface)
@@ -1042,6 +1042,7 @@ const SqlEditorPanel: ({ initialShardKey }: SqlEditorPanelProps) => ReactElement
 ```ts
 interface SqlEditorPanelProps {
     readonly initialShardKey?: string;
+    readonly now?: () => number;
 }
 ```
 
