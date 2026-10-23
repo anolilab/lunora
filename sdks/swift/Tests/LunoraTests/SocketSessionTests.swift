@@ -234,6 +234,22 @@ extension ConformanceTests {
         XCTAssertFalse(sent.contains { $0["type"] as? String == "whisper" }, "and must write no whisper frame")
     }
 
+    func testAnEmptySessionTokenIsNoToken() throws {
+        let client = LunoraClient(url: "https://app.example")
+        var notified = 0
+
+        _ = client.onTokenExpired { notified += 1 }
+        client.sessionToken = nil
+        client.attachSocket { _ in }
+        client.detachSocket(closeCode: 4003, reason: "refused")
+
+        client.sessionToken = ""
+        client.attachSocket { _ in }
+        client.detachSocket(closeCode: 4003, reason: "refused")
+
+        XCTAssertEqual(notified, 1, "nil and an empty token are one credential, so the refusal is reported once")
+    }
+
     func testAWhisperWithoutDataIsDropped() throws {
         let client = LunoraClient(url: "https://app.example")
         var delivered: [Any] = []

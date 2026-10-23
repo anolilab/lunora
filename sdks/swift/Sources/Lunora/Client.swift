@@ -162,9 +162,12 @@ public final class LunoraClient {
         get { withLock { storedSessionToken } }
         set {
             withLock {
-                guard newValue != storedSessionToken else { return }
+                // An empty token is no token: nil and "" put the same connect frame on the wire, so they are one credential.
+                let normalized = newValue?.isEmpty == false ? newValue : nil
 
-                storedSessionToken = newValue
+                guard normalized != storedSessionToken else { return }
+
+                storedSessionToken = normalized
                 credentialGeneration += 1
             }
         }
