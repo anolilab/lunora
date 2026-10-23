@@ -372,6 +372,7 @@ interface EditableFilter {
         unknown
     ];
     operator: FilterOperator;
+    path?: string;
     value: string;
 }
 ```
@@ -443,6 +444,7 @@ interface FileBrowserProps {
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    path?: string[];
     value?: unknown;
 }
 ```
@@ -450,7 +452,7 @@ interface FilterClause {
 ### `FilterOperator` (type)
 
 ```ts
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 ```
 
 ### `FunctionCallStat` (interface)
@@ -2860,6 +2862,9 @@ const MESSAGE_IDS: readonly [
     "Clear table ({total})",
     "Clear table",
     "Shard: root",
+    "has",
+    "Nested field path",
+    "nested path, e.g. geo.city",
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows."
 ];
