@@ -702,14 +702,19 @@ const apiSpecFor = (options: DeployCommandOptions, cwd: string): ApiSpec | undef
 /**
  * The celld toolchain a deploy runs (`celld`, `esbuild`, and `CELLD_BUCKET` for a
  * live deploy): its warnings print, and its errors come back as the deploy's
- * refusal. Nothing for any other target.
+ * refusal. `prepare` writes nothing to the bucket, so it is probed as a dry run.
+ * Nothing for any other target.
  */
-const celldToolchainError = async (options: DeployCommandOptions, target: string): Promise<string | undefined> => {
+const celldToolchainError = async (options: DeployCommandOptions, target: string, command: PreDeployCommand): Promise<string | undefined> => {
     if (target !== "celld") {
         return undefined;
     }
 
-    const probe = await (options.celldToolchain ?? (() => probeCelldToolchain({ dryRun: options.dryRun === true, env: process.env, purpose: "deploy" })))();
+    const probe = await (options.celldToolchain ?? probeCelldToolchain)({
+        dryRun: command === "prepare" || options.dryRun === true,
+        env: process.env,
+        purpose: "deploy",
+    });
 
     for (const warning of probe.warnings) {
         options.logger.warn(warning);
@@ -758,7 +763,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
 
     // The same stop for a missing celld toolchain (`celld`, `esbuild`, the fleet
     // bucket): it is checked before codegen or provisioning writes a file.
-    const toolchainError = await celldToolchainError(options, target);
+    const toolchainError = await celldToolchainError(options, target, command);
 
     if (toolchainError !== undefined) {
         options.logger.error(toolchainError);

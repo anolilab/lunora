@@ -1,5 +1,5 @@
 /** The options `lunora deploy` takes and the result it reports — shared by `build`, `prepare` and the package API. */
-import type { CelldToolchainProbe, DevProcessSpawner, DiscoveryCache } from "@lunora/config";
+import type { CelldToolchainProbe, CelldToolchainProbeOptions, DevProcessSpawner, DiscoveryCache } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { DockerProbe } from "../../util/docker";
@@ -25,7 +25,7 @@ interface DeployCommandOptions {
     bundleMetaPath?: string;
 
     /** The celld toolchain check a celld deploy runs before codegen; injected in tests. Defaults to `probeCelldToolchain`. */
-    celldToolchain?: () => Promise<CelldToolchainProbe>;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
 
     /**
      * The `--env` this run's client build was given as `CLOUDFLARE_ENV`. Set only when a client build ran, so the generated config

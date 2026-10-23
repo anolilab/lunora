@@ -112,7 +112,7 @@ interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
     bundleMetaPath?: string;
-    celldToolchain?: () => Promise<CelldToolchainProbe>;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
     clientBuildEnvironment?: string;
     clientBuildOutputJson?: boolean;
     clientBuildRan?: boolean;

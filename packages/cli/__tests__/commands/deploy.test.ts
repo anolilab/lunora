@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
-import { createDiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache, probeCelldToolchain } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runDeployCommand } from "../../src/commands/deploy/handler";
+import { runDeployCommand, runPreDeployPipeline } from "../../src/commands/deploy/handler";
 import type { DeployCommandResult } from "../../src/commands/deploy/types";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
@@ -365,6 +365,31 @@ describe("lunora deploy", () => {
                 expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
                 expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
                 expect(calls).toHaveLength(0);
+            });
+
+            // The real probe with `celld` and `esbuild` on PATH and no CELLD_BUCKET: only what the run is asked to do decides.
+            const probeWithoutBucket: typeof probeCelldToolchain = (probe) =>
+                probeCelldToolchain({ ...probe, env: {}, run: () => Promise.resolve({ code: 0, stdout: "99.0.0" }) });
+
+            it("prepares a celld app with CELLD_BUCKET unset, and refuses the deploy", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const prepared = await runPreDeployPipeline({ celldToolchain: probeWithoutBucket, cwd: workdir, logger, spawner, target: "celld" }, "prepare");
+                const deployed = await runDeployCommand({
+                    celldToolchain: probeWithoutBucket,
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                });
+
+                expect(prepared.error).toBeUndefined();
+                expect(deployed).toMatchObject({ code: EXIT_CODE.MISSING_DEPENDENCY, error: expect.stringMatching(/CELLD_BUCKET/u) });
             });
 
             it("refuses --preview for celld before the pipeline writes anything", async () => {
