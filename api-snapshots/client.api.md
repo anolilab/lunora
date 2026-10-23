@@ -1601,7 +1601,7 @@ class TabCoordinator {
 
 ```ts
 class TransportError extends LunoraError {
-    constructor(message: string, data?: unknown, headers?: Readonly<Record<string, string>>);
+    constructor(message: string, data?: unknown);
 }
 ```
 
