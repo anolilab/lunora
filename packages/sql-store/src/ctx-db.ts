@@ -1779,6 +1779,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
     // {@link createTableNameCache} for the size cap rationale.
     const tableNameCache = createTableNameCache();
+    // Only the tables an id is probed against can hold a pinned entry for it, so a physical delete clears just these.
+    const probedTables = Object.entries(schema.tables)
+        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
+        .map(([tableName]) => tableName);
 
     let triggerDepth = 0;
 
@@ -3291,7 +3295,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // re-probes instead of resolving to the now-empty original table.
             tableNameCache.delete(unpinnedCacheKey(id));
 
-            for (const table of Object.keys(schema.tables)) {
+            for (const table of probedTables) {
                 tableNameCache.delete(pinnedCacheKey(table, id));
             }
 
