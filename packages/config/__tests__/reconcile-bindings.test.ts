@@ -941,14 +941,16 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
     });
 
-    it("writes a celld KV binding with a name-derived id, and no Hyperdrive binding", () => {
+    // The celld projection derives the id; one written here would follow a later
+    // switch to Cloudflare into a deploy that needs the id-less shape.
+    it("writes a celld KV binding without an id, as on Cloudflare, and no Hyperdrive binding", () => {
         expect.assertions(3);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "celld" });
 
-        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV", id: "lunora-app-kv" }]);
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
         expect(readConfig().hyperdrive).toBeUndefined();
-        expect(result.added).toContain("KV (Workers KV, namespace lunora-app-kv)");
+        expect(result.added).toContain("KV (Workers KV, created on deploy)");
     });
 
     it.each([

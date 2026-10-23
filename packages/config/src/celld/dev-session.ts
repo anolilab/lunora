@@ -121,7 +121,7 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
     const notice = (line: string, stream: CelldLineOrigin["stream"] = "stdout"): void => {
         log(line, { stream, tag: "celld" });
     };
-    const toolchain = await (options.probe ?? (() => probeCelldToolchain({ purpose: "dev" })))();
+    const toolchain = await (options.probe ?? (() => probeCelldToolchain({ env: process.env, purpose: "dev" })))();
 
     for (const warning of toolchain.warnings) {
         notice(warning, "stderr");

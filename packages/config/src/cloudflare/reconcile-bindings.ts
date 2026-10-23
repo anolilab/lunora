@@ -392,12 +392,12 @@ const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string
 const KV_TARGETS: ReadonlySet<string> = new Set(["celld", "cloudflare"]);
 
 /**
- * Add a `KV` namespace binding when the project binds none. On Cloudflare it is
- * id-less: wrangler creates the namespace on the first deploy and writes its id
- * back, so nothing here mints it. celld has no namespace to create, and takes any
- * id it is given, so its binding carries one derived from the Worker's name. A
- * project that already binds a namespace (under any name) is left alone:
- * `createKv()` is handed whichever binding the app chose. Not run for a
+ * Add an id-less `KV` namespace binding when the project binds none. Wrangler
+ * creates the namespace on the first deploy and writes its id back, so nothing
+ * here mints it. celld needs an id, but its projection derives one
+ * (`projectCelldConfig`), so the config never carries a celld-only id into a
+ * later Cloudflare deploy. A project that already binds a namespace (under any
+ * name) is left alone: `createKv()` is handed whichever binding the app chose. Not run for a
  * jurisdiction-pinned schema: a namespace wrangler creates is unrestricted and
  * cannot be moved, so that app creates it itself. Pure.
  */
@@ -412,13 +412,7 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
         return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
     }
 
-    if (createsCloudflareResources(target)) {
-        return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
-    }
-
-    const id = `${typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora"}-kv`;
-
-    return { added: [`KV (Workers KV, namespace ${id})`], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV", id }]) };
+    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**
@@ -1024,8 +1018,8 @@ const reconcileWranglerBindings = (
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
-    // kv is written without a remote id on Cloudflare (wrangler creates the
-    // namespace on deploy) and with a name-derived id on celld, hyperdrive with a
+    // kv is written without a remote id (wrangler creates the namespace on
+    // deploy; the celld projection derives one), hyperdrive with a
     // placeholder id that deploy replaces once it has a connection string, and
     // artifacts with the Worker's name as its namespace; hyperdrive and artifacts
     // only for a Cloudflare target. Pipelines stays a hint: it carries an
@@ -1219,4 +1213,4 @@ const reconcileWranglerBindings = (
 };
 
 export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };
+export { collectExportGaps, D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID, reconcileWranglerBindings };

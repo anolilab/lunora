@@ -839,7 +839,7 @@ const runPreDeployChecks = (
     target: string,
 ): { code: ExitCode; error: string } | undefined => {
     // The placeholder is Cloudflare's: `wrangler d1 create` mints the real id. celld's
-    // D1 takes any id, and reconcile writes it one.
+    // D1 takes any id, and its projection swaps the placeholder for the database name.
     const d1Error = target === "cloudflare" ? checkD1Placeholder(cwd, options.logger, command, options.env) : undefined;
 
     if (d1Error !== undefined) {

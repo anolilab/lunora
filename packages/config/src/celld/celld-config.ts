@@ -28,6 +28,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { MissingBuildOutputError } from "../build-output-error";
+import { D1_PLACEHOLDER_ID } from "../cloudflare/reconcile-bindings";
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
@@ -189,6 +190,37 @@ const projectWorkflowExports = (exports: unknown): { bindings: Config[]; rest: C
 };
 
 /**
+ * Give each D1 database still carrying reconcile's Cloudflare placeholder its
+ * name as the id. celld takes any id as the fleet-wide identity, so every
+ * project left with the placeholder would otherwise share one database.
+ */
+const projectD1Databases = (databases: unknown): unknown =>
+    Array.isArray(databases)
+        ? databases.map((database: unknown) =>
+              isRecord(database) && database["database_id"] === D1_PLACEHOLDER_ID && typeof database["database_name"] === "string"
+                  ? { ...database, database_id: database["database_name"] }
+                  : database,
+          )
+        : databases;
+
+/**
+ * Give each id-less KV namespace (the shape reconcile writes, for wrangler to
+ * create on Cloudflare) an id celld can use: `<worker>-<binding>`, so two
+ * namespaces of one Worker stay apart.
+ */
+const projectKvNamespaces = (namespaces: unknown, workerName: unknown): unknown => {
+    const worker = typeof workerName === "string" && workerName.length > 0 ? workerName : "lunora";
+
+    return Array.isArray(namespaces)
+        ? namespaces.map((namespace: unknown) =>
+              isRecord(namespace) && namespace["id"] === undefined && typeof namespace["binding"] === "string"
+                  ? { ...namespace, id: `${worker}-${namespace["binding"].toLowerCase()}` }
+                  : namespace,
+          )
+        : namespaces;
+};
+
+/**
  * Project a parsed wrangler config onto what celld accepts.
  * @param config The parsed wrangler config.
  * @returns the projected config and every key removed from it. A removed key
@@ -213,6 +245,16 @@ const projectCelldConfig = (config: Config): { config: Config; dropped: string[]
         switch (key) {
             case "containers": {
                 projected[key] = projectContainers(value, dropped);
+
+                break;
+            }
+            case "d1_databases": {
+                projected[key] = projectD1Databases(value);
+
+                break;
+            }
+            case "kv_namespaces": {
+                projected[key] = projectKvNamespaces(value, config["name"]);
 
                 break;
             }
@@ -494,10 +536,14 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
         write: () => {
             // Best-effort, unlike a service projection's: this one carries only what the
             // committed wrangler config already does, so a read-only checkout still runs.
-            try {
-                ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
-            } catch {
-                // The projection is no secret; an unignored one is only noise in `git status`.
+            // A build's projection lands in the build output, which is no place for a
+            // `.gitignore` and is ignored already.
+            if (!fromBuild) {
+                try {
+                    ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
+                } catch {
+                    // The projection is no secret; an unignored one is only noise in `git status`.
+                }
             }
 
             writeFileSync(configPath, contents);

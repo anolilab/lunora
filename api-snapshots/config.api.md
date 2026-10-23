@@ -3439,6 +3439,7 @@ interface BindingEntry {
 ```ts
 interface CelldCommandResult {
     code: number;
+    error?: string;
     stdout: string;
 }
 ```
