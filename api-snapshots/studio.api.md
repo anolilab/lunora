@@ -1484,6 +1484,7 @@ const MESSAGE_IDS: readonly [
     "Subscriptions",
     "Synced customers, subscriptions, and webhook events.",
     "{count} messages",
+    "+{count} more",
     "{count} pending changes",
     "{count} pasted cells were skipped",
     "{count} running",
