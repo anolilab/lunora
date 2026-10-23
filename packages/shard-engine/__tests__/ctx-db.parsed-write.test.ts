@@ -635,4 +635,13 @@ describe("insertManyUnsafe refuses a NUL in a trusted-import id before writing a
         await expect(writer.insertManyUnsafe!("items", batch, { allowExplicitId: true })).rejects.toThrow(/NUL/u);
         await expect(writer.get("ok1")).resolves.toBeNull();
     });
+
+    it("insertMany mints every id, so a NUL-bearing _id never reaches the explicit-id path", async () => {
+        expect.assertions(2);
+
+        const [first, second] = await writer.insertMany!("items", [input({ _id: "bad\u0000id" }), input({ _id: "ok2" })]);
+
+        expect(first).not.toBe("bad\u0000id");
+        expect(second).not.toBe("ok2");
+    });
 });
