@@ -43,13 +43,15 @@ const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): R
 
 /**
  * Whether a cell's stored value can be turned into a facet-style equality filter.
- * Limited to the SQLite scalars a facet returns, which an equality comparison
- * matches faithfully. An object, array or blob would bind as serialised text that
- * the stored form never equals, so the action is withheld rather than filtering
- * to zero rows.
+ * Limited to the scalars an equality comparison matches faithfully: a SQLite
+ * scalar or a JSON boolean (which binds as 0/1 against `json_extract`). `undefined`
+ * is a field absent from this document, which the filter reads as NULL, so it
+ * qualifies too. An object, array or blob would bind as serialised text that the
+ * stored form never equals, so the action is withheld rather than filtering to
+ * zero rows.
  */
 const isFilterableCellValue = (value: unknown): boolean =>
-    value === null || typeof value === "string" || typeof value === "number" || typeof value === "bigint";
+    value === undefined || value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" || typeof value === "bigint";
 
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
@@ -594,7 +596,7 @@ export const DataBrowser = ({
                     onFilter={
                         isFilterableCellValue(expandedCell.storedValue)
                             ? () => {
-                                  facetFilter(expandedCell.column, expandedCell.storedValue);
+                                  facetFilter(expandedCell.column, expandedCell.storedValue ?? null);
                                   closeExpandedCell();
                               }
                             : undefined
