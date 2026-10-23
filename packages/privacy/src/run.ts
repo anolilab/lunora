@@ -351,14 +351,26 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return { status: assembled.status };
         }
 
-        const markReady = async (): Promise<void> => {
-            const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), storageKey: archiveKey };
+        // A claim, not an update: an erasure that fails this export after the step's read must not be written
+        // over, and the archive it would point at holds data that erasure removed, so it goes too.
+        const ready = await step("ready", async (request): Promise<RequestStatus> => {
+            const status = transition("processing", "ready");
+            const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), status, storageKey: archiveKey };
 
-            await setStatus(scope.ports, requestId, { detail: archiveKey, from: "processing", patch, to: "ready" });
-        };
-        const ready = await step("ready", markReady);
+            if (await scope.ports.store.claim(requestId, "processing", patch)) {
+                await scope.ports.store.addEvent(requestId, scope.ports.now(), status, archiveKey);
 
-        return ready.status === "processing" ? { archiveKey, status: "ready" } : { status: ready.status };
+                return status;
+            }
+
+            await deleteRequestFiles(scope.ports.files, { ...request, storageKey: archiveKey });
+
+            const current = await requireRequest(scope.ports.store, requestId);
+
+            return current.status;
+        });
+
+        return ready.value === "ready" ? { archiveKey, status: "ready" } : { status: ready.value ?? ready.status };
     } catch (error) {
         return { status: await failStep(scope, steps, requestId, failureDetail(error)) };
     }
@@ -400,7 +412,9 @@ const eraseDataset = async (scope: Pick<RunScope, "disposition" | "ports">, data
  *
  * An export still processing is failed in the same write: its later steps would read the tombstone key
  * as the subject and assemble an archive missing every dataset not yet collected. The claim keeps a
- * run that left `processing` meanwhile from being written over.
+ * run that left `processing` meanwhile from being written over. The export's ready step claims too, so
+ * whichever claim lands first wins: an export failed here never turns ready, and one that turned ready
+ * first is expired here.
  */
 const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
     const requests = await ports.store.listForSubject(subjectId);
@@ -415,6 +429,13 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
                 await ports.store.addEvent(request.id, ports.now(), "failed", "UNPROCESSABLE: the subject was erased while the export ran");
 
                 return;
+            }
+
+            // An export that went ready after the files step holds data this erasure removed, so it expires here.
+            const current = request.status === "processing" ? await ports.store.get(request.id) : request;
+
+            if (current?.status === "ready") {
+                await expireRequestFiles(ports, current);
             }
 
             await ports.store.update(request.id, { subjectId: key });

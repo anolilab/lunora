@@ -212,6 +212,67 @@ describe("runExport", () => {
         expect(collectedFor).toStrictEqual(["u1"]);
         expect(files.files.has(`${exported.id}/export.zip`)).toBe(false);
     });
+
+    it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
+        const store = memoryRequests();
+        let erase: (() => Promise<unknown>) | undefined;
+        const beforeReady = async (patch: { readonly status?: string }): Promise<void> => {
+            const run = erase;
+
+            if (patch.status === "ready" && run !== undefined) {
+                erase = undefined;
+                await run();
+            }
+        };
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                await beforeReady(patch);
+
+                return store.claim(id, from, patch);
+            },
+            update: async (id: string, patch: Parameters<typeof store.update>[1]) => {
+                await beforeReady(patch);
+                await store.update(id, patch);
+            },
+        };
+        const { files, privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        erase = async () => privacy.runErasure(erasure.id);
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect(store.rows.get(exported.id)?.storageKey).toBeUndefined();
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
+    it("expires an export that turned ready after the erasure's files step", async () => {
+        const store = memoryRequests();
+        const { files, privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+        const { listForSubject } = store;
+        let lists = 0;
+
+        // The erasure lists the subject's requests in its files step and again when it completes; the export
+        // finishes between the two.
+        store.listForSubject = async (subjectId) => {
+            lists += 1;
+
+            if (lists === 2) {
+                await privacy.runExport(exported.id);
+            }
+
+            return listForSubject(subjectId);
+        };
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "completed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
 });
 
 describe("runErasure", () => {
