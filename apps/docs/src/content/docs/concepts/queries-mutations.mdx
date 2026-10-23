@@ -153,6 +153,7 @@ It still applies column defaults, maintains all indexes and companions
 (search/aggregate/rank/CDC + live subscriptions), and **still enforces RLS**:
 secure-by-default and your table's insert policy apply exactly as for `insertMany`
 (there is no RLS-bypassing writer). `allowExplicitId` preserves a supplied `_id`.
+An id that contains a NUL character (U+0000) is refused with `BAD_REQUEST`, on every store.
 Use it only for data you control; reach for `insertMany` for anything user-supplied.
 
 ## `ctx.auth`
