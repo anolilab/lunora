@@ -287,8 +287,56 @@ describe("lunora deploy", () => {
                 });
 
                 expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN/u) });
-                expect(result.error).toMatch(/one bootstrap credential in vars/u);
+                expect(result.error).toMatch(/rather than committing it/u);
                 expect(calls).toHaveLength(0);
+            });
+
+            it("aborts a celld deploy when a required secret is in the vars but empty", async () => {
+                expect.assertions(2);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: { ...CELLD_VARS, LUNORA_ADMIN_TOKEN: "" } }),
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN \(empty or a placeholder\)/u) });
+                expect(calls).toHaveLength(0);
+            });
+
+            // celld cannot see a secret manager the app reads at runtime, so a key only `.dev.vars` names is the app's call.
+            it("ships a celld deploy whose app-only .dev.vars secret is not in the vars, and names it", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), "OPENAI_API_KEY=sk-local\n", "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.code).toBe(0);
+                expect(warns.some((message) => message.includes("not set in the wrangler vars: OPENAI_API_KEY"))).toBe(true);
             });
 
             it("ships a celld-target app with `celld deploy` on the projected config", async () => {

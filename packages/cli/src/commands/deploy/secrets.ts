@@ -12,6 +12,7 @@ import {
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
+    isPlaceholderValue,
     parseDevVariableEntries,
     requiredSecrets,
     resolveSchemaDirectory,
@@ -71,12 +72,12 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
             ? `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
                   `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`
             : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; ` +
-                  `keep real secrets in a secret manager, one bootstrap credential in vars.`,
+                  `a key the app reads from env must be a \`vars\` entry in the deployed config, one it loads from a secret manager at runtime need not.`,
     );
 };
 
-/** The secret keys this project requires on the deployed worker: its packages' + any secret-typed local var. */
-const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | undefined): Promise<string[]> => {
+/** The secret keys this project requires on the deployed worker, by source: its packages', and the secret-typed local vars. */
+const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | undefined): Promise<{ fromLocal: string[]; fromPackages: string[] }> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
@@ -85,7 +86,7 @@ const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | un
         // Scan failure → fall back to the core secrets + whatever is declared locally.
     }
 
-    const fromPackages = requiredSecrets(packages).map((entry) => entry.key);
+    const fromPackages = [...new Set(requiredSecrets(packages).map((entry) => entry.key))];
 
     let fromLocal: string[] = [];
 
@@ -103,7 +104,7 @@ const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | un
         // Unreadable .dev.vars → packages-only.
     }
 
-    return [...new Set([...fromPackages, ...fromLocal])];
+    return { fromLocal: fromLocal.filter((key) => !fromPackages.includes(key)), fromPackages };
 };
 
 /**
@@ -328,9 +329,13 @@ interface MissingSecretsOutcome {
 /**
  * The secrets check for a target with no secret store: its only channel is the
  * `vars` of the config projection the deploy ships (for a Vite virtual entry,
- * the build's config, not the project's), sent as plain strings. A required key
- * the projection does not carry is missing from the deployed worker, and nothing
- * here can supply it — so the deploy aborts, interactive or not.
+ * the build's config, not the project's), sent as plain strings. An absent,
+ * non-string, empty or placeholder value is a credential the worker cannot use.
+ *
+ * Only the packages' secrets abort the deploy: Lunora reads those from env, so
+ * nothing but `vars` can supply them. A key that is required only because
+ * `.dev.vars` names it may be one the app loads from a secret manager at
+ * runtime, which this check cannot see, so it is a warning.
  */
 const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
     let deployed: Readonly<Record<string, unknown>>;
@@ -341,8 +346,23 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
         return { error: error instanceof Error ? error.message : String(error) };
     }
 
-    const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
-    const missing = required.filter((key) => !Object.hasOwn(deployed, key));
+    const isUnset = (key: string): boolean => {
+        const value = deployed[key];
+
+        return typeof value !== "string" || isPlaceholderValue(value);
+    };
+    const describe = (key: string): string => (Object.hasOwn(deployed, key) ? `${key} (empty or a placeholder)` : key);
+    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const localUnset = fromLocal.filter((key) => isUnset(key));
+
+    if (localUnset.length > 0) {
+        options.logger.warn(
+            `${DEV_VARS_FILE} key(s) not set in the wrangler vars: ${localUnset.map((key) => describe(key)).join(", ")}. ` +
+                `${driver.name} has no secret store: a key the app reads from env must be a \`vars\` entry; one it loads from a secret manager at runtime need not.`,
+        );
+    }
+
+    const missing = fromPackages.filter((key) => isUnset(key));
 
     if (missing.length === 0) {
         return {};
@@ -350,8 +370,9 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
 
     return {
         error:
-            `missing required secret(s) in the wrangler vars: ${missing.join(", ")}. ${driver.name} has no secret store, so each one must be a \`vars\` entry in the wrangler config — ` +
-            `keep real secrets in a secret manager, one bootstrap credential in vars. Add them, then re-deploy.`,
+            `missing required secret(s) in the wrangler vars: ${missing.map((key) => describe(key)).join(", ")}. ` +
+            `${driver.name} has no secret store and Lunora reads these from env, so each must be a real \`vars\` value in the config the deploy ships — ` +
+            `write it there from your secret manager at deploy time rather than committing it. Add them, then re-deploy.`,
     };
 };
 
@@ -398,8 +419,8 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     }
 
     const remoteNames = new Set(remote.names);
-    const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
-    const missing = required.filter((key) => !remoteNames.has(key));
+    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const missing = [...fromPackages, ...fromLocal].filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {
         return {};
