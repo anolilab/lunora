@@ -1166,4 +1166,81 @@ describe("connectLiveStream", () => {
 
         live.close();
     });
+
+    it("reconnects without waiting for the registrations of a connection that ended normally", async () => {
+        expect.assertions(3);
+
+        const streams: FakeStream[] = [];
+        const held: Record<string, (() => void)[]> = { c1: [] };
+        const subscribes: ControlCall[] = [];
+        const heldFirstMarks = milestone(() => held.c1?.length ?? 0);
+        const streamMarks = milestone(() => streams.length);
+        const onSecondMarks = milestone(() => subscribes.filter((call) => call.connectionId === "c2").length);
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                const stream = new FakeStream(`c${String(streams.length + 1)}`);
+
+                streams.push(stream);
+                streamMarks.notify();
+
+                return Promise.resolve(stream.response);
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            if (call.action !== "subscribe") {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            subscribes.push(call);
+            onSecondMarks.notify();
+
+            // The first connection's first window never answers: its calls stall until the test releases them.
+            const holds = held[call.connectionId ?? ""];
+
+            if (holds === undefined || holds.length >= RESUBSCRIBE_CONCURRENCY) {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            return new Promise<Response>((resolve) => {
+                holds.push(() => {
+                    resolve(Response.json({ ok: true }, { status: 200 }));
+                });
+                heldFirstMarks.notify();
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        for (let index = 1; index <= RESUBSCRIBE_CONCURRENCY + 1; index += 1) {
+            live.subscribe({ id: `s${String(index)}`, topic: `T${String(index)}` });
+        }
+
+        await heldFirstMarks.reached(RESUBSCRIBE_CONCURRENCY);
+
+        // The stream ends normally while its registrations are still in flight.
+        streams[0]?.end();
+
+        // The replacement connection opens with those calls still held, so the reconnect is not waiting on them.
+        await streamMarks.reached(2);
+
+        expect(streams).toHaveLength(2);
+
+        for (const release of held.c1 ?? []) {
+            release();
+        }
+
+        await onSecondMarks.reached(RESUBSCRIBE_CONCURRENCY + 1);
+
+        await live.ready;
+
+        expect(subscribes.filter((call) => call.connectionId === "c2")).toHaveLength(RESUBSCRIBE_CONCURRENCY + 1);
+        expect(live.connectionId).toBe("c2");
+
+        live.close();
+    });
 });

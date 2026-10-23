@@ -428,8 +428,11 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
         const reader = response.body?.getReader();
 
+        // The connection has ended: its drain must not hold up the reconnect. With the connection id cleared, the drain
+        // stops claiming controls, and a drain that finishes later cannot resolve `ready` for a connection that is gone.
         if (reader === undefined) {
-            await registered;
+            connectionId = undefined;
+            registered.catch(() => undefined);
 
             return;
         }
@@ -476,7 +479,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             }
         }
 
-        await registered;
+        connectionId = undefined;
+        registered.catch(() => undefined);
     };
 
     const run = async (): Promise<void> => {
