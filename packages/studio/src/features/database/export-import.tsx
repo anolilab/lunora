@@ -11,13 +11,13 @@ import { Card, CardContent } from "../../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { useAdminQuery, useInvalidateAdmin } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
-import type { ExportRow, ImportShardResult, TableInfo } from "../../lib/admin";
+import type { ExportRow, ImportShardResult, TableColumnsResult, TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { downloadFile } from "../data/grid-features";
 import type { CsvProblem } from "./csv";
-import { CsvFormatError, parseCsvDocuments } from "./csv";
+import { coerceCsvDocuments, CsvFormatError, parseCsvDocuments } from "./csv";
 
 interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -27,6 +27,7 @@ interface ExportImportPanelProps {
 const EXPORT_SHARD = adminRef(ADMIN_FUNCTIONS.exportShard);
 const IMPORT_SHARD = adminRef(ADMIN_FUNCTIONS.importShard);
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+const DESCRIBE_TABLE = adminRef(ADMIN_FUNCTIONS.describeTable);
 const NO_ARGS: Record<string, unknown> = {};
 
 type Translate = ReturnType<typeof useT>;
@@ -140,22 +141,41 @@ const ndjsonEntries = async function* (file: Blob): AsyncGenerator<ImportEntry> 
  * malformed record fails here and nothing is written. The file is held whole because that is the only way to know every record is valid
  * before the first chunk is sent.
  */
-const csvEntries = async (file: Blob, table: string): Promise<ImportEntry[]> => {
+const csvEntries = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<ImportEntry[]> => {
     const lines: string[] = [];
 
     for await (const { line } of fileLines(file)) {
         lines.push(line);
     }
 
-    return parseCsvDocuments(lines.join("\n")).map(({ doc, record }) => {
+    return coerceCsvDocuments(parseCsvDocuments(lines.join("\n")), kinds).map(({ doc, record }) => {
         return { line: record, row: { doc, table } };
     });
 };
 
-const openCsvSource = async (file: Blob, table: string): Promise<ImportSource> => {
-    const entries = await csvEntries(file, table);
+const openCsvSource = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<ImportSource> => {
+    const entries = await csvEntries(file, table, kinds);
 
     return () => entries;
+};
+
+/**
+ * The validator kind of each column of `table`, from the same `describeTable` read the generate-rows dialog uses. A failed read comes back
+ * as the message to show, since a CSV that cannot be checked against its columns must not be sent.
+ */
+const readColumnKinds = async (
+    client: ImportClient,
+    t: Translate,
+    shardKey: string,
+    table: string,
+): Promise<{ failure: string } | { kinds: ReadonlyMap<string, string> }> => {
+    try {
+        const { columns } = (await client.query(DESCRIBE_TABLE, { table }, callOptions(shardKey))) as TableColumnsResult;
+
+        return { kinds: new Map(columns.map((column) => [column.name, column.type])) };
+    } catch (error_) {
+        return { failure: t("Couldn't read the columns of {table}: {message}", { message: errorMessage(error_), table }) };
+    }
 };
 
 /** Rows sent per `importShard` call at most. The byte cap below is what keeps wide rows under the body limit. */
@@ -250,11 +270,38 @@ const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
         });
     }
 
+    if (problem.kind === "cell-type") {
+        if (problem.expected === "boolean") {
+            return t("line {line}: column “{column}” must be true or false, got “{value}”.", {
+                column: problem.column,
+                line: problem.record,
+                value: problem.value,
+            });
+        }
+
+        if (problem.expected === "bigint") {
+            return t("line {line}: column “{column}” must be an integer, got “{value}”.", {
+                column: problem.column,
+                line: problem.record,
+                value: problem.value,
+            });
+        }
+
+        return t("line {line}: column “{column}” must be a number, got “{value}”.", { column: problem.column, line: problem.record, value: problem.value });
+    }
+
     if (problem.kind === "text-after-quote") {
         return t("line {line}: text follows a closing quote.", { line: problem.record });
     }
 
     return t("line {line}: a quoted field is never closed.", { line: problem.record });
+};
+
+/** The failure text for a file that could not be read or checked, named for the format it was picked as. */
+const describeInvalidFile = (csvTable: null | string, error: unknown, t: Translate): string => {
+    const detail = error instanceof CsvFormatError ? describeCsvProblem(error.problem, t) : errorMessage(error);
+
+    return csvTable === null ? t("Invalid NDJSON: {message}", { message: detail }) : t("Invalid CSV: {message}", { message: detail });
 };
 
 interface CsvTablePickerProps {
@@ -331,15 +378,22 @@ const sendImport = async (
     const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
     let prepared: { rows: number; source: ImportSource };
 
+    // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
+    // refused here rather than sent as text the writer would reject row by row.
+    const kindsRead = csvTable === null ? { kinds: new Map<string, string>() } : await readColumnKinds(client, t, shardKey, csvTable);
+
+    if ("failure" in kindsRead) {
+        return { failure: { message: kindsRead.failure, rows: 0 }, total };
+    }
+
+    const { kinds } = kindsRead;
+
     try {
-        const source: ImportSource = csvTable === null ? () => ndjsonEntries(file) : await openCsvSource(file, csvTable);
+        const source: ImportSource = csvTable === null ? () => ndjsonEntries(file) : await openCsvSource(file, csvTable, kinds);
 
         prepared = { rows: await countRows(source()), source };
     } catch (error_) {
-        const detail = error_ instanceof CsvFormatError ? describeCsvProblem(error_.problem, t) : errorMessage(error_);
-        const message = csvTable === null ? t("Invalid NDJSON: {message}", { message: detail }) : t("Invalid CSV: {message}", { message: detail });
-
-        return { failure: { message, rows: 0 }, total };
+        return { failure: { message: describeInvalidFile(csvTable, error_, t), rows: 0 }, total };
     }
 
     const { rows: rowCount, source } = prepared;

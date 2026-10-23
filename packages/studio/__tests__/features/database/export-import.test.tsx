@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ExportImportPanel } from "../../../src/features/database/export-import";
-import type { ExportRow } from "../../../src/lib/admin";
+import type { ColumnMeta, ExportRow } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -13,14 +13,35 @@ const EXPORT_ROWS: ExportRow[] = [
     { doc: { __id__: "m2", text: "world" }, table: "messages" },
 ];
 
-/** A server whose shard holds `rowsByTable`; `exportShard` answers one table per call, as the panel asks for it. */
-const createClient = (rowsByTable?: Record<string, ExportRow[]>): MockClientHooks =>
+/** Every `messages` column is text, which is what a CSV cell is when the table declares nothing else. */
+const TEXT_COLUMNS: ColumnMeta[] = [
+    { name: "id", optional: false, type: "string" },
+    { name: "text", optional: false, type: "string" },
+];
+
+/** The typed columns the coercion tests import into: one per kind a CSV cell is coerced to. */
+const TYPED_COLUMNS: ColumnMeta[] = [
+    { name: "id", optional: false, type: "string" },
+    { name: "count", optional: false, type: "number" },
+    { name: "active", optional: false, type: "boolean" },
+    { name: "amount", optional: false, type: "bigint" },
+];
+
+/**
+ * A server whose shard holds `rowsByTable`, with `columns` as the `messages` table's columns; `exportShard` answers one table per call, as
+ * the panel asks for it.
+ */
+const createClient = (rowsByTable?: Record<string, ExportRow[]>, columns: ColumnMeta[] = TEXT_COLUMNS): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
                 return Object.entries(rowsByTable ?? { messages: EXPORT_ROWS }).map(([name, rows]) => {
                     return { name, rowCount: rows.length };
                 });
+            }
+
+            if (reference === ADMIN_FUNCTIONS.describeTable) {
+                return { columns };
             }
 
             if (reference === ADMIN_FUNCTIONS.exportShard) {
@@ -450,6 +471,10 @@ describe("exportImportPanel", () => {
                     return [{ name: "messages", rowCount: 0 }];
                 }
 
+                if (reference === ADMIN_FUNCTIONS.describeTable) {
+                    return { columns: TEXT_COLUMNS };
+                }
+
                 if (reference === ADMIN_FUNCTIONS.importShard) {
                     return {
                         conflicts: 0,
@@ -469,5 +494,66 @@ describe("exportImportPanel", () => {
         const errors = await screen.findByTestId("ei-import-errors");
 
         expect(errors.textContent).toBe("line 3 (messages): text must be a string");
+    });
+
+    it("coerces a number column to a number, so the writer receives a value it accepts", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,count\nm1,42\nm2,1.5e2\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["count"])).toStrictEqual([42, 150]);
+    });
+
+    it("coerces a boolean column to true or false, in any case", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,active\nm1,TRUE\nm2,false\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["active"])).toStrictEqual([true, false]);
+    });
+
+    it("coerces a bigint column to a bigint, exact past 2^53", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,amount\nm1,9007199254740993\nm2,-12\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["amount"])).toStrictEqual([9_007_199_254_740_993n, -12n]);
+    });
+
+    it("writes nothing when one cell does not fit its column type, and names the record and column", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+        // The header is record 1, so index 1000 is record 1001.
+        const lines = ["id,count", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},${index.toString()}`)];
+
+        lines[1000] = "m999,x";
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: line 1001: column “count” must be a number, got “x”.");
     });
 });

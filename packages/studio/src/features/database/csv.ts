@@ -9,8 +9,21 @@ type CsvProblem =
     | { kind: "duplicate-header"; name: string }
     | { column: number; kind: "empty-header" }
     | { expected: number; found: number; kind: "ragged"; record: number }
+    | { column: string; expected: CellType; kind: "cell-type"; record: number; value: string }
     | { kind: "text-after-quote"; record: number }
     | { kind: "unterminated-quote"; record: number };
+
+/** The column kinds a CSV cell is coerced into. Every other kind keeps its text. */
+type CellType = "bigint" | "boolean" | "number";
+
+/** A value a CSV cell can take after coercion. */
+type CsvValue = bigint | boolean | number | string;
+
+/** A record after coercion, ready to become an import row. */
+interface CoercedDocument {
+    doc: Record<string, unknown>;
+    record: number;
+}
 
 class CsvFormatError extends Error {
     public readonly problem: CsvProblem;
@@ -185,5 +198,63 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
     });
 };
 
-export { CsvFormatError, parseCsv, parseCsvDocuments };
-export type { CsvCell, CsvDocument, CsvProblem };
+/** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
+type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; kind: "rejected" };
+
+/** Digits with an optional minus sign: the text a `bigint` column can hold. */
+const INTEGER_TEXT = /^-?\d+$/u;
+
+/**
+ * Read one cell's text as its column kind. Numbers, timestamps and dates take `Number`, so the text must not be blank (`Number("  ")` is 0)
+ * and must come out finite. Booleans take `true` or `false` in any case. Bigints take the integer text and keep it exact. Any other kind
+ * stays text, and the server validator decides what it accepts.
+ */
+const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
+    if (kind === "bigint") {
+        return INTEGER_TEXT.test(text) ? { kind: "ok", value: BigInt(text) } : { expected: "bigint", kind: "rejected" };
+    }
+
+    if (kind === "boolean") {
+        const lower = text.toLowerCase();
+
+        if (lower === "true" || lower === "false") {
+            return { kind: "ok", value: lower === "true" };
+        }
+
+        return { expected: "boolean", kind: "rejected" };
+    }
+
+    if (kind === "date" || kind === "number" || kind === "timestamp") {
+        const number = text.trim() === "" ? Number.NaN : Number(text);
+
+        return Number.isFinite(number) ? { kind: "ok", value: number } : { expected: "number", kind: "rejected" };
+    }
+
+    return { kind: "ok", value: text };
+};
+
+/**
+ * Coerce every cell of parsed documents to the type of its column, from the table's declared kinds (`kinds` maps a column name to its
+ * validator kind). A cell that does not fit its kind throws a {@link CsvFormatError} naming the record and column, so a file with one bad
+ * cell is refused before anything is written. An omitted cell stays omitted, and a column the table does not declare is passed through as
+ * text for the server to reject.
+ */
+const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string, string>): CoercedDocument[] =>
+    documents.map(({ doc, record }) => {
+        const coerced: Record<string, unknown> = {};
+
+        for (const [column, text] of Object.entries(doc)) {
+            const cell = coerceCell(text, kinds.get(column));
+
+            if (cell.kind === "rejected") {
+                throw new CsvFormatError({ column, expected: cell.expected, kind: "cell-type", record, value: text });
+            }
+
+            coerced[column] = cell.value;
+        }
+
+        return { doc: coerced, record };
+    });
+
+export { coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments };
+export type { CellType, CoercedDocument, CsvCell, CsvDocument, CsvProblem, CsvValue };

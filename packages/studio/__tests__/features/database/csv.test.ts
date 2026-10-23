@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CsvFormatError, parseCsv, parseCsvDocuments } from "../../../src/features/database/csv";
+import { coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments } from "../../../src/features/database/csv";
 
 /** The problem a parse throws, so each test can assert the kind and the record it names. */
 const problemOf = (run: () => unknown): unknown => {
@@ -145,5 +145,103 @@ describe("parseCsvDocuments", () => {
         expect.assertions(1);
 
         expect(parseCsvDocuments("id, title \n1,hello\n")).toStrictEqual([{ doc: { id: "1", title: "hello" }, record: 2 }]);
+    });
+});
+
+describe("coerceCsvDocuments", () => {
+    const kinds = new Map([
+        ["active", "boolean"],
+        ["amount", "bigint"],
+        ["count", "number"],
+        ["label", "string"],
+        ["payload", "object"],
+        ["stamp", "timestamp"],
+    ]);
+
+    /** The coerced value of the single column `name` in a one-row CSV with that header. */
+    const coerced = (name: string, text: string): unknown => {
+        const [document] = coerceCsvDocuments(parseCsvDocuments(`${name}\n${text}\n`), kinds);
+
+        return document?.doc[name];
+    };
+
+    it("reads a number column with Number, accepting decimal and exponent forms", () => {
+        expect.assertions(1);
+
+        expect([coerced("count", "42"), coerced("count", "1.5"), coerced("count", "-3e2")]).toStrictEqual([42, 1.5, -300]);
+    });
+
+    it("reads a boolean column as true or false, in any case", () => {
+        expect.assertions(1);
+
+        expect([coerced("active", "TRUE"), coerced("active", "False")]).toStrictEqual([true, false]);
+    });
+
+    it("keeps a bigint column exact, as a bigint, past the range of a JavaScript number", () => {
+        expect.assertions(1);
+
+        expect([coerced("amount", "9007199254740993"), coerced("amount", "-12")]).toStrictEqual([9_007_199_254_740_993n, -12n]);
+    });
+
+    it("leaves a string column and a column of an unlisted kind as text", () => {
+        expect.assertions(2);
+
+        expect(coerced("label", "007")).toBe("007");
+        expect(coerced("payload", "{}")).toBe("{}");
+    });
+
+    it("omits an empty unquoted cell from the coerced document, so the schema default applies", () => {
+        expect.assertions(1);
+
+        const [document] = coerceCsvDocuments(parseCsvDocuments("count,active\n,true\n"), kinds);
+
+        expect(document?.doc).toStrictEqual({ active: true });
+    });
+
+    it("rejects a number cell that is not a finite number, naming the record and column", () => {
+        expect.assertions(5);
+
+        for (const text of ["x", "Infinity", "NaN", "1,5"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,count\nm1,${text.includes(",") ? `"${text}"` : text}\n`), kinds))).toStrictEqual({
+                column: "count",
+                expected: "number",
+                kind: "cell-type",
+                record: 2,
+                value: text,
+            });
+        }
+
+        // A blank cell is not a number: Number("  ") is 0, so it must not coerce to one.
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,  \n"), kinds))).toMatchObject({ expected: "number", kind: "cell-type" });
+    });
+
+    it("rejects a boolean cell that is not true or false", () => {
+        expect.assertions(1);
+
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,active\nm1,yes\n"), kinds))).toStrictEqual({
+            column: "active",
+            expected: "boolean",
+            kind: "cell-type",
+            record: 2,
+            value: "yes",
+        });
+    });
+
+    it("rejects a bigint cell that is not an integer, including decimals, exponents, hex and padding", () => {
+        expect.assertions(5);
+
+        for (const text of ["1.5", "1e3", "0x1F", " 4", "+4"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,amount\nm1,${text}\n`), kinds))).toMatchObject({
+                column: "amount",
+                expected: "bigint",
+                kind: "cell-type",
+            });
+        }
+    });
+
+    it("reports the first bad cell in file order, so a file with several bad cells names one stable record", () => {
+        expect.assertions(1);
+
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,x\nm2,y\n"), kinds))).toMatchObject({ record: 2, value: "x" });
     });
 });
