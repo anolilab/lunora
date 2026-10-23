@@ -215,7 +215,15 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
+import {
+    buildStreamError,
+    buildSubscriptionError,
+    errorEnvelopeOf,
+    reconstructError,
+    reconstructErrorWithRetryAfter,
+    responseHeadersRecord,
+    withResponseHeaders,
+} from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -4767,7 +4775,9 @@ class LunoraClient {
         try {
             body = await response.json();
         } catch {
-            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`, {
+                headers: responseHeadersRecord(response.headers),
+            });
         }
 
         const envelope = errorEnvelopeOf(body);
@@ -4780,10 +4790,12 @@ class LunoraClient {
         // instead, per §4.2.
         if (!response.ok || (envelope !== undefined && !body.results)) {
             if (envelope !== undefined) {
-                throw reconstructError(envelope);
+                throw withResponseHeaders(reconstructError(envelope), response.headers);
             }
 
-            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`, {
+                headers: responseHeadersRecord(response.headers),
+            });
         }
 
         // Each entry is dispatched as an independent single call server-side, so
@@ -6646,7 +6658,7 @@ class LunoraClient {
             // portal, a truncated body. The HTTP status is the only verdict
             // there is, and `unparseableResponseError` is where the outbox's
             // "unknown fate, re-queue" / "refused, settle" split is decided.
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         // Valid JSON that is not an object (`null`, `[]`, a bare string) carries
@@ -6656,7 +6668,7 @@ class LunoraClient {
         const parsed: unknown = body;
 
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         const envelope = errorEnvelopeOf(body);
@@ -6665,7 +6677,7 @@ class LunoraClient {
             // Rebuilt with its `.code` and (for an app `LunoraError`) wire-decoded
             // `.data`, plus any `Retry-After` normalised into that `data` — the
             // one channel the hint travels on.
-            throw reconstructErrorWithRetryAfter(envelope, response.headers.get("retry-after"));
+            throw reconstructErrorWithRetryAfter(envelope, response.headers);
         }
 
         // A non-2xx response whose body parsed as JSON but carried no READABLE
@@ -6676,7 +6688,7 @@ class LunoraClient {
         // dropping it over a gateway blip, a 4xx settles it rather than replaying
         // a refusal forever.
         if (!response.ok) {
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         flags.onMutationAck?.(body.lastMutationId);
@@ -10001,14 +10013,12 @@ class LunoraClient {
             return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
-        const retryAfterHeader = response.headers.get("retry-after");
-
         // `null` parses as JSON but is no more an envelope than an HTML page is.
         if (!payload) {
             // Not a Lunora envelope at all (an edge's HTML page) — classified by
             // HTTP status, since re-queuing every such reply unconditionally
             // parks a chunk the edge REFUSED at the head of the outbox forever.
-            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, retryAfterHeader), shardKey, authToken);
+            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, response.headers), shardKey, authToken);
         }
 
         // Whole-batch rejection with no per-slot results: one outcome covering
@@ -10022,8 +10032,8 @@ class LunoraClient {
             const whole = errorEnvelopeOf(payload);
             const error =
                 whole === undefined
-                    ? unparseableResponseError(response.status, response.statusText, retryAfterHeader)
-                    : reconstructErrorWithRetryAfter(whole, retryAfterHeader);
+                    ? unparseableResponseError(response.status, response.statusText, response.headers)
+                    : reconstructErrorWithRetryAfter(whole, response.headers);
 
             return this.settleWholeBatchError(items, error, shardKey, authToken);
         }

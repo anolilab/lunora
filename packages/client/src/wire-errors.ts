@@ -217,25 +217,38 @@ const reconstructError = (errorBody: {
 };
 
 /**
+ * A response's headers as a plain read-only record, keys lowercased (the `Headers`
+ * iterator yields lowercase names). Built once per error, so the caller's `Headers`
+ * object is never retained.
+ */
+const responseHeadersRecord = (responseHeaders: Headers): Readonly<Record<string, string>> => Object.freeze(Object.fromEntries(responseHeaders));
+
+/** Attach the reply's headers to an error about to be thrown, non-enumerable like `internal`. */
+const withResponseHeaders = <T extends Error>(error: T, responseHeaders: Headers): T =>
+    Object.defineProperty(error, "headers", { value: responseHeadersRecord(responseHeaders) });
+
+/**
  * Rebuild a thrown `Error` from a server `{ error }` envelope (`reconstructError`)
  * with any `Retry-After` response header folded into `data.retryAfterMs` — the ONE
  * channel a retry hint travels on, and the only one the public `getRetryAfterMs`
  * reads. The runtime's REST limiter sends its hint as the header (whole seconds)
  * where an application limiter puts milliseconds in the envelope, so both replay
  * paths normalise it here rather than each in their own way.
+ *
+ * The response's headers ride along as `headers` (see {@link responseHeadersRecord}).
  */
 const reconstructErrorWithRetryAfter = (
     errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string },
-    retryAfterHeader: null | string,
+    responseHeaders: Headers,
 ): LunoraClientError => {
     const error = reconstructError(errorBody);
-    const data = retryAfterData(error, retryAfterHeader);
+    const data = retryAfterData(error, responseHeaders.get("retry-after"));
 
     if (data !== undefined) {
         error.data = data;
     }
 
-    return error;
+    return withResponseHeaders(error, responseHeaders);
 };
 
 /**
@@ -261,7 +274,19 @@ const slotError = (inner: { error?: unknown }): LunoraClientError => {
  * forward-compat/unknown server codes assignable without losing autocomplete on
  * the known `LunoraErrorCode` union.
  */
-type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[]; why?: string };
+type LunoraClientError = Error & {
+    code?: LunoraErrorCode | (string & {});
+    data?: unknown;
+    docsUrl?: string;
+
+    /**
+     * The headers of the reply this error came from. Set by the RPC, batch and replay paths; absent on
+     * a failure with no reply (a `fetch` that rejected, a timeout) and on the admin and stream paths.
+     */
+    headers?: Readonly<Record<string, string>>;
+    hint?: string | string[];
+    why?: string;
+};
 
 export {
     buildStreamError,
@@ -269,10 +294,12 @@ export {
     errorEnvelopeOf,
     reconstructError,
     reconstructErrorWithRetryAfter,
+    responseHeadersRecord,
     retryAfterData,
     retryAfterHeaderMs,
     slotError,
     unreadableSlotError,
     whyProperty,
+    withResponseHeaders,
 };
 export type { LunoraClientError, RpcEnvelopeBody };

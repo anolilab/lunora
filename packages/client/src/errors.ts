@@ -36,8 +36,8 @@ const KNOWN_ERROR_CODES = new Set<string>(Object.keys(ERROR_CATALOG));
  * {@link getRetryAfterMs} reads back and the outbox paces its retry on.
  */
 class TransportError extends LunoraError {
-    public constructor(message: string, data?: unknown) {
-        super("INTERNAL", message, { data });
+    public constructor(message: string, data?: unknown, headers?: Readonly<Record<string, string>>) {
+        super("INTERNAL", message, { data, headers });
     }
 }
 
