@@ -961,7 +961,7 @@ describe("connectLiveStream", () => {
         const everyId = Array.from({ length: RESUBSCRIBE_CONCURRENCY + 1 }, (_, index) => `s${String(index + 1)}`);
 
         expect(subscribes.map((call) => call.connectionId).filter((id) => id !== "c1" && id !== "c2")).toStrictEqual([]);
-        expect([...onSecond].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(everyId);
+        expect(onSecond.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(everyId);
 
         live.close();
     });
