@@ -205,9 +205,28 @@ type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; kind:
 const INTEGER_TEXT = /^-?\d+$/u;
 
 /**
- * Read one cell's text as its column kind. Numbers, timestamps and dates take `Number`, so the text must not be blank (`Number("  ")` is 0)
- * and must come out finite. Booleans take `true` or `false` in any case. Bigints take the integer text and keep it exact. Any other kind
- * stays text, and the server validator decides what it accepts.
+ * A decimal number: an optional sign, digits, an optional fraction and an optional exponent. `Number` reads more than this (hex, binary,
+ * octal, and the empty string), so the text is matched against this shape before it is converted.
+ */
+const DECIMAL_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
+
+/** The text, trimmed of surrounding whitespace, as a finite decimal number, or `undefined`. */
+const parseDecimal = (text: string): number | undefined => {
+    const trimmed = text.trim();
+
+    if (!DECIMAL_TEXT.test(trimmed)) {
+        return undefined;
+    }
+
+    const number = Number(trimmed);
+
+    return Number.isFinite(number) ? number : undefined;
+};
+
+/**
+ * Read one cell's text as its column kind. Numbers, timestamps and dates take a decimal, trimmed of surrounding whitespace. Booleans take
+ * `true` or `false` in any case. Bigints take the integer text and keep it exact. Any other kind stays text, and the server validator
+ * decides what it accepts.
  */
 const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     if (kind === "bigint") {
@@ -225,9 +244,9 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     }
 
     if (kind === "date" || kind === "number" || kind === "timestamp") {
-        const number = text.trim() === "" ? Number.NaN : Number(text);
+        const number = parseDecimal(text);
 
-        return Number.isFinite(number) ? { kind: "ok", value: number } : { expected: "number", kind: "rejected" };
+        return number === undefined ? { expected: "number", kind: "rejected" } : { kind: "ok", value: number };
     }
 
     return { kind: "ok", value: text };

@@ -165,10 +165,24 @@ describe("coerceCsvDocuments", () => {
         return document?.doc[name];
     };
 
-    it("reads a number column with Number, accepting decimal and exponent forms", () => {
+    it("reads a number column as a decimal, accepting a sign, a fraction, an exponent and surrounding spaces", () => {
         expect.assertions(1);
 
-        expect([coerced("count", "42"), coerced("count", "1.5"), coerced("count", "-3e2")]).toStrictEqual([42, 1.5, -300]);
+        expect([coerced("count", "42"), coerced("count", "1.5"), coerced("count", "-3e2"), coerced("count", "  42 ")]).toStrictEqual([42, 1.5, -300, 42]);
+    });
+
+    it("rejects number text that is not a decimal, though Number would read it: hex, binary, digit separators and trailing text", () => {
+        expect.assertions(4);
+
+        for (const text of ["0x1F", "0b11", "1_000", "12abc"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,count\nm1,${text}\n`), kinds))).toStrictEqual({
+                column: "count",
+                expected: "number",
+                kind: "cell-type",
+                record: 2,
+                value: text,
+            });
+        }
     });
 
     it("reads a boolean column as true or false, in any case", () => {
