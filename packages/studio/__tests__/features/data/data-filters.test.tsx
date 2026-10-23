@@ -125,6 +125,75 @@ describe("toFilterClauses", () => {
     });
 });
 
+describe("toFilterClauses — nested paths and array membership", () => {
+    it("splits a typed nested path, omits the path for a blank box, coerces has values, and drops a blank has row", () => {
+        expect.assertions(1);
+
+        expect(
+            toFilterClauses([
+                { column: "address", operator: "eq", path: "geo.city", value: "Berlin" },
+                { column: "address", operator: "eq", path: "  ", value: "Berlin" },
+                { column: "tags", operator: "has", value: "10" },
+                { column: "tags", operator: "has", value: "" },
+            ]),
+        ).toStrictEqual([
+            { column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" },
+            { column: "address", operator: "eq", value: "Berlin" },
+            { column: "tags", operator: "has", value: 10 },
+        ]);
+    });
+});
+
+describe("dataFilters — nested path and has", () => {
+    it("offers has and reports an edited path on the row it belongs to", () => {
+        expect.assertions(3);
+
+        const onFiltersChange = noop();
+
+        render(
+            <DataFilters
+                columns={COLUMNS}
+                filters={[{ column: "address", operator: "eq", path: "", value: "Berlin" }]}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={noop()}
+                search=""
+            />,
+        );
+
+        const row = screen.getByTestId("db-filter-row");
+
+        expect(within(row).getByRole("option", { name: "has" }).textContent).toBe("has");
+
+        fireEvent.change(within(row).getByTestId("db-filter-path"), { target: { value: "city" } });
+
+        expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "eq", path: "city", value: "Berlin" }]);
+
+        fireEvent.change(within(row).getByTestId("db-filter-operator"), { target: { value: "has" } });
+
+        expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "has", path: "", value: "Berlin" }]);
+    });
+
+    it("keeps a row's path when the value is edited", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = noop();
+
+        render(
+            <DataFilters
+                columns={COLUMNS}
+                filters={[{ column: "address", operator: "eq", path: "city", value: "Berlin" }]}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={noop()}
+                search=""
+            />,
+        );
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-value"), { target: { value: "Paris" } });
+
+        expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "eq", path: "city", value: "Paris" }]);
+    });
+});
+
 describe("dataFilters", () => {
     it("renders the search box and forwards changes", () => {
         expect.assertions(1);

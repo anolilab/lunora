@@ -97,6 +97,29 @@ describe("dataViewParams", () => {
         expect(searchToDataView({ filters }).filters).toEqual([{ column: "status", operator: "eq", value: "error" }]);
     });
 
+    it("keeps a has clause and a nested path through the URL round-trip", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "tags", operator: "has", value: "blue" },
+            { column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" },
+        ];
+
+        expect(searchToDataView(dataViewToSearch(searchToDataView({ filters: JSON.stringify(filters) }))).filters).toStrictEqual(filters);
+    });
+
+    it("drops a clause whose path is not a list of field names, rather than keeping it on the parent field", () => {
+        expect.assertions(1);
+
+        const filters = JSON.stringify([
+            { column: "address", operator: "eq", path: "city", value: "Berlin" },
+            { column: "address", operator: "eq", path: ["city", 2], value: "Berlin" },
+            { column: "status", operator: "eq", value: "active" },
+        ]);
+
+        expect(searchToDataView({ filters }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
+    });
+
     it("tolerates non-JSON filters", () => {
         expect.assertions(1);
 

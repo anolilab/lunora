@@ -64,9 +64,18 @@ interface GlobalTablePage {
  * here as bytes because the facet payload is wire-encoded), normalised by
  * {@link sqliteEncode} and bound as a parameter, never interpolated.
  * AND-combined with the other clauses.
+ *
+ * Only `eq` is compiled on this path. `operator` and `path` exist so that a
+ * request asking for anything else is refused by {@link buildEqPredicate} rather
+ * than read as an equality: a `has` or `contains` clause matched as `= ?` would
+ * return rows the caller did not ask for.
  */
 interface GlobalFilterClause {
     column: string;
+    /** Must be absent or `"eq"`; any other operator is refused. */
+    operator?: string;
+    /** Must be absent or empty; a nested path is refused (D1 columns are physical). */
+    path?: string[];
     value: unknown;
 }
 
@@ -207,6 +216,26 @@ const globalColumnKind = (schema: SchemaLike, table: string, column: string): st
 const INTEGER_TEXT = /^-?\d+$/u;
 
 /**
+ * workerd's ceiling on bound parameters per statement — the same limit the shard
+ * engine enforces. Duplicated rather than imported because `@lunora/shard-engine`
+ * keeps its builders internal.
+ */
+const MAX_BOUND_PARAMETERS = 100;
+
+/**
+ * Refuse a D1 statement that would bind more parameters than workerd accepts.
+ * @throws LunoraError `BAD_REQUEST` when `count` exceeds {@link MAX_BOUND_PARAMETERS}
+ */
+const assertParameterBudget = (table: string, count: number): void => {
+    if (count > MAX_BOUND_PARAMETERS) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `the query over ${table} binds ${String(count)} parameters, and a statement takes at most ${String(MAX_BOUND_PARAMETERS)} — remove some filters`,
+        );
+    }
+};
+
+/**
  * The bound form of an eq filter value: the writer's own {@link sqliteEncode},
  * given the column's kind. A `v.bigint()` column stores a zero-padded TEXT sort
  * key, and a browser sends the operator's `10` as a number (or, past 2^53, as the
@@ -225,6 +254,22 @@ const bindGlobalFilterValue = (value: unknown, kind: string | undefined): unknow
     const text = typeof value === "number" || typeof value === "string" ? String(value).trim() : undefined;
 
     return sqliteEncode(text !== undefined && INTEGER_TEXT.test(text) ? BigInt(text) : value, kind);
+};
+
+/**
+ * Refuse a clause this path cannot compile. The wire carries `operator` and
+ * `path` so a request for `has`, `contains` or a nested field is refused here
+ * rather than read as an equality on the parent column.
+ * @throws LunoraError `BAD_REQUEST` naming the operator or the nested path
+ */
+const assertEqOnlyClause = (filter: GlobalFilterClause): void => {
+    if (filter.operator !== undefined && filter.operator !== "eq") {
+        throw new LunoraError("BAD_REQUEST", `operator "${filter.operator}" is not supported on the global browser — only eq is`);
+    }
+
+    if (filter.path !== undefined && !(Array.isArray(filter.path) && filter.path.length === 0)) {
+        throw new LunoraError("BAD_REQUEST", `a nested path is not supported on the global browser, so ${filter.column} must be a top-level column`);
+    }
 };
 
 /**
@@ -249,6 +294,8 @@ const buildEqPredicate = (
     const params: unknown[] = [];
 
     for (const filter of filters ?? []) {
+        assertEqOnlyClause(filter);
+
         if (!displayColumns.includes(filter.column)) {
             throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${filter.column}`, { status: 404 });
         }
@@ -415,6 +462,9 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const columns = await resolveColumns(exec, schema, table);
     const { params: whereParams, where: whereSql } = buildEqPredicate(schema, table, columns, options.filters);
 
+    // The page statement appends LIMIT and OFFSET to the WHERE params.
+    assertParameterBudget(table, whereParams.length + 2);
+
     const total = await countRows(exec, quoted, whereSql, whereParams);
     // `LIMIT ? OFFSET ?` with no ORDER BY is not pagination: SQLite may return
     // the rows in whatever order the plan produces, and two identical requests
@@ -481,6 +531,7 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
+    assertParameterBudget(table, whereParams.length + 1);
     const physical = quoteIdentifier(physicalColumnName(schema, table, column));
 
     // Over-fetch one row past the cap to detect (and report) truncation. The

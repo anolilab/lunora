@@ -4,7 +4,7 @@ import { decodeWire } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";
 
 import { isInternalTableName } from "../../../shared/internal-table-name";
-import { jsonPathSegment } from "../../../shared/json-path-segment";
+import { isBareJsonPathLabel, jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
@@ -849,19 +849,26 @@ interface TablePage {
  */
 type ColumnKinds = Readonly<Record<string, string>>;
 
-/** Comparison a {@link FilterClause} applies. `contains` is a case-insensitive substring test (see {@link containsSql}); the rest are direct SQL comparisons. */
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+/**
+ * Comparison a {@link FilterClause} applies. `contains` is a case-insensitive substring test (see {@link containsSql}); `has` tests membership in a JSON array; the rest are direct SQL comparisons.
+ */
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 
 /**
  * One structured column filter — `column`, `operator`, `value` — AND-combined
  * with the substring `search` and every other clause. `column` is a displayed
  * column: a physical/meta column (compared directly) or a `__doc__` JSON field
- * (compared via `json_extract`, with the path bound as a parameter). The `value`
- * is always a bound parameter, so no clause can inject SQL.
+ * (compared via `json_extract`, with the path bound as a parameter). `path` names
+ * a field nested under that `__doc__` field (`{column: "address", path: ["city"]}`
+ * addresses `address.city`); it is a list rather than a dotted string because a
+ * dotted `column` is a literal flat key. The `value` is always a bound parameter,
+ * so no clause can inject SQL.
  */
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    /** Field names nested under `column`, outermost first. Only a `__doc__` field has one. */
+    path?: string[];
     value?: unknown;
 }
 
@@ -1161,8 +1168,28 @@ const physicalColumnNames = (sql: SqlExec, quotedTable: string): string[] =>
         .toArray()
         .map((column) => column.name);
 
-/** SQL operator per direct {@link FilterOperator} (everything but `contains`, which uses {@link containsSql}). */
-const FILTER_SQL_OPERATOR: Record<Exclude<FilterOperator, "contains">, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
+/** SQL operator per direct {@link FilterOperator} (`contains` uses {@link containsSql}, `has` uses {@link buildArrayContains}). */
+const FILTER_SQL_OPERATOR: Record<Exclude<FilterOperator, "contains" | "has">, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
+
+/**
+ * workerd's ceiling on bound parameters per statement. SQLite raises a bare
+ * "too many SQL variables" over it, naming no filter, so the builder refuses
+ * first and says which filters to drop.
+ */
+const MAX_BOUND_PARAMETERS = 100;
+
+/**
+ * Refuse a statement that would bind more parameters than workerd accepts.
+ * @throws LunoraError `BAD_REQUEST` when `count` exceeds {@link MAX_BOUND_PARAMETERS}
+ */
+const assertParameterBudget = (table: string, count: number): void => {
+    if (count > MAX_BOUND_PARAMETERS) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `the query over ${table} binds ${String(count)} parameters, and a statement takes at most ${String(MAX_BOUND_PARAMETERS)} — remove some filters or narrow the search`,
+        );
+    }
+};
 
 /** Coerce a filter value to its comparison text, treating non-primitives as empty (they can't meaningfully substring-match). */
 const filterValueText = (value: unknown): string => {
@@ -1200,15 +1227,36 @@ const isVacuousFilterClause = (clause: FilterClause): boolean =>
     clause.operator === "contains" ? filterValueText(clause.value) === "" : RANGE_OPERATORS.has(clause.operator) && clause.value === "";
 
 /**
- * Resolve a displayed column to its SQL expression plus any bound path params —
- * the single home for the injection-safe allowlist + bound-path discipline shared
- * by {@link buildFilterClause} and {@link buildOrderBy}. A physical/meta column
- * compiles to its quoted identifier (no params); a `__doc__` field to
- * `json_extract(__doc__, ?)` with the JSON path (`$."field"`) **bound**, never
- * interpolated. Returns `undefined` for an unknown column on a non-doc table.
+ * The `$`-rooted JSON path of a `__doc__` field, optionally nested under it. The
+ * root keeps the shared quoter, so a schema-free field named `a.b` still
+ * addresses its flat key. Each nested segment must have the identifier shape
+ * codegen enforces on schema fields: a bare label is never quoted or escaped, and
+ * an empty or punctuated segment is refused rather than guessed at.
+ * @throws LunoraError `BAD_REQUEST` when a nested segment is not an identifier
+ */
+const documentJsonPath = (field: string, path: ReadonlyArray<string>): string => {
+    if (!path.every((segment) => typeof segment === "string" && isBareJsonPathLabel(segment))) {
+        throw new LunoraError("BAD_REQUEST", `nested path under ${field} must name fields by identifier, got ${JSON.stringify(path)}`);
+    }
+
+    return `$.${[field, ...path].map((segment) => jsonPathSegment(segment)).join(".")}`;
+};
+
+/**
+ * Resolve a displayed column (and an optional nested `path` under it) to its SQL
+ * expression plus any bound path params — the single home for the injection-safe
+ * allowlist + bound-path discipline shared by {@link buildFilterClause} and
+ * {@link buildOrderBy}. A physical/meta column compiles to its quoted identifier
+ * (no params, and no nested path); a `__doc__` field to `json_extract(__doc__, ?)`
+ * with the JSON path **bound**, never interpolated. Returns `undefined` for an
+ * unknown column on a non-doc table.
  * @returns the SQL expression and its bound params, or `undefined` for an unknown column on a non-doc table
  */
-const resolveColumnExpression = (column: string, physicalColumns: string[]): undefined | { expression: string; params: unknown[] } => {
+const resolveColumnExpression = (
+    column: string,
+    physicalColumns: string[],
+    path: ReadonlyArray<string> = [],
+): undefined | { expression: string; params: unknown[] } => {
     const isPhysical = physicalColumns.includes(column);
     const isDocumentStored = physicalColumns.includes(DOC_COLUMN);
 
@@ -1216,9 +1264,15 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
         return undefined;
     }
 
-    return isPhysical
-        ? { expression: quoteIdentifier(column), params: [] }
-        : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$.${jsonPathSegment(column)}`] };
+    if (isPhysical) {
+        if (path.length > 0) {
+            throw new LunoraError("BAD_REQUEST", `${column} is a physical column, so it has no nested path`);
+        }
+
+        return { expression: quoteIdentifier(column), params: [] };
+    }
+
+    return { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [documentJsonPath(column, path)] };
 };
 
 /** An integer literal a `v.bigint()` filter accepts as typed text. */
@@ -1272,6 +1326,56 @@ const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
     kind === "bigint" && typeof value === "string" ? (decodeBigintSqlKey(value) ?? value) : value;
 
 /**
+ * The scalar a `has` clause tests for membership. A JSON boolean reads back from
+ * `json_each` as the integer 0 or 1, so it binds as that; anything that is not a
+ * string, finite number or boolean has no element form to compare against.
+ * @throws LunoraError `BAD_REQUEST` when the value is null, an object, an array, or not finite
+ */
+const arrayElementValue = (value: unknown): number | string => {
+    const element = typeof value === "boolean" ? Number(value) : value;
+
+    if (typeof element === "string" || (typeof element === "number" && Number.isFinite(element))) {
+        return element;
+    }
+
+    throw new LunoraError("BAD_REQUEST", '"has" needs a string, number or boolean value to look for in the array');
+};
+
+/**
+ * Compile a `has` clause: the JSON array at the document field (or nested path)
+ * contains `value`. `json_each(__doc__, ?)` walks the array at the bound path; the
+ * `typeof(j.key) = 'integer'` guard keeps only array elements, since an object's
+ * members carry text keys and a scalar yields a NULL key. Without it `has` would
+ * match an object's values, and on a scalar field it would act as `eq`.
+ * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
+ * @throws LunoraError `BAD_REQUEST` on a physical column, a bigint field, or a non-scalar value
+ */
+const buildArrayContains = (
+    clause: FilterClause,
+    physicalColumns: string[],
+    kinds: ColumnKinds | undefined,
+): { params: unknown[]; sql: string } | undefined => {
+    if (physicalColumns.includes(clause.column)) {
+        throw new LunoraError("BAD_REQUEST", `"has" needs an array-valued document field, but ${clause.column} is a physical column`);
+    }
+
+    if (!physicalColumns.includes(DOC_COLUMN)) {
+        return undefined;
+    }
+
+    const path = clause.path ?? [];
+
+    if (path.length === 0 && kinds?.[clause.column] === "bigint") {
+        throw new LunoraError("BAD_REQUEST", `"has" is not supported on bigint column ${clause.column} — it stores a sort key, not an array`);
+    }
+
+    return {
+        params: [documentJsonPath(clause.column, path), arrayElementValue(clause.value)],
+        sql: `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND j.value = ?)`,
+    };
+};
+
+/**
  * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
  * `undefined` to skip it (an unknown column on a non-doc table). The compared
  * expression + bound path params come from {@link resolveColumnExpression}; the
@@ -1294,14 +1398,21 @@ const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  */
 const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kinds: ColumnKinds | undefined): { params: unknown[]; sql: string } | undefined => {
-    const resolved = resolveColumnExpression(clause.column, physicalColumns);
+    if (clause.operator === "has") {
+        return buildArrayContains(clause, physicalColumns, kinds);
+    }
+
+    const path = clause.path ?? [];
+    const resolved = resolveColumnExpression(clause.column, physicalColumns, path);
 
     if (resolved === undefined || isVacuousFilterClause(clause)) {
         return undefined;
     }
 
     const { expression, params: pathParameters } = resolved;
-    const kind = physicalColumns.includes(clause.column) ? undefined : kinds?.[clause.column];
+    // A nested leaf has no declared kind of its own: the kinds map is keyed by the
+    // top-level field, whose kind describes the parent object, not what is under it.
+    const kind = physicalColumns.includes(clause.column) || path.length > 0 ? undefined : kinds?.[clause.column];
 
     if (clause.operator === "contains") {
         // The stored text of a bigint is a zero-padded sort key, so a substring
@@ -1582,6 +1693,10 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     const whereParams = predicate?.parameters ?? [];
     const orderParams = order?.params ?? [];
 
+    // The page statement binds the WHERE and ORDER BY params plus LIMIT and OFFSET;
+    // the COUNT binds a subset of that, so checking the page covers both.
+    assertParameterBudget(table, whereParams.length + orderParams.length + 2);
+
     // `skipCount` omits the COUNT entirely (the caller sources `total` from a
     // separate, predicate-keyed read so paging never re-counts). Otherwise the
     // COUNT reflects the filtered set so pagination stays honest.
@@ -1642,7 +1757,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     // otherwise leave the scan unfiltered — a whole-table write under the verb of
     // a filtered one.
     for (const clause of options.filters ?? []) {
-        if (resolveColumnExpression(clause.column, columns) === undefined) {
+        if (resolveColumnExpression(clause.column, columns, clause.path ?? []) === undefined) {
             throw new LunoraError("BAD_REQUEST", `unknown column: ${clause.column}`);
         }
     }
@@ -1675,6 +1790,8 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
 
     // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
     // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
+    assertParameterBudget(table, parameters.length + 1);
+
     const fetched = sql.exec<{ id: string }>(`SELECT id FROM ${quoted}${whereSql}${orderSql} LIMIT ?`, ...parameters, limit + 1).toArray();
 
     const hasMore = fetched.length > limit;
@@ -1767,6 +1884,8 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     // The grouped expression's bound path params appear twice (SELECT + GROUP BY),
     // so they bracket the WHERE params on each side in SQL order. Over-fetch one
     // row past the cap to detect (and report) truncation.
+    assertParameterBudget(table, resolved.params.length * 2 + whereParams.length + 1);
+
     const rows = sql
         .exec<{
             count: bigint | number;

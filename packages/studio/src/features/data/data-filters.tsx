@@ -1,6 +1,7 @@
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { useT } from "../../i18n/i18n-context";
 import type { FilterClause, FilterOperator } from "../../lib/admin";
 
 /** A filter row as edited in the UI — the value is always a string until coerced for the wire. */
@@ -28,11 +29,20 @@ interface EditableFilter {
      * typed value (`age > 18` has to compare numerically).
      */
     literal?: [unknown];
+
     operator: FilterOperator;
+
+    /**
+     * Dot-separated field names nested under `column`, as typed (`city`,
+     * `geo.city`). Absent or empty addresses the column itself. {@link toFilterClauses}
+     * splits it into the wire `path`; a dot is never part of a field name, so the join
+     * and split round-trip exactly.
+     */
+    path?: string;
     value: string;
 }
 
-/** Operators offered in the dropdown, in a sensible order, with their display labels. */
+/** Symbolic operators offered in the dropdown, in a sensible order. `has` is labelled through `t()` at render time. */
 const OPERATORS: ReadonlyArray<{ label: string; value: FilterOperator }> = [
     { label: "=", value: "eq" },
     { label: "≠", value: "ne" },
@@ -71,6 +81,9 @@ const isVacuous = (filter: EditableFilter): boolean => {
     return filter.operator !== "eq" && filter.operator !== "ne" && filter.literal === undefined && filter.value.trim() === "";
 };
 
+/** The wire `path` for a typed nested path: its segments, or `undefined` when the box is blank. */
+const wirePath = (path: string | undefined): string[] | undefined => (path === undefined || path.trim() === "" ? undefined : path.trim().split("."));
+
 /**
  * Convert the UI's string-valued filter rows into wire {@link FilterClause}s:
  * drops rows with no column, and coerces a canonical numeric string to a number for
@@ -97,13 +110,17 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
     filters
         .filter((filter) => filter.column !== "" && !isVacuous(filter))
         .map((filter) => {
+            const path = wirePath(filter.path);
+            const pathField = path === undefined ? {} : { path };
+
             if (filter.operator === "contains") {
-                return { column: filter.column, operator: filter.operator, value: filter.value };
+                return { column: filter.column, operator: filter.operator, ...pathField, value: filter.value };
             }
 
             return {
                 column: filter.column,
                 operator: filter.operator,
+                ...pathField,
                 value: filter.literal === undefined ? coerceFilterValue(filter.value) : filter.literal[0],
             };
         });
@@ -115,7 +132,7 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
  * later has to be considered here rather than silently surviving an edit.
  */
 const typedFilter = (filter: EditableFilter, patch: Partial<EditableFilter>): EditableFilter => {
-    return { column: filter.column, operator: filter.operator, value: filter.value, ...patch };
+    return { column: filter.column, operator: filter.operator, path: filter.path, value: filter.value, ...patch };
 };
 
 /**
@@ -187,6 +204,7 @@ const DataFilters = ({
     search: string;
 }): ReactElement => {
     const [aiPrompt, setAiPrompt] = useState("");
+    const t = useT();
 
     const addFilter = (): void => {
         onFiltersChange([...filters, { column: columns[0] ?? "", operator: "eq", value: "" }]);
@@ -210,6 +228,13 @@ const DataFilters = ({
         const next = event.currentTarget.value as FilterOperator;
 
         onFiltersChange(filters.map((filter, position) => (position === index ? { ...filter, operator: next } : filter)));
+    };
+
+    const changePath = (event: ChangeEvent<HTMLInputElement>): void => {
+        const index = Number(event.currentTarget.dataset.index);
+        const next = event.currentTarget.value;
+
+        onFiltersChange(filters.map((filter, position) => (position === index ? typedFilter(filter, { path: next }) : filter)));
     };
 
     const changeValue = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -279,12 +304,20 @@ const DataFilters = ({
                         ))}
                     </select>
                     <select aria-label="Filter operator" data-index={index} data-testid="db-filter-operator" onChange={changeOperator} value={filter.operator}>
-                        {OPERATORS.map((operator) => (
+                        {[...OPERATORS, { label: t("has"), value: "has" as const }].map((operator) => (
                             <option key={operator.value} value={operator.value}>
                                 {operator.label}
                             </option>
                         ))}
                     </select>
+                    <input
+                        aria-label={t("Nested field path")}
+                        data-index={index}
+                        data-testid="db-filter-path"
+                        onChange={changePath}
+                        placeholder={t("nested path, e.g. geo.city")}
+                        value={filter.path ?? ""}
+                    />
                     <input
                         aria-label="Filter value"
                         data-index={index}

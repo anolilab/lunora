@@ -169,7 +169,7 @@ type GenerateFilterResult = GenerateFilterOk | GenerateSqlDegraded;
 type GenerateChartResult = GenerateChartOk | GenerateSqlDegraded;
 
 /** Operators the data browser's filter builder accepts. A response naming anything else is rejected. */
-const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
 
 /** Chart kinds the editor can render. */
 const CHART_KINDS = new Set(["area", "bar", "line"]);
@@ -431,7 +431,7 @@ const attempt = async <T>(
 const structuredSystemPrompt = (task: "chart" | "filter"): string => {
     const shape =
         task === "filter"
-            ? 'a JSON array of {"column","operator","value"} objects, operator one of eq, ne, lt, lte, gt, gte, contains'
+            ? 'a JSON array of {"column","operator","value"} objects, operator one of eq, ne, lt, lte, gt, gte, contains, or has (the array column contains value)'
             : 'a JSON object {"kind","x","y"} where kind is one of bar, line, area, x is one column name and y is an array of column names';
 
     return (

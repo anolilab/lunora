@@ -3132,6 +3132,55 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
     });
 });
 
+describe("shardDO admin filters — nested paths and array membership", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: AdminShard;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.raw(
+            `INSERT INTO "orders" VALUES ('o1', 1, '{"address":{"city":"Berlin"},"tags":["red","blue"]}'), ('o2', 2, '{"address":{"city":"Paris"},"tags":["green"]}')`,
+        );
+
+        shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const pageIds = async (filters: unknown): Promise<unknown[]> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters, table: "orders" }));
+        const { result } = await response.json<{ result: { rows: Record<string, unknown>[] } }>();
+
+        return result.rows.map((row) => row["id"]);
+    };
+
+    it("filters a nested field through the path the browser sends", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "address", operator: "eq", path: ["city"], value: "Berlin" }])).resolves.toStrictEqual(["o1"]);
+    });
+
+    it("filters array membership through has", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "tags", operator: "has", value: "green" }])).resolves.toStrictEqual(["o2"]);
+    });
+
+    it("answers 400 to a path that is not a list of field names, rather than testing the parent field", async () => {
+        expect.assertions(2);
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "address", operator: "eq", path: "city", value: "Berlin" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+    });
+});
+
 /**
  * {@link MoneyApplyShard} with the two other seams the codegen subclass fills: the
  * schema's column kinds (`tableColumns`) and a real per-row writer for the bulk

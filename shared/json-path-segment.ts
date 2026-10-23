@@ -35,3 +35,6 @@ const BARE_JSON_PATH_LABEL = /^[A-Za-z_$][\w$]*$/u;
 
 export const jsonPathSegment = (field: string): string =>
     BARE_JSON_PATH_LABEL.test(field) ? field : `"${field.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`)}"`;
+
+/** Whether `label` is a bare object label, so `jsonPathSegment` would return it unquoted. */
+export const isBareJsonPathLabel = (label: string): boolean => BARE_JSON_PATH_LABEL.test(label);
