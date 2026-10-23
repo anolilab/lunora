@@ -1,3 +1,38 @@
+## @lunora/codegen [1.0.0-alpha.347](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.346...@lunora/codegen@1.0.0-alpha.347) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.251
+* **@lunora/agent:** upgraded to 1.0.0-alpha.241
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.147
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/do:** upgraded to 1.0.0-alpha.241
+* **@lunora/payment:** upgraded to 1.0.0-alpha.234
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
+## @lunora/codegen [1.0.0-alpha.346](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.345...@lunora/codegen@1.0.0-alpha.346) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+### Performance Improvements
+
+* **codegen:** cache rpc service declaration emit ([#1302](https://github.com/anolilab/lunora/issues/1302)) ([448e02f](https://github.com/anolilab/lunora/commit/448e02f56cec15390138844e2f16299ae31dc568))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.250
+* **@lunora/agent:** upgraded to 1.0.0-alpha.240
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/do:** upgraded to 1.0.0-alpha.240
+* **@lunora/payment:** upgraded to 1.0.0-alpha.233
+* **@lunora/server:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
 ## @lunora/codegen [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.344...@lunora/codegen@1.0.0-alpha.345) (2026-10-22)
 
 ### Performance Improvements

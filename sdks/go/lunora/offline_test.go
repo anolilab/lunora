@@ -626,7 +626,7 @@ func TestClientIDIsPerInstanceAndRidesEveryWrite(t *testing.T) {
 		t.Fatalf("persisted clientId: got %q, want %q", got, first.ClientID())
 	}
 
-	first.AttachSocket(func(map[string]any) error { return nil })
+	first.AttachSocket(func(map[string]any) error { return nil }, nil)
 	first.FlushOfflineQueue("")
 
 	if sentClientID != first.ClientID() {
@@ -1318,7 +1318,7 @@ func TestSubmitQueuesWhileOfflineAndKeepsItsOverlay(t *testing.T) {
 
 	var seen []any
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 	client.Subscribe("messages:list", map[string]any{"channel": "general"}, func(value any) { seen = append(seen, value) }, nil, "")
 
 	// Prime the subscription with a server value, then drop the socket.
@@ -1326,7 +1326,7 @@ func TestSubmitQueuesWhileOfflineAndKeepsItsOverlay(t *testing.T) {
 		t.Fatalf("prime: %v", err)
 	}
 
-	client.DetachSocket()
+	client.DetachSocket(0, "")
 
 	outcome, err := client.Submit(SubmitOptions{
 		Args:         map[string]any{"channel": "general"},
@@ -1354,7 +1354,7 @@ func TestSubmitQueuesWhileOfflineAndKeepsItsOverlay(t *testing.T) {
 		t.Fatalf("pending: got %d, want 1", client.PendingMutationCount())
 	}
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 	client.FlushOfflineQueue("")
 
 	if posts != 1 || client.PendingMutationCount() != 0 {
@@ -1459,7 +1459,7 @@ func TestSubmitRollsBackTheOverlayWhenTheWriteIsRejected(t *testing.T) {
 
 	var seen []any
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 	client.Subscribe("messages:list", map[string]any{}, func(value any) { seen = append(seen, value) }, nil, "")
 
 	if _, err := client.HandleFrame([]byte(`{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}`)); err != nil {
@@ -1516,8 +1516,8 @@ func TestSubmitAndFlushDoNotRaceTheQueue(t *testing.T) {
 	})
 
 	// Connected once, then dropped: every Submit queues.
-	client.AttachSocket(func(map[string]any) error { return nil })
-	client.DetachSocket()
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
+	client.DetachSocket(0, "")
 
 	var committed atomic.Int64
 
@@ -1606,8 +1606,8 @@ func TestCloseRacingSubmitStrandsNoWrite(t *testing.T) {
 	for attempt := range 200 {
 		client := NewClient("https://app.example", nil)
 
-		client.AttachSocket(func(map[string]any) error { return nil })
-		client.DetachSocket()
+		client.AttachSocket(func(map[string]any) error { return nil }, nil)
+		client.DetachSocket(0, "")
 
 		var wait sync.WaitGroup
 
@@ -1687,14 +1687,14 @@ func TestOnlineOnlyWriteIsRefusedWhenDisconnectedAndNeverPersisted(t *testing.T)
 
 	var seen []any
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 	client.Subscribe("auth:setPassword", args, func(value any) { seen = append(seen, value) }, nil, "")
 
 	if _, err := client.HandleFrame([]byte(`{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}`)); err != nil {
 		t.Fatalf("prime: %v", err)
 	}
 
-	client.DetachSocket()
+	client.DetachSocket(0, "")
 
 	_, err := client.Submit(SubmitOptions{
 		Args:         args,
@@ -1736,7 +1736,7 @@ func TestOnlineOnlyWriteIsSentWhenConnected(t *testing.T) {
 	var bodies [][]byte
 
 	client := onlineOnlyClient(store, &bodies)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	outcome, err := client.Submit(SubmitOptions{Args: map[string]any{"token": onlineOnlySecret}, FunctionPath: "auth:setPassword", OnlineOnly: true})
 	if err != nil {
@@ -1870,7 +1870,7 @@ func TestOnlineOnlyTransportFailureIsRefused(t *testing.T) {
 	overlayRolledBack(t, *seen)
 
 	client, _, _ = fresh(unreachablePost, &memoryStore{})
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	_, err = client.Submit(SubmitOptions{Args: args, FunctionPath: "auth:setPassword", OnlineOnly: true})
 

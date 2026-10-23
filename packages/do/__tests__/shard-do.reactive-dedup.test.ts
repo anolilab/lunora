@@ -197,10 +197,11 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
         expect(sockets.every((ws, index) => lastOwner(ws, `sub-${String(index)}`) !== undefined)).toBe(true);
     });
 
-    it("reads each socket's attachment twice per flush (expiry+fan-out share one read, plus the deliberate post-await fresh read)", async () => {
-        expect.assertions(1);
+    it("decodes no socket attachment on a write flush once this instance has cached it, and each one once after a wake", async () => {
+        expect.assertions(2);
 
-        const shard = new DedupShard(createFakeState(), {});
+        const state = createFakeState();
+        const shard = new DedupShard(state, {});
         const reads: { count: number }[] = [];
 
         for (let index = 0; index < 3; index += 1) {
@@ -226,7 +227,16 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
 
         await shard.writeRpc();
 
-        expect(reads.map((counter) => counter.count)).toStrictEqual([2, 2, 2]);
+        // The subscribe already cached every attachment, so the flush's passes decode none.
+        expect(reads.map((counter) => counter.count)).toStrictEqual([0, 0, 0]);
+
+        // A new instance (a hibernation wake) holds no cache: one decode per socket, then cached.
+        const woken = new DedupShard(state, {});
+
+        await woken.writeRpc();
+        await woken.writeRpc();
+
+        expect(reads.map((counter) => counter.count)).toStrictEqual([1, 1, 1]);
     });
 
     it("negative: an identity-dependent query runs once PER socket under its own identity (no leak)", async () => {

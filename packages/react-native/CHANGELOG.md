@@ -1,3 +1,23 @@
+## @lunora/react-native [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.221...@lunora/react-native@1.0.0-alpha.222) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/react:** upgraded to 1.0.0-alpha.256
+
+## @lunora/react-native [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.220...@lunora/react-native@1.0.0-alpha.221) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/react:** upgraded to 1.0.0-alpha.255
+
 ## @lunora/react-native [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.219...@lunora/react-native@1.0.0-alpha.220) (2026-10-22)
 
 

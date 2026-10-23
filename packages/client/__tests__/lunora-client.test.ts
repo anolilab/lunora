@@ -2,6 +2,7 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createClientQuery } from "../src/client-query-store";
+import { TabCoordinator } from "../src/cross-tab";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
@@ -1589,9 +1590,10 @@ describe("lunoraClient", () => {
 
             first.receive({ cursor: 10, data: [{ _id: "a" }, { _id: "b" }, { _id: "c" }], id: subId, type: "data" });
             // Frame 1 of a 3-frame run; the socket dies before frames 2 and 3.
-            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, type: "delta" });
+            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
 
-            expect(received.at(-1)).toStrictEqual([{ _id: "b" }, { _id: "c" }]);
+            // The half-run is held, never shown: the list stays the snapshot it was.
+            expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }, { _id: "c" }]);
 
             first.triggerClose();
             vi.advanceTimersByTime(15);
@@ -1617,6 +1619,106 @@ describe("lunoraClient", () => {
 
             client.close();
             vi.useRealTimers();
+        });
+
+        it("commits a delta run once: one listener notification and one cross-tab broadcast", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const broadcast = vi.spyOn(TabCoordinator.prototype, "broadcastSubscriptionData");
+            const client = new LunoraClient({
+                crossTabSync: true,
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 10, data: [{ _id: "a" }, { _id: "b" }], id: subId, type: "data" });
+
+                const notifiedBefore = received.length;
+                const broadcastBefore = broadcast.mock.calls.length;
+
+                socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ cursor: 13, delta: { key: "b", op: "update", row: { _id: "b", v: 2 }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.slice(notifiedBefore)).toStrictEqual([[{ _id: "b", v: 2 }, { _id: "c" }]]);
+                expect(broadcast.mock.calls.slice(broadcastBefore).map((call) => [call[1], call[2]])).toStrictEqual([[[{ _id: "b", v: 2 }, { _id: "c" }], 13]]);
+
+                // A run cut off by a snapshot is dropped, never applied on top of it.
+                socket.receive({ delta: { key: "b", op: "delete", table: "messages" }, id: subId, more: true, type: "delta" });
+                socket.receive({ cursor: 20, data: [{ _id: "z" }], id: subId, type: "data" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "z" }]);
+                expect(received.slice(notifiedBefore)).toHaveLength(2);
+            } finally {
+                client.close();
+                broadcast.mockRestore();
+                vi.useRealTimers();
+            }
+        });
+
+        it("holds a run's non-final frames and commits on its last frame, cursor or not", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 10, data: [{ _id: "a" }], id: subId, type: "data" });
+
+                // A legacy broadcast carries no `more` flag: it is a whole change, applied on arrival.
+                socket.receive({ delta: { key: "b", op: "insert", row: { _id: "b" }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+                // A non-final frame of a run is held until the run's last frame arrives.
+                socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: subId, more: true, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }]);
+
+                // A shard that stopped stamping cursors still commits its run: the last frame has no `more`.
+                socket.receive({ delta: { key: "d", op: "insert", row: { _id: "d" }, table: "messages" }, id: subId, type: "delta" });
+
+                expect(received.at(-1)).toStrictEqual([{ _id: "a" }, { _id: "b" }, { _id: "c" }, { _id: "d" }]);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
         });
 
         it("does not replay a resume cursor it holds no value behind", () => {
@@ -6168,8 +6270,11 @@ describe("lunoraClient", () => {
             try {
                 client.subscribe(fnRef("q:list"), {}, () => undefined);
 
-                // Solo self-promotion (default 3s leaderTimeout) opens the socket.
-                await vi.advanceTimersByTimeAsync(3100);
+                // Advance to the next scheduled timer until leadership opens the socket.
+                while (sockets.length === 0) {
+                    // eslint-disable-next-line no-await-in-loop -- each timer must settle before the socket check
+                    await vi.advanceTimersToNextTimerAsync();
+                }
 
                 expect(sockets).toHaveLength(1);
 

@@ -53,7 +53,8 @@ void caseServerFrameConsumer() {
 
   for (final testCase in objectList(fixture('ws-frames.json')['serverFrames'])) {
     final sent = <Map<String, Object?>>[];
-    final client = LunoraClient(url: 'https://app.example')..attachSocket(sent.add);
+    final client = LunoraClient(url: 'https://app.example');
+    attachRecording(client, sent);
     final seen = <Object?>[];
     final errors = <LunoraSubscriptionError>[];
 
@@ -288,9 +289,8 @@ void caseShapeSubscriptionsResendAfterReconnect() {
 
   final resent = <Map<String, Object?>>[];
 
-  client
-    ..attachSocket(resent.add)
-    ..resendSubscriptions();
+  attachRecording(client, resent);
+  client.resendSubscriptions();
 
   equals(canonical(<Object?>[for (final frame in resent) frame['type']]), canonical(<Object?>['subscribe', 'shape_subscribe']), 'BOTH registries resend');
 
@@ -313,17 +313,15 @@ void caseDetachedSubscriptionIsHeldUntilReattach() {
   final dead = <Map<String, Object?>>[];
   final live = <Map<String, Object?>>[];
 
-  client
-    ..attachSocket(dead.add)
-    ..detachSocket();
+  attachRecording(client, dead);
+  client.detachSocket();
 
   client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'});
 
   equals(dead.length, 0, 'a subscription made while detached is not written to the dead socket');
 
-  client
-    ..attachSocket(live.add)
-    ..resendSubscriptions();
+  attachRecording(client, live);
+  client.resendSubscriptions();
 
   equals(live.length, 1, 'reattaching resends the held subscription once');
   equals(live.isEmpty ? null : live.first['type'], 'subscribe', 'as a subscribe frame');
@@ -415,9 +413,8 @@ void caseShapePokeWithUndecodableRowIsRefusedWhole() {
 
   final resent = <Map<String, Object?>>[];
 
-  client
-    ..attachSocket(resent.add)
-    ..resendSubscriptions();
+  attachRecording(client, resent);
+  client.resendSubscriptions();
   equals(resent.single['sinceCheckpoint'], shape['undecodableRowResendCheckpoint'], 'the checkpoint did not advance past rows the view never held');
   equals(resent.single['sinceEpoch'], 'e1', 'nor did the epoch');
 
@@ -474,9 +471,8 @@ void caseMalformedFramesAreIgnoredWithoutRaising() {
 
   final resent = <Map<String, Object?>>[];
 
-  client
-    ..attachSocket(resent.add)
-    ..resendSubscriptions();
+  attachRecording(client, resent);
+  client.resendSubscriptions();
 
   final query = resent.single['query']! as Map<String, Object?>;
 
@@ -530,9 +526,8 @@ void caseIdentityChangeEvictsPreviousSession() {
     final notified = List<List<Object?>>.of(delivered);
     final resent = <Map<String, Object?>>[];
 
-    client
-      ..attachSocket(resent.add)
-      ..resendSubscriptions();
+    attachRecording(client, resent);
+    client.resendSubscriptions();
 
     final query = resent.firstWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>;
     final shapeFrame = resent.firstWhere((frame) => frame['type'] == 'shape_subscribe');

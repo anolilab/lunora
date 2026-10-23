@@ -1976,7 +1976,10 @@ describe("shardDO subscription delta push", () => {
         // Derive the expected wire strings directly from subscriptionListDeltas,
         // encoding each delta the legacy way (JSON.stringify(delta)).
         const expectedDeltas = subscriptionListDeltas(JSON.stringify(prevResult), nextResult, "messages");
-        const expectedLines = (expectedDeltas ?? []).map((delta) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}}`);
+        // Every frame but the last of a run is marked `more`, which is how the client holds the run.
+        const expectedLines = (expectedDeltas ?? []).map(
+            (delta, index, all) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}${index === all.length - 1 ? "" : ',"more":true'}}`,
+        );
 
         expect(sentDeltaLines).toHaveLength(expectedLines.length);
         expect(sentDeltaLines).toEqual(expectedLines);

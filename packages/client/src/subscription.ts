@@ -129,6 +129,14 @@ export interface SubscriptionState {
     optimisticLayers: OptimisticLayer[];
 
     /**
+     * The merged value of a delta run whose final, cursor-carrying frame has not
+     * arrived yet. Held aside so a run of k frames commits, notifies and
+     * broadcasts once. Dropped when a snapshot, a `resume`, or a new socket
+     * supersedes the run.
+     */
+    pendingDeltaRun?: { payload: unknown };
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
