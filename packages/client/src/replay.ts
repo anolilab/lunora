@@ -14,7 +14,7 @@ import { decodeWire } from "@lunora/wire";
 import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
 import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
-import { responseHeadersRecord, retryAfterHeaderMs, slotError, withResponseHeaders } from "./wire-errors";
+import { retryAfterHeaderMs, slotError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -107,14 +107,14 @@ const UNPARSEABLE_STATUS_CODES: Record<number, LunoraErrorCode> = {
 const unparseableResponseError = (status: number, statusText: string, responseHeaders: Headers): LunoraError => {
     const hint = retryAfterHeaderMs(responseHeaders.get("retry-after"));
     const data = hint === undefined ? undefined : { retryAfterMs: hint };
-    const headers = responseHeadersRecord(responseHeaders);
     const message = `LunoraClient: response carried no error envelope (status ${status.toString()}${statusText ? ` ${statusText}` : ""})`;
+    // Headers are attached after construction: the published `@lunora/errors` ignores a `headers` option.
+    const error =
+        status < 400 || status >= 500 || status === 408
+            ? new TransportError(message, data)
+            : new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data });
 
-    if (status < 400 || status >= 500 || status === 408) {
-        return new TransportError(message, data, headers);
-    }
-
-    return new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data, headers });
+    return withResponseHeaders(error, responseHeaders);
 };
 
 /**
