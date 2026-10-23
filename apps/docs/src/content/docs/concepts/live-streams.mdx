@@ -47,14 +47,23 @@ and `key` has the shape that topic declares, so `key.postId` is typed once you h
 narrowed on `topic`. `raw` is the wire topic exactly as the browser sent it. There is
 no string to split.
 
-`defineLiveStream` returns `connectPath` (`/live/posts/connect`), `controlPath`
-(`/live/posts/control`), and the two route handlers. Codegen does not mount them.
-Mount them on the HTTP router you pass to `createWorker`, next to your other
-[HTTP endpoints](/docs/concepts/http-endpoints):
+Codegen mounts each stream's two routes on the worker: `GET /live/posts/connect` for the
+SSE connection and `POST /live/posts/control` for subscribe and unsubscribe. You write no
+`app.get` or `app.post` for them. The routes are matched before your own
+[HTTP endpoints](/docs/concepts/http-endpoints) and before a framework's routes, so a route
+of yours at one of those two paths never runs. Any other request goes to your router, or to
+your framework's handler, unchanged. A stream's module is loaded on the first request that
+reaches it.
+
+If you compose a framework worker by hand with `withLunora` rather than through the generated
+`.buildFrameworkWorker(host)`, codegen does not wrap the host for you. Wrap it with
+`liveStreamRouter` yourself, and give it the stream's `id` and a loader:
 
 ```ts
-app.get(posts.connectPath, posts.connect);
-app.post(posts.controlPath, posts.control);
+const live = liveStreamRouter([{ id: "posts", load: () => import("./lunora/live").then((m) => m.posts) }], astroWorker);
+
+// `options` are the same Lunora options you pass to `withLunora` today.
+export default withLunora(live, options);
 ```
 
 ### What codegen reads

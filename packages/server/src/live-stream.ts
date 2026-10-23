@@ -38,17 +38,14 @@
  *     onSubscribe: async ({ ctx, topic, key }) => topic === "post" && (await ctx.runQuery(api.posts.canRead, { postId: key.postId })),
  * });
  *
- * // mount the two routes on the app's http router
- * app.get(posts.connectPath, posts.connect);
- * app.post(posts.controlPath, posts.control);
- *
  * // publish from any HTTP action: the reference names the stream and the topic, and types the payload
  * import { live } from "./_generated/live";
  * await ctx.live.publish(live.posts.post({ postId }), { event: "comment_added", commentId });
  * ```
  *
- * Codegen reads the stream from its literals (`id`, topic names, key fields in order) and
- * writes `_generated/live.ts`, whose references carry no server code and so can be handed to
+ * Codegen reads the stream from its literals (`id`, topic names, key fields in order), mounts its
+ * connect and control routes on the worker (see {@link liveStreamRouter}), and writes
+ * `_generated/live.ts`, whose references carry no server code and so can be handed to
  * a framework hook in the browser. A publish is checked against the declaration: a payload the
  * topic's validator rejects, or a topic the stream never declared, rejects with `BAD_REQUEST`.
  *
@@ -112,6 +109,7 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { isStringValidator, parseValidatorMap } from "@lunora/values";
+import type { ExecutionContext } from "hono";
 
 import {
     isLiveIdentifier,
@@ -123,7 +121,7 @@ import {
     parseLiveTopic,
 } from "../../../shared/live-stream";
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "./http";
-import { httpAction } from "./http";
+import { httpAction, httpRouter } from "./http";
 
 /** One declared topic: the key that addresses it (string-valued fields, in order) and the payload it carries. */
 interface LiveTopicDeclaration {
@@ -191,11 +189,11 @@ interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
 
 /** The two route handlers {@link defineLiveStream} produces, plus the declaration they enforce. */
 interface LiveStream<Topics extends LiveTopics = LiveTopics> {
-    /** Mount with `app.get(stream.connectPath, stream.connect)`. Returns the SSE response. */
+    /** Served at `connectPath` by the worker's live-stream router. Returns the SSE response. */
     connect: LunoraRouteHandler;
     /** `GET` path for the SSE connection. */
     connectPath: string;
-    /** Mount with `app.post(stream.controlPath, stream.control)`. Returns a JSON ack. */
+    /** Served at `controlPath` by the worker's live-stream router. Returns a JSON ack. */
     control: LunoraRouteHandler;
     /** `POST` path for subscribe / unsubscribe control. */
     controlPath: string;
@@ -408,7 +406,133 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
     return { connect, connectPath, control, controlPath, id: config.id, topics: config.topics, validatePublish };
 };
 
-export { defineLiveStream };
-export type { LiveStream, LiveStreamConfig, LiveSubscribeHandler, LiveSubscribeOptions, LiveTopicDeclaration, LiveTopicKey, LiveTopicPayload, LiveTopics };
+/** A declared stream {@link liveStreamRouter} serves. `load` runs on the first request that reaches the stream. */
+interface LiveStreamMount {
+    /** The stream's `id`, which names its routes: `/live/<id>/connect` and `/live/<id>/control`. */
+    id: string;
+    /** The stream's two handlers, deferred so a worker starts without evaluating every live module. */
+    load: () => Promise<Pick<LiveStream, "connect" | "control">>;
+}
+
+/** Anything with a `fetch` a request can be handed to: `httpRouter()`, or a framework host's router. */
+interface LiveRouterApp {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- bivariant params let a hono app, typed against its own bindings, assign here
+    fetch(request: Request, env?: Record<string, unknown>, context?: ExecutionContext): Promise<Response> | Response;
+}
+
+/** The triggers a framework host may carry beside its `fetch`, which the runtime reads by name. */
+interface LiveHostTriggers {
+    email?: unknown;
+    queue?: unknown;
+    scheduled?: unknown;
+}
+
+/** The router a live-stream router hands every other request to: an app with a `fetch`, or a bare `fetch` handler. */
+type LiveRouterFallback =
+    (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+
+type LiveStreamApp = ReturnType<typeof httpRouter>;
+
+/**
+ * A framework host's triggers, copied by name as the runtime reads them. Spreading the host instead would also copy
+ * the own properties of a class-instance host, which the router has no use for.
+ */
+const hostTriggersOf = (host: LiveRouterFallback | undefined): LiveHostTriggers => {
+    if (typeof host !== "object") {
+        return {};
+    }
+
+    return {
+        ...(typeof host.email === "function" ? { email: host.email } : {}),
+        ...(typeof host.queue === "function" ? { queue: host.queue } : {}),
+        ...(typeof host.scheduled === "function" ? { scheduled: host.scheduled } : {}),
+    };
+};
+
+/**
+ * Serve each declared stream's connect and control routes, and hand every other request to `fallback`. Codegen
+ * emits this as the worker's `httpRouter`, or around a framework host, so a stream needs no `app.get` / `app.post`
+ * of its own.
+ *
+ * Only the exact method and path of a stream's two routes are taken. A user route at one of those paths is
+ * shadowed, because the stream is matched first. With no `fallback`, an unmatched request gets the 404 a worker
+ * with no router gives.
+ *
+ * A framework host is a `fallback` too, and its own properties (the `scheduled`, `queue` and `email` triggers it may
+ * carry) are kept on the returned router, so the host's triggers still reach the worker when it is composed.
+ */
+const liveStreamRouter = (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback): LiveRouterApp => {
+    const routes = new Map<string, LiveStreamMount>();
+
+    for (const mount of mounts) {
+        routes.set(`GET ${liveConnectPath(mount.id)}`, mount);
+        routes.set(`POST ${liveControlPath(mount.id)}`, mount);
+    }
+
+    // A failed load is forgotten, so the next request retries it rather than replaying the rejection forever.
+    const routers = new Map<LiveStreamMount, Promise<LiveStreamApp>>();
+    const routerFor = (mount: LiveStreamMount): Promise<LiveStreamApp> => {
+        let router = routers.get(mount);
+
+        if (router === undefined) {
+            router = mount.load().then(
+                ({ connect, control }) => {
+                    const app = httpRouter();
+
+                    app.get(liveConnectPath(mount.id), connect);
+                    app.post(liveControlPath(mount.id), control);
+
+                    return app;
+                },
+                (error: unknown) => {
+                    routers.delete(mount);
+
+                    throw error;
+                },
+            );
+            routers.set(mount, router);
+        }
+
+        return router;
+    };
+
+    const delegate = (request: Request, env: Record<string, unknown> | undefined, context: ExecutionContext | undefined): Promise<Response> | Response => {
+        if (fallback === undefined) {
+            return new Response("Not found", { status: 404 });
+        }
+
+        return typeof fallback === "function" ? fallback(request, env, context) : fallback.fetch(request, env, context);
+    };
+
+    return {
+        ...hostTriggersOf(fallback),
+        fetch: async (request, env, context) => {
+            const mount = routes.get(`${request.method} ${new URL(request.url).pathname}`);
+
+            if (mount === undefined) {
+                return delegate(request, env, context);
+            }
+
+            const app = await routerFor(mount);
+
+            return app.fetch(request, env, context);
+        },
+    };
+};
+
+export { defineLiveStream, liveStreamRouter };
+export type {
+    LiveRouterApp,
+    LiveRouterFallback,
+    LiveStream,
+    LiveStreamConfig,
+    LiveStreamMount,
+    LiveSubscribeHandler,
+    LiveSubscribeOptions,
+    LiveTopicDeclaration,
+    LiveTopicKey,
+    LiveTopicPayload,
+    LiveTopics,
+};
 
 export { type LiveTopicRef } from "../../../shared/live-stream";

@@ -8,6 +8,7 @@ import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
 import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
+import { liveStreamRouter } from "@lunora/server";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
@@ -200,7 +201,9 @@ class AppBuilder<Env extends object> {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
             openApiSpec,
-            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
+            httpRouter: liveStreamRouter([
+                { id: "feed", load: () => import("../live.js").then((m) => m.feed) },
+            ], this.httpRouterApp),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
