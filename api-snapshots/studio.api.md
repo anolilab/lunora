@@ -1629,6 +1629,8 @@ const MESSAGE_IDS: readonly [
     "Header column {column} is empty.",
     "CSV rows have no table column, so choose the table they go into.",
     "Choose a table",
+    "Checking {total} rows before writing…",
+    "Nothing was written, because some rows would be refused. Fix the rows listed below and import again.",
     "Target table",
     "ip",
     "Jobs queued with runAfter / runAt will appear here.",

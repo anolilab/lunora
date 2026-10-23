@@ -812,6 +812,7 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
+    dryRun?: boolean;
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -1039,6 +1040,7 @@ interface ImportFanOutRequest {
         shardKey: string;
         startLine?: number;
     }>;
+    dryRun?: boolean;
     headers?: Record<string, string>;
 }
 ```
