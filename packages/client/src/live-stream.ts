@@ -329,8 +329,11 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
      * at a time: a client with many topics would otherwise send one POST per topic in the same tick. A transient
      * failure (no reply, 5xx, 404 or 401) aborts the connection, so the reconnect loop registers them again; a
      * refusal is final, as with a fresh subscribe. Statuses are judged in subscription order, as before.
+     *
+     * Resolves `true` only when every active subscription was registered on the connection this call started
+     * on. A connection change stops the workers early; the replacement connection's own resubscribe covers the rest.
      */
-    const resubscribeAll = async (): Promise<void> => {
+    const resubscribeAll = async (): Promise<boolean> => {
         // The drain can outlive this connection: a paced call is claimed later, so it must name the id captured now.
         const sentOn = connectionId;
         const pending = [...subscriptions];
@@ -357,6 +360,8 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
         await Promise.all(Array.from({ length: Math.min(RESUBSCRIBE_CONCURRENCY, pending.length) }, drain));
 
+        const complete = connectionId === sentOn;
+
         for (const reply of replies) {
             if (reply === undefined) {
                 continue;
@@ -368,13 +373,15 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             if (status === undefined || status >= 500 || status === 404 || status === 401) {
                 aborter?.abort();
 
-                return;
+                return false;
             }
 
             if (status >= 400) {
                 refuse(id, entry, status);
             }
         }
+
+        return complete;
     };
 
     const pump = async (response: Response): Promise<void> => {
@@ -394,12 +401,19 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
         // The body is read meanwhile: a slow control POST must not hold the
         // stream's bytes unread.
         const registered = (async (): Promise<void> => {
+            let complete: boolean;
+
             try {
-                await resubscribeAll();
+                complete = await resubscribeAll();
             } catch {
                 // Registration failed outright: reconnect and register again rather than leave `ready` pending.
                 aborter?.abort();
 
+                return;
+            }
+
+            // Not every subscription reached this connection: leave `ready` pending for the replacement connection.
+            if (!complete) {
                 return;
             }
 
