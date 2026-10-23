@@ -627,6 +627,35 @@ describe("d1 introspect — operators and nested paths on the global path", () =
         expect(countStatement()).toBeUndefined();
     });
 
+    it("refuses has on a v.any or union column, naming the operator, since that storage is JSON text with no json_each here", async () => {
+        expect.assertions(5);
+
+        const untyped: SchemaLike = {
+            tables: {
+                mixed: {
+                    indexes: [],
+                    shape: { loose: col("any"), u: col("union") },
+                    shardMode: { kind: "global" } as never,
+                },
+            },
+        };
+
+        harness.ddl(`CREATE TABLE "mixed" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "u" TEXT, "loose" TEXT)`);
+        harness.ddl(`INSERT INTO "mixed" VALUES ('m1', 1, '["blue"]', '["blue"]')`);
+
+        for (const column of ["loose", "u"]) {
+            // eslint-disable-next-line no-await-in-loop -- one read per column, each must reject
+            const error = await readGlobalTablePage(recordingExec, untyped, { filters: [{ column, operator: "has", value: "blue" }], table: "mixed" }).catch(
+                (error_: unknown) => error_,
+            );
+
+            expect(error).toMatchObject({ code: "BAD_REQUEST" });
+            expect((error as Error).message).toContain('"has"');
+        }
+
+        expect(countStatement()).toBeUndefined();
+    });
+
     it("refuses a nested path, since D1 columns are physical, and reads an empty path list as the column itself", async () => {
         expect.assertions(3);
 

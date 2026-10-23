@@ -260,6 +260,12 @@ const bindGlobalFilterValue = (value: unknown, kind: string | undefined): unknow
  * Refuse a clause this path cannot compile. The wire carries `operator` and
  * `path` so a request for `has`, `contains` or a nested field is refused here
  * rather than read as an equality on the parent column.
+ *
+ * This is why `has` is refused on a `v.any` or union column too. Those are stored
+ * as JSON text in a plain D1 column, and this path compiles eq only: there is no
+ * `json_each` over that storage, so membership cannot be tested here. An eq on
+ * the text would answer a different question, and `has` read as eq would return
+ * the wrong rows, so the refusal stays.
  * @throws LunoraError `BAD_REQUEST` naming the operator or the nested path
  */
 const assertEqOnlyClause = (filter: GlobalFilterClause): void => {
