@@ -246,19 +246,36 @@ class LunoraClient {
 
     // Built before any is sent, for the reason [resendSubscriptions] gives: the
     // sender is the caller's code.
-    final frames = <Map<String, Object?>>[
-      buildConnectFrame(clientId: transport.clientId, context: context, token: _sessionToken),
-      for (final topic in _whisperListeners.keys) buildWhisperSubscribeFrame(topic),
-    ];
+    final connect = buildConnectFrame(clientId: transport.clientId, context: context, token: _sessionToken);
 
-    for (final frame in frames) {
-      // A sender that detaches or re-attaches during a write supersedes this attach: the rest of the
-      // frames are not written to a socket that is no longer attached.
-      if (attachGeneration != _attachGeneration) {
-        return;
+    // A sender that detaches or re-attaches during a write supersedes this attach: nothing more is written to
+    // a socket that is no longer attached.
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
+    sender(connect);
+
+    // A sender may register a topic while connect is written, and such a topic is in no earlier snapshot, so
+    // every topic is joined until none is left. A topic that has since been left is not joined.
+    final joined = <String>{};
+
+    while (attachGeneration == _attachGeneration) {
+      String? next;
+
+      for (final topic in _whisperListeners.keys) {
+        if (!joined.contains(topic)) {
+          next = topic;
+          break;
+        }
       }
 
-      sender(frame);
+      if (next == null) {
+        break;
+      }
+
+      joined.add(next);
+      sender(buildWhisperSubscribeFrame(next));
     }
 
     if (attachGeneration != _attachGeneration) {

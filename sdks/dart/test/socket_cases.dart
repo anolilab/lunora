@@ -269,6 +269,25 @@ void caseSupersededAttachWritesNoMoreJoins() {
   equals(sent.where((frame) => frame['type'] == 'whisper_subscribe').length, 1, 'a detach during the joins stops the remaining joins');
 }
 
+/// A topic a sender registers while connect is written is joined on that attach, not left unjoined.
+void caseTopicRegisteredDuringConnectIsJoined() {
+  final client = LunoraClient(url: 'https://app.example', clientId: 'client-test');
+  final sent = <Map<String, Object?>>[];
+
+  client.attachSocket((frame) {
+    sent.add(frame);
+    if (frame['type'] == 'connect') {
+      client.whisperSubscribe('room:general', (_) {});
+    }
+  });
+
+  equals(
+    canonical(<Object?>[for (final frame in sent) frame['type'] == 'whisper_subscribe' ? frame['topic'] : frame['type']]),
+    canonical(<Object?>['connect', 'room:general']),
+    'the topic registered during connect is joined after it',
+  );
+}
+
 /// Every reconnect joins each registered topic again, straight after `connect`.
 void caseWhisperTopicsRejoinAfterReconnect() {
   covers('whisper_topics_rejoin_after_reconnect');
