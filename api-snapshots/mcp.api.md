@@ -47,6 +47,20 @@ interface CallAgentToolOptions {
 const DEFAULT_MAX_REQUEST_BYTES: number;
 ```
 
+### `FunctionMcpServerOptions` (interface)
+
+```ts
+interface FunctionMcpServerOptions {
+    allowWrites?: boolean;
+    fetch?: typeof fetch;
+    name?: string;
+    openRpcSpec: unknown;
+    token?: string;
+    url: string;
+    version?: string;
+}
+```
+
 ### `LOCAL_SERVER_NAME` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
@@ -259,6 +273,12 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 ### `createAuthedMcpFetchHandler` (const)
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
+
+### `createFunctionMcpServer` (const)
+
+```ts
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Server;
+```
 
 ### `createLocalMcpServer` (const)
 

@@ -212,6 +212,49 @@ const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", t
 await server.connect(myTransport);
 ```
 
+## Expose your app's functions
+
+`createLunoraMcpServer` fronts a deployment with generic tools (`lunora_run_query`, `lunora_run_mutation`, …). To give a model one tool per function in **your** app, with typed arguments, build the server from the OpenRPC document your app generates:
+
+```ts
+import { createFunctionMcpServer } from "@lunora/mcp";
+import { openRpcSpec } from "./lunora/_generated/openrpc";
+
+const server = createFunctionMcpServer({
+    url: env.LUNORA_URL,
+    token: caller.token, // the caller's bearer, not an admin token
+    openRpcSpec,
+    allowWrites: false,
+});
+```
+
+For a Worker that serves MCP over HTTP, build the server per request, with the signed-in user's token, and hand it to `serveStateless`:
+
+```ts
+import { createFunctionMcpServer, serveStateless } from "@lunora/mcp";
+
+export default {
+    async fetch(request: Request, env: Env): Promise<Response> {
+        const user = await resolveUser(request); // your own session check
+        const server = createFunctionMcpServer({ url: env.LUNORA_URL, token: user.token, openRpcSpec });
+
+        return serveStateless(server, request);
+    },
+};
+```
+
+Requirements and behaviour:
+
+- **Generate the document.** Pass `apiSpec: "openrpc"` (or `"both"`) to the Vite plugin, or run `lunora codegen --api-spec openrpc`. Without it, `_generated/openrpc.ts` is not emitted and the import fails.
+- **Identity is the caller's.** Each tool runs as `token` through the public RPC path, so auth and row-level security apply as they do in the app. Nothing calls `/_lunora/admin/*`, so no admin token is needed.
+- **One tool per query, mutation and action.** Internal and stream functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
+- **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
+- **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
+- **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A bigint inside a union (`anyOf`) is not converted.
+- **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. A function with no `.output()` has no `outputSchema`.
+- **Sensitive arguments** (`v.sensitive`) are masked in a write proposal and sent on a reference that the client never queues offline.
+- **Not yet supported:** progress notifications for stream functions (they are not in the document), and `shardKey` is always accepted even for an unsharded function.
+
 ## Expose an agent
 
 A deployment's durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) agents can be fronted as MCP tools. This is **opt-in and fail-closed**, mirroring `allowWrites`: starting an agent run is a side effect, so the agent tools are omitted from the advertised list _and_ refused at dispatch unless you explicitly enable them. `@lunora/mcp` takes no dependency on `@lunora/agent` — it reaches the agent's public `agents:agentRun` mutation over RPC like any other function.
