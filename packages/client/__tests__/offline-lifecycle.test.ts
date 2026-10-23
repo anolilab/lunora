@@ -887,10 +887,7 @@ describe("offline lifecycle (e2e)", () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
-        expect(settled.map((result) => ((result as PromiseRejectedResult).reason as { headers?: unknown }).headers)).toEqual([
-            expect.objectContaining({ "x-edge": "cf" }),
-            expect.objectContaining({ "x-edge": "cf" }),
-        ]);
+        expect(settled).toMatchObject([{ reason: { headers: { "x-edge": "cf" } } }, { reason: { headers: { "x-edge": "cf" } } }]);
 
         client.close();
     });

@@ -54,11 +54,7 @@ describe("rpc error response headers", () => {
 
         const fetchMock = vi.fn<typeof fetch>(async () => new Response("nope", { headers: { "x-edge": "cf" }, status: 400 }));
 
-        const error = (await client(fetchMock)
-            .mutation(fnRef("docs:write"), {})
-            .catch((error_: unknown) => error_)) as { headers?: Record<string, string> };
-
-        expect(error.headers).toMatchObject({ "x-edge": "cf" });
+        await expect(client(fetchMock).mutation(fnRef("docs:write"), {})).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
     });
 
     it("carries the reply's headers when the body is JSON null", async () => {
@@ -66,11 +62,7 @@ describe("rpc error response headers", () => {
 
         const fetchMock = vi.fn<typeof fetch>(async () => Response.json(null, { headers: { "x-edge": "cf" }, status: 502 }));
 
-        const error = (await client(fetchMock)
-            .query(fnRef("docs:get"), {})
-            .catch((error_: unknown) => error_)) as { headers?: Record<string, string> };
-
-        expect(error.headers).toMatchObject({ "x-edge": "cf" });
+        await expect(client(fetchMock).query(fnRef("docs:get"), {})).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
     });
 
     it("leaves headers absent when no reply arrived (the fetch itself rejected)", async () => {
@@ -112,11 +104,7 @@ describe("rpc error response headers", () => {
             Response.json({ error: { code: "TOO_MANY_REQUESTS", message: "slow down" } }, { headers: { "x-edge": "cf" }, status: 429 }),
         );
 
-        const error = (await client(fetchMock)
-            .batch([{ fn: fnRef("docs:read") }])
-            .catch((error_: unknown) => error_)) as { headers?: Record<string, string> };
-
-        expect(error.headers).toMatchObject({ "x-edge": "cf" });
+        await expect(client(fetchMock).batch([{ fn: fnRef("docs:read") }])).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
     });
 
     it("carries the reply's headers when a batch reply is not JSON, or is JSON with no results and no envelope", async () => {
@@ -125,14 +113,7 @@ describe("rpc error response headers", () => {
         const notJson = vi.fn<typeof fetch>(async () => new Response("<html>bad gateway</html>", { headers: { "x-edge": "cf" }, status: 502 }));
         const noEnvelope = vi.fn<typeof fetch>(async () => Response.json({ note: "proxy" }, { headers: { "x-edge": "cf" }, status: 502 }));
 
-        const first = (await client(notJson)
-            .batch([{ fn: fnRef("docs:read") }])
-            .catch((error_: unknown) => error_)) as { headers?: Record<string, string> };
-        const second = (await client(noEnvelope)
-            .batch([{ fn: fnRef("docs:read") }])
-            .catch((error_: unknown) => error_)) as { headers?: Record<string, string> };
-
-        expect(first.headers).toMatchObject({ "x-edge": "cf" });
-        expect(second.headers).toMatchObject({ "x-edge": "cf" });
+        await expect(client(notJson).batch([{ fn: fnRef("docs:read") }])).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
+        await expect(client(noEnvelope).batch([{ fn: fnRef("docs:read") }])).rejects.toMatchObject({ headers: { "x-edge": "cf" } });
     });
 });
