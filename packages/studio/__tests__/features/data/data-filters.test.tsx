@@ -144,6 +144,28 @@ describe("toFilterClauses — nested paths and array membership", () => {
     });
 });
 
+describe("toFilterClauses — typed booleans", () => {
+    it("sends has true and has false as JSON booleans, so they match a boolean element", () => {
+        expect.assertions(1);
+
+        expect(
+            toFilterClauses([
+                { column: "flags", operator: "has", value: "true" },
+                { column: "flags", operator: "has", value: " false " },
+            ]),
+        ).toStrictEqual([
+            { column: "flags", operator: "has", value: true },
+            { column: "flags", operator: "has", value: false },
+        ]);
+    });
+
+    it("leaves an eq on the text true as text, so the boolean fix does not change equality", () => {
+        expect.assertions(1);
+
+        expect(toFilterClauses([{ column: "flag", operator: "eq", value: "true" }])).toStrictEqual([{ column: "flag", operator: "eq", value: "true" }]);
+    });
+});
+
 describe("dataFilters — nested path and has", () => {
     it("offers has and reports an edited path on the row it belongs to", () => {
         expect.assertions(3);

@@ -72,6 +72,22 @@ const coerceFilterValue = (value: string): number | string => {
     return trimmed !== "" && Number.isFinite(asNumber) && String(asNumber) === trimmed ? asNumber : value;
 };
 
+/**
+ * The wire value for a `has` row. `has` tests membership of a JSON element, and a
+ * JSON boolean element is only found by a boolean, so `true` and `false` become
+ * booleans here; any other text takes the same coercion as every operator. `eq`
+ * and `ne` never reach this: `true` there stays text, as it always has.
+ */
+const coerceHasValue = (value: string): boolean | number | string => {
+    const trimmed = value.trim();
+
+    return trimmed === "true" || trimmed === "false" ? trimmed === "true" : coerceFilterValue(value);
+};
+
+/** The wire value of a typed row: `has` has its own boolean-aware coercion, every other operator the numeric one. */
+const coerceRowValue = (filter: EditableFilter): boolean | number | string =>
+    filter.operator === "has" ? coerceHasValue(filter.value) : coerceFilterValue(filter.value);
+
 /** A typed row whose value is blank under an operator that needs one — see {@link toFilterClauses}. */
 const isVacuous = (filter: EditableFilter): boolean => {
     if (filter.operator === "contains") {
@@ -121,7 +137,7 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
                 column: filter.column,
                 operator: filter.operator,
                 ...pathField,
-                value: filter.literal === undefined ? coerceFilterValue(filter.value) : filter.literal[0],
+                value: filter.literal === undefined ? coerceRowValue(filter) : filter.literal[0],
             };
         });
 
