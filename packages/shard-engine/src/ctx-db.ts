@@ -228,14 +228,22 @@ const assertStorableRowId = (id: string): void => {
  * Refuse every trusted-import id in a batch before any row is written: a global batch writes D1 row by row, and D1 cannot
  * roll back what it already wrote.
  */
-const assertBatchRowIds = (documents: ReadonlyArray<Record<string, unknown>>, allowExplicitId: boolean | undefined): void => {
+const assertBatchRowIds = (
+    definition: TableDefinitionLike | undefined,
+    documents: ReadonlyArray<Record<string, unknown>>,
+    allowExplicitId: boolean | undefined,
+    auth: Parameters<typeof applyInsertDefaults>[2],
+): void => {
     if (allowExplicitId !== true) {
         return;
     }
 
     for (const document of documents) {
-        if (typeof document["_id"] === "string") {
-            assertStorableRowId(document["_id"]);
+        // The id each row is stored under, after column defaults: the value the single-row insert checks.
+        const id = definition === undefined ? document["_id"] : applyInsertDefaults(definition, document, auth)["_id"];
+
+        if (typeof id === "string") {
+            assertStorableRowId(id);
         }
     }
 };
@@ -3959,7 +3967,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async insertManyUnsafe(tableName, documents, batchOptions) {
             assertBatchLimit(documents.length, batchOptions?.limit, "insertManyUnsafe");
 
-            assertBatchRowIds(documents, batchOptions?.allowExplicitId);
+            assertBatchRowIds(schema.tables[tableName], documents, batchOptions?.allowExplicitId, auth);
 
             if (documents.length === 0) {
                 return [];
