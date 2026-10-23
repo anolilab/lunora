@@ -336,6 +336,7 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
     const resubscribeAll = async (): Promise<boolean> => {
         // The drain can outlive this connection: a paced call is claimed later, so it must name the id captured now.
         const sentOn = connectionId;
+        const sentAborter = aborter;
         const pending = [...subscriptions];
         const replies = pending.map((): { entry: LiveSubscription; id: string; status: number | undefined } | undefined => undefined);
         // Every worker pulls from this one iterator, so each subscription is claimed by exactly one of them.
@@ -360,7 +361,10 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
         await Promise.all(Array.from({ length: Math.min(RESUBSCRIBE_CONCURRENCY, pending.length) }, drain));
 
-        const complete = connectionId === sentOn;
+        // The connection changed: its replies need no action, because the replacement registers everything again.
+        if (connectionId !== sentOn) {
+            return false;
+        }
 
         for (const reply of replies) {
             if (reply === undefined) {
@@ -371,7 +375,7 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
 
             // No reply, a server error, a missing connection, or an expired credential: reconnect and register again.
             if (status === undefined || status >= 500 || status === 404 || status === 401) {
-                aborter?.abort();
+                sentAborter?.abort();
 
                 return false;
             }
@@ -381,7 +385,7 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             }
         }
 
-        return complete;
+        return true;
     };
 
     const pump = async (response: Response): Promise<void> => {

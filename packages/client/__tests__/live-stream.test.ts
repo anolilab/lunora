@@ -1075,4 +1075,95 @@ describe("connectLiveStream", () => {
 
         live.close();
     });
+
+    it("does not abort the replacement connection on a refused reply from the connection it replaced", async () => {
+        expect.assertions(4);
+
+        const streams: FakeStream[] = [];
+        const signals: (AbortSignal | null | undefined)[] = [];
+        const held: Record<string, (() => void)[]> = { c1: [], c2: [] };
+        const subscribes: ControlCall[] = [];
+        const heldFirstMarks = milestone(() => held.c1?.length ?? 0);
+        const heldSecondMarks = milestone(() => held.c2?.length ?? 0);
+        const streamMarks = milestone(() => streams.length);
+
+        const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = input instanceof Request ? input.url : String(input);
+
+            if (/\/connect(?:\?|$)/u.test(url)) {
+                const stream = new FakeStream(`c${String(streams.length + 1)}`);
+
+                streams.push(stream);
+                signals.push(init?.signal);
+                streamMarks.notify();
+
+                return Promise.resolve(stream.response);
+            }
+
+            const body = init?.body;
+            const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            if (call.action !== "subscribe") {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            subscribes.push(call);
+
+            // Each connection holds only its first window, so its drain is still waiting when the next event happens.
+            const holds = held[call.connectionId ?? ""];
+
+            if (holds === undefined || holds.length >= RESUBSCRIBE_CONCURRENCY) {
+                return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
+            }
+
+            return new Promise<Response>((resolve) => {
+                holds.push(() => {
+                    resolve(Response.json({ ok: true }, { status: call.connectionId === "c1" ? 401 : 200 }));
+                });
+                heldFirstMarks.notify();
+                heldSecondMarks.notify();
+            });
+        };
+
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, retryDelay: 1 });
+
+        for (let index = 1; index <= RESUBSCRIBE_CONCURRENCY + 1; index += 1) {
+            live.subscribe({ id: `s${String(index)}`, topic: `T${String(index)}` });
+        }
+
+        await heldFirstMarks.reached(RESUBSCRIBE_CONCURRENCY);
+
+        streams[0]?.error();
+
+        await streamMarks.reached(2);
+        await flush();
+
+        const onReady = vi.fn<() => void>();
+
+        live.ready.then(onReady).catch(() => undefined);
+
+        // The old connection's replies arrive after the drop: its workers stop on the connection change.
+        for (const release of held.c1 ?? []) {
+            release();
+        }
+
+        // Calls for the same subscription wait for its earlier call, so the replacement's window is only sent now.
+        await heldSecondMarks.reached(RESUBSCRIBE_CONCURRENCY);
+
+        expect(held.c2).toHaveLength(RESUBSCRIBE_CONCURRENCY);
+
+        // The cut-short drain must not report the stream ready while the new connection still has subscriptions to register.
+        expect(onReady).not.toHaveBeenCalled();
+
+        for (const release of held.c2 ?? []) {
+            release();
+        }
+
+        await live.ready;
+
+        expect(signals[1]?.aborted).toBe(false);
+        expect(subscribes.filter((call) => call.connectionId === "c2")).toHaveLength(RESUBSCRIBE_CONCURRENCY + 1);
+
+        live.close();
+    });
 });
