@@ -93,21 +93,50 @@ describe("readTablePage — nested paths and array membership", () => {
             );
 
             expect(error?.code).toBe("BAD_REQUEST");
-            expect(error?.message).toMatch(/identifier/u);
+            expect(error?.message).toMatch(/non-empty/u);
         });
 
-        it("rejects a path segment carrying SQL text instead of binding it", () => {
-            expect.assertions(2);
+        it("binds a path segment carrying SQL text as a literal key, never as SQL", () => {
+            expect.assertions(4);
 
             const injected = "city') OR 1=1 --";
+            const { recorded, sql } = recordingSql(database.sql);
 
-            const error = rejectionOf(() =>
-                readTablePage(database.sql, { filters: [{ column: "address", operator: "eq", path: [injected], value: "x" }], table: "orders" }),
+            const page = readTablePage(sql, { filters: [{ column: "address", operator: "eq", path: [injected], value: "Berlin" }], table: "orders" });
+            const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
+
+            // No object has that key, so nothing matches, and the table is untouched.
+            expect(page.total).toBe(0);
+            expect(readTablePage(database.sql, { table: "orders" }).total).toBe(5);
+            expect(statement?.sql).not.toContain("OR 1=1");
+            expect(statement?.params).toContain(`$.address."city') OR 1=1 --"`);
+        });
+
+        // A key containing a quote, a backslash, a dot or a hyphen is a real key. The
+        // shared quoter escapes it, so the bound path addresses exactly that key.
+        it("matches a hyphenated key and keys holding a quote, a backslash or a dot as literal keys", () => {
+            expect.assertions(6);
+
+            database.raw(`CREATE TABLE "keyed" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                String.raw`INSERT INTO "keyed" VALUES ('k1', 1, '{"zones":{"geo-zone":"Berlin"}}'), ('k2', 2, '{"box":{"q\"x":"quote","b\\c":"slash","d.e":"dot"}}')`,
             );
 
-            expect(error?.code).toBe("BAD_REQUEST");
-            // The table is untouched: every row is still there to be counted.
-            expect(readTablePage(database.sql, { table: "orders" }).total).toBe(5);
+            const keyed = (filters: FilterClause[]): unknown[] =>
+                readTablePage(database.sql, { filters, table: "keyed" }).rows.map((row) => (row as { id: string }).id);
+
+            expect(keyed([{ column: "zones", operator: "eq", path: ["geo-zone"], value: "Berlin" }])).toStrictEqual(["k1"]);
+            expect(keyed([{ column: "box", operator: "eq", path: ['q"x'], value: "quote" }])).toStrictEqual(["k2"]);
+            expect(keyed([{ column: "box", operator: "eq", path: [String.raw`b\c`], value: "slash" }])).toStrictEqual(["k2"]);
+            expect(keyed([{ column: "box", operator: "eq", path: ["d.e"], value: "dot" }])).toStrictEqual(["k2"]);
+            // A dot is part of the key, not a separator: `d` then `e` is a different path.
+            expect(keyed([{ column: "box", operator: "eq", path: ["d", "e"], value: "dot" }])).toStrictEqual([]);
+
+            const { recorded, sql } = recordingSql(database.sql);
+
+            readTablePage(sql, { filters: [{ column: "box", operator: "eq", path: ['q"x'], value: "quote" }], table: "keyed" });
+
+            expect(recorded.find((entry) => entry.sql.includes("COUNT"))?.params).toContain(String.raw`$.box."q\"x"`);
         });
 
         it("binds a root field name that needs quoting, and never splices it into the SQL", () => {

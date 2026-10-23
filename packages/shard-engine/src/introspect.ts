@@ -4,7 +4,7 @@ import { decodeWire } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";
 
 import { isInternalTableName } from "../../../shared/internal-table-name";
-import { isBareJsonPathLabel, jsonPathSegment } from "../../../shared/json-path-segment";
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
@@ -1227,16 +1227,17 @@ const isVacuousFilterClause = (clause: FilterClause): boolean =>
     clause.operator === "contains" ? filterValueText(clause.value) === "" : RANGE_OPERATORS.has(clause.operator) && clause.value === "";
 
 /**
- * The `$`-rooted JSON path of a `__doc__` field, optionally nested under it. The
- * root keeps the shared quoter, so a schema-free field named `a.b` still
- * addresses its flat key. Each nested segment must have the identifier shape
- * codegen enforces on schema fields: a bare label is never quoted or escaped, and
- * an empty or punctuated segment is refused rather than guessed at.
- * @throws LunoraError `BAD_REQUEST` when a nested segment is not an identifier
+ * The `$`-rooted JSON path of a `__doc__` field, optionally nested under it. Every
+ * segment goes through the shared quoter, which escapes `"` and `\` and quotes any
+ * label SQLite would misread (one holding a `.`, `[`, `-` or a space), so a segment
+ * always addresses the key it names. The path is returned to be bound, never
+ * spliced into the SQL. An empty segment is refused: `$.""` is not a key a document
+ * can be asked for, and an empty name is always a mistake in the caller.
+ * @throws LunoraError `BAD_REQUEST` when a nested segment is empty
  */
 const documentJsonPath = (field: string, path: ReadonlyArray<string>): string => {
-    if (!path.every((segment) => typeof segment === "string" && isBareJsonPathLabel(segment))) {
-        throw new LunoraError("BAD_REQUEST", `nested path under ${field} must name fields by identifier, got ${JSON.stringify(path)}`);
+    if (!path.every((segment) => typeof segment === "string" && segment !== "")) {
+        throw new LunoraError("BAD_REQUEST", `nested path under ${field} must name each field with a non-empty string, got ${JSON.stringify(path)}`);
     }
 
     return `$.${[field, ...path].map((segment) => jsonPathSegment(segment)).join(".")}`;
