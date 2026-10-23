@@ -255,6 +255,26 @@ export default defineSchema({
         }).toThrow(/privacy_table_unclassified: "notes"/u);
     });
 
+    it("classifies a table by a v.id of the users table in a v.object whose fields are a const", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const metaFields = { owner: v.id("users") };
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), meta: v.object(metaFields) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
     it("checks a table whose name starts with privacy_", () => {
         expect.assertions(1);
 
