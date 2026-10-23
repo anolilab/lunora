@@ -167,7 +167,10 @@ const dispatchPort = async (
  * a fresh `dedupId` for this call only: the workflow's positional ids are not safe here, since a
  * replayed step is served from its journal and the calls it made vanish, shifting every later id onto
  * another call's cached result. A new id per call means a re-run applies again rather than collides;
- * the port writes are idempotent by design (tombstones upsert, erase drains, claims are conditional).
+ * the port writes are idempotent by design (tombstones upsert, erase drains, claims are conditional),
+ * except `store.addEvent`: a step retried after an event committed but its response was lost writes
+ * that event twice. A retry-stable id would need the step's name and a call order that `Promise.all`
+ * inside a step does not fix, so the audit log accepts a rare duplicate rather than a collision.
  */
 type PortTransport = (call: { readonly method: string; readonly payload: string }, options: { readonly dedupId: string }) => Promise<unknown>;
 
