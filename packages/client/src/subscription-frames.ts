@@ -63,6 +63,13 @@ export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: 
     position.cursor < state.serverCursor;
 
 /**
+ * Whether a frame is a non-final frame of a delta run. The server marks every frame of a run
+ * but the last with `more: true`; the run is applied when its last frame arrives. A
+ * standalone legacy `broadcastDelta` frame carries no flag, so it is applied on arrival.
+ */
+export const isNonFinalRunFrame = (message: { more?: boolean; type: string }): boolean => message.type === "delta" && message.more === true;
+
+/**
  * Whether a cross-tab frame was stamped for another identity. A frame with no stamp
  * (a mixed-version leader) is accepted, as before.
  */

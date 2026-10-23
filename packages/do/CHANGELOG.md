@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.240...@lunora/do@1.0.0-alpha.241) (2026-10-22)
+
+### Performance Improvements
+
+* hot-path fixes from the performance sweep ([#1305](https://github.com/anolilab/lunora/issues/1305)) ([4e4ec66](https://github.com/anolilab/lunora/commit/4e4ec66a0040990581ad6bdc22e44c58b36714af))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/do [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.239...@lunora/do@1.0.0-alpha.240) (2026-10-22)
 
 ### Bug Fixes

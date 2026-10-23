@@ -147,7 +147,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isStaleDataFrame } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
     onBecomeLeader,
@@ -7308,6 +7308,8 @@ class LunoraClient {
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
                 state.acked = false;
+                // A delta run is one socket's stream: whatever of it arrived ends with that socket.
+                state.pendingDeltaRun = undefined;
 
                 if (socketOpened) {
                     state.valueReceived = false;
@@ -7814,6 +7816,7 @@ class LunoraClient {
         state.acked = false;
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
+        state.pendingDeltaRun = undefined;
         /* eslint-enable no-param-reassign */
         this.emitSyncStatus();
 
@@ -7841,9 +7844,11 @@ class LunoraClient {
         }
 
         let payload: unknown;
+        const pendingRun = state.pendingDeltaRun;
 
         try {
-            payload = resolveDataPayload(message, state.serverBase);
+            // A run's later frames merge onto the frames before them, not onto the committed base.
+            payload = resolveDataPayload(message, pendingRun === undefined ? state.serverBase : pendingRun.payload);
         } catch (error) {
             // The frame carried a value `decodeWire` refuses (an over-long
             // bigint, an over-depth tree, a malformed map entry). Left to throw
@@ -7852,6 +7857,9 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
+            // A run that was partly held can no longer complete on this base: drop it, so a later
+            // frame merges onto the committed value and not onto the abandoned partial one.
+            state.pendingDeltaRun = undefined;
             fanSubscriptionError(state.errorCallbacks, {
                 code: "WIRE_DECODE_FAILED",
                 message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
@@ -7865,6 +7873,19 @@ class LunoraClient {
 
             return;
         }
+
+        // A non-final frame of a run (`more: true`) is held, so the run commits, notifies and
+        // broadcasts once. Frames whose run never ends (a dropped socket) are discarded with the
+        // socket, and the reconnect's snapshot or `resume` answers from the cursor before the run.
+        // The server stamps `lastMutationId` on every frame of a run, so the final frame's
+        // own watermark is the run's.
+        if (isNonFinalRunFrame(message)) {
+            state.pendingDeltaRun = { payload };
+
+            return;
+        }
+
+        state.pendingDeltaRun = undefined;
 
         // Drop the cache seed before the value moves, then commit the payload and its
         // position. The watermark and the checkpoint fan-out follow the commit.
@@ -7928,6 +7949,8 @@ class LunoraClient {
             return;
         }
 
+        // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
+        state.pendingDeltaRun = undefined;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
     }
 
@@ -8992,6 +9015,7 @@ class LunoraClient {
             state.serverBase = undefined;
             state.serverCursor = undefined;
             state.serverEpoch = undefined;
+            state.pendingDeltaRun = undefined;
             // The resubscribe rides the next socket, so this one is no longer
             // acknowledged by anything.
             state.acked = false;

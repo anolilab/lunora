@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.146...@lunora/scheduler@1.0.0-alpha.147) (2026-10-22)
+
+### Performance Improvements
+
+* hot-path fixes from the performance sweep ([#1305](https://github.com/anolilab/lunora/issues/1305)) ([4e4ec66](https://github.com/anolilab/lunora/commit/4e4ec66a0040990581ad6bdc22e44c58b36714af))
+
 ## @lunora/scheduler [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.145...@lunora/scheduler@1.0.0-alpha.146) (2026-10-22)
 
 

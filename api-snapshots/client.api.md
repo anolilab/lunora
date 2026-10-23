@@ -1544,6 +1544,9 @@ interface SubscriptionState {
     lastMutationId?: number;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
     serverBase: unknown;
     serverCursor?: number;
     serverEpoch?: string;
@@ -2579,6 +2582,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```
