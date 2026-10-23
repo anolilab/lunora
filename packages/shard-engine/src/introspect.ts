@@ -719,7 +719,16 @@ interface QueuesResult {
  * package. Returned by `getWorkflowInstanceStatus` and `createWorkflowInstance`.
  */
 type WorkflowInstanceState =
-    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the freshly created instance id and its initial status. */
 interface CreateWorkflowInstanceResult {

@@ -230,15 +230,17 @@ const runsUnconditionally = (node: TsNode, handler: TsNode): boolean => {
             return true;
         }
 
-        if (!(
-            Node.isBlock(ancestor) ||
-            Node.isExpressionStatement(ancestor) ||
-            Node.isAwaitExpression(ancestor) ||
-            Node.isParenthesizedExpression(ancestor) ||
-            Node.isVariableStatement(ancestor) ||
-            Node.isVariableDeclarationList(ancestor) ||
-            Node.isVariableDeclaration(ancestor)
-        )) {
+        if (
+            !(
+                Node.isBlock(ancestor) ||
+                Node.isExpressionStatement(ancestor) ||
+                Node.isAwaitExpression(ancestor) ||
+                Node.isParenthesizedExpression(ancestor) ||
+                Node.isVariableStatement(ancestor) ||
+                Node.isVariableDeclarationList(ancestor) ||
+                Node.isVariableDeclaration(ancestor)
+            )
+        ) {
             return false;
         }
     }

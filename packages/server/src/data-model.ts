@@ -713,7 +713,8 @@ type OneRelationFields<RelT> = {
  * validation rejects the missing field.
  */
 export type InsertValues<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, T extends keyof DM> =
-    IM[T] | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
+    | IM[T]
+    | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<

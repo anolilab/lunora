@@ -9,7 +9,9 @@ import { fnv1a64Hex } from "./apply-diff";
  * @experimental
  */
 type RowChange =
-    { data: Record<string, unknown>; type: "insert" } | { data: Record<string, unknown>; id: string; type: "update" } | { id: string; type: "delete" };
+    | { data: Record<string, unknown>; type: "insert" }
+    | { data: Record<string, unknown>; id: string; type: "update" }
+    | { id: string; type: "delete" };
 
 /**
  * A scoped, ordered set of row changes for a single table.
