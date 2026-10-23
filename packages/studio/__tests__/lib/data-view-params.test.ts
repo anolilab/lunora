@@ -75,6 +75,15 @@ describe("dataViewParams", () => {
         expect(searchToDataView({ order: "createdAt:sideways" }).orderBy).toBeUndefined();
     });
 
+    it("keeps an eq filter on a NULL value through the URL round-trip", () => {
+        expect.assertions(2);
+
+        const search = dataViewToSearch(searchToDataView({ filters: JSON.stringify([{ column: "note", operator: "eq", value: null }]) }));
+
+        expect(search.filters).toBe(JSON.stringify([{ column: "note", operator: "eq", value: null }]));
+        expect(searchToDataView(search).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+    });
+
     it("drops malformed filters, keeping the valid ones", () => {
         expect.assertions(1);
 

@@ -7,10 +7,10 @@ interface RowInspection {
     readonly closeExpandedCell: () => void;
     readonly closeInspect: () => void;
     /** The cell whose full value the expand dialog is showing, if any. */
-    readonly expandedCell: null | { column: string; value: unknown };
+    readonly expandedCell: null | { column: string; storedValue: unknown; value: unknown };
     /** The row whose document the detail drawer is showing, if any. */
     readonly inspecting: TableRow | null;
-    readonly onExpandCell: (column: string, value: unknown) => void;
+    readonly onExpandCell: (column: string, value: unknown, storedValue: unknown) => void;
     readonly onInspect: (row: TableRow | null) => void;
 }
 
@@ -34,9 +34,9 @@ const useRowInspection = (): RowInspection => {
 
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
-    const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
-    const onExpandCell = (column: string, value: unknown): void => {
-        setExpandedCell({ column, value });
+    const [expandedCell, setExpandedCell] = useState<null | { column: string; storedValue: unknown; value: unknown }>(null);
+    const onExpandCell = (column: string, value: unknown, storedValue: unknown): void => {
+        setExpandedCell({ column, storedValue, value });
     };
     const closeExpandedCell = (): void => {
         setExpandedCell(null);

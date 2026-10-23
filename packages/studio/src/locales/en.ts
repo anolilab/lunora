@@ -713,6 +713,7 @@ const MESSAGE_IDS = [
     "Copy",
     "Copied",
     "Cell value",
+    "Filter by this value",
     "Close",
     "Form",
     "Invalid JSON",

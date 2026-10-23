@@ -152,6 +152,26 @@ describe("createWorker — global introspection endpoints", () => {
         expect(intro.readTablePage).toHaveBeenCalledWith({ filters: [{ column: "name", value: "Acme" }], table: "organizations" });
     });
 
+    it("table keeps an eq filter whose value is JSON null, so a NULL cell's filter reaches the reader", async () => {
+        expect.assertions(2);
+
+        const intro = introspector();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
+        const filters = encodeURIComponent(JSON.stringify([{ column: "name", value: null }]));
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/global/table?table=organizations&filters=${filters}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(intro.readTablePage).toHaveBeenCalledWith({ filters: [{ column: "name", value: null }], table: "organizations" });
+    });
+
     it("table wire-decodes tagged filter values so a bytes drill-down survives the query param", async () => {
         expect.assertions(2);
 

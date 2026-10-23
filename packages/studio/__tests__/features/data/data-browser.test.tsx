@@ -2302,6 +2302,80 @@ describe("dataBrowser — facets", () => {
     });
 });
 
+/**
+ * A client serving a `messages` page where the first row's `note` is NULL and the
+ * second's is set. An `eq` clause with a null value selects the NULL rows, the way
+ * the server compiles it, so the page narrows to exactly the cell that was clicked.
+ */
+const createNullableCellClient = (): MockClientHooks => {
+    const rows: Record<string, unknown>[] = [
+        { __id__: "m1", meta: { level: 1 }, note: null, text: "hello" },
+        { __id__: "m2", meta: { level: 2 }, note: "kept", text: "world" },
+    ];
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            const { filters = [], limit = 50, offset = 0, table } = args as { filters?: FilterArg[]; limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            const matched = rows.filter((row) => filters.every((clause) => clause.operator !== "eq" || (row[clause.column] ?? null) === clause.value));
+
+            return { columns: ["__id__", "meta", "note", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+        },
+    });
+};
+
+describe("dataBrowser — filter by cell value", () => {
+    it("adds an eq filter with a null value from a NULL cell, narrowing to the rows that hold NULL", async () => {
+        expect.assertions(3);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("null filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+        expect(screen.getByTestId("db-row").textContent).toContain("hello");
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it("withholds the filter action on an object value, which no equality clause can match", async () => {
+        expect.assertions(1);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-meta")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-value");
+
+        expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+    });
+});
+
 interface ShardSwitchRow {
     __id__: string;
     text: string;

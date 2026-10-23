@@ -41,6 +41,16 @@ const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
 const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
     new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
 
+/**
+ * Whether a cell's stored value can be turned into a facet-style equality filter.
+ * Limited to the SQLite scalars a facet returns, which an equality comparison
+ * matches faithfully. An object, array or blob would bind as serialised text that
+ * the stored form never equals, so the action is withheld rather than filtering
+ * to zero rows.
+ */
+const isFilterableCellValue = (value: unknown): boolean =>
+    value === null || typeof value === "string" || typeof value === "number" || typeof value === "bigint";
+
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
@@ -581,6 +591,14 @@ export const DataBrowser = ({
                     bucket={storageColumns.get(expandedCell.column)}
                     column={expandedCell.column}
                     onClose={closeExpandedCell}
+                    onFilter={
+                        isFilterableCellValue(expandedCell.storedValue)
+                            ? () => {
+                                  facetFilter(expandedCell.column, expandedCell.storedValue);
+                                  closeExpandedCell();
+                              }
+                            : undefined
+                    }
                     resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
                     value={expandedCell.value}
                 />
