@@ -68,6 +68,23 @@ describe("admin introspection on workerd", () => {
         });
     });
 
+    it("filters a boolean doc field by eq true and eq false through the JSON truth value", async () => {
+        expect.assertions(2);
+
+        await withSql("admin-filter-booleans", (sql) => {
+            createDocTable(sql, "switches");
+            sql.exec(`INSERT INTO "switches" VALUES ('on', 1, '{"enabled":true}'), ('off', 1, '{"enabled":false}')`);
+
+            const idsWhere = (value: boolean): string[] =>
+                readTablePage(sql, { filters: [{ column: "enabled", operator: "eq", value }], table: "switches" }).rows.map(
+                    (row) => (row as { id: string }).id,
+                );
+
+            expect(idsWhere(true)).toStrictEqual(["on"]);
+            expect(idsWhere(false)).toStrictEqual(["off"]);
+        });
+    });
+
     it("keeps a date search under the parameter cap however many date fields a table declares", async () => {
         expect.assertions(1);
 
