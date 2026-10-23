@@ -36,20 +36,20 @@ const withoutColumns = (
 };
 
 /**
- * Collect one dataset's rows and write them to storage under the run's id, returning the part's key. A retry
- * overwrites the part, so it is idempotent.
+ * Collect one dataset's rows and write them to storage under the run's id. A retry overwrites the part, so it
+ * is idempotent.
  * The rows go through the Lunora wire codec, which plain JSON cannot replace: a `bigint` column would
  * throw and a bytes column would be written as `{}`. The codec writes them as tagged leaves, a bigint
  * as its decimal string and bytes as base64, and the archive keeps that form.
  */
-const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord, runId: string): Promise<string> => {
+const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord, runId: string): Promise<void> => {
     const rows = await ports.data.collect(dataset, request.subjectId);
 
     requireTables(rows, dataset, "collect");
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
-    return ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(runId, dataset) });
+    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(runId, dataset) });
 };
 
 /** Assemble the archive and the summary from the run's stored parts, then store both under the run's id. */
@@ -59,7 +59,7 @@ const assembleExport = async (
     request: RequestRecord,
     subjectKey: string,
     runId: string,
-): Promise<{ readonly archiveKey: string; readonly summaryKey: string }> => {
+): Promise<string> => {
     const files: { data: string; path: string }[] = [];
     const manifestDatasets: ManifestDataset[] = [];
 
@@ -104,9 +104,10 @@ const assembleExport = async (
         title: "Your data",
     });
     const archiveKey = await ports.files.put(request.id, { data: zip, name: `${runId}/export.zip` });
-    const summaryKey = await ports.files.put(request.id, { data: pdf, name: `${runId}/summary.pdf` });
 
-    return { archiveKey, summaryKey };
+    await ports.files.put(request.id, { data: pdf, name: `${runId}/summary.pdf` });
+
+    return archiveKey;
 };
 
 export { assembleExport, collectPart };

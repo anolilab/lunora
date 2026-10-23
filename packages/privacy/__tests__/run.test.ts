@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
-import { codeOf, exportFileOf, memoryRequests, setup } from "./harness";
+import type { MemoryFiles } from "./harness";
+import { codeOf, exportFileOf, memoryFiles, memoryRequests, setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -212,7 +213,7 @@ describe("runExport", () => {
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(store.rows.get(exported.id)?.status).toBe("failed");
         expect(collectedFor).toStrictEqual(["u1"]);
-        expect([...files.files.keys()].some((key) => key.startsWith(`${exported.id}/`) && key.endsWith("/export.zip"))).toBe(false);
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
     it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
@@ -303,6 +304,52 @@ describe("runExport", () => {
         expect(loser).toStrictEqual({ archiveKey: winnerKey, status: "ready" });
         expect(winnerKey === undefined ? false : files.files.has(winnerKey)).toBe(true);
         expect([...files.files.keys()].filter((key) => key.endsWith("/export.zip"))).toStrictEqual([winnerKey]);
+    });
+
+    it("deletes the part it wrote when a later collect step finds the request no longer processing", async () => {
+        const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
+        const store = memoryRequests();
+        const files = memoryFiles();
+        const writing: MemoryFiles = {
+            ...files,
+            put: async (requestId, file) => {
+                const key = await files.put(requestId, file);
+                const row = store.rows.get(requestId);
+
+                // Another run fails the request right after this run wrote its first part.
+                if (file.name.endsWith("/parts/tasks.json") && row !== undefined) {
+                    store.rows.set(requestId, { ...row, status: "failed" });
+                }
+
+                return key;
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, datasets: [tasks, second], files: writing, store });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
+    });
+
+    it("deletes the part it wrote when a later collect step throws", async () => {
+        const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
+        const { port } = memoryData({});
+        const failing: DataPort = {
+            ...port,
+            collect: async (dataset, subjectId) => {
+                if (dataset.id === "notes") {
+                    throw new Error("disk full");
+                }
+
+                return port.collect(dataset, subjectId);
+            },
+        };
+        const { files, privacy, store } = setup({ data: failing, datasets: [tasks, second] });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
     });
 
     it("never deletes the winner's archive when the loser's status read is stale", async () => {

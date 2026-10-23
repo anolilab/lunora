@@ -70,6 +70,16 @@ const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Pro
     await Promise.all([...keys].map(async (key) => files.delete(key)));
 };
 
+/** Delete the files one export run wrote: every key under the request that carries the run's id. Returns how many. */
+const deleteRunFiles = async (files: StorePort, requestId: string, runId: string): Promise<number> => {
+    const listed = await files.list(`${requestId}/`);
+    const keys = listed.filter((key) => key.includes(`/${runId}/`));
+
+    await Promise.all(keys.map(async (key) => files.delete(key)));
+
+    return keys.length;
+};
+
 /** The subject's key prefix for a dataset's files. An empty prefix would match every subject's files, so it is refused. */
 const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined => {
     if (dataset.files === undefined) {
@@ -324,6 +334,18 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
         whileProcessing(scope, steps, requestId, name, run);
+    let runId: string | undefined;
+
+    // A run that stops after writing removes what it wrote, and only that: another run of the export keeps its files.
+    const stop = async (status: RequestStatus): Promise<ExportOutcome> => {
+        const id = runId;
+
+        if (id !== undefined) {
+            await steps.do("discard", async () => deleteRunFiles(scope.ports.files, requestId, id));
+        }
+
+        return { status };
+    };
 
     await loadStep(scope, steps, requestId);
 
@@ -334,32 +356,30 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return { status: started };
         }
 
-        // Every file this run writes is named under its own id, journaled so a replay keeps it. A second run of the
-        // same export writes elsewhere, so a run that loses the ready claim deletes only what it wrote.
-        const runId = await steps.do("run", () => Promise.resolve(scope.ports.newId()));
-        const written: string[] = [];
+        // Every file this run writes is named under its own id, journaled so a replay keeps it.
+        runId = await steps.do("run", () => Promise.resolve(scope.ports.newId()));
+
+        const ownId = runId;
 
         for (const dataset of scope.datasets) {
-            // Each dataset is one step: its rows go to storage, so the step returns only the part's key.
+            // Each dataset is one step: its rows go to storage, so the step returns nothing large.
             // eslint-disable-next-line no-await-in-loop -- steps run in order by design
-            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request, runId));
+            const collected = await step(`collect:${dataset.id}`, async (request) => collectPart(scope.ports, dataset, request, ownId));
 
-            if (collected.value === undefined) {
-                return { status: collected.status };
+            if (collected.status !== "processing") {
+                // eslint-disable-next-line no-await-in-loop -- the run ends here
+                return await stop(collected.status);
             }
-
-            written.push(collected.value);
         }
 
-        const assemble = async (request: RequestRecord): ReturnType<typeof assembleExport> =>
-            assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId), runId);
+        const assemble = async (request: RequestRecord): Promise<string> =>
+            assembleExport(scope.ports, scope.datasets, request, scope.subjectKey(request.subjectId), ownId);
         const assembled = await step("assemble", assemble);
+        const archiveKey = assembled.value;
 
-        if (assembled.value === undefined) {
-            return { status: assembled.status };
+        if (archiveKey === undefined) {
+            return await stop(assembled.status);
         }
-
-        const { archiveKey, summaryKey } = assembled.value;
 
         // A claim, not an update: an erasure that fails this export after the step's read must not be written
         // over, and the archive this run wrote holds data that erasure removed, so its files go too.
@@ -373,7 +393,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
                 return { archiveKey, status };
             }
 
-            await Promise.all([...written, archiveKey, summaryKey].map(async (key) => scope.ports.files.delete(key)));
+            await deleteRunFiles(scope.ports.files, requestId, ownId);
 
             // Another run of this export that claimed ready first answers with its own archive.
             const current = await requireRequest(scope.ports.store, requestId);
@@ -385,7 +405,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
 
         return ready.value ?? { status: ready.status };
     } catch (error) {
-        return { status: await failStep(scope, steps, requestId, failureDetail(error)) };
+        return await stop(await failStep(scope, steps, requestId, failureDetail(error)));
     }
 };
 
@@ -440,6 +460,8 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
                 (await ports.store.claim(request.id, "processing", { status: transition("processing", "failed"), subjectId: key }))
             ) {
                 await ports.store.addEvent(request.id, ports.now(), "failed", "UNPROCESSABLE: the subject was erased while the export ran");
+                // Every run of this export is stopped by the claim, so all of its files go; a run still writing removes its own.
+                await deleteRequestFiles(ports.files, request);
 
                 return;
             }
