@@ -125,18 +125,21 @@ describe("createSqlCtxDb id lookup under a table pin", () => {
         expect(second?.["title"]).toBe("in b");
     });
 
-    it("does not confuse an explicit id containing the pin delimiter with a pinned lookup", async () => {
-        expect.assertions(2);
+    it("does not answer an unpinned read of a NUL-bearing id from a pinned cache entry", async () => {
+        expect.assertions(3);
 
-        // `x` lives in `a`. The id `a\u0000x` lives in `b`, and is an ordinary explicit id.
+        // `x` lives in `a`, so the pinned read caches it. The unpinned id `a\u0000x` is not stored anywhere: it is only
+        // looked up. The NUL is bound as a parameter, never read back, so this holds on every SQLite build.
         await writer.insert("a", { _id: "x", title: "in a" }, { allowExplicitId: true });
-        await writer.insert("b", { _id: "a\u0000x", title: "in b" }, { allowExplicitId: true });
 
-        const pinned = await writer.get("x", "a");
+        await expect(writer.get("x", "a")).resolves.toMatchObject({ title: "in a" });
+
+        probes = [];
+
         const unpinned = await writer.get("a\u0000x");
 
-        expect(pinned?.["title"]).toBe("in a");
-        expect(unpinned?.["title"]).toBe("in b");
+        expect(probes.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a", "b", "c"]);
+        expect(unpinned).toBeNull();
     });
 
     it("treats an id owned by another table as absent under a pin", async () => {
