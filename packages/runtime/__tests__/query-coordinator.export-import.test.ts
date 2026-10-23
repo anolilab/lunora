@@ -158,6 +158,27 @@ describe("orchestrateImport", () => {
         expect(result.failed).toBe(0);
     });
 
+    it("tells each shard whether to only check its rows, and writes unless asked not to", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["c1"] });
+        const coordinator = createQueryCoordinator({ registry });
+        const seen: unknown[] = [];
+
+        const spy = createShardSpy((_shardKey, body) => {
+            seen.push(body.args["dryRun"]);
+
+            return json({ result: { conflicts: 0, errors: [], inserted: {} } });
+        });
+        const batches = [{ rows: [{ doc: { _id: "m1", channelId: "c1", text: "hi" }, table: "messages" }], shardKey: "c1" }];
+
+        await coordinator.orchestrateImport(spy.namespace, { batches });
+        await coordinator.orchestrateImport(spy.namespace, { batches, dryRun: true });
+
+        expect(seen).toStrictEqual([false, true]);
+        expect(seen).toHaveLength(2);
+    });
+
     it("collects per-shard errors but does not throw", async () => {
         expect.assertions(4);
 

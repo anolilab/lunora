@@ -290,6 +290,7 @@ const streamingImport = async (
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
+    dryRun: boolean,
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
@@ -329,6 +330,7 @@ const streamingImport = async (
         // the live worker (a fail-open leak).
         const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
+            dryRun,
             headers: forwardedHeaders,
         });
 
@@ -344,7 +346,7 @@ const streamingImport = async (
             // shard rows or blank lines. `startLine` is the first global row's
             // line, retained only as a backward-compat fallback.
             const startLine = globalRows[0]?.line ?? 1;
-            const result = await options.importGlobals({ rows: globalRows, startLine });
+            const result = await options.importGlobals({ dryRun, rows: globalRows, startLine });
 
             mergeImportResult(totals, result);
         } else {

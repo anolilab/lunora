@@ -10741,6 +10741,28 @@ abstract class ShardDO {
     }
 
     /**
+     * The `importShard` admin op: a dry run is answered without touching storage,
+     * a real import flushes live subscribers and is audited.
+     */
+    private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseImportShardArgs(args);
+        const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
+
+        // A dry run writes nothing, so there is no table to flush and no change to audit.
+        if (parsed.dryRun) {
+            return adminResponse(result);
+        }
+
+        // The import inserts rows through the writer, which records touched tables;
+        // flush so live subscribers re-run.
+        await this.flushChangedTables();
+
+        this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+
+        return adminResponse(result);
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -10797,16 +10819,7 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                const parsed = parseImportShardArgs(args);
-                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
-
-                // The import inserts rows through the writer, which records
-                // touched tables; flush so live subscribers re-run.
-                await this.flushChangedTables();
-
-                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
-
-                return adminResponse(result);
+                return this.importAdminShard(args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {

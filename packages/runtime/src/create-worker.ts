@@ -287,7 +287,12 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFunction = (request: {
+    /** Check the rows and return their shape errors without writing. */
+    dryRun?: boolean;
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    startLine?: number;
+}) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
@@ -3834,7 +3839,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
+        streamingImport: (request, headers, dryRun) => streamingImport(request, options, queryCoordinator, headers, shardDO, dryRun),
         syncGlobals: options.syncGlobals,
     });
 

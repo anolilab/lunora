@@ -67,7 +67,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
@@ -75,6 +75,8 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
             'import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
+        // A dry run must reach the D1 importer, or a global table would be written by a check.
+        expect(output).toContain("dryRun: request.dryRun === true,");
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {
