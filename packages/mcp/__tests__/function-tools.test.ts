@@ -95,12 +95,17 @@ describe("functionToolsFromOpenRpc", () => {
         expect(() => functionToolsFromOpenRpc(null, { allowWrites: false })).toThrow(/openRpcSpec must be the OpenRPC document/);
     });
 
-    it("skips a method whose kind is not invocable over RPC", () => {
-        expect.assertions(1);
+    it("lists a stream as a read-only tool with no outputSchema, even when the document declares a result", () => {
+        expect.assertions(4);
 
-        const { definitions } = functionToolsFromOpenRpc(spec(method("feed:tail", "stream"), LIST), { allowWrites: true });
+        const streamWithResult = method("feed:tail", "stream", { result: { properties: { n: { type: "number" } }, type: "object" } });
+        const { definitions, routes } = functionToolsFromOpenRpc(spec(streamWithResult, LIST), { allowWrites: false });
+        const tail = definitions.find((tool) => tool.name === "feed_tail");
 
-        expect(definitions.map((tool) => tool.name)).toEqual(["messages_list"]);
+        expect(tail).toBeDefined();
+        expect(tail).not.toHaveProperty("outputSchema");
+        expect(tail?.annotations?.readOnlyHint).toBe(true);
+        expect(routes.get("feed_tail")?.kind).toBe("stream");
     });
 
     it("omits outputSchema for the placeholder result", () => {

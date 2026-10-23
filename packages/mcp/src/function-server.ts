@@ -8,15 +8,15 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import pkg from "../package.json";
 import { coerceArgs } from "./function-args";
 import type { FunctionKind, FunctionRoute, FunctionTools } from "./function-tools";
-import { functionToolsFromOpenRpc } from "./function-tools";
+import { functionToolsFromOpenRpc, isWrite } from "./function-tools";
 import { errorFromThrown, errorResult, ok, okStructured } from "./tool-result";
 import type { ToolResult } from "./tool-types";
 import { readArgumentsBag } from "./tools";
 import { readConfirmation, screenWriteConfirmation } from "./write-confirmation";
 
 /**
- * Serve a developer's own Lunora app over MCP: one tool per query, mutation and
- * action, each taking its arguments as a typed JSON Schema.
+ * Serve a developer's own Lunora app over MCP: one tool per query, mutation,
+ * action and stream, each taking its arguments as a typed JSON Schema.
  *
  * Identity is the caller's, not an admin's. The `token` is the bearer the app
  * already uses for its own RPC calls, so auth and row-level security apply to
@@ -88,7 +88,7 @@ const runWrite = async (
     args: Record<string, unknown>,
     shardKey: string | undefined,
 ): Promise<ToolResult> => {
-    const kind: Exclude<FunctionKind, "query"> = route.kind === "action" ? "action" : "mutation";
+    const kind: Extract<FunctionKind, "action" | "mutation"> = route.kind === "action" ? "action" : "mutation";
     const confirmation = readConfirmation(input);
     const gate = await screenWriteConfirmation(
         client,
@@ -113,9 +113,63 @@ const runWrite = async (
 };
 
 /**
- * Dispatch one tool call. A query runs at once. A mutation or action passes the
- * same two-step confirmation the generic write tools use, so a model that calls
- * it directly gets a proposal back and runs nothing.
+ * What a stream call gets from its MCP request. `signal` is the caller's abort, which
+ * cancels the stream. `progress` is present only when the request carried a
+ * `progressToken`, and it is sent once per chunk with that chunk's index.
+ */
+interface StreamCallContext {
+    progress?: (chunkIndex: number) => Promise<void>;
+    signal?: AbortSignal;
+}
+
+/**
+ * The read half of a stream: open it, report each chunk as progress, and return every
+ * chunk once it completes. A mid-stream error throws out of the loop, and the caller's
+ * `try` turns it into an error result.
+ *
+ * Breaking out of the loop (a throwing progress send) cancels the stream through the
+ * iterator's `return()`. A normal completion needs no cancel, because the client sends
+ * an `unsubscribe` on cancel and the server already ended the run.
+ */
+const runStream = async (
+    client: LunoraClient,
+    route: FunctionRoute,
+    args: Record<string, unknown>,
+    shardKey: string | undefined,
+    context: StreamCallContext,
+): Promise<ToolResult> => {
+    const streamRef: FunctionReference<"stream"> = { __lunoraRef: route.path };
+    const iterable = client.stream(streamRef, args, { shardKey });
+    const { signal, progress } = context;
+    const onAbort = (): void => {
+        iterable.cancel();
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    if (signal?.aborted === true) {
+        onAbort();
+    }
+
+    const chunks: unknown[] = [];
+
+    try {
+        for await (const chunk of iterable) {
+            chunks.push(chunk);
+            await progress?.(chunks.length - 1);
+        }
+    } finally {
+        signal?.removeEventListener("abort", onAbort);
+    }
+
+    return ok(chunks);
+};
+
+/**
+ * Dispatch one tool call. A query runs at once. A stream runs to completion and
+ * returns its chunks. A mutation or action passes the same two-step confirmation
+ * the generic write tools use, so a model that calls it directly gets a proposal
+ * back and runs nothing.
  *
  * Exported so the gate and the handshake can be exercised without a transport.
  */
@@ -125,6 +179,7 @@ const callFunctionTool = async (
     name: string,
     input: Record<string, unknown>,
     allowWrites: boolean,
+    context: StreamCallContext = {},
 ): Promise<ToolResult> => {
     const route = routes.get(name);
 
@@ -132,7 +187,7 @@ const callFunctionTool = async (
         return errorResult("NOT_FOUND", `unknown tool: ${name}`);
     }
 
-    if (route.kind !== "query" && !allowWrites) {
+    if (isWrite(route.kind) && !allowWrites) {
         return errorResult("FORBIDDEN", `tool "${name}" is disabled: this MCP server is read-only. Enable writes with allowWrites.`);
     }
 
@@ -142,6 +197,10 @@ const callFunctionTool = async (
 
         if (route.kind === "query") {
             return resultOf(route, await client.query(reference(route.path), args, { shardKey }));
+        }
+
+        if (route.kind === "stream") {
+            return await runStream(client, route, args, shardKey, context);
         }
 
         return await runWrite(client, route, name, input, args, shardKey);
@@ -174,9 +233,21 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
         return { tools: [...definitions] };
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> =>
-        callFunctionTool(client, routes, request.params.name, request.params.arguments ?? {}, allowWrites),
-    );
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
+        const { progressToken } = extra._meta ?? {};
+        const context: StreamCallContext = {
+            signal: extra.signal,
+            ...(progressToken === undefined
+                ? {}
+                : {
+                      progress: async (chunkIndex: number): Promise<void> => {
+                          await extra.sendNotification({ method: "notifications/progress", params: { progress: chunkIndex, progressToken } });
+                      },
+                  }),
+        };
+
+        return callFunctionTool(client, routes, request.params.name, request.params.arguments ?? {}, allowWrites, context);
+    });
 
     return server;
 };

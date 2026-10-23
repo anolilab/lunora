@@ -247,14 +247,16 @@ Requirements and behaviour:
 
 - **Generate the document.** Pass `apiSpec: "openrpc"` (or `"both"`) to the Vite plugin, or run `lunora codegen --api-spec openrpc`. Without it, `_generated/openrpc.ts` is not emitted and the import fails.
 - **Identity is the caller's.** Each tool runs as `token` through the public RPC path, so auth and row-level security apply as they do in the app. Nothing calls `/_lunora/admin/*`, so no admin token is needed.
-- **One tool per query, mutation and action.** Internal and stream functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
+- **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
 - **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
 - **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
 - **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A bigint inside a union (`anyOf`) is not converted.
 - **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. A function with no `.output()` has no `outputSchema`.
+- **A stream is a read-only tool that collects its chunks.** The call runs the stream to completion and returns every chunk, in order, as the text block, with no `outputSchema` and no wrapping. A mid-stream error is an error result. When the caller aborts, the stream is cancelled on the Lunora socket.
 - **Sensitive arguments** (`v.sensitive`) are masked in a write proposal and sent on a reference that the client never queues offline.
 - **Over stdio, for an editor:** `connectFunctionStdio(options)` builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
-- **Not yet supported:** progress notifications for stream functions (they are not in the document), and `shardKey` is always accepted even for an unsharded function.
+- **Stream progress** is one `notifications/progress` per chunk (the progress value is the chunk's index, with no total), sent only when the request carries a `progressToken`. It reaches the caller only over a transport that delivers notifications during the call. `serveStateless` answers each request as a single JSON body, so there the chunks still arrive in the result, but no progress does.
+- **Not yet supported:** `shardKey` is always accepted even for an unsharded function.
 
 ## Expose an agent
 

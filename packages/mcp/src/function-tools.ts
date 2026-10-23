@@ -11,12 +11,15 @@ import { WRITE_CONFIRMATION_PROPERTIES } from "./write-confirmation";
  * from the OpenRPC document codegen emits (`openRpcSpec`). The document is a
  * static input, so listing tools needs no network call and no admin token.
  *
- * Only the functions the RPC surface exposes reach here: codegen already drops
- * `internal` and `stream` functions from the document, and this reads only the
- * three kinds that remain.
+ * Only the functions the RPC surface exposes reach here: codegen drops `internal`
+ * functions from the document. A `stream` is listed, and it becomes a read-only tool
+ * whose dispatch collects the chunks it yields.
  */
 
-type FunctionKind = "action" | "mutation" | "query";
+type FunctionKind = "action" | "mutation" | "query" | "stream";
+
+/** A mutation or action writes, so it passes the confirmation handshake. A query and a stream only read. */
+const isWrite = (kind: FunctionKind): boolean => kind === "action" || kind === "mutation";
 
 /**
  * `none`: no `.output()` was declared, so the result is text only.
@@ -52,7 +55,7 @@ interface FunctionShape {
     path: string;
 }
 
-const isKind = (value: unknown): value is FunctionKind => value === "query" || value === "mutation" || value === "action";
+const isKind = (value: unknown): value is FunctionKind => value === "query" || value === "mutation" || value === "action" || value === "stream";
 
 /**
  * Anthropic's tool-name rule: `^[a-zA-Z0-9_-]{1,64}$`. Namespaces may carry `/`
@@ -76,6 +79,7 @@ const GENERATED_DESCRIPTION_BY_KIND: Record<FunctionKind, (path: string) => stri
     action: (path) => `Runs the action "${path}", which may call external services.`,
     mutation: (path) => `Runs the mutation "${path}", which changes data.`,
     query: (path) => `Runs the query "${path}". Read-only.`,
+    stream: (path) => `Runs the stream "${path}", which yields chunks. The result is every chunk, in order. Read-only.`,
 };
 
 /** The author's doc comment when present, else the generated sentence. Writes always end with the handshake. */
@@ -171,7 +175,8 @@ const shapeOf = (method: unknown): FunctionShape | undefined => {
         ...argsOf(method),
         ...(typeof description === "string" ? { description } : {}),
         kind,
-        output: outputShapeOf(method["result"]),
+        // A stream has no single result, so no output shape is declared for it, even if the document carries one.
+        output: kind === "stream" ? { mode: "none" } : outputShapeOf(method["result"]),
         path,
     };
 };
@@ -215,7 +220,7 @@ const inputSchemaOf = (shape: FunctionShape, write: boolean): ToolInputSchema =>
 };
 
 const toolDefinitionOf = (name: string, shape: FunctionShape): ToolDefinition => {
-    const write = shape.kind !== "query";
+    const write = isWrite(shape.kind);
     const title = `${shape.kind} ${shape.path}`;
 
     return {
@@ -224,9 +229,10 @@ const toolDefinitionOf = (name: string, shape: FunctionShape): ToolDefinition =>
         inputSchema: inputSchemaOf(shape, write),
         name,
         // A write's first call returns a proposal, which is not the function's output shape, so
-        // a write carries no outputSchema, as the generic write tools do. A query's schema is
-        // widened to admit the error shape: the SDK client checks structuredContent even on errors.
-        ...(write || shape.output.mode === "none" ? {} : { outputSchema: withErrorShape(shape.output.schema) }),
+        // a write carries no outputSchema, as the generic write tools do. A stream has no single
+        // result to describe. A query's schema is widened to admit the error shape: the SDK client
+        // checks structuredContent even on errors.
+        ...(write || shape.kind === "stream" || shape.output.mode === "none" ? {} : { outputSchema: withErrorShape(shape.output.schema) }),
     };
 };
 
@@ -271,7 +277,7 @@ const functionToolsFromOpenRpc = (spec: unknown, options: { allowWrites: boolean
 
         routes.set(name, routeOf(shape));
 
-        if (shape.kind === "query" || options.allowWrites) {
+        if (!isWrite(shape.kind) || options.allowWrites) {
             definitions.push(toolDefinitionOf(name, shape));
         }
     }
@@ -280,4 +286,4 @@ const functionToolsFromOpenRpc = (spec: unknown, options: { allowWrites: boolean
 };
 
 export type { FunctionKind, FunctionRoute, FunctionTools };
-export { functionToolsFromOpenRpc, toolNameOf };
+export { functionToolsFromOpenRpc, isWrite, toolNameOf };
