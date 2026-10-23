@@ -17,6 +17,15 @@ describe("changelog row retention default", () => {
         expect(resolveCdcLogRetention({ LUNORA_CDC_LOG_RETENTION: 250 })).toBe(250);
     });
 
+    it("deletes no rows when only the payload window is configured", () => {
+        expect.assertions(3);
+
+        // A payload-only operator asked for compaction; a row window they never set would delete rows it should keep.
+        expect(resolveCdcLogRetention({ LUNORA_CDC_PAYLOAD_RETENTION: "5" })).toBeUndefined();
+        expect(resolveCdcLogRetention({ LUNORA_CDC_PAYLOAD_RETENTION: "5x" })).toBe(DEFAULT_CDC_LOG_RETENTION_ROWS);
+        expect(resolveCdcLogRetention({ LUNORA_CDC_PAYLOAD_RETENTION: "5", LUNORA_CDC_LOG_RETENTION: "250" })).toBe(250);
+    });
+
     it("lets a deployment opt out explicitly with `off`", () => {
         expect.assertions(2);
 

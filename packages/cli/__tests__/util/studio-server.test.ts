@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { ALLOW_FORWARDED_ENV } from "@lunora/config/studio-host";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startStudioServer } from "../../src/util/studio-server";
+import { proxyHttp, startStudioServer } from "../../src/util/studio-server";
 
 /** Bind a throwaway TCP server to the system-assigned port and return both. */
 const bindPort = (): Promise<{ port: number; server: ReturnType<typeof createServer> }> =>
@@ -304,6 +304,32 @@ describe("startStudioServer", () => {
             expect(response.body).toContain("<!doctype html>");
         } finally {
             await studio.close();
+        }
+    });
+
+    it("serves the new admin token after `.dev.vars` changes mid-session", async () => {
+        expect.assertions(2);
+
+        const cwd = mkdtempSync(join(tmpdir(), "lunora-studio-token-"));
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd, port, workerOrigin: "http://localhost:8787" });
+
+        try {
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenA\n");
+
+            const first = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(cwd, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenB\n");
+
+            const second = await requestStudio(port, "/", `127.0.0.1:${String(port)}`);
+
+            expect(first.body).toContain("tokenA");
+            expect(second.body).toContain("tokenB");
+        } finally {
+            await studio.close();
+            rmSync(cwd, { force: true, recursive: true });
         }
     });
 
@@ -680,4 +706,40 @@ export default defineSchema({
             }
         },
     );
+});
+
+describe("proxyHttp timeout", () => {
+    it("bounds time-to-headers only: a body that goes quiet past the timeout still arrives whole", async () => {
+        expect.assertions(1);
+
+        const upstream = createHttpServer((_request, response) => {
+            response.writeHead(200);
+            response.write("first,");
+            setTimeout(() => response.end("second"), 300);
+        });
+        const { port: upstreamPort, server: upstreamBinder } = await bindPort();
+
+        await closeServer(upstreamBinder);
+        await new Promise<void>((resolve) => {
+            upstream.listen(upstreamPort, "127.0.0.1", resolve);
+        });
+
+        const proxy = createHttpServer((request, response) => {
+            proxyHttp(request, response, new URL(`http://127.0.0.1:${String(upstreamPort)}`), 100);
+        });
+
+        await new Promise<void>((resolve) => {
+            proxy.listen(0, "127.0.0.1", resolve);
+        });
+
+        try {
+            const address = proxy.address() as { port: number };
+            const { body } = await requestStudio(address.port, "/_lunora/x", `127.0.0.1:${String(address.port)}`);
+
+            expect(body).toBe("first,second");
+        } finally {
+            await closeServer(proxy);
+            await closeServer(upstream);
+        }
+    });
 });

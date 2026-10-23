@@ -37,7 +37,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../../shared/base64";
-import type { InboundEmail, RawInboundEmail } from "./parse";
+import type { InboundAttachment, InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
 import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
@@ -356,22 +356,57 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
 }
 
 /**
+ * Total binary attachment bytes forwarded in the default envelope. Raw +
+ * decoded + base64 + JSON copies of one large attachment outgrow the isolate's
+ * memory limit; apps that need more supply `resolveArgs` and store to R2.
+ */
+const MAX_FORWARDED_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+const TRAILING_BASE64_PADDING = /={1,2}$/;
+
+/**
+ * Bytes a string attachment occupies once forwarded: its decoded length when it
+ * is base64, its UTF-8 length otherwise. Charged against the same budget as
+ * binary content so a large string part cannot bypass the cap.
+ */
+const stringContentBytes = (content: string, encoding: InboundAttachment["encoding"]): number => {
+    if (encoding !== "base64") {
+        return new TextEncoder().encode(content).byteLength;
+    }
+
+    const padding = TRAILING_BASE64_PADDING.exec(content)?.[0].length ?? 0;
+
+    return Math.floor((content.length * 3) / 4) - padding;
+};
+
+/**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.
  * Binary attachment `content` (postal-mime hands binary parts back as an
  * `ArrayBuffer`/`Uint8Array`) would be corrupted by `JSON.stringify` — an
  * `ArrayBuffer` serialises to `{}` and a `Uint8Array` to a bloated index-keyed
  * object. We base64-encode binary content and mark `encoding: "base64"` so it
- * survives the wire intact; string content is passed through untouched.
+ * survives the wire intact; string content is passed through untouched. Content
+ * past {@link MAX_FORWARDED_ATTACHMENT_BYTES} is dropped and the attachment
+ * marked `truncated`.
  */
 const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
     if (email.attachments.length === 0) {
         return email;
     }
 
+    let forwarded = 0;
+
     return {
         ...email,
         attachments: email.attachments.map((attachment) => {
             const { content } = attachment;
+            const size = typeof content === "string" ? stringContentBytes(content, attachment.encoding) : content.byteLength;
+
+            if (forwarded + size > MAX_FORWARDED_ATTACHMENT_BYTES) {
+                return { ...attachment, content: "", encoding: "base64" as const, truncated: true };
+            }
+
+            forwarded += size;
 
             if (typeof content === "string") {
                 return attachment;

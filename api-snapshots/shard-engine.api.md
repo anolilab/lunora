@@ -257,7 +257,10 @@ interface AppendAuditEntry {
 interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    findHolders: (holderTable: string, field: string, value: unknown, page: {
+        limit: number;
+        select?: ReadonlyArray<string>;
+    }) => Promise<Record<string, unknown>[]>;
     onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
     onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
@@ -477,6 +480,7 @@ interface CompanionSyncDeps {
     recordCdc: (table: string, id: string, op: "delete" | "insert" | "update", doc?: Record<string, unknown>) => void;
     schema: SchemaLike;
     sql: SqlExec;
+    verified?: Set<string>;
 }
 ```
 
@@ -539,6 +543,7 @@ interface CtxDbOptions {
     cache?: ReactiveCache;
     cdc?: boolean;
     clock?: Clock;
+    companionMemo?: Set<string>;
     enforceRls?: boolean;
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
@@ -3927,7 +3932,7 @@ const clearCapturedMail: (sql: SqlExec) => {
 ### `clearCompanionSignatures` (const)
 
 ```ts
-const clearCompanionSignatures: (sql: SqlExec) => void;
+const clearCompanionSignatures: (sql: SqlExec, companionMemo?: Set<string>) => void;
 ```
 
 ### `clearMemoryTables` (const)

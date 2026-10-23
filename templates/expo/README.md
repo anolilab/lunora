@@ -79,12 +79,12 @@ if you must, and only as a secret with the deployed HTTPS URL:
 ## Running on web
 
 The app bundles for the browser via `react-native-web`, and the live chat works
-the same on web as on native. Auth is a **bearer** token, not a cookie: the HTTP
-RPC carries it in the `Authorization` header, so nothing depends on the browser
-cookie jar or on the worker being same-origin. A browser WebSocket cannot set that
-header on the upgrade, so the upgrade carries no bearer. Whether the socket is
-identified then depends on a session cookie the browser sends with it. One
-web-specific note:
+the same on web as on native. On native, auth is a **bearer** token, not a
+cookie: HTTP RPC and the WebSocket upgrade both carry it in the `Authorization`
+header, never in the URL. A browser socket cannot set that header, so on web the
+live socket is authenticated by the better-auth session cookie instead — serve
+the worker same-site with the web app (or behind the same origin) so the cookie
+reaches the upgrade. One more web-specific note:
 
 - **Auth storage:** `expo-secure-store` has no web build, so `src/auth-client.ts`
   falls back to `localStorage` on web to persist the session.

@@ -55,6 +55,10 @@ const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
  *
  * A malformed value reads as the default rather than as a tighter window — the
  * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
+ *
+ * The default is withheld when only `LUNORA_CDC_PAYLOAD_RETENTION` is set: that
+ * operator asked for compaction, and a row window they never configured would
+ * delete changelog rows the payload setting is meant to keep.
  * @returns the row count to keep, or `undefined` when row retention is switched off
  */
 const resolveCdcLogRetention = (environment: unknown): number | undefined => {
@@ -64,7 +68,13 @@ const resolveCdcLogRetention = (environment: unknown): number | undefined => {
         return undefined;
     }
 
-    return envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY) ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
+    const configured = envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY);
+
+    if (configured !== undefined) {
+        return configured;
+    }
+
+    return envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION") === undefined ? DEFAULT_CDC_LOG_RETENTION_ROWS : undefined;
 };
 
 /**
@@ -193,7 +203,8 @@ class CdcRetentionRunner {
      * `LUNORA_CDC_LOG_RETENTION` deletes rows outright past N, which is the
      * level that destroys information and the one the archive exists for. It
      * defaults to {@link DEFAULT_CDC_LOG_RETENTION_ROWS} so the log is bounded
-     * out of the box, and `off` restores the unbounded log.
+     * out of the box, except when only `LUNORA_CDC_PAYLOAD_RETENTION` is set: then
+     * no row window applies, and `off` restores the unbounded log.
      *
      * Both levels are enforced on the READ paths, not merely intended here —
      * `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`, and

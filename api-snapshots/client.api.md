@@ -544,6 +544,7 @@ class LunoraClient {
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
+    isCrossTabFollower(): boolean;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
@@ -920,6 +921,7 @@ type LunoraClientError = Error & {
 ```ts
 interface LunoraClientOptions {
     authBasePath?: string;
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
     clientId?: string;
     connectionContext?: Record<string, unknown>;

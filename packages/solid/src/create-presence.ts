@@ -72,6 +72,10 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
+    }
+
     const sessionId = options.sessionId ?? randomSessionId();
 
     const [present, setPresent] = createSignal<ReturnOf<L> | undefined>(undefined);

@@ -38,10 +38,11 @@ const SHARED_APP_FILES = ["src/Chat.tsx", "src/Login.tsx", "lunora/messages.ts"]
 /**
  * `src/server/index.ts` is deliberately NOT in {@link SHARED_APP_FILES} — its
  * docblock and branding differ between the two copies — but the one security
- * decision inside it must hold in both: the session never rides the WebSocket URL.
- * The client presents it in the upgrade's `Authorization` header (`getAuthHeaders`)
- * and the `connect` frame, so a query-string read here would reintroduce the leak
- * into every access log on every reconnect.
+ * decision inside it must hold in both.
+ *
+ * Both copies take the session from the request headers. The native client sends
+ * its bearer as the upgrade's `Authorization` header, so no token is ever read from
+ * the URL: a URL token lands in access logs, `Referer` headers and shared links.
  */
 const SERVER_ENTRY = "src/server/index.ts";
 
@@ -49,11 +50,14 @@ describe.each([
     ["templates/expo", TEMPLATE_DIR],
     ["examples/expo", EXAMPLE_DIR],
 ])("%s/src/server/index.ts", (label, directory) => {
-    test("never reads a credential from the query string", () => {
+    test("reads the session from the request headers, never from a ?token= URL parameter", () => {
         const source = readFileSync(join(directory, SERVER_ENTRY), "utf8");
 
-        expect(source, `${label}/${SERVER_ENTRY} reads ?token= — the session must travel in the Authorization header`).not.toContain(
-            `searchParams.get("token")`,
+        // A bearer in the URL lands in access logs and Referer headers. The native client
+        // sends it as the upgrade's Authorization header, and the session comes from there.
+        expect(source, `${label}/${SERVER_ENTRY} reads a session token from the URL`).not.toMatch(/searchParams\.get\("token"\)/);
+        expect(source, `${label}/${SERVER_ENTRY} no longer resolves the session from the request headers`).toMatch(
+            /getSession\(\{ headers: identityRequest\.headers \}\)/,
         );
     });
 });

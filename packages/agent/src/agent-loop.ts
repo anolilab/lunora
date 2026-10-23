@@ -861,6 +861,25 @@ const applyPrepareStepResult = (
 };
 
 /**
+ * Newest rows the loop replays when no compaction is configured. Without a bound,
+ * every turn re-sends the whole thread, which a long-lived thread eventually
+ * overflows; `compaction` is the opt-in alternative that summarizes the rest.
+ */
+const DEFAULT_HISTORY_LIMIT = 200;
+
+/**
+ * Drop the leading `tool` rows of a newest-first window. Their assistant tool-call
+ * fell outside the window, and a tool result without its call is rejected by the
+ * provider (400).
+ * @experimental
+ */
+const trimLeadingToolRows = (rows: ReadonlyArray<AgentMessageRow>): AgentMessageRow[] => {
+    const start = rows.findIndex((row) => row.role !== "tool");
+
+    return start === -1 ? [] : rows.slice(start);
+};
+
+/**
  * Decide the compaction split for a turn: when `compaction` is configured and the
  * history exceeds `maxMessages`, return the `older` messages to summarize and the
  * `recent` tail to keep verbatim (the most recent `keepRecent`, default
@@ -1057,7 +1076,10 @@ const generateTurn = async (turnContext: TurnContext, turn: number, steps: Reado
         const { history, summary } =
             agent.compaction !== undefined && turnContext.compact !== undefined
                 ? await compactIncrementally(turnContext)
-                : await compactHistory(turnContext, (await run(listMessages, { key: threadKey })) as AgentMessageRow[]);
+                : await compactHistory(
+                      turnContext,
+                      trimLeadingToolRows((await run(listMessages, { key: threadKey, limit: DEFAULT_HISTORY_LIMIT })) as AgentMessageRow[]),
+                  );
 
         let prepared: PreparedTurn = {
             activeTools: agent.activeTools,
@@ -1899,4 +1921,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
+export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction, trimLeadingToolRows };

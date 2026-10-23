@@ -30,7 +30,7 @@
 
 import type { SqlExec } from "@lunora/shard-engine";
 
-import { shouldPrune } from "./prune-marker";
+import { pruneOncePerWindow } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -177,7 +177,7 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
     // Bounded retention: keep only the most recent buckets — run once per
     // window instead of on every recorded attempt. The delete is table-wide, so
     // the default (unscoped) marker key covers exactly what it prunes.
-    if (shouldPrune(sql, bucket)) {
+    pruneOncePerWindow(sql, bucket, "", () => {
         runSql(
             sql,
             `DELETE FROM "${AUTH_METRICS_BUCKETS_TABLE}"
@@ -186,7 +186,7 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
              )`,
             AUTH_METRICS_BUCKET_RETENTION * AUTH_METRICS_BUCKET_MS,
         );
-    }
+    });
 };
 
 /**

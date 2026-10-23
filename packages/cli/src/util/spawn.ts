@@ -13,6 +13,9 @@ import { LunoraError } from "@lunora/errors";
  */
 const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
 
+/** How long a child may hold its piped stdio open after it has exited before its captured output is returned. */
+const STDIO_EXIT_GRACE_MS = 500;
+
 /**
  * Escapes `value` for the child's CommandLineToArgvW re-parse inside the double quotes that
  * `quote` wraps it in: a run of backslashes right before a `"` (an embedded quote, or the closing
@@ -203,7 +206,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
             });
         }
 
+        let settled = false;
+
         child.on("error", (error) => {
+            settled = true;
+
             // The single chokepoint for "that program isn't installed": every
             // shell-out in the CLI goes through this spawner, and Node reports a
             // command that isn't on PATH as an `ENOENT` on the child (no PID, no
@@ -224,16 +231,42 @@ export const defaultSpawner: Spawner = (descriptor) =>
             reject(error);
         });
 
+        let exitCode = 0;
+
+        let stdioGrace: ReturnType<typeof setTimeout> | undefined;
+
+        const finish = (): void => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(stdioGrace);
+            resolve({
+                code: exitCode,
+                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
+            });
+        };
+
         child.on("exit", (code, signal) => {
             // A signal-killed child reports `code === null`; treat that as a
             // failure (non-zero) rather than silently passing — e.g. an
             // OOM-killed `tsc` must not read as a clean type-check.
-            resolve({
-                code: code ?? (signal ? 1 : 0),
-                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
-                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
-            });
+            exitCode = code ?? (signal ? 1 : 0);
+            // `close` waits for every holder of the piped stdio. A grandchild that
+            // inherited it keeps `close` from ever firing, so after a short grace
+            // the output captured so far is the result, and the pipes are dropped.
+            stdioGrace = setTimeout(() => {
+                child.stdout?.destroy();
+                child.stderr?.destroy();
+                finish();
+            }, STDIO_EXIT_GRACE_MS);
         });
+
+        // Settle on `close`, not `exit`: `exit` can fire while the piped stdio
+        // is still draining, which would truncate the captured output.
+        child.on("close", finish);
 
         if (hasInput && child.stdin) {
             // A child that exits before draining stdin (e.g. `wrangler secret put`

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
@@ -55,34 +55,4 @@ const useQuerySubscription = ({ args, argsKey, client, function_, onError, query
     }, [client, queryClient, subscriptionKey, skipped, stableOnError]);
 };
 
-/**
- * The one-shot HTTP snapshot behind a query's first value.
- *
- * It races the subscription that feeds the same key. TanStack applies a resolved
- * `queryFn` result unconditionally — a `setQueryData` while the fetch is in
- * flight does NOT cancel it — so a push that lands first would be reverted to
- * pre-push data, and with `staleTime: Infinity` and push-driven freshness it
- * stays reverted until the next write (and bypasses the optimistic layer engine,
- * since the TanStack cache was written raw). Sample the key's push counter either
- * side of the fetch and yield to anything newer.
- */
-const fetchQuerySnapshot = async <F extends FunctionReference>(
-    client: LunoraClient,
-    queryClient: QueryClient,
-    function_: F,
-    args: Record<string, unknown>,
-    shardKey: string | undefined,
-    queryKey: QueryKey,
-): Promise<ReturnOf<F>> => {
-    const registry = getSubscriptionRegistry(client);
-    const sample = registry.openSnapshotSample(queryKey);
-    const snapshot = await client.query<F>(function_, args as ArgsOf<F>, { shardKey });
-
-    if (registry.closeSnapshotSample(sample)) {
-        return snapshot;
-    }
-
-    return queryClient.getQueryData<ReturnOf<F>>(queryKey) ?? snapshot;
-};
-
-export { fetchQuerySnapshot, useQuerySubscription };
+export default useQuerySubscription;

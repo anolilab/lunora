@@ -1215,6 +1215,8 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             probeOnAnon.postMessage({ data: "stale-anon-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
             await delay(30);
 
+            // A browser socket cannot carry the bearer, so the sign-in does not
+            // blank the view; nothing from the old channel followed it.
             expect(received).toStrictEqual(["anon-row"]);
 
             // The NEW channel is live.
@@ -1523,4 +1525,28 @@ describe("follower epoch rule (cross-tab)", () => {
             client.close();
         }
     }, 10_000);
+});
+
+describe("lunoraClient.isCrossTabFollower", () => {
+    it("is true only while crossTabSync is on and this tab is not the leader", () => {
+        expect.assertions(3);
+
+        const plain = new LunoraClient({ url: TEST_URL, WebSocket: createMockWebSocket([]) });
+        const synced = new LunoraClient({ crossTabSync: true, url: TEST_URL, WebSocket: createMockWebSocket([]) });
+
+        try {
+            expect(plain.isCrossTabFollower()).toBe(false);
+
+            // Still inside the claim window: no leader known, and no socket here.
+            expect(synced.isCrossTabFollower()).toBe(true);
+
+            vi.spyOn(TabCoordinator.prototype, "isLeader").mockReturnValue(true);
+
+            expect(synced.isCrossTabFollower()).toBe(false);
+        } finally {
+            vi.restoreAllMocks();
+            plain.close();
+            synced.close();
+        }
+    });
 });

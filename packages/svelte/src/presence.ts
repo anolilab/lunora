@@ -77,6 +77,10 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L> => {
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
+    }
     const sessionId = options.sessionId ?? randomSessionId();
 
     let latestData: Record<string, unknown> | undefined = options.data;

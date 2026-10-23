@@ -421,3 +421,26 @@ describe("createDynamicShardRegistry", () => {
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
     });
 });
+
+describe("createDynamicShardRegistry secret", () => {
+    it("sends the secret header on reads and writes", async () => {
+        expect.assertions(1);
+
+        const seen: (string | null)[] = [];
+        const namespace = createFakeNamespace({
+            fetch: async (request) => {
+                seen.push(request.headers.get("x-lunora-shard-registry-do-secret"));
+
+                return Response.json({ ok: true, shardKeys: [], tables: {} });
+            },
+        });
+        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace, secret: "s3cret" });
+
+        await registry.register("messages", "a");
+        await registry.unregister("messages", "a");
+        await registry.listShardKeys("messages");
+        await registry.snapshot();
+
+        expect(seen).toStrictEqual(["s3cret", "s3cret", "s3cret", "s3cret"]);
+    });
+});
