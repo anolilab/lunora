@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.232...@lunora/server@1.0.0-alpha.233) (2026-10-23)
+
+### Features
+
+* **server:** mount declared live streams without app routes ([#1314](https://github.com/anolilab/lunora/issues/1314)) ([45f31b6](https://github.com/anolilab/lunora/commit/45f31b6781c3e0bfe300264b9d8f59175424d47a)), closes [#1204](https://github.com/anolilab/lunora/issues/1204)
+
 ## @lunora/server [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.231...@lunora/server@1.0.0-alpha.232) (2026-10-22)
 
 
