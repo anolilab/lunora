@@ -1326,16 +1326,25 @@ const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
     kind === "bigint" && typeof value === "string" ? (decodeBigintSqlKey(value) ?? value) : value;
 
 /**
- * The scalar a `has` clause tests for membership. A JSON boolean reads back from
- * `json_each` as the integer 0 or 1, so it binds as that; anything that is not a
- * string, finite number or boolean has no element form to compare against.
+ * The element test a `has` scalar compiles to: a JSON type condition plus, for
+ * strings and numbers, the bound value. `json_each` reports a JSON boolean as the
+ * integer 1 or 0, so comparing values alone would make `has true` match a stored
+ * `1` and `has 1` match a stored `true`. The type condition keeps each kind to its
+ * own JSON type. The type fragments are fixed text chosen from the value's
+ * JavaScript type, never from user input.
  * @throws LunoraError `BAD_REQUEST` when the value is null, an object, an array, or not finite
  */
-const arrayElementValue = (value: unknown): number | string => {
-    const element = typeof value === "boolean" ? Number(value) : value;
+const arrayElementMatch = (value: unknown): { params: (number | string)[]; sql: string } => {
+    if (typeof value === "boolean") {
+        return { params: [], sql: `j.type = '${value ? "true" : "false"}'` };
+    }
 
-    if (typeof element === "string" || (typeof element === "number" && Number.isFinite(element))) {
-        return element;
+    if (typeof value === "string") {
+        return { params: [value], sql: "j.type = 'text' AND j.value = ?" };
+    }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return { params: [value], sql: "j.type IN ('integer', 'real') AND j.value = ?" };
     }
 
     throw new LunoraError("BAD_REQUEST", '"has" needs a string, number or boolean value to look for in the array');
@@ -1369,9 +1378,11 @@ const buildArrayContains = (
         throw new LunoraError("BAD_REQUEST", `"has" is not supported on bigint column ${clause.column} — it stores a sort key, not an array`);
     }
 
+    const element = arrayElementMatch(clause.value);
+
     return {
-        params: [documentJsonPath(clause.column, path), arrayElementValue(clause.value)],
-        sql: `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND j.value = ?)`,
+        params: [documentJsonPath(clause.column, path), ...element.params],
+        sql: `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND ${element.sql})`,
     };
 };
 

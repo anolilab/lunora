@@ -158,6 +158,36 @@ describe("readTablePage — nested paths and array membership", () => {
             expect(ids([{ column: "flags", operator: "has", value: true }])).toEqual(["o1"]);
         });
 
+        // `json_each` reports a JSON boolean as the integer 1 or 0, so a value-only
+        // comparison would let `true` find a stored 1 and 1 find a stored true.
+        it("does not match a stored 1 when asked for true", () => {
+            expect.assertions(2);
+
+            // scores is [1,2,3] on o1; the array holds no true, so nothing matches.
+            expect(ids([{ column: "scores", operator: "has", value: true }])).toStrictEqual([]);
+            expect(ids([{ column: "scores", operator: "has", value: 1 }])).toStrictEqual(["o1"]);
+        });
+
+        it("does not match a stored true when asked for 1, or a stored false when asked for 0", () => {
+            expect.assertions(2);
+
+            expect(ids([{ column: "flags", operator: "has", value: 1 }])).toStrictEqual([]);
+            expect(ids([{ column: "flags", operator: "has", value: 0 }])).toStrictEqual([]);
+        });
+
+        it('does not match a stored 1 when asked for the string "1"', () => {
+            expect.assertions(1);
+
+            expect(ids([{ column: "scores", operator: "has", value: "1" }])).toStrictEqual([]);
+        });
+
+        it("applies the same type test in the bulk-delete selector, so it selects no row for has true", () => {
+            expect.assertions(2);
+
+            expect(selectMatchingIds(database.sql, { filters: [{ column: "scores", operator: "has", value: true }], table: "orders" }).ids).toStrictEqual([]);
+            expect(selectMatchingIds(database.sql, { filters: [{ column: "scores", operator: "has", value: 1 }], table: "orders" }).ids).toStrictEqual(["o1"]);
+        });
+
         it("matches an array nested under a path", () => {
             expect.assertions(1);
 
@@ -173,7 +203,9 @@ describe("readTablePage — nested paths and array membership", () => {
 
             const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
 
-            expect(statement?.sql).toContain("EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.value = ?)");
+            expect(statement?.sql).toContain(
+                "EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?)",
+            );
             expect(statement?.sql).not.toContain("blue");
             expect(statement?.sql).not.toContain("$.tags");
             expect(statement?.params).toEqual(["$.tags", "blue"]);
