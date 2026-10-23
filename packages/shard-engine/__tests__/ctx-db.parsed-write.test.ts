@@ -615,3 +615,24 @@ describe("a patch verifier sees the row that will be stored", () => {
         await expect(stored(id, "score")).resolves.toBe(42);
     });
 });
+
+describe("insertManyUnsafe refuses a NUL in a trusted-import id before writing any row", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, schema);
+        writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("leaves the earlier, valid row of the batch unwritten", async () => {
+        expect.assertions(2);
+
+        const batch = [input({ _id: "ok1", score: 42 }), input({ _id: "bad\u0000id", score: 42 })];
+
+        await expect(writer.insertManyUnsafe!("items", batch, { allowExplicitId: true })).rejects.toThrow(/NUL/u);
+        await expect(writer.get("ok1")).resolves.toBeNull();
+    });
+});

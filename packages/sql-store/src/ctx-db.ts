@@ -64,6 +64,7 @@ import {
     assertFlatPredicate,
     assertNoExplicitUndefined,
     assertPatchAllowed,
+    assertStorableRowId,
     assertValidClientId,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
@@ -3621,6 +3622,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
             } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                assertStorableRowId(withDefaults["_id"]);
                 id = withDefaults["_id"];
             } else {
                 id = generateId();

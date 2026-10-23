@@ -213,6 +213,33 @@ const assertValidClientId = (clientId: string): void => {
     }
 };
 
+/**
+ * Refuse a trusted-import row id holding U+0000. An id is a key: the SQL writers cache resolved ids under a key with a NUL
+ * between the table and the id, and some SQLite builds truncate text at a NUL on read, so a row stored under such an id
+ * cannot be read back by it. Refused on every store, so one import does not behave differently by store.
+ */
+const assertStorableRowId = (id: string): void => {
+    if (id.includes("\0")) {
+        throw new LunoraError("BAD_REQUEST", `invalid row id ${JSON.stringify(id)}: a row id cannot hold a NUL character (U+0000)`);
+    }
+};
+
+/**
+ * Refuse every trusted-import id in a batch before any row is written: a global batch writes D1 row by row, and D1 cannot
+ * roll back what it already wrote.
+ */
+const assertBatchRowIds = (documents: ReadonlyArray<Record<string, unknown>>, allowExplicitId: boolean | undefined): void => {
+    if (allowExplicitId !== true) {
+        return;
+    }
+
+    for (const document of documents) {
+        if (typeof document["_id"] === "string") {
+            assertStorableRowId(document["_id"]);
+        }
+    }
+};
+
 /** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
 interface WriteEvent {
     doc?: Record<string, unknown>;
@@ -3883,6 +3910,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
             } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                assertStorableRowId(withDefaults["_id"]);
                 id = withDefaults["_id"];
             } else {
                 id = generateId();
@@ -3930,6 +3958,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         async insertManyUnsafe(tableName, documents, batchOptions) {
             assertBatchLimit(documents.length, batchOptions?.limit, "insertManyUnsafe");
+
+            assertBatchRowIds(documents, batchOptions?.allowExplicitId);
 
             if (documents.length === 0) {
                 return [];
@@ -4830,7 +4860,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         : writer;
 };
 
-export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export { assertStorableRowId, assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
 export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";

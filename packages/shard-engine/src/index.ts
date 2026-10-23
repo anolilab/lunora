@@ -45,6 +45,7 @@ export type {
 export {
     applyCdcChanges,
     assertNoExplicitUndefined,
+    assertStorableRowId,
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
