@@ -41,7 +41,7 @@ messages = client.query("messages:list", { "channel" => "general" })
 client.mutation("messages:send", { "channel" => "general", "text" => "hi" })
 client.mutation("ledger:add", { "amount" => Lunora::WireBigInt.new(1000) })
 
-# Live subscription: attach your socket, then feed it frames.
+# Live subscription: attach your socket (it sends connect first), then feed it frames.
 client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
 unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 ```
@@ -56,20 +56,23 @@ around the poster.
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`handle_frame` returns the frame's type). Each socket open sends the `connect` frame
-first, then resubscribes and replays this shard's queued writes:
+(`handle_frame` returns the frame's type). `attach_socket` sends the `connect` frame
+first on each socket open, then the whisper joins; `resend_subscriptions` follows it
+with the queries and shape views, and the loop then replays this shard's queued writes:
 
 ```ruby
+client.session_token = session # the WebSocket session credential; see "Token expiry" below
+client.on_token_expired(-> { client.session_token = refresh_session }) # your refresh; assumed to return the new credential
+
 attempt = 0
 loop do
   retry_thread = nil
   retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
   socket = nil
+  close_code = close_reason = nil # the close frame that ended the run; nil when the socket dropped without one
   begin
     socket = connect # your socket library
-    sender = ->(frame) { socket.send(JSON.generate(frame)) }
-    sender.call(Lunora.build_connect_frame(nil, nil, token: session)) # connect first: the server's onConnect hook fires on it
-    client.attach_socket(sender)
+    client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
     client.resend_subscriptions
     report = client.flush_offline_queue # HTTP replay; transient failures stay queued
     if report.retry_after_ms || report.requeued.any?
@@ -92,6 +95,7 @@ loop do
     while (raw = socket.receive)
       attempt = 0 if client.handle_frame(raw) == "ack"
     end
+    close_code, close_reason = socket.close_frame # assumed: your socket library reports the close code and reason
   rescue StandardError
     nil
   ensure
@@ -104,7 +108,7 @@ loop do
     retry_thread&.join # so a requeued write is seen by the next run's flush
     socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
   end
-  client.detach_socket
+  client.detach_socket(close_code, close_reason)
   delay = [30.0, 2.0**[attempt, 5].min].min
   sleep(delay / 2 + rand * delay / 2)
   attempt += 1
@@ -113,7 +117,21 @@ end
 
 A requeued or rate-limited replay must not stop the read loop: the retry runs on a thread that is killed when the socket run ends, so live updates keep flowing meanwhile.
 
-The `connect` frame carries the session credential as `token`; a deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The session credential never goes in the socket URL; the only `?token=` a client sends is an admin ticket.
+`attach_socket(sender, context = nil)` sends `connect` as the first frame of every socket open: the client id, the `context` when you pass one, and the session credential as `token` when one is set. The session credential is `client.session_token`, separate from the RPC bearer (`auth_token`), and it never goes in the socket URL. A deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The only `?token=` a client sends is an admin ticket.
+
+### Token expiry
+
+`detach_socket(close_code, close_reason)` takes the close frame that ended the socket (`nil` for none), marks the client offline, and notifies the `on_token_expired` listeners when the credential needs replacing:
+
+- A `4001` close always notifies.
+- A `4003` close notifies once per credential generation. A new `session_token` starts a new generation. A socket that opened under a credential you have since replaced notifies nothing. A `4003` whose reason is exactly `connect deadline` notifies nothing, because that socket never sent `connect`.
+- A `TOKEN_EXPIRED` error frame notifies, and is not routed to its subscription. An `UNAUTHENTICATED` error frame is routed to its subscription like any other error.
+
+`client.on_token_expired(listener)` returns a handle that unregisters the listener. A listener that raises does not stop the others or the socket read loop.
+
+### Whispers and rooms
+
+`client.whisper_subscribe(topic) { |value| ... }` joins a topic: the first listener sends `whisper_subscribe`, and removing the last one sends `whisper_unsubscribe`. Each attach rejoins every topic after `connect`. `client.whisper(topic, data)` relays `data` to the topic's other members. It is not queued: it returns `false`, and sends nothing, when no socket is attached. `client.connect_room(name) { |message| ... }` joins the topic `room:<name>` and returns a handle whose `send(message)` relays to the room and whose `close` leaves it. A room is never acknowledged, so there is nothing to wait for before sending.
 
 `handle_frame` never raises into your read loop: a frame that is not JSON, or
 JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not

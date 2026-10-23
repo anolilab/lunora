@@ -548,11 +548,7 @@ func resendFrames(t *testing.T, client *Client) []map[string]any {
 
 	var resent []map[string]any
 
-	client.AttachSocket(func(frame map[string]any) error {
-		resent = append(resent, frame)
-
-		return nil
-	})
+	client.AttachSocket(recordSubscriptionFrames(&resent), nil)
 
 	if err := client.ResendSubscriptions(); err != nil {
 		t.Fatalf("resend: %v", err)
@@ -566,7 +562,7 @@ func TestAPokeWithAnUndecodableRowIsRefusedWhole(t *testing.T) {
 
 	shape := shapeFixture(t)
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	var (
 		delivered [][]any
@@ -617,11 +613,7 @@ func TestAPokeWithAnUndecodableRowIsRefusedWhole(t *testing.T) {
 	// attached, so the cold subscribe it sends lands in `sent`.
 	var sent []map[string]any
 
-	client.AttachSocket(func(frame map[string]any) error {
-		sent = append(sent, frame)
-
-		return nil
-	})
+	client.AttachSocket(recordSubscriptionFrames(&sent), nil)
 
 	delivered = nil
 	gap, _ := shape["gapPokeSequence"].([]any)
@@ -675,11 +667,7 @@ func TestAContiguousBasedPokeAppliesNormally(t *testing.T) {
 
 	var sent []map[string]any
 
-	client.AttachSocket(func(frame map[string]any) error {
-		sent = append(sent, frame)
-
-		return nil
-	})
+	client.AttachSocket(recordSubscriptionFrames(&sent), nil)
 	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, nil)
 
 	sequence, _ := shape["pokeSequence"].([]any)
@@ -707,7 +695,7 @@ func TestMalformedFramesAreIgnoredWithoutPanicking(t *testing.T) {
 	}
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	calls := 0
 	client.Subscribe("messages:list", map[string]any{}, func(any) { calls++ }, nil, "")
@@ -795,7 +783,7 @@ func TestAStreamEndsWhenTheClientCloses(t *testing.T) {
 	covers("subscription_stream_ends_on_close")
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	events, unsubscribe := client.Stream("messages:list", map[string]any{}, "")
 	defer unsubscribe()
@@ -890,7 +878,7 @@ func TestAnIdentityChangeEvictsThePreviousSession(t *testing.T) {
 
 		t.Run(fmt.Sprintf("%v->%v", transition["from"], transition["to"]), func(t *testing.T) {
 			client := NewClient("https://app.example", nil)
-			client.AttachSocket(func(map[string]any) error { return nil })
+			client.AttachSocket(func(map[string]any) error { return nil }, nil)
 			client.Subscribe("messages:list", map[string]any{}, func(any) {}, nil, "")
 
 			var shapeRows [][]any

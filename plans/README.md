@@ -33,7 +33,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                                   | Title                                                                  | Notes                                                                                  |
 | ------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [531](./531-typed-live-topics.md)                      | Typed live topics: declared names and payloads, generated refs         | A to D shipped; E (auto-mount the routes) open                                         |
 | [530](./530-vite-startup-ts-morph-graph.md)            | Keep ts-morph out of the Vite and cloudflare config-load graph         | BLOCKED: owner picks lazy codegen (~130 files) or async `lunora()` (public API change) |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                               | decisions D1–D6 open; Phase 0 first                                                    |
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                    | replay engine, frame handlers, admin surface; decisions D1–D3                          |
@@ -61,6 +60,7 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 
 | Plan | Title                                                                       | Commit               |
 | ---- | --------------------------------------------------------------------------- | -------------------- |
+| 531  | Typed live topics: declared names, payloads, and route mounting             | pending (fill in PR) |
 | 489  | Many-to-many relations through a join table                                 | #1146                |
 | 479  | Make `createPayment`'s `authorize` required (default-deny)                  | 360c4f27c            |
 | 483  | Make the `.dev.vars` create exclusive on the final path                     | 58e11f997, 88b7c1997 |

@@ -15,6 +15,7 @@
         "@lunora/container": "workspace:*",
         "@lunora/db": "workspace:*",
         "@lunora/react": "workspace:*",
+        "@lunora/runtime": "workspace:*",
         "@lunora/scheduler": "workspace:*",
         "@lunora/server": "workspace:*",
         "@lunora/values": "workspace:*",

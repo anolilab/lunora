@@ -1,6 +1,6 @@
 import type { IdentityIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
-import { hasEmailAgents, hasShardedTables } from "./app-helpers";
+import { hasEmailAgents, hasLiveStreamMounts, hasShardedTables } from "./app-helpers";
 
 /**
  * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
@@ -167,6 +167,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
+        ...(hasLiveStreamMounts(options) ? [`import { liveStreamRouter } from "${options.useUmbrella ? "lunorash/server" : "@lunora/server"}";`] : []),
         ...(options.hasVectors ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };

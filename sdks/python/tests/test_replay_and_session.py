@@ -372,7 +372,7 @@ class TestFrameManifestCases(unittest.TestCase):
             client.handle_frame(frame)
 
         self.assertEqual(rows[-1], shape["contiguousExpectedRows"])
-        self.assertEqual([frame["type"] for frame in sent], ["shape_subscribe"], "no re-seed")
+        self.assertEqual([frame["type"] for frame in sent], ["connect", "shape_subscribe"], "no re-seed")
 
     def test_identity_change_evicts_previous_session(self):
         covers("identity_change_evicts_previous_session")

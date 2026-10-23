@@ -83,6 +83,32 @@ does. Measured over a 50 s idle connection: two pings and two pongs each way, no
 application traffic, socket still open. The inbound `lunora-pong` a differently
 configured peer may send is ignored.
 
+### Connect, credentials and close codes
+
+Every socket open sends `connect` first, before any subscription or whisper join.
+`connect` carries the session credential (`ws_token`) as `connect.token` when one is
+set, and never puts it in the URL; `?token=` carries only the admin ticket
+(`ws_ticket`). `connect_and_run` does this for you. A caller that attaches its own
+socket calls `attach_socket(send, context=None)`, which sends `connect` (with the
+optional connection `context`) and then joins the whisper topics; it does not resend
+subscriptions, so call `resend_subscriptions()` after it when you need them.
+
+The server refuses a credential by closing the socket. `on_token_expired(listener)`
+runs when that happens: a 4001 always, a `TOKEN_EXPIRED` error frame always, and a
+4003 once per credential. Refresh the credential in the listener and assign
+`client.ws_token`; the next open presents it. A 4003 from a socket opened under an
+older credential notifies nothing, and neither does a 4003 whose reason is
+`connect deadline`. A 503 at upgrade is transient, so `reconnect_forever` retries it
+with backoff.
+
+### Whispers and rooms
+
+`whisper_subscribe(topic, listener)` joins a topic and returns an unsubscribe;
+`whisper(topic, data)` relays `data` to the other members and returns `False` when no
+socket is attached (nothing is queued). Joins are sent again after every reconnect.
+`connect_room(name, listener)` joins `room:<name>` and returns a handle with `send(message)`
+and `close()`; a room join is never acknowledged, so there is nothing to wait for.
+
 ## Optimistic updates and offline writes
 
 `mutation` is the direct write path: one HTTP round-trip that raises when the
