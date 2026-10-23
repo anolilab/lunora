@@ -243,6 +243,22 @@ pub fn whisper_frames_join_send_and_deliver() {
 }
 
 /// Each open rejoins every registered topic straight after `connect`.
+/// A closed client forgets its room registrations, so an attach after close joins no topic.
+pub fn closed_client_does_not_rejoin_rooms() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let mut client = Client::new("https://app.example", None);
+
+    client.client_id = "client-test".to_string();
+    let _listener = client.whisper_subscribe("room:general", Box::new(|_value: &WireValue| {}));
+    client.close();
+    client.attach_socket(recording_sender(&sent), None);
+
+    let frames = take(&sent);
+
+    assert_eq!(frames.len(), 1, "after close, the attach writes connect and no join");
+    assert_eq!(frames[0]["type"], json!("connect"));
+}
+
 pub fn whisper_topics_rejoin_after_reconnect() {
     let document = fixture("ws-frames.json");
     let rejoin = document["whisperFrames"]["rejoinOnReconnect"].as_array().expect("rejoinOnReconnect");

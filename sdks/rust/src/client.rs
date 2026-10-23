@@ -672,8 +672,10 @@ impl Client {
 
     /// Registers a listener for token expiry: a 4001 close, a refused session
     /// credential (once per credential), and a `TOKEN_EXPIRED` error frame. The
-    /// listener should fetch a fresh credential and pass it to
-    /// [`Client::set_session_token`]. Returns the id that removes it.
+    /// listener runs inside `detach_socket` or `handle_frame`, which hold the
+    /// client, so it cannot reach the client itself. It should signal its owner
+    /// (a flag or a channel), and the owner calls [`Client::set_session_token`]
+    /// once it has the fresh credential. Returns the id that removes it.
     pub fn on_token_expired(&mut self, listener: TokenExpiredHandler) -> ListenerId {
         let id = self.next_listener();
 
@@ -817,6 +819,7 @@ impl Client {
         self.shapes.clear();
         self.pokes.clear();
         self.poke_order.clear();
+        self.whispers.clear();
     }
 
     /// Who is signed in, as last set by [`Client::set_identity`].

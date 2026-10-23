@@ -1498,3 +1498,8 @@ fn whisper_frames_join_send_and_deliver() {
 fn whisper_topics_rejoin_after_reconnect() {
     socket_cases::whisper_topics_rejoin_after_reconnect();
 }
+
+#[test]
+fn closed_client_does_not_rejoin_rooms() {
+    socket_cases::closed_client_does_not_rejoin_rooms();
+}
