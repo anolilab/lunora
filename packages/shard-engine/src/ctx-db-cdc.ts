@@ -772,6 +772,34 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
 
     const document = change.doc ?? {};
 
+    // Row already exists — replace its fields. Drop only `_id` (replace takes
+    // the id as its first argument). KEEP `_creationTime` and pass the
+    // trusted-replay `allowExplicitId` opt-in so `replace` preserves the row's
+    // original creation time instead of resetting it to the replay clock (the
+    // default mutation path mints a fresh `clock()`).
+    //
+    // `change.table` is passed as `expectedTable` like the delete and insert
+    // above: an unscoped `replace` probes every table on the premise that ids
+    // are unique across them, which `.source()` tables break — `liftSourceId`
+    // sets `_id` to the upstream natural primary key, so an orders update lands
+    // in the users row.
+    const replaceExisting = async (): Promise<void> => {
+        const fields = { ...document };
+
+        delete fields["_id"];
+
+        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
+    };
+
+    // A row stored under a NUL-bearing id predates the guard on explicit ids, and
+    // `insert` refuses that id before it can report a conflict. Rewrite such a row
+    // in place instead, so replaying its history does not stop the whole changelog.
+    if (change.id.includes("\0") && (await writer.get(change.id, change.table)) !== null) {
+        await replaceExisting();
+
+        return;
+    }
+
     try {
         await writer.insert(change.table, document, { allowExplicitId: true });
     } catch (error: unknown) {
@@ -779,22 +807,7 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
             throw error;
         }
 
-        // Row already exists — replace its fields. Drop only `_id` (replace
-        // takes the id as its first argument). KEEP `_creationTime` and pass the
-        // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
-        // row's original creation time instead of resetting it to the replay
-        // clock (the default mutation path mints a fresh `clock()`).
-        //
-        // `change.table` is passed as `expectedTable` like the delete and insert
-        // above: an unscoped `replace` probes every table on the premise that ids
-        // are unique across them, which `.source()` tables break — `liftSourceId`
-        // sets `_id` to the upstream natural primary key, so an orders update
-        // lands in the users row.
-        const fields = { ...document };
-
-        delete fields["_id"];
-
-        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
+        await replaceExisting();
     }
 };
 
