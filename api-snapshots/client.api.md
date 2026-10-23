@@ -910,6 +910,7 @@ type LunoraClientError = Error & {
     code?: LunoraErrorCode | (string & {});
     data?: unknown;
     docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
     hint?: string | string[];
     why?: string;
 };
@@ -1600,7 +1601,7 @@ class TabCoordinator {
 
 ```ts
 class TransportError extends LunoraError {
-    constructor(message: string, data?: unknown);
+    constructor(message: string, data?: unknown, headers?: Readonly<Record<string, string>>);
 }
 ```
 
