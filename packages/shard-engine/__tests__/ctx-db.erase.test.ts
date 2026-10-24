@@ -189,6 +189,40 @@ describe("ctx-db.deleteAll", () => {
         expect(probes()).toBe(0);
     });
 
+    it("pins every id of a .global() deleteAll to the table being erased", async () => {
+        expect.assertions(1);
+
+        const rows = new Map<string, Record<string, unknown>>([
+            ["p1", { _id: "p1", userId: "u1" }],
+            ["p2", { _id: "p2", userId: "u2" }],
+        ]);
+        const pinned: (string | undefined)[] = [];
+        const globalDb = {
+            delete: async (id: string, expectedTable?: string) => {
+                pinned.push(expectedTable);
+                rows.delete(id);
+            },
+            findMany: async () => {
+                return { continueCursor: null, isDone: true, page: [...rows.values()] };
+            },
+        } as unknown as DatabaseWriterLike;
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            globalDb,
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        await writer.deleteAll("profiles");
+
+        expect(pinned).toStrictEqual(["profiles", "profiles"]);
+    });
+
     it("scopes a .global() deleteWhere to the requested table on both delete paths", async () => {
         expect.assertions(2);
 

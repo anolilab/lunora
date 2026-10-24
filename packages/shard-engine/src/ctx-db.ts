@@ -2856,9 +2856,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * `delete` does (a delete costs a row and no bytes, and D1 does not roll back
      * with the DO's transaction).
      */
-    const deleteGlobalById = async (global: DatabaseWriterLike, id: string, deleteOptions?: { hard?: boolean }): Promise<void> => {
+    const deleteGlobalById = async (global: DatabaseWriterLike, tableName: string, id: string, deleteOptions?: { hard?: boolean }): Promise<void> => {
         meterWrite(undefined);
-        await global.delete(id, undefined, deleteOptions);
+        // Pinned: an unpinned D1 delete resolves the id across every `.global()` table, so an id two tables hold would be erased from the wrong one.
+        await global.delete(id, tableName, deleteOptions);
     };
 
     /**
@@ -3486,7 +3487,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                     for (const id of ids) {
                         // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                        await (global === undefined ? writer.delete(id, expectedTable, deleteOptions) : deleteGlobalById(global, id, deleteOptions));
+                        await (global === undefined ? writer.delete(id, expectedTable, deleteOptions) : deleteGlobalById(global, tableName, id, deleteOptions));
                         deleted += 1;
                     }
 
