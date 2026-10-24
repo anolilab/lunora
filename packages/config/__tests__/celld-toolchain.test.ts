@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CelldCommandRunner } from "../src/celld/celld-toolchain";
-import { probeCelldToolchain } from "../src/celld/celld-toolchain";
+import { launchOptions, probeCelldToolchain, runCommand } from "../src/celld/celld-toolchain";
 
 /** A runner for the given tools: each present one answers with the version it reports, the others are not on PATH. */
 const tools =
@@ -120,5 +120,53 @@ describe("probeCelldToolchain", () => {
         const result = await probeCelldToolchain({ purpose: "dev", run: tools({ celld: "celld 0.6.0", esbuild: "0.25.0" }) });
 
         expect(result.warnings).toStrictEqual([expect.stringMatching(/celld 0\.6\.0 is older/u)]);
+    });
+
+    it("reports a tool that never exits as hung, naming the command", async () => {
+        expect.assertions(1);
+
+        const hung: CelldCommandRunner = async (command) => (command === "celld" ? { code: 1, error: "ETIMEDOUT", stdout: "" } : { code: 0, stdout: "0.25.0" });
+
+        await expect(errorsOf({ purpose: "dev", run: hung })).resolves.toStrictEqual([
+            "`celld --version` did not exit within 10s — the celld on PATH does not run; reinstall it",
+        ]);
+    });
+});
+
+describe(runCommand, () => {
+    it("kills a command still running at the timeout and resolves it as timed out", async () => {
+        expect.assertions(1);
+
+        const directory = mkdtempSync(join(tmpdir(), "celld-toolchain-"));
+        const tool = join(directory, "hung");
+
+        // `exec` replaces the shell, so the kill reaches the sleeper and closes its stdout.
+        writeFileSync(tool, "#!/bin/sh\nexec sleep 30\n");
+        chmodSync(tool, 0o755);
+
+        try {
+            await expect(runCommand(tool, ["--version"], { timeoutMs: 100 })).resolves.toStrictEqual({ code: 1, error: "ETIMEDOUT", stdout: "" });
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+});
+
+describe(launchOptions, () => {
+    it("runs a Windows command through a shell, quoting one that cmd.exe would re-split", () => {
+        expect.assertions(3);
+
+        expect(launchOptions("esbuild", "win32")).toStrictEqual({ command: "esbuild", shell: true });
+        expect(launchOptions(String.raw`C:\Program Files\tools\esbuild.cmd`, "win32")).toStrictEqual({
+            command: String.raw`"C:\Program Files\tools\esbuild.cmd"`,
+            shell: true,
+        });
+        expect(launchOptions("a&calc", "win32")).toStrictEqual({ command: '"a&calc"', shell: true });
+    });
+
+    it("leaves a command alone off Windows", () => {
+        expect.assertions(1);
+
+        expect(launchOptions("/opt/my tools/esbuild", "linux")).toStrictEqual({ command: "/opt/my tools/esbuild", shell: false });
     });
 });

@@ -12,6 +12,15 @@ import { execFile } from "node:child_process";
  */
 const CELLD_RATED_VERSION = "0.6.1";
 
+/** How long a version probe gets before the tool counts as hung. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** The `error` of a command that was killed for running past {@link PROBE_TIMEOUT_MS}. */
+const TIMED_OUT = "ETIMEDOUT";
+
+/** A command `cmd.exe` would re-split or interpret. */
+const CMD_UNSAFE = /[\s&|<>^%"]/u;
+
 const VERSION = /(\d{1,6})\.(\d{1,6})\.(\d{1,6})/u;
 
 interface CelldCommandResult {
@@ -42,10 +51,31 @@ interface CelldToolchainProbe {
     warnings: string[];
 }
 
+/**
+ * What `execFile` is given for a command. On Windows an npm-installed tool is a `.cmd` shim, which
+ * `execFile` cannot start without a shell (Node refuses it since CVE-2024-27980), and `cmd.exe`
+ * re-splits a command with whitespace or metacharacters, so those are quoted.
+ */
+const launchOptions = (command: string, platform: NodeJS.Platform): { command: string; shell: boolean } =>
+    platform === "win32" ? { command: CMD_UNSAFE.test(command) ? `"${command.replaceAll('"', "")}"` : command, shell: true } : { command, shell: false };
+
 /** Resolves a command's output, or `undefined` when the command does not exist. */
-const runCommand: CelldCommandRunner = async (command, args) =>
+const runCommand = async (
+    command: string,
+    args: ReadonlyArray<string>,
+    { platform = process.platform, timeoutMs = PROBE_TIMEOUT_MS }: { platform?: NodeJS.Platform; timeoutMs?: number } = {},
+): Promise<CelldCommandResult | undefined> =>
     new Promise((resolve) => {
-        execFile(command, [...args], { windowsHide: true }, (error, stdout) => {
+        const launch = launchOptions(command, platform);
+
+        execFile(launch.command, [...args], { killSignal: "SIGKILL", shell: launch.shell, timeout: timeoutMs, windowsHide: true }, (error, stdout) => {
+            // A hung tool was killed, so it has neither an exit code nor a launch error.
+            if (error !== null && error.killed === true) {
+                resolve({ code: 1, error: TIMED_OUT, stdout });
+
+                return;
+            }
+
             // A spawn failure has a string code (`ENOENT`, `EACCES`); a non-zero exit has a numeric one.
             if (error !== null && typeof error.code === "string") {
                 resolve(error.code === "ENOENT" ? undefined : { code: 1, error: error.code, stdout });
@@ -57,9 +87,14 @@ const runCommand: CelldCommandRunner = async (command, args) =>
         });
     });
 
-/** How a command that exists failed: it could not start, or it exited nonzero. */
-const failure = (result: CelldCommandResult): string =>
-    result.error === undefined ? `exited with code ${String(result.code)}` : `could not start (${result.error})`;
+/** How a command that exists failed: it hung, could not start, or exited nonzero. */
+const failure = (result: CelldCommandResult): string => {
+    if (result.error === TIMED_OUT) {
+        return `did not exit within ${String(PROBE_TIMEOUT_MS / 1000)}s`;
+    }
+
+    return result.error === undefined ? `exited with code ${String(result.code)}` : `could not start (${result.error})`;
+};
 
 /** Whether `version` (`x.y.z`) is older than `rated`. */
 const isOlder = (version: readonly [number, number, number], rated: string): boolean => {
@@ -136,4 +171,4 @@ const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise
 };
 
 export type { CelldCommandResult, CelldCommandRunner, CelldToolchainProbe, CelldToolchainProbeOptions };
-export { CELLD_RATED_VERSION, probeCelldToolchain };
+export { CELLD_RATED_VERSION, launchOptions, probeCelldToolchain, runCommand };
