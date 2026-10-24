@@ -305,6 +305,28 @@ describe("generateFilter", () => {
         expect(ai.run).toHaveBeenCalledTimes(MAX_ATTEMPTS);
     });
 
+    it.each([
+        ['{"column":"status","operator":"gt","value":null}'],
+        ['{"column":"status","operator":"contains","value":""}'],
+        ['{"column":"status","operator":"has","value":"  "}'],
+    ])("degrades the whole suggestion when %s would be discarded as blank", async (clause) => {
+        expect.assertions(1);
+
+        const ai = binding(`[{"column":"status","operator":"eq","value":"open"},${clause}]`);
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("leaves eq and ne alone, since the browser keeps a blank row for them", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"ne","value":null}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(false);
+    });
+
     it("keeps the valid clauses when only some are bad", async () => {
         expect.assertions(1);
 
