@@ -125,9 +125,21 @@ const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: strin
  */
 const rangeDeal = (min: number, max: number): UniqueDeal => {
     if (Number.isInteger(min) && Number.isInteger(max)) {
-        const capacity = max - min + 1;
+        // Past ±2^53 `min + index` stops being injective, so only the safe span of the range is dealt.
+        const low = Math.max(min, -Number.MAX_SAFE_INTEGER);
+        const high = Math.min(max, Number.MAX_SAFE_INTEGER);
 
-        return { capacity, valueAt: (index) => min + (index % capacity) };
+        if (low > high) {
+            return { capacity: 1, valueAt: () => min };
+        }
+
+        const capacity = high - low + 1;
+
+        return { capacity, valueAt: (index) => low + (index % capacity) };
+    }
+
+    if (min === max) {
+        return { capacity: 1, valueAt: () => min };
     }
 
     return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
@@ -180,6 +192,11 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
     // first whole number above it rather than shrinking the column to the default window.
     if (constraints.maximum === undefined && constraints.minimumFromExclusive === true) {
         const first = Math.floor(constraints.exclusiveMinimum ?? 0) + 1;
+
+        // Past 2^53 `first + index` repeats; `minimum` is the one value `constraintsOf` proved is above the bound.
+        if (first > Number.MAX_SAFE_INTEGER) {
+            return { capacity: 1, valueAt: () => constraints.minimum };
+        }
 
         return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
     }

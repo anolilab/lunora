@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { generateValue } from "../src/generate-value";
 import { seedPlan } from "../src/plan";
+import { planUniqueDeal } from "../src/unique-value";
 
 const NOW = 1_785_000_000_000;
 
@@ -79,6 +80,51 @@ describe("generateValue — validator constraints the generator must honour", ()
         const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: 0.5, maximum: 1, type: "integer" } } } as unknown as Validator;
 
         expect(generateValue(validator, "amount", "input", NOW)).toBe(1);
+    });
+
+    describe.each([
+        ["a float", {}],
+        ["an integer", { type: "integer" }],
+    ])("an exclusive minimum too large for a fixed step, %s column", (_label, extra) => {
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: 1e20, ...extra } } } as unknown as Validator;
+
+        it("generates a value strictly above it", () => {
+            expect.hasAssertions();
+
+            for (let index = 0; index < 20; index += 1) {
+                expect(generateValue(validator, "amount", ["huge", index], NOW) as number).toBeGreaterThan(1e20);
+            }
+        });
+
+        it("deals only values strictly above it, and never repeats one", () => {
+            expect.hasAssertions();
+
+            const { capacity, valueAt } = planUniqueDeal(
+                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, validator },
+                { now: NOW, table: "t" },
+            );
+            const values = Array.from({ length: Math.min(capacity, 3) }, (_, index) => valueAt(index, () => 0) as number);
+
+            expect(values.every((value) => value > 1e20)).toBe(true);
+            expect(new Set(values).size).toBe(values.length);
+        });
+    });
+
+    it("refuses a second row for a unique integer range past the safe integers", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            ids: defineTable({
+                big: v
+                    .number()
+                    .int()
+                    .min(2 ** 53)
+                    .max(2 ** 53 + 4)
+                    .unique(),
+            }),
+        });
+
+        expect(() => seedPlan(schema, { counts: { ids: 2 } })).toThrow(/unique column "big" has only 1 possible values/u);
     });
 
     it("keeps epoch-ms for a time-named .positive() column", () => {

@@ -44,11 +44,15 @@ const EXCLUSIVE_EPSILON = 1e-6;
 
 /** The lowest value strictly above `exclusive` the column can hold. */
 const inclusiveAbove = (exclusive: number, maximum: number | undefined, integer: boolean): number => {
+    const step = integer ? Math.floor(exclusive) + 1 : exclusive + EXCLUSIVE_EPSILON;
+    // Past about 2^53 a fixed step rounds back onto the bound, which the column forbids; a step
+    // relative to the bound's magnitude always moves it (and lands on a whole number there).
+    const above = step > exclusive ? step : exclusive + Math.abs(exclusive) * Number.EPSILON;
+
     if (integer) {
-        return Math.floor(exclusive) + 1;
+        return above;
     }
 
-    const above = exclusive + EXCLUSIVE_EPSILON;
     const halfway = maximum === undefined ? above : (exclusive + maximum) / 2;
 
     // A float interval narrower than the epsilon still has values: its midpoint is strictly

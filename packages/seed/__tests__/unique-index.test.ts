@@ -64,6 +64,38 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
     });
 
+    it("never counts a zero-width decimal range towards a composite's capacity", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            readings: defineTable({ amount: v.number().min(0.5).max(0.5), tags: v.array(v.string()).max(0) }).index("by_amount_tags", ["amount", "tags"], {
+                unique: true,
+            }),
+        });
+
+        expect(rowsOf(seedPlan(schema, { counts: { readings: 1 } }), "readings")).toHaveLength(1);
+        expect(() => seedPlan(schema, { counts: { readings: 2 } })).toThrow(/by_amount_tags/u);
+    });
+
+    it("never counts an integer range past the safe integers towards a composite's capacity", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            ids: defineTable({
+                big: v
+                    .number()
+                    .int()
+                    .min(2 ** 53)
+                    .max(2 ** 53 + 4),
+                flag: v.boolean(),
+            }).index("by_big_flag", ["big", "flag"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { ids: 2 } }), "ids");
+
+        expect(new Set(rows.map((row) => `${String(row.big)}|${String(row.flag)}`)).size).toBe(2);
+        expect(() => seedPlan(schema, { counts: { ids: 3 } })).toThrow(/by_big_flag/u);
+    });
+
     it("spreads a through table over several parents when one parent table alone covers the batch", () => {
         expect.hasAssertions();
 
