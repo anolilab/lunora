@@ -106,7 +106,9 @@ throws `` `queue` binding is required for mailer.queue() ``, except under
 capture, where it sends straight to the capture inbox so dev flows keep working.
 A consumer builds its mailer with `createMailerFromEnv` too, drains the queue
 with `consumeQueuedSend(mailer, message.body)` and then calls `message.ack()`
-for each message. With a queue bound in dev, the message still goes through the
+for each message. On a throw, branch on `isRetryableMailError(error)`: retry with
+`message.retry()` when it is true, and ack and log when it is false, since a refused
+address or malformed body never sends and a retry only dead-letters it. With a queue bound in dev, the message still goes through the
 queue and the consumer's mailer captures it into the inbox. Queues deliver at least once: with
 per-message acks a later throw retries only the unacknowledged messages, while
 without them a single throw resends the whole batch. The full wiring is in the "Queueing"

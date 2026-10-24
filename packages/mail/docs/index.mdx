@@ -106,12 +106,16 @@ A consumer Worker re-hydrates the payload and sends it with
 calls `mailer.send(...)` for you and returns `{ id }`. Call `message.ack()` after
 each successful send: Cloudflare Queues are at-least-once, so without a per-message
 ack a single throw retries the WHOLE batch — resending every already-delivered
-email in it, not just the one that failed. Build the consumer's mailer with
+email in it, not just the one that failed. A failed send is either retryable or a
+refusal, and the consumer branches on `isRetryableMailError(error)`: a provider
+outage, rate limit or network failure is retried with `message.retry()`, while a
+refused address, a rejected message or a malformed body is acked and logged,
+because a retry would fail the same way and only fill the dead-letter queue. Build the consumer's mailer with
 `createMailerFromEnv` so that in dev the queued message is captured into the
 studio inbox at consume time instead of delivered:
 
 ```ts
-import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
+import { consumeQueuedSend, createMailerFromEnv, isRetryableMailError } from "@lunora/mail";
 
 export default {
     queue: async (batch, env) => {
@@ -130,7 +134,19 @@ export default {
                 continue;
             }
 
-            await consumeQueuedSend(mailer, message.body);
+            try {
+                await consumeQueuedSend(mailer, message.body);
+            } catch (error) {
+                // A refusal the provider will never accept: a retry only dead-letters it.
+                if (!isRetryableMailError(error)) {
+                    console.error("mail refused", error);
+                    message.ack();
+                    continue;
+                }
+
+                message.retry();
+                continue;
+            }
             await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
             message.ack();
         }
@@ -289,6 +305,8 @@ rules; that lifecycle stays in Cloudflare.
 | `renderEmail(element)`                | Render a React Email element to `{ html, text }`                                                                                                                                                                    |
 | `toQueuedPayload(options)`            | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                               |
 | `consumeQueuedSend(mailer, body)`     | Validate a queued payload and `mailer.send(...)` it; returns `{ id }`                                                                                                                                               |
+| `isRetryableMailError(error)`         | Whether a failed send is worth a redelivery: `true` for a provider outage, rate limit or network failure, `false` for a refusal                                                                                     |
+| `MailSendError`                       | The error a failed send throws; `retryable` and `data.retryable` carry the decision                                                                                                                                 |
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,

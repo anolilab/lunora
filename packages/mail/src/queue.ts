@@ -66,7 +66,19 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  *     for (const message of batch.messages) {
  *       const { idempotencyKey } = message.body;
  *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
- *       await consumeQueuedSend(mailer, message.body);
+ *       try {
+ *         await consumeQueuedSend(mailer, message.body);
+ *       } catch (error) {
+ *         // A refusal the provider will never accept: a retry only dead-letters it.
+ *         if (!isRetryableMailError(error)) {
+ *           console.error("mail refused", error);
+ *           message.ack();
+ *           continue;
+ *         }
+ *
+ *         message.retry();
+ *         continue;
+ *       }
  *       await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
  *       message.ack();
  *     }
