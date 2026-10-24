@@ -185,7 +185,7 @@ const requireWriter = async (ctx: MutationCtx): Promise<{ organizationId: string
  */
 interface OrganizationsReader {
     findFirst: (args: { where: { organizationId: string } }) => Promise<Doc<"saas_organizations"> | null>;
-    findMany: (args: Record<string, never>) => Promise<{ page: Doc<"saas_organizations">[] }>;
+    findMany: (args: { where?: { status: { ne: string } } }) => Promise<{ page: Doc<"saas_organizations">[] }>;
 }
 
 const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader =>
@@ -208,6 +208,12 @@ const activityRow = (entry: {
     subjectId?: string;
     subjectType: string;
 }): Record<string, unknown> => ({ ...entry, createdAt: Date.now() });
+
+/** Joins an archived project's slug to its id, freeing the slug. `~` never survives {@link toSlug}. */
+const ARCHIVED_SLUG_MARK = "~archived~";
+
+/** Replaces the slug of a deleted organisation's projection row, freeing the slug. `~` never occurs in a better-auth slug. */
+const DELETED_SLUG_PREFIX = "~deleted~";
 
 /** URL-safe slug for a project name, deduped per tenant by the unique index. */
 const toSlug = (name: string): string =>
@@ -287,8 +293,17 @@ export const createProject = mutation
             .withIndex("byOrgSlug", (q) => q.eq("organizationId", organizationId).eq("slug", slug))
             .first();
 
-        if (clash) {
+        if (clash && !clash.archivedAt) {
             throw new LunoraError("CONFLICT", `a project named "${name}" already exists`);
+        }
+
+        // The unique index covers archived rows too and nothing un-archives, so an
+        // archived project would hold its name for good. Archiving releases it:
+        // the old row keeps its data under a slug nothing can type.
+        if (clash) {
+            const clashId = clash["_id"] as Id<"saas_projects">;
+
+            await ctx.db.patch(clashId, { slug: `${slug}${ARCHIVED_SLUG_MARK}${String(clashId)}` });
         }
 
         const projectId = await ctx.db.insert("saas_projects", { createdBy: userId, name, organizationId, slug });
@@ -365,9 +380,11 @@ export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_
         throw new LunoraError("FORBIDDEN", "requires the platform admin role");
     }
 
+    // Deleted organisations stay as tombstones (see `syncOrganization`) and are not tenants.
+    //
     // ponytail: the first page only — page through `cursor` once there are more
     // tenants than one page holds.
-    const { page } = await organizations(ctx).findMany({});
+    const { page } = await organizations(ctx).findMany({ where: { status: { ne: "deleted" } } });
 
     return page;
 });
@@ -383,6 +400,11 @@ export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_
  * predates the hooks still inserts a whole row. The rest are patched only when
  * given, so a membership change cannot reset a plan. A new row starts on the
  * `free` plan — the catalog's id for "no subscription".
+ *
+ * A deleted organisation is kept as a tombstone, not removed: a member hook still
+ * in flight when the deletion lands would otherwise re-insert the row as active.
+ * The tombstone gives its slug back — `bySlug` is unique, and better-auth lets the
+ * next organisation take it — and is final, so a late sync cannot revive it.
  */
 export const syncOrganization = internalMutation
     .input({
@@ -396,6 +418,18 @@ export const syncOrganization = internalMutation
     .mutation(async ({ args: { name, organizationId, plan, seats, slug, status }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
         const updatedAt = Date.now();
+
+        if (existing?.["status"] === "deleted") {
+            return;
+        }
+
+        if (status === "deleted") {
+            if (existing) {
+                await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, { slug: `${DELETED_SLUG_PREFIX}${organizationId}`, status, updatedAt });
+            }
+
+            return;
+        }
 
         if (existing) {
             // `_id` through the index signature, and named as the id it is: a row
