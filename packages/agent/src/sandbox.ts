@@ -354,7 +354,8 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
             const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
 
             return (await context.run(SANDBOX_REF, { ...modelInput, ...destination, kind: "browser" }, { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS })) as
-                BrowserRenderResult | string;
+                | BrowserRenderResult
+                | string;
         },
         inputSchema: BROWSER_TOOL_SCHEMA,
         isLunoraAgentTool: true,

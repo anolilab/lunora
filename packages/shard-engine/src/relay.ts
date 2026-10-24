@@ -333,7 +333,15 @@ interface RelayLiveFrame {
 
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame =
-    RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+    | RelayAttach
+    | RelayDetach
+    | RelayFrame
+    | RelayLiveControl
+    | RelayLiveFrame
+    | RelayRoomEvent
+    | RelayShapePoke
+    | RelayShapeSubscribe
+    | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
 export type {

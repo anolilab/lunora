@@ -111,7 +111,9 @@ interface TabCoordinatorOptions {
 }
 
 type WsFollowerMessage =
-    { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
+    | { tabId: string; ts: number; type: "heartbeat" }
+    | { tabId: string; ts: number; type: "claim-leadership" }
+    | { tabId: string; type: "yield-leadership" };
 
 type WsLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
@@ -184,7 +186,8 @@ class TabCoordinator {
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionSettled:
-        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
+        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void)
+        | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,

@@ -2487,7 +2487,8 @@ describe("lunoraClient", () => {
                     {
                         optimisticUpdate: (store, args) => {
                             const current = store.getQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }) as
-                                undefined | unknown[];
+                                | undefined
+                                | unknown[];
 
                             store.setQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }, [...(current ?? []), draft]);
                         },

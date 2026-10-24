@@ -343,7 +343,8 @@ const resolveGatewayOption = (
  * generates images never evaluates them.
  */
 let imageProviders:
-    Promise<{ createGoogle: typeof import("@ai-sdk/google").createGoogle; createOpenAI: typeof import("@ai-sdk/openai").createOpenAI }> | undefined;
+    | Promise<{ createGoogle: typeof import("@ai-sdk/google").createGoogle; createOpenAI: typeof import("@ai-sdk/openai").createOpenAI }>
+    | undefined;
 
 const loadImageProviders = (): NonNullable<typeof imageProviders> => {
     imageProviders ??= Promise.all([import("@ai-sdk/openai"), import("@ai-sdk/google")]).then(

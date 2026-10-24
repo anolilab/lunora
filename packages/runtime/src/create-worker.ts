@@ -6102,7 +6102,8 @@ interface FrameworkTriggers {
  * {@link withFrameworkWorker} drop them with the type checker's blessing.
  */
 type FrameworkHostHandler =
-    ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
+    | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
+    | (HttpRouterLike & Partial<FrameworkTriggers>);
 
 /** Lunora worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
 type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
