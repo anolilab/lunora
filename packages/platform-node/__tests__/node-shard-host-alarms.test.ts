@@ -221,6 +221,41 @@ describe("createNodeShardHost alarms", () => {
         }
     });
 
+    it("delivers an alarm once when it comes due inside another task's transaction that rolls back", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        let fired = 0;
+        const { database, dispose, host } = createNodeShardHost({
+            onAlarm: () => {
+                fired += 1;
+            },
+        });
+
+        try {
+            await host.alarms.set(Date.now() + 10);
+
+            await expect(
+                host.transaction(async () => {
+                    // The transaction never touches the alarm; the timer just comes due while it is open.
+                    await vi.advanceTimersByTimeAsync(50);
+
+                    throw new Error("boom");
+                }),
+            ).rejects.toThrow("boom");
+
+            await vi.advanceTimersByTimeAsync(50);
+
+            expect(fired).toBe(1);
+            expect(host.alarms.get()).toBeNull();
+            expect(alarmRowCount(database)).toBe(0);
+        } finally {
+            dispose();
+            vi.useRealTimers();
+        }
+    });
+
     it("does not let a failed alarm's retry overwrite a newer alarm another host scheduled", async () => {
         expect.assertions(1);
 

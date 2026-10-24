@@ -39,6 +39,14 @@ const ALARM_RETRY_LIMIT = 6;
 const ALARM_RETRY_BASE_MS = 100;
 
 /**
+ * How long an alarm timer waits before looking again when a transaction is open
+ * on the connection. The timer is not a boundary, so its statements would join
+ * that `BEGIN`, and a rollback would restore a row the alarm had already
+ * consumed and delivered.
+ */
+const FOREIGN_TRANSACTION_RETRY_MS = 10;
+
+/**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
  * binding's own spelling of SQL `NULL` — the one place in this file that has
  * to use it, since better-sqlite3's FFI has no other way to write one.
@@ -222,11 +230,151 @@ const createAlarms = (
 
     const consume = (firedAt: number): boolean => database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt).changes > 0;
 
+    /**
+     * Set while the armed timer is only waiting for another task's transaction to
+     * end, so a rollback can deliver straight away instead of waiting it out.
+     */
+    let waitingOnTransaction = false;
+    let resyncTimeout: ReturnType<typeof setTimeout> | undefined;
+
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
             alarmTimeout = undefined;
         }
+
+        waitingOnTransaction = false;
+    };
+
+    /**
+     * Hold `step` in the alarm timer slot until the open transaction ends. A
+     * fresh `set` or `delete` replaces the wait, and either one owns the next
+     * wakeup instead.
+     */
+    const afterTransaction = (step: () => void): void => {
+        alarmTimeout = setTimeout(() => {
+            alarmTimeout = undefined;
+            waitingOnTransaction = false;
+            step();
+        }, FOREIGN_TRANSACTION_RETRY_MS);
+        waitingOnTransaction = true;
+    };
+
+    /**
+     * Re-arm a consumed alarm whose handler threw, with backoff. A throwing
+     * handler must not become an unhandled rejection that takes the process
+     * down, but it must not lose the wakeup either. workerd isolates a throwing
+     * `alarm()` AND re-delivers it with backoff; a host that only isolated it
+     * deleted the row before delivery and then swallowed the rejection, so
+     * nothing re-armed and the loop that alarm drives (a TTL sweep, a
+     * global-shape poll, a scheduler GC) stopped for good.
+     */
+    const retryFailedDelivery = (): void => {
+        if (!database.open || alarmAt !== undefined) {
+            // Nothing to retry against, or the handler rescheduled
+            // before it failed — that alarm owns the next wakeup.
+            return;
+        }
+
+        // A retry row written inside another task's transaction would vanish
+        // with its rollback, and the wakeup with it.
+        if (database.inTransaction) {
+            afterTransaction(retryFailedDelivery);
+
+            return;
+        }
+
+        attempts += 1;
+
+        if (attempts > ALARM_RETRY_LIMIT) {
+            attempts = 0;
+
+            return;
+        }
+
+        const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
+
+        // Only into an empty slot: another process over this file may have
+        // scheduled a newer alarm since this one was consumed, and its timer
+        // delivers only while the row still holds its timestamp. That alarm
+        // owns the next wakeup, so follow it instead of overwriting it.
+        if (persistIfEmpty(retryAt)) {
+            alarmAt = retryAt;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(retryAt);
+
+            return;
+        }
+
+        attempts = 0;
+
+        const durable = selectAlarm();
+
+        if (durable !== undefined) {
+            alarmAt = durable.scheduled_for;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above
+            arm(durable.scheduled_for);
+        }
+    };
+
+    /** Deliver the alarm armed for `ms`, once no other task holds a transaction open. */
+    const fire = (ms: number): void => {
+        // The timer is not a boundary, so the consume below would join an open
+        // `BEGIN`: delivered now, then restored by that transaction's rollback
+        // and delivered again.
+        if (database.open && database.inTransaction) {
+            afterTransaction(() => {
+                fire(ms);
+            });
+
+            return;
+        }
+
+        alarmAt = undefined;
+
+        // A caller may close the database before this timer fires — e.g.
+        // it set a future alarm, then tore the platform down (process
+        // shutdown, test cleanup). `persist` runs a prepared statement
+        // against `database`; on a closed better-sqlite3 connection that
+        // throws synchronously *inside* the `setTimeout` callback, which
+        // is an uncaught exception Node has no way to route back to a
+        // caller's try/catch — it crashes the process. Guard on the
+        // connection's own open/closed state rather than trying to track
+        // "did dispose() already run" separately, since `close()` is the
+        // one fact that actually determines whether `.run()` is safe.
+        if (!database.open) {
+            return;
+        }
+
+        // Clear the durable row BEFORE delivering. An `onAlarm` that throws
+        // (or that itself schedules the next alarm, which is the normal
+        // pattern) must not race a stale row: the timestamp this timer just
+        // consumed is spent either way, and leaving it behind would re-fire
+        // it on the next construction over this database. Conditional on
+        // the timestamp: a transaction may have persisted a newer alarm
+        // while this timer was still armed, and that row is not ours.
+        if (!consume(ms)) {
+            // Another process over this file claimed the row first (or a
+            // newer alarm replaced it); delivering again would fire it twice.
+            // A replacing alarm is armed by its own commit, but a timer that
+            // was armed for it may have been dropped, so re-arm from the row.
+            const durable = selectAlarm();
+
+            if (durable !== undefined) {
+                alarmAt = durable.scheduled_for;
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see `retryFailedDelivery`
+                arm(durable.scheduled_for);
+            }
+
+            return;
+        }
+
+        (async (): Promise<void> => {
+            await onAlarm?.();
+            attempts = 0;
+        })().catch(() => {
+            retryFailedDelivery();
+        });
     };
 
     /**
@@ -253,92 +401,8 @@ const createAlarms = (
         }
 
         alarmTimeout = setTimeout(() => {
-            alarmAt = undefined;
             alarmTimeout = undefined;
-
-            // A caller may close the database before this timer fires — e.g.
-            // it set a future alarm, then tore the platform down (process
-            // shutdown, test cleanup). `persist` runs a prepared statement
-            // against `database`; on a closed better-sqlite3 connection that
-            // throws synchronously *inside* the `setTimeout` callback, which
-            // is an uncaught exception Node has no way to route back to a
-            // caller's try/catch — it crashes the process. Guard on the
-            // connection's own open/closed state rather than trying to track
-            // "did dispose() already run" separately, since `close()` is the
-            // one fact that actually determines whether `.run()` is safe.
-            if (!database.open) {
-                return;
-            }
-
-            // Clear the durable row BEFORE delivering. An `onAlarm` that throws
-            // (or that itself schedules the next alarm, which is the normal
-            // pattern) must not race a stale row: the timestamp this timer just
-            // consumed is spent either way, and leaving it behind would re-fire
-            // it on the next construction over this database. Conditional on
-            // the timestamp: a transaction may have persisted a newer alarm
-            // while this timer was still armed, and that row is not ours.
-            if (!consume(ms)) {
-                // Another process over this file claimed the row first (or a
-                // newer alarm replaced it); delivering again would fire it twice.
-                // A replacing alarm is armed by its own commit, but a timer that
-                // was armed for it may have been dropped, so re-arm from the row.
-                const durable = selectAlarm();
-
-                if (durable !== undefined) {
-                    alarmAt = durable.scheduled_for;
-                    arm(durable.scheduled_for);
-                }
-
-                return;
-            }
-
-            (async (): Promise<void> => {
-                await onAlarm?.();
-                attempts = 0;
-            })().catch(() => {
-                // A throwing handler must not become an unhandled rejection
-                // that takes the process down — but it must not lose the wakeup
-                // either. workerd isolates a throwing `alarm()` AND re-delivers
-                // it with backoff; a host that only isolated it deleted the row
-                // before delivery and then swallowed the rejection, so nothing
-                // re-armed and the loop that alarm drives (a TTL sweep, a
-                // global-shape poll, a scheduler GC) stopped for good.
-                if (!database.open || alarmAt !== undefined) {
-                    // Nothing to retry against, or the handler rescheduled
-                    // before it failed — that alarm owns the next wakeup.
-                    return;
-                }
-
-                attempts += 1;
-
-                if (attempts > ALARM_RETRY_LIMIT) {
-                    attempts = 0;
-
-                    return;
-                }
-
-                const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
-
-                // Only into an empty slot: another process over this file may have
-                // scheduled a newer alarm since this one was consumed, and its timer
-                // delivers only while the row still holds its timestamp. That alarm
-                // owns the next wakeup, so follow it instead of overwriting it.
-                if (persistIfEmpty(retryAt)) {
-                    alarmAt = retryAt;
-                    arm(retryAt);
-
-                    return;
-                }
-
-                attempts = 0;
-
-                const durable = selectAlarm();
-
-                if (durable !== undefined) {
-                    alarmAt = durable.scheduled_for;
-                    arm(durable.scheduled_for);
-                }
-            });
+            fire(ms);
         }, delay);
     };
 
@@ -416,24 +480,51 @@ const createAlarms = (
     };
 
     /**
-     * Discard an alarm mutation whose transaction rolled back, then re-sync the
-     * timer with the durable row the rollback restored. A timer that fired while
-     * the transaction was open saw its uncommitted view: an alarm the transaction
-     * had deleted looked gone, so the timer cleared itself, and only the restored
-     * row says it is still due. Called after the `ROLLBACK`.
+     * Re-sync the timer with the durable row a rollback restored. A timer that
+     * came due while the transaction was open is waiting it out, and only the
+     * restored row says whether the alarm is still due.
      */
-    const rollback = (): void => {
-        pending = undefined;
+    const resync = (): void => {
+        resyncTimeout = undefined;
 
         if (!database.open) {
             return;
         }
 
+        // Still inside a transaction (a failed `ROLLBACK`, or another `BEGIN` on
+        // the connection): the row read here would be its uncommitted view.
+        if (database.inTransaction) {
+            resyncTimeout = setTimeout(resync, FOREIGN_TRANSACTION_RETRY_MS);
+
+            return;
+        }
+
         const durable = selectAlarm();
 
-        if (durable !== undefined && (alarmTimeout === undefined || alarmAt !== durable.scheduled_for)) {
+        // A timer waiting out the transaction is re-armed too, so the alarm is delivered now that it has ended.
+        if (durable !== undefined && (alarmTimeout === undefined || waitingOnTransaction || alarmAt !== durable.scheduled_for)) {
             alarmAt = durable.scheduled_for;
             arm(durable.scheduled_for);
+        }
+    };
+
+    /** Discard an alarm mutation whose transaction rolled back. Called after the `ROLLBACK`. */
+    const rollback = (): void => {
+        pending = undefined;
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+        }
+
+        resync();
+    };
+
+    const dispose = (): void => {
+        clearAlarmTimeout();
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+            resyncTimeout = undefined;
         }
     };
 
@@ -447,7 +538,7 @@ const createAlarms = (
         arm(restored.scheduled_for);
     }
 
-    return { alarms, commit, dispose: clearAlarmTimeout, rollback };
+    return { alarms, commit, dispose, rollback };
 };
 
 /** Options for {@link createNodeShardHost}. */

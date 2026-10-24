@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNodeSchedulerHost } from "../src/node-scheduler-host";
+import { createNodeShardHost } from "../src/node-shard-host";
 
 describe("createNodeSchedulerHost", () => {
     afterEach(() => {
@@ -232,5 +233,137 @@ describe("createNodeSchedulerHost", () => {
             secondDatabase.close();
             rmSync(directory, { force: true, recursive: true });
         }
+    });
+
+    /**
+     * The scheduler's timers share the shard host's connection but not its
+     * transaction lock, so a statement they run while a mutation holds `BEGIN`
+     * joins that transaction. These open one through the shard host, let the
+     * scheduler's timer come due inside it, roll it back, and check that the job
+     * is still delivered exactly once and then settled.
+     */
+    describe("with another task's transaction open on the shared connection", () => {
+        const rolledBack = (shard: ReturnType<typeof createNodeShardHost>, during: () => Promise<void>): Promise<void> =>
+            shard.host.transaction(async () => {
+                await during();
+
+                throw new Error("rolled back");
+            });
+
+        it("does not claim a job inside the transaction, so its rollback cannot strand it", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const delivered: string[] = [];
+            const shard = createNodeShardHost();
+            const host = createNodeSchedulerHost(shard.database, {
+                onDispatch: (functionPath: string): void => {
+                    delivered.push(functionPath);
+                },
+            });
+            let deliveredDuringTransaction: string[] = [];
+
+            try {
+                await host.scheduler.schedule("jobs:run", {}, { delayMs: 10 });
+
+                await expect(
+                    rolledBack(shard, async () => {
+                        await vi.advanceTimersByTimeAsync(50);
+                        deliveredDuringTransaction = [...delivered];
+                    }),
+                ).rejects.toThrow("rolled back");
+
+                await vi.advanceTimersByTimeAsync(50);
+
+                expect(deliveredDuringTransaction).toStrictEqual([]);
+                expect(delivered).toStrictEqual(["jobs:run"]);
+                await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+            } finally {
+                host.dispose();
+                shard.dispose();
+            }
+        });
+
+        it("does not renew a lease inside the transaction, so settlement still matches the claim", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const delivered: string[] = [];
+            let finishHandler: () => void = () => {};
+            const shard = createNodeShardHost();
+            const host = createNodeSchedulerHost(shard.database, {
+                onDispatch: async (functionPath: string): Promise<void> => {
+                    delivered.push(functionPath);
+                    await new Promise<void>((resolve) => {
+                        finishHandler = resolve;
+                    });
+                },
+            });
+
+            try {
+                await host.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+                await vi.advanceTimersByTimeAsync(10);
+
+                // The renewal tick (a third of the 60 s lease) comes due inside the transaction.
+                await expect(
+                    rolledBack(shard, async () => {
+                        await vi.advanceTimersByTimeAsync(25_000);
+                    }),
+                ).rejects.toThrow("rolled back");
+
+                finishHandler();
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(delivered).toStrictEqual(["jobs:run"]);
+                await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+
+                // Nothing left claimed for a later host to redeliver.
+                expect(shard.database.prepare("SELECT count(*) AS n FROM _lunora_scheduler_jobs").get()).toStrictEqual({ n: 0 });
+            } finally {
+                host.dispose();
+                shard.dispose();
+            }
+        });
+
+        it("does not settle a delivered job inside the transaction, so its rollback cannot restore the row", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const delivered: string[] = [];
+            let finishHandler: () => void = () => {};
+            const shard = createNodeShardHost();
+            const host = createNodeSchedulerHost(shard.database, {
+                onDispatch: async (functionPath: string): Promise<void> => {
+                    delivered.push(functionPath);
+                    await new Promise<void>((resolve) => {
+                        finishHandler = resolve;
+                    });
+                },
+            });
+
+            try {
+                await host.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+                await vi.advanceTimersByTimeAsync(10);
+
+                // The handler finishes while the transaction is open.
+                await expect(
+                    rolledBack(shard, async () => {
+                        finishHandler();
+                        await vi.advanceTimersByTimeAsync(50);
+                    }),
+                ).rejects.toThrow("rolled back");
+
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(delivered).toStrictEqual(["jobs:run"]);
+                await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+            } finally {
+                host.dispose();
+                shard.dispose();
+            }
+        });
     });
 });
