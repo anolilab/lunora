@@ -149,7 +149,7 @@ deployments --format json` applies to `list` only; `cloudflare containers
 emitting a fabricated document.
 
 Where the flag is forwarded to a tool that writes the document itself —
-`cloudflare deployments list`, the `cloudflare containers` read subcommands, and
+`cloudflare deployments list` and `status`, the `cloudflare containers` read subcommands, and
 `logs` (a stream, not a result) — stdout carries **that** tool's output and no envelope is added, since
 a second document on the same stream would make neither parseable.
 
@@ -977,6 +977,7 @@ Inspect deployment history and move traffic between Worker versions (wraps
 
 ```bash
 lunora cloudflare deployments list                       # 10 most recent deployments
+lunora cloudflare deployments status                     # live version and its traffic split
 lunora cloudflare deployments inspect <version-id>       # view a specific Worker version
 lunora cloudflare deployments rollback --yes             # roll back to the previous version
 lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version

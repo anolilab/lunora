@@ -5,7 +5,7 @@ import type { OutputFormat } from "../../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../../util/spawn";
 import { defaultSpawner } from "../../../util/spawn";
 
-type DeploymentsSubcommand = "inspect" | "list" | "promote" | "rollback";
+type DeploymentsSubcommand = "inspect" | "list" | "promote" | "rollback" | "status";
 
 interface DeploymentsCommandOptions {
     /** `promote --percent` below 100: confirms both versions can share one Durable Object database. */
@@ -13,7 +13,7 @@ interface DeploymentsCommandOptions {
     cwd?: string;
     /** Cloudflare environment name (`--env`). */
     env?: string;
-    /** Output format: `pretty` (default) or `json`. Only `list` has a JSON rendering. */
+    /** Output format: `pretty` (default) or `json`. `list` and `status` have a JSON rendering. */
     format?: OutputFormat;
     /** `promote --percent` below 100: the live version that keeps the remaining traffic. */
     from?: string;
@@ -34,7 +34,7 @@ interface DeploymentsCommandResult {
     code: number;
 
     /**
-     * True once `wrangler deployments list --json` has been spawned: wrangler
+     * True once `wrangler deployments list|status --json` has been spawned: wrangler
      * writes that document to stdout itself, so the CLI must not add a second.
      */
     delegated?: boolean;
@@ -52,13 +52,14 @@ const withEnv = (args: string[], env: string | undefined): string[] => {
     return args;
 };
 
-/** Build the wrangler argv for `list`. */
-const buildListArgs = (options: DeploymentsCommandOptions): string[] => {
-    const args = withEnv(["deployments", "list"], options.env);
+/**
+ * Build the wrangler argv for `list` or `status`. Both print a document that
+ * wrangler can render as JSON itself, so `--format json` forwards the flag
+ * rather than wrapping wrangler output in a shape of its own.
+ */
+const buildReadArgs = (options: DeploymentsCommandOptions, subcommand: "list" | "status"): string[] => {
+    const args = withEnv(["deployments", subcommand], options.env);
 
-    // `wrangler deployments list --json` writes the document to stdout itself —
-    // there is nothing for the CLI to re-serialize, so `--format json` forwards
-    // the flag rather than wrapping wrangler output in a shape of its own.
     if (options.format === "json") {
         args.push("--json");
     }
@@ -153,8 +154,9 @@ const buildArgs = (options: DeploymentsCommandOptions): ArgsResult => {
 
             return { args: withEnv(["versions", "view", options.versionId], options.env) };
         }
-        case "list": {
-            return { args: buildListArgs(options) };
+        case "list":
+        case "status": {
+            return { args: buildReadArgs(options, options.subcommand) };
         }
         case "promote": {
             if (options.versionId === undefined) {
@@ -200,8 +202,8 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     // Only `list` has a document. Refused rather than ignored: a caller that
     // pipes `deployments rollback --format json` into a parser would otherwise
     // get wrangler's prose and a zero exit.
-    if (options.format === "json" && options.subcommand !== "list") {
-        const unsupported = `deployments ${options.subcommand}: --format json is only available for \`deployments list\` — wrangler has no JSON rendering for the others.`;
+    if (options.format === "json" && options.subcommand !== "list" && options.subcommand !== "status") {
+        const unsupported = `deployments ${options.subcommand}: --format json is only available for \`deployments list\` and \`deployments status\` — wrangler has no JSON rendering for the others.`;
 
         options.logger.error(unsupported);
 
@@ -231,14 +233,14 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
-    // `list --json` puts wrangler's own document on stdout (see `buildListArgs`),
-    // so this run's stdout is already spoken for.
+    // `list --json` and `status --json` put wrangler's own document on stdout
+    // (see `buildReadArgs`), so this run's stdout is already spoken for.
     return { code: result.code, delegated: options.format === "json", descriptor };
 };
 
 /** Narrow a raw argument to a known {@link DeploymentsSubcommand}. */
 const isDeploymentsSubcommand = (value: unknown): value is DeploymentsSubcommand =>
-    value === "list" || value === "inspect" || value === "rollback" || value === "promote";
+    value === "list" || value === "inspect" || value === "rollback" || value === "promote" || value === "status";
 
 export type { DeploymentsCommandOptions, DeploymentsCommandResult, DeploymentsSubcommand };
 export { isDeploymentsSubcommand, runDeploymentsCommand };

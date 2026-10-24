@@ -31,7 +31,7 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
     {
         name: "deployments",
         summary: "deployment history; roll back or promote Worker versions",
-        usage: "list | inspect <version-id> | rollback [version-id] | promote <version-id>",
+        usage: "list | status | inspect <version-id> | rollback [version-id] | promote <version-id>",
     },
     {
         name: "profile",
@@ -69,6 +69,7 @@ const cloudflareCommand: Command = {
         ["lunora cloudflare containers list --format json", "List container instances as JSON (also `info`, `images list`)"],
         ["lunora cloudflare containers images delete transcoder:v1", "Delete an image to free registry storage"],
         ["lunora cloudflare deployments list", "Show the 10 most recent deployments"],
+        ["lunora cloudflare deployments status", "Show the live version and how traffic is split across versions"],
         ["lunora cloudflare deployments inspect <version-id>", "View a specific Worker version"],
         ["lunora cloudflare deployments rollback --yes", "Roll back to the previous version"],
         ["lunora cloudflare deployments promote <version-id> --yes", "Send 100% of traffic to a version"],
@@ -142,7 +143,7 @@ const cloudflareCommand: Command = {
         },
         {
             ...OUTPUT_FORMAT_OPTION,
-            description: "Output format: pretty (default) or json (containers: list | info | images list; deployments: list only)",
+            description: "Output format: pretty (default) or json (containers: list | info | images list; deployments: list and status)",
         },
         TARGET_OPTION,
     ],

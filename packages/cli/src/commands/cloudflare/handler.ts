@@ -152,7 +152,11 @@ const runDeployments = async ({ cwd, format, logger, options, rest }: ToolRun): 
     const [sub, versionId] = rest;
 
     if (!isDeploymentsSubcommand(sub)) {
-        return refuse(logger, EXIT_CODE.USAGE, `cloudflare deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`);
+        return refuse(
+            logger,
+            EXIT_CODE.USAGE,
+            `cloudflare deployments: unknown subcommand "${sub ?? ""}" — expected list | status | inspect | rollback | promote`,
+        );
     }
 
     const result = await runDeploymentsCommand({

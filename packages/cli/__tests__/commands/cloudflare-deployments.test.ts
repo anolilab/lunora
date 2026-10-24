@@ -47,6 +47,39 @@ describe("lunora cloudflare deployments", () => {
         expect(argsOf(calls)).toContain("--json");
     });
 
+    it("status spawns `wrangler deployments status` and forwards --format json as --json", async () => {
+        expect.assertions(3);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({ cwd: "/tmp", env: "production", format: "json", logger, spawner, subcommand: "status" });
+
+        expect(result.code).toBe(0);
+        expect(argsOf(calls)).toContain("wrangler deployments status --env production");
+        expect(argsOf(calls)).toContain("--json");
+    });
+
+    it("status refuses the split flags, which only apply to promote", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({
+            confirmSharedState: true,
+            cwd: "/tmp",
+            from: "live1",
+            logger,
+            percent: 10,
+            spawner,
+            subcommand: "status",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
+    });
+
     it("launches wrangler through npx when the project declares npm", async () => {
         expect.assertions(2);
 

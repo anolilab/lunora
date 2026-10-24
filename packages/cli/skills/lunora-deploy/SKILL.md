@@ -185,11 +185,12 @@ See `lunora-migration-helper` for the full flow.
 
 ```bash
 lunora cloudflare deployments list
+lunora cloudflare deployments status             # which versions carry traffic, and how much
 lunora cloudflare deployments rollback --yes              # previous version
 lunora cloudflare deployments promote <version-id> --yes  # send 100% of traffic to a version
 ```
 
-A partial rollout (`--percent N --from <live-version-id> --confirm-shared-state`) runs two versions against one Durable Object database. Confirm their schemas and Durable Object migrations match before using it; a Durable Object class migration must go out at 100%.
+A partial rollout (`--percent N --from <live-version-id> --confirm-shared-state`) runs two versions against one Durable Object database. Nothing in `promote` compares the two versions' schemas, so confirm them yourself before using it. Two facts bound the risk: `lunora deploy --preview` runs the schema-drift gate before it uploads, so a version uploaded that way passed it unless `--prebuilt` skipped the gate or `--allow-schema-drift` overrode it; and `wrangler versions upload` refuses a version with a pending Durable Object migration, so that migration reaches traffic only through `deploy`, at 100%. A split whose live version predates a migration the target relies on is not detected by either check.
 
 Rolling back code does not roll back data migrations or D1 DDL.
 

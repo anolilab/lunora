@@ -105,6 +105,7 @@ lunora verify       # codegen dry-run + tsc --noEmit
 
 ```bash
 lunora cloudflare deployments list                       # the 10 most recent
+lunora cloudflare deployments status                     # the live version and its traffic split
 lunora cloudflare deployments inspect <version-id>       # what a version contains
 lunora cloudflare deployments rollback --yes             # back to the previous version
 lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
