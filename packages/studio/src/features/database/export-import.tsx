@@ -421,6 +421,12 @@ const sendImport = async (
         await forEachRowChunk(source(), async (rows, startLine) => {
             const result = (await client.query(IMPORT_SHARD, { dryRun: true, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
+            // A check never inserts and never meets a conflict. A server that predates dry runs ignores the flag and writes, and the real pass
+            // would then write every row again, so stop on the first chunk that shows a write.
+            if (result.conflicts > 0 || Object.values(result.inserted).some((count) => count > 0)) {
+                throw new Error(t("This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent."));
+            }
+
             check.errors.push(...result.errors);
         });
     } catch (error_) {

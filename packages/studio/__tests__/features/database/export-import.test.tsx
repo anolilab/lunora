@@ -51,9 +51,10 @@ const createClient = (rowsByTable?: Record<string, ExportRow[]>, columns: Column
             }
 
             if (reference === ADMIN_FUNCTIONS.importShard) {
-                const { rows } = args as { rows: ExportRow[] };
+                const { dryRun, rows } = args as ImportArgs;
 
-                return { conflicts: 0, errors: [], inserted: { messages: rows.length } };
+                // A check writes nothing, so it reports nothing inserted.
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -130,7 +131,8 @@ const createCheckingClient = (badLine?: number): MockClientHooks =>
                     };
                 }
 
-                return { conflicts: 0, errors: [], inserted: { messages: rows.length } };
+                // A check writes nothing, so it reports nothing inserted.
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -527,7 +529,7 @@ describe("exportImportPanel", () => {
                     return {
                         conflicts: 0,
                         errors: [{ code: "VALIDATION", line: 3, message: "text must be a string", table: "messages" }],
-                        inserted: { messages: 2 },
+                        inserted: {},
                     };
                 }
 
@@ -642,6 +644,32 @@ describe("exportImportPanel", () => {
         expect(importCalls(mock)).toHaveLength(0);
         expect(errors.textContent).toBe("line 1101 (messages): text must be a string");
         expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
+    });
+
+    it("stops at the first check that reports a write, since the server ignored the dry-run flag", async () => {
+        expect.assertions(3);
+
+        // A server that predates dry runs answers a check like a real import: it inserts the rows and says so.
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    return { conflicts: 0, errors: [], inserted: { messages: (args as ImportArgs).rows.length } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toBe("This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent.");
+        expect(dryChecks(mock)).toHaveLength(1);
+        expect(importCalls(mock)).toHaveLength(0);
     });
 
     it("checks every chunk in order, then writes the same chunks", async () => {
