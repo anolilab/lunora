@@ -733,36 +733,6 @@ const walkHolderPages = async (
     }
 };
 
-/**
- * Apply the `onDelete` action for a single holder relation pointing at the
- * deleted parent. Resolves the referenced value, finds holder rows and either
- * aborts (`restrict`), cascades the delete, or nulls the FK.
- *
- * Cross-backend cascade is not rejected here: backend-aware callbacks (each
- * receives `holderTable`) route to the right writer. The supported direction
- * (DO → D1) routes through the global writer the codegen passes into
- * `createShardCtxDb`; the unsupported direction (D1 → many shards) throws via
- * the D1 caller's `findHolders`, so this helper stays backend-agnostic.
- *
- * **Atomicity caveat.** A cross-backend cascade is not transactional: the
- * global cascade fires *before* the local DELETE commits. If the cascade
- * succeeds and the local DELETE then fails, the parent row stays but its
- * global holders are gone. Callers that care should add their own
- * compensation (a periodic reconciliation job, or a Cloudflare Queue retry).
- *
- * **Bounded.** Holders are counted first with an ids-only read of
- * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
- * `CASCADE_LIMIT` before any holder of any relation of the parent is touched. The probed ids
- * are processed first, then re-read {@link DEFAULT_BATCH_LIMIT} at a time from
- * the start (catching holders inserted mid-cascade) until a page comes back short — a processed holder no longer matches (deleted,
- * soft-deleted, or its FK nulled). The ceiling is per relation per level: a
- * nested cascade is only counted when its own parent is deleted, so a
- * grandchild relation over the ceiling throws after the levels above it have
- * already run. A DO-local cascade inside a mutation rolls back with it; in an
- * action context (no enclosing transaction), on a `.global()` (D1/Hyperdrive)
- * writer, or across backends, the levels already run stay, so the cascade is
- * left partial.
- */
 /** A relation whose holders were counted and passed the checks, waiting to be applied. */
 interface RelationPlan {
     holderTable: string;
@@ -813,8 +783,36 @@ const probeRelation = async (options: ApplyOnDeleteOptions, holderTable: string,
     return { holderTable, probe, referencedValue, relation };
 };
 
-// The probe is the first page only while no earlier plan has changed its holder table: after that its ids may be gone,
-// so the walk re-reads from the start.
+/**
+ * Apply the `onDelete` action for a single holder relation pointing at the
+ * deleted parent. Resolves the referenced value, finds holder rows and either
+ * aborts (`restrict`), cascades the delete, or nulls the FK.
+ *
+ * Cross-backend cascade is not rejected here: backend-aware callbacks (each
+ * receives `holderTable`) route to the right writer. The supported direction
+ * (DO → D1) routes through the global writer the codegen passes into
+ * `createShardCtxDb`; the unsupported direction (D1 → many shards) throws via
+ * the D1 caller's `findHolders`, so this helper stays backend-agnostic.
+ *
+ * **Atomicity caveat.** A cross-backend cascade is not transactional: the
+ * global cascade fires *before* the local DELETE commits. If the cascade
+ * succeeds and the local DELETE then fails, the parent row stays but its
+ * global holders are gone. Callers that care should add their own
+ * compensation (a periodic reconciliation job, or a Cloudflare Queue retry).
+ *
+ * **Bounded.** Holders are counted first with an ids-only read of
+ * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
+ * `CASCADE_LIMIT` before any holder of any relation of the parent is touched. The probed ids
+ * are processed first, then re-read {@link DEFAULT_BATCH_LIMIT} at a time from
+ * the start (catching holders inserted mid-cascade) until a page comes back short — a processed holder no longer matches (deleted,
+ * soft-deleted, or its FK nulled). The ceiling is per relation per level: a
+ * nested cascade is only counted when its own parent is deleted, so a
+ * grandchild relation over the ceiling throws after the levels above it have
+ * already run. A DO-local cascade inside a mutation rolls back with it; in an
+ * action context (no enclosing transaction), on a `.global()` (D1/Hyperdrive)
+ * writer, or across backends, the levels already run stay, so the cascade is
+ * left partial.
+ */
 const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, probeIsCurrent: boolean): Promise<void> => {
     const { findHolders, onCascade, onSetNull, tableName } = options;
     const { holderTable, probe, referencedValue, relation } = plan;
@@ -827,6 +825,8 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
         `onDelete on "${tableName}" made no progress: ${reference} rows still match after being processed`,
         // The probe already holds every holder's id; walking it first leaves only
         // holders inserted mid-cascade for the re-reads.
+        // The probe is the first page only while no earlier plan has changed its holder table: after that its ids may be gone,
+        // so the walk re-reads from the start.
         probeIsCurrent ? probe : undefined,
     );
 };
