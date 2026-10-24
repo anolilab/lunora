@@ -56,8 +56,13 @@ const PricingTable = ({ onSelect, plans, subscription }: PricingTableProps): Rea
 interface BillingPanelProps {
     /** Members in the organisation — the real seat count, not the billed quantity. */
     memberCount: number;
-    /** Open the provider's customer portal. The return is ignored. */
-    onManage: () => unknown;
+
+    /**
+     * Open the provider's customer portal. The return is ignored. Omit it while the
+     * organisation has nothing to manage (no customer exists until a first checkout)
+     * and the button is not rendered.
+     */
+    onManage?: () => unknown;
     plans: ReadonlyArray<Plan>;
     /** `undefined` while the query is in flight. */
     subscription: SubscriptionLike | undefined;
@@ -73,15 +78,17 @@ const BillingPanel = ({ memberCount, onManage, plans, subscription }: BillingPan
     return (
         <Card
             actions={
-                <button
-                    className="lu-saas-button lu-saas-button--quiet"
-                    onClick={() => {
-                        onManage();
-                    }}
-                    type="button"
-                >
-                    Manage billing
-                </button>
+                onManage ? (
+                    <button
+                        className="lu-saas-button lu-saas-button--quiet"
+                        onClick={() => {
+                            onManage();
+                        }}
+                        type="button"
+                    >
+                        Manage billing
+                    </button>
+                ) : undefined
             }
             subtitle={plan?.name}
             title="Billing"

@@ -55,4 +55,10 @@ describe("billingPanel", () => {
 
         expect(onManage).toHaveBeenCalled();
     });
+
+    it("renders no manage button when there is nothing to manage yet", () => {
+        render(BillingPanel, { memberCount: 1, plans: PLANS, subscription: undefined });
+
+        expect(screen.queryByText("Manage billing")).not.toBeInTheDocument();
+    });
 });

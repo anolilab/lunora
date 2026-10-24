@@ -6,8 +6,8 @@
     interface Props {
         /** Members in the organisation — the real seat count, not the billed quantity. */
         memberCount: number;
-        /** Open the provider's customer portal. */
-        onManage: () => unknown;
+        /** Open the provider's customer portal. Omit it while there is nothing to manage and the button is not rendered. */
+        onManage?: () => unknown;
         plans: ReadonlyArray<Plan>;
         subscription: SubscriptionLike | undefined;
     }
@@ -20,17 +20,17 @@
     const overAllowance = $derived(seatAlert(seats));
 </script>
 
-<Card subtitle={plan?.name} title="Billing">
-    {#snippet actions()}
-        <button
-            class="lu-saas-button lu-saas-button--quiet"
-            onclick={() => {
-                onManage();
-            }}
-            type="button">Manage billing</button
-        >
-    {/snippet}
+{#snippet manage()}
+    <button
+        class="lu-saas-button lu-saas-button--quiet"
+        onclick={() => {
+            onManage?.();
+        }}
+        type="button">Manage billing</button
+    >
+{/snippet}
 
+<Card actions={onManage ? manage : undefined} subtitle={plan?.name} title="Billing">
     {#if notice}
         <p class="lu-saas-error" role="status">{notice}</p>
     {/if}
