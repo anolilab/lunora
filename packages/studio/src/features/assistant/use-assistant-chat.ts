@@ -66,6 +66,26 @@ const useAssistantChat = ({
     // whatever the operator has since typed.
     const appliedDraft = useRef<number | undefined>(undefined);
 
+    /*
+     * The turn in flight, if any — a ref because `pending` is a render-time value:
+     * two sends dispatched before the next render both read the same `false`.
+     * Setting this synchronously is what makes the second one bail.
+     *
+     * It is also the handle that cancels the request. `pending` lives in the
+     * panel's own hook state, so closing and reopening the panel resets it to
+     * `false` while the old request carried on — and its completion then replaced
+     * the session's turns with a transcript captured before the operator's next
+     * question. Aborting on unmount means a turn nobody is watching cannot land.
+     */
+    const inFlight = useRef<AbortController | undefined>(undefined);
+
+    useEffect(
+        () => () => {
+            inFlight.current?.abort();
+        },
+        [],
+    );
+
     const pending = ops.pending("chat");
     const reason = ops.reason("chat");
 
@@ -92,9 +112,13 @@ const useAssistantChat = ({
      * {@link decide}.
      */
     const sendTurn = (prompt: string, sent: ReadonlyArray<SessionTurn>, approval?: ChatApproval): void => {
-        if (prompt === "" || pending || session === undefined) {
+        if (prompt === "" || pending || inFlight.current !== undefined || session === undefined) {
             return;
         }
+
+        const controller = new AbortController();
+
+        inFlight.current = controller;
 
         // The question joins the transcript immediately, so the operator sees what
         // they asked while it is in flight. The turns SENT are the ones from before
@@ -131,12 +155,13 @@ const useAssistantChat = ({
                                 : current,
                         );
                     },
+                    controller.signal,
                 )
                 .then((answer) => {
                     // A degraded turn adds nothing to the transcript — the reason is
                     // rendered from the ops' own per-task status instead, so a failure
                     // never looks like a reply.
-                    if (answer !== undefined) {
+                    if (answer !== undefined && !controller.signal.aborted) {
                         setTruncatedFor(answer.truncated ? session.id : undefined);
                         // What the turn actually did travels WITH the turn, so an answer
                         // built from three reads never looks like one invented from
@@ -156,6 +181,8 @@ const useAssistantChat = ({
                     return answer;
                 })
                 .finally(() => {
+                    inFlight.current = undefined;
+
                     // Whatever happened — answered, degraded, or interrupted — the
                     // live text has served its purpose and is not part of the
                     // transcript.
@@ -167,7 +194,9 @@ const useAssistantChat = ({
     const send = (text?: string): void => {
         const prompt = (text ?? draft).trim();
 
-        if (prompt === "" || pending || session === undefined) {
+        // Checked here as well as in `sendTurn`: the draft is cleared below, and a
+        // send that is about to be refused must not eat what the operator typed.
+        if (prompt === "" || pending || inFlight.current !== undefined || session === undefined) {
             return;
         }
 
@@ -184,7 +213,7 @@ const useAssistantChat = ({
      * server saw the first time, plus the decision.
      */
     const decide = (allow: boolean, ticket: string): void => {
-        if (session === undefined || pending) {
+        if (session === undefined || pending || inFlight.current !== undefined) {
             return;
         }
 
@@ -211,6 +240,7 @@ const useAssistantChat = ({
     useEffect(() => {
         if (seededDraft !== undefined && seededDraft.id !== appliedDraft.current) {
             appliedDraft.current = seededDraft.id;
+            // react-doctor-disable-next-line react-doctor/no-derived-state -- a one-shot prefill, not a mirror: the operator edits the draft afterwards, so it cannot be derived from the seed
             setDraft(seededDraft.text);
         }
     }, [seededDraft]);

@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -185,6 +185,98 @@ describe("assistantPanel", () => {
         });
 
         expect(screen.getAllByTestId("assistant-turn-assistant")).toHaveLength(1);
+    });
+
+    it("sends one turn when send fires twice before a re-render", async () => {
+        expect.hasAssertions();
+
+        // `pending` is a render-time value, so two sends dispatched in one batch both
+        // read `false`. The second must be refused by something that is set
+        // synchronously, or two turns overlap and the later completion overwrites the
+        // newer exchange.
+        let answer: (() => void) | undefined;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+
+        const mock = createMockClient({
+            query: (reference): unknown => (reference === ADMIN_FUNCTIONS.aiAvailable ? { available: true } : { columns: [], rowCount: 0, rows: [] }),
+            streamRpc: async (reference): Promise<unknown> => {
+                if (reference !== ADMIN_FUNCTIONS.aiChat) {
+                    return { available: true };
+                }
+
+                await held;
+
+                return { degraded: false, partial: false, reply: "Two rows.", toolCalls: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        fireEvent.change(screen.getByTestId("assistant-input"), { target: { value: "how many messages?" } });
+
+        // eslint-disable-next-line testing-library/no-unnecessary-act -- both clicks must land in ONE batch, before React re-renders; a bare fireEvent re-renders between them and hides the race
+        act(() => {
+            fireEvent.click(screen.getByTestId("assistant-send"));
+            fireEvent.click(screen.getByTestId("assistant-send"));
+        });
+
+        answer?.();
+        await screen.findByTestId("assistant-turn-assistant");
+
+        expect(mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(1);
+        expect(screen.getAllByTestId("assistant-turn-user")).toHaveLength(1);
+    });
+
+    it("cancels the turn when the panel closes, so its answer cannot land later", async () => {
+        expect.hasAssertions();
+
+        // Closing unmounts the hook and with it the `pending` flag; the request
+        // carried on and its completion replaced the session's turns with an array
+        // captured before whatever the operator did next.
+        let answer: (() => void) | undefined;
+        let signal: AbortSignal | undefined;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+
+        const mock = createMockClient({
+            query: (reference): unknown => (reference === ADMIN_FUNCTIONS.aiAvailable ? { available: true } : { columns: [], rowCount: 0, rows: [] }),
+            streamRpc: async (reference, _args, options): Promise<unknown> => {
+                if (reference !== ADMIN_FUNCTIONS.aiChat) {
+                    return { available: true };
+                }
+
+                signal = (options as { signal?: AbortSignal }).signal;
+
+                await held;
+
+                return { degraded: false, partial: false, reply: "Too late.", toolCalls: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("how many messages?");
+
+        await waitFor(() => {
+            expect(signal).toBeDefined();
+        });
+
+        fireEvent.click(screen.getByTestId("assistant-close"));
+
+        expect(signal?.aborted).toBe(true);
+
+        // The request completes anyway (a real one would reject); reopening must
+        // show the question and nothing the cancelled turn produced.
+        answer?.();
+        await openChat();
+
+        expect(screen.queryByTestId("assistant-turn-assistant")).toBeNull();
+        expect(screen.getAllByTestId("assistant-turn-user")).toHaveLength(1);
     });
 
     it("leaves no partial turn in the transcript when the stream is interrupted", async () => {

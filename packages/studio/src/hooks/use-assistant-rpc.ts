@@ -6,10 +6,8 @@ import type {
     AiOptInLevel,
     AssistantChartConfig,
     ChatApproval,
-    ChatPendingApproval,
     ChatResult,
     ChatStreamEvent,
-    ChatToolReport,
     ChatTurn,
     FilterClause,
     GenerateChartResult,
@@ -51,6 +49,9 @@ interface AssistantRpc {
      * the behaviour this had before it streamed, and a caller that renders the
      * narration must still commit nothing until this promise resolves — which is
      * what keeps an interrupted turn out of the transcript.
+     *
+     * `signal` cancels the request: the caller aborts it when the panel goes away,
+     * so a turn nobody is watching cannot land in a transcript that has moved on.
      */
     readonly chat: (
         prompt: string,
@@ -58,16 +59,8 @@ interface AssistantRpc {
         schema: ReadonlyArray<SchemaFact>,
         approval?: ChatApproval,
         onEvent?: (event: ChatStreamEvent) => void,
-    ) => Promise<
-        | undefined
-        | {
-              partial: boolean;
-              pendingApproval?: ChatPendingApproval;
-              reply: string;
-              toolCalls: ReadonlyArray<ChatToolReport>;
-              truncated: boolean;
-          }
-    >;
+        signal?: AbortSignal,
+    ) => Promise<Exclude<ChatResult, { degraded: true }> | undefined>;
 
     /** Ask for a draft, or a repair when `failed` is supplied. */
     readonly generate: (prompt: string, failed?: { error: string; sql: string }) => Promise<string | undefined>;
@@ -205,7 +198,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
 
     const rewrite = async (instruction: string, sql: string): Promise<string | undefined> => askForSql({ editSql: sql, prompt: instruction });
 
-    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval, onEvent) => {
+    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval, onEvent, signal) => {
         begin("chat");
 
         try {
@@ -244,20 +237,13 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
                     onFrame: (frame: unknown) => {
                         onEvent?.(frame as ChatStreamEvent);
                     },
+                    ...(signal === undefined ? {} : { signal }),
                 },
             )) as ChatResult;
 
             finish("chat", result.degraded ? result.reason : undefined);
 
-            return result.degraded
-                ? undefined
-                : {
-                      partial: result.partial,
-                      ...(result.pendingApproval === undefined ? {} : { pendingApproval: result.pendingApproval }),
-                      reply: result.reply,
-                      toolCalls: result.toolCalls,
-                      truncated: result.truncated,
-                  };
+            return result.degraded ? undefined : result;
         } catch {
             finish("chat", "ai-error");
 
