@@ -223,6 +223,53 @@ describe("coerceCsvDocuments", () => {
         }
     });
 
+    it("refuses a number cell whose digits a double cannot keep, instead of storing a rounded value", () => {
+        expect.assertions(5);
+
+        for (const text of ["9007199254740993", "-9007199254740993", "12345678901234567890", "0.10000000000000000001", "1e-400"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,count\nm1,${text}\n`), kinds))).toStrictEqual({
+                column: "count",
+                expected: "number",
+                inexact: true,
+                kind: "cell-type",
+                record: 2,
+                value: text,
+            });
+        }
+    });
+
+    it("keeps a number cell that a double holds exactly, however it is spelled", () => {
+        expect.assertions(1);
+
+        expect(
+            [
+                "0.1",
+                "1.50",
+                "15e-1",
+                "-0",
+                "9007199254740991",
+                "9007199254740992",
+                "1152921504606846976",
+                "1e21",
+                "123456789012345680000",
+                "0.30000000000000004",
+                "0e99",
+            ].map((text) => coerced("count", text)),
+        ).toStrictEqual([
+            0.1,
+            1.5,
+            1.5,
+            -0,
+            9_007_199_254_740_991,
+            9_007_199_254_740_992,
+            2 ** 60,
+            1e21,
+            123_456_789_012_345_680_000,
+            0.300_000_000_000_000_04,
+            0,
+        ]);
+    });
+
     it("reads an ISO-8601 date as midnight UTC, and an ISO date-time as the instant its offset names", () => {
         expect.assertions(3);
 

@@ -295,6 +295,17 @@ const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
             });
         }
 
+        if (problem.inexact === true) {
+            return t(
+                "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+                {
+                    column: problem.column,
+                    line: problem.record,
+                    value: problem.value,
+                },
+            );
+        }
+
         return t("line {line}: column “{column}” must be a number, got “{value}”.", { column: problem.column, line: problem.record, value: problem.value });
     }
 

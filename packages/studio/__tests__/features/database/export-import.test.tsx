@@ -607,6 +607,23 @@ describe("exportImportPanel", () => {
         expect(error.textContent).toBe("Invalid CSV: line 1001: column “count” must be a number, got “x”.");
     });
 
+    it("writes nothing for a number a double would round, and points to a bigint column", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,count\nm1,9007199254740993\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe(
+            "Invalid CSV: line 2: column “count” holds “9007199254740993”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+        );
+    });
+
     it("sends a column named __proto__ to the server as a field of its own, beside the others", async () => {
         expect.assertions(2);
 

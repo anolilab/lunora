@@ -9,7 +9,7 @@ type CsvProblem =
     | { kind: "duplicate-header"; name: string }
     | { column: number; kind: "empty-header" }
     | { expected: number; found: number; kind: "ragged"; record: number }
-    | { column: string; expected: CellType; kind: "cell-type"; record: number; value: string }
+    | { column: string; expected: CellType; inexact?: true; kind: "cell-type"; record: number; value: string }
     | { kind: "text-after-quote"; record: number }
     | { kind: "unterminated-quote"; record: number };
 
@@ -209,7 +209,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
 };
 
 /** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
-type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; kind: "rejected" };
+type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; inexact?: true; kind: "rejected" };
 
 /** Digits with an optional minus sign: the text a `bigint` column can hold. */
 const INTEGER_TEXT = /^-?\d+$/u;
@@ -235,8 +235,55 @@ const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
  */
 const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/u;
 
-/** The text as a finite decimal number, or `undefined`. */
-const parseDecimal = (text: string): number | undefined => {
+/** The sign, digits and exponent of decimal text; `Number#toExponential` output matches too. */
+const DECIMAL_PARTS = /^[+-]?(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?$/iu;
+
+/**
+ * A decimal's value as digits with no leading or trailing zero and the power of ten they are scaled by, so two spellings of one value
+ * (`1.50`, `15e-1`) compare equal. Zero has no digits.
+ */
+const decimalKey = (text: string): { digits: string; exponent: number } => {
+    const [, whole = "", fraction = "", exponent = "0"] = DECIMAL_PARTS.exec(text) ?? [];
+    const all = `${whole}${fraction}`;
+    let start = 0;
+    let end = all.length;
+
+    while (start < end && all.charAt(start) === "0") {
+        start += 1;
+    }
+
+    while (end > start && all.charAt(end - 1) === "0") {
+        end -= 1;
+    }
+
+    return start === end ? { digits: "", exponent: 0 } : { digits: all.slice(start, end), exponent: Number(exponent) - fraction.length + (all.length - end) };
+};
+
+/**
+ * Whether `number` holds exactly the value `text` writes. A double keeps about 16 significant digits, so a longer digit string is read
+ * back as a different value (`9007199254740993` becomes `9007199254740992`) and the stored cell would differ from the file with no error.
+ * `0.1` is accepted: it round-trips through its shortest spelling, which is what a double is. A whole number past 2^53 is accepted only
+ * when the double is that integer exactly, as 2^60 is.
+ */
+const isExactDecimal = (text: string, number: number): boolean => {
+    const written = decimalKey(text);
+    const stored = decimalKey(number.toExponential());
+
+    if (written.digits === stored.digits && written.exponent === stored.exponent) {
+        return true;
+    }
+
+    // `number` is finite here, so an integer's exponent is at most 308 and the BigInt below is small.
+    return (
+        written.digits !== "" &&
+        written.exponent >= 0 &&
+        Number.isInteger(number) &&
+        BigInt(written.digits) * 10n ** BigInt(written.exponent) === BigInt(Math.abs(number))
+    );
+};
+
+/** The text as a finite decimal number that keeps every digit written, or `undefined`. */
+const parseDecimal = (text: string): { number: number } | { inexact: true } | undefined => {
     const trimmed = text.trim();
 
     if (!DECIMAL_TEXT.test(trimmed)) {
@@ -245,7 +292,11 @@ const parseDecimal = (text: string): number | undefined => {
 
     const number = Number(trimmed);
 
-    return Number.isFinite(number) ? number : undefined;
+    if (!Number.isFinite(number)) {
+        return undefined;
+    }
+
+    return isExactDecimal(trimmed, number) ? { number } : { inexact: true };
 };
 
 /** Whether `year-month-day` names a day the calendar has. `Date.parse` would roll `2026-02-30` over into March instead. */
@@ -297,6 +348,17 @@ const parseIsoDate = (text: string): number | undefined => {
     return Number.isFinite(millis) ? millis : undefined;
 };
 
+/** A number cell: refused when it is not a decimal, and refused as `inexact` when the double would not hold every digit. */
+const coerceNumber = (text: string): CoercedCell => {
+    const parsed = parseDecimal(text);
+
+    if (parsed === undefined) {
+        return { expected: "number", kind: "rejected" };
+    }
+
+    return "number" in parsed ? { kind: "ok", value: parsed.number } : { expected: "number", inexact: true, kind: "rejected" };
+};
+
 /**
  * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes whole-number epoch milliseconds or an
  * ISO-8601 date. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
@@ -320,9 +382,7 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     }
 
     if (kind === "number") {
-        const number = parseDecimal(text);
-
-        return number === undefined ? { expected: "number", kind: "rejected" } : { kind: "ok", value: number };
+        return coerceNumber(text);
     }
 
     if (kind === "date" || kind === "timestamp") {
@@ -350,7 +410,14 @@ const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string,
             const cell = coerceCell(text, kinds.get(column));
 
             if (cell.kind === "rejected") {
-                throw new CsvFormatError({ column, expected: cell.expected, kind: "cell-type", record, value: text });
+                throw new CsvFormatError({
+                    column,
+                    expected: cell.expected,
+                    ...(cell.inexact === true && { inexact: true as const }),
+                    kind: "cell-type",
+                    record,
+                    value: text,
+                });
             }
 
             setField(coerced, column, cell.value);
