@@ -25,6 +25,12 @@ interface OpenRpcDocument {
     methods?: OpenRpcMethod[];
 }
 
+/**
+ * The methods the RPC reference documents. A `stream` opens a WebSocket rather than a
+ * POST, so it has no operation here, and a document of only streams has nothing to show.
+ */
+const rpcMethodsOf = (document: OpenRpcDocument): OpenRpcMethod[] => (document.methods ?? []).filter((method) => method["x-lunora-function-kind"] !== "stream");
+
 /** The method's `args` param (or its first param) — the user-facing argument schema. */
 const argsParameterOf = (method: OpenRpcMethod): OpenRpcParameter | undefined =>
     (method.params ?? []).find((parameter) => parameter.name === "args") ?? (method.params ?? [])[0];
@@ -63,8 +69,7 @@ const toOperation = (method: OpenRpcMethod): ApiOperation => {
  */
 const parseOpenRpc = (raw: unknown): ApiModel => {
     const document = (raw ?? {}) as OpenRpcDocument;
-    // A `stream` is not an RPC operation: it opens a WebSocket, so the POST /_lunora/rpc reference would be wrong.
-    const operations = (document.methods ?? []).filter((method) => method["x-lunora-function-kind"] !== "stream").map((method) => toOperation(method));
+    const operations = rpcMethodsOf(document).map((method) => toOperation(method));
 
     const byNamespace = new Map<string, ApiOperation[]>();
 
@@ -91,3 +96,5 @@ const parseOpenRpc = (raw: unknown): ApiModel => {
 };
 
 export default parseOpenRpc;
+export { rpcMethodsOf };
+export type { OpenRpcDocument };
