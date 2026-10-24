@@ -2494,7 +2494,7 @@ describe("dataBrowser — filter by cell value", () => {
     );
 
     it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const mock = createMockClient({
             query: (reference, args): unknown => {
@@ -2522,12 +2522,8 @@ describe("dataBrowser — filter by cell value", () => {
         // A history navigation changes the table while the dialog is still mounted.
         fireEvent.click(screen.getByTestId("db-table-users"));
 
-        await waitFor(() => {
-            if (screen.queryByTestId("grid-cell-dialog") !== null) {
-                throw new Error("dialog still open after the table changed");
-            }
-        });
-
+        // The scope reset runs during render, so the dialog is already gone when the click's act() returns.
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
         expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
         expect(
             mock.query.mock.calls.some(
