@@ -1644,6 +1644,18 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(result.generated.functions).toContain("await run.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
+        it("refuses a stream over RPC and keeps a stream's ctx read-only, as its declared query ctx is", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+            // OpenRPC lists streams for MCP, so an RPC call reaches `handleRpc` with one. Run there, its
+            // async iterator reaches the wire encoder as a single result and the call fails as a 500.
+            expect(result.generated.shard).toContain('if (registered.kind === "stream") {');
+            // A stream's typed ctx is the query ctx, so its `run*` must refuse a write as a query's does.
+            expect(result.generated.shard).toContain('if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {');
+        });
+
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
             expect.assertions(4);
 
