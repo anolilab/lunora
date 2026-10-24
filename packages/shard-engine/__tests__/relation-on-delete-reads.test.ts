@@ -45,4 +45,39 @@ describe("applyOnDelete holder reads", () => {
         // The probe read all 1200; the one re-read that confirms nothing is left reads none.
         expect(rowsRead).toBe(1200);
     });
+
+    it("probes a single holder for a restrict relation instead of the full ceiling", async () => {
+        expect.assertions(2);
+
+        const limits: number[] = [];
+
+        await expect(
+            applyOnDelete({
+                deletedId: "u1",
+                deletedReference: () => undefined,
+                findHolders: async (_table, _field, _value, page) => {
+                    limits.push(page.limit);
+
+                    return [{ _id: "m0" }];
+                },
+                onCascade: async () => {},
+                onRestrict: (message) => {
+                    throw new Error(message);
+                },
+                onSetNull: async () => {},
+                schema: {
+                    tables: {
+                        messages: {
+                            indexes: [],
+                            relationMap: { author: { field: "authorId", kind: "one", onDelete: "restrict", references: "_id", table: "users" } },
+                            shape: {},
+                        },
+                        users: { indexes: [], shape: {} },
+                    },
+                },
+                tableName: "users",
+            }),
+        ).rejects.toThrow("still references it");
+        expect(limits).toStrictEqual([1]);
+    });
 });

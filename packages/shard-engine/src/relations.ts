@@ -779,7 +779,11 @@ const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable:
             { status: 400 },
         );
 
-    const probe = await findHolders(holderTable, relation.field, referencedValue, { limit: CASCADE_MAX_ROWS + 1, select: ["_id"] });
+    // `restrict` only needs to know whether any holder exists, so it never pays for the full ceiling probe.
+    const probe = await findHolders(holderTable, relation.field, referencedValue, {
+        limit: relation.onDelete === "restrict" ? 1 : CASCADE_MAX_ROWS + 1,
+        select: ["_id"],
+    });
 
     if (probe.length === 0) {
         return;
