@@ -84,16 +84,16 @@ describe("rpc error response headers", () => {
         expect.assertions(3);
 
         const fetchMock = vi.fn<typeof fetch>(async () =>
-            Response.json({ error: { code: "CONFLICT", message: "stale" } }, { headers: { "set-cookie": SESSION_COOKIE }, status: 409 }),
+            Response.json({ error: { code: "CONFLICT", message: "stale" } }, { headers: { "set-cookie": SESSION_COOKIE, "x-edge": "cf" }, status: 409 }),
         );
 
         const error = (await client(fetchMock)
             .mutation(fnRef("docs:write"), {})
             .catch((error_: unknown) => error_)) as Record<string, unknown> & { headers?: Record<string, string> };
 
-        // Present on the error itself, so the negative assertions below cannot pass by the header being dropped.
-        expect(error.headers?.["set-cookie"]).toBe(SESSION_COOKIE);
-        expect(Object.keys(error)).not.toContain("headers");
+        // Another header is present, so the negative assertions below cannot pass by the whole record being dropped.
+        expect(error.headers?.["x-edge"]).toBe("cf");
+        expect(error.headers).not.toHaveProperty("set-cookie");
         expect(JSON.stringify(error)).not.toContain(SESSION_COOKIE);
     });
 

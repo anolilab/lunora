@@ -219,9 +219,11 @@ const reconstructError = (errorBody: {
 /**
  * A response's headers as a plain read-only record, keys lowercased (the `Headers`
  * iterator yields lowercase names). Built once per error, so the caller's `Headers`
- * object is never retained.
+ * object is never retained. `set-cookie` is left out: it is a session credential the
+ * browser stores for itself, and nothing a caller does with the error needs it.
  */
-const responseHeadersRecord = (responseHeaders: Headers): Readonly<Record<string, string>> => Object.freeze(Object.fromEntries(responseHeaders));
+const responseHeadersRecord = (responseHeaders: Headers): Readonly<Record<string, string>> =>
+    Object.freeze(Object.fromEntries([...responseHeaders].filter(([name]) => name !== "set-cookie")));
 
 /** Attach the reply's headers to an error about to be thrown, non-enumerable like `internal`. */
 const withResponseHeaders = <T extends Error>(error: T, responseHeaders: Headers): T =>
