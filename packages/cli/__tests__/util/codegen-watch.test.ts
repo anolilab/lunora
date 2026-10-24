@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
+import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startCodegenWatch } from "../../src/util/codegen-watch";
@@ -14,6 +15,14 @@ vi.mock("@lunora/codegen", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@lunora/codegen")>();
 
     return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>() };
+});
+
+// Whether an event is the echo of a studio handler's write is `@lunora/config`'s
+// to decide and test; here a test only says which answer it gets.
+vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, consumeStudioWrite: vi.fn<typeof actual.consumeStudioWrite>() };
 });
 
 const silentLogger = (): { errors: string[]; logger: Logger; warns: string[] } => {
@@ -55,6 +64,11 @@ describe("startCodegenWatch", () => {
 
         vi.mocked(runCodegen).mockReset();
         vi.mocked(runCodegen).mockImplementation(actual.runCodegen);
+
+        const studioHost = await vi.importActual<typeof import("@lunora/config/studio-host")>("@lunora/config/studio-host");
+
+        vi.mocked(consumeStudioWrite).mockReset();
+        vi.mocked(consumeStudioWrite).mockImplementation(studioHost.consumeStudioWrite);
     });
 
     afterEach(() => {
@@ -503,6 +517,49 @@ describe("startCodegenWatch", () => {
                 });
 
                 expect(calls).toHaveLength(1);
+            } finally {
+                await handle.close();
+                rmSync(workdir, { force: true, recursive: true });
+            }
+        });
+
+        it("runs only the hook for a studio write, whose handler already ran codegen", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // `lunora dev` serves Studio from this process, and its schema and
+            // policy handlers run codegen in the request that writes the file.
+            // Their write is a temporary file renamed over the source, which raises
+            // an event for the temporary file and (on macOS) two for the source.
+            const workdir = projectWithPostCodegen();
+            const schemaPath = join(workdir, "schema.ts");
+            const hookRuns = runCounter();
+            const spawner = (): Promise<{ code: number }> => {
+                hookRuns.report();
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            vi.mocked(consumeStudioWrite).mockImplementation((path) => path === schemaPath);
+
+            const handle = startCodegenWatch({ debounceMs: 50, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+            try {
+                await handle.ready;
+
+                // Past HOOK_SETTLE_MS, or the watcher would treat this write as the startup hook's own.
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 350);
+                });
+
+                writeFileSync(`${schemaPath}.lunora-tmp`, "// studio edit", "utf8");
+                renameSync(`${schemaPath}.lunora-tmp`, schemaPath);
+
+                await hookRuns.reached(2);
+
+                // Startup only: the studio write ran the hook without codegen.
+                expect(runCodegen).toHaveBeenCalledTimes(1);
             } finally {
                 await handle.close();
                 rmSync(workdir, { force: true, recursive: true });

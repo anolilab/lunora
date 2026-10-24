@@ -17,6 +17,13 @@ const WINDOW_MS = 5000;
 
 const pending = new Map<string, { expiresAt: number; text: string }>();
 
+/**
+ * Suffix of the temporary file a studio handler writes and renames over its
+ * target. A watcher that sees every file has to ignore it: its events are part
+ * of the handler's write, not a change of their own.
+ */
+export const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
+
 /** Record a write the studio handler has just made to `path`. */
 export const recordStudioWrite = (path: string, text: string, now: number = Date.now()): void => {
     for (const [key, write] of pending) {

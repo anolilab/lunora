@@ -3148,6 +3148,12 @@ const STUDIO_SCRIPT_PATH: string;
 const STUDIO_STYLE_PATH: string;
 ```
 
+### `STUDIO_WRITE_TEMP_SUFFIX` (const)
+
+```ts
+const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
+```
+
 ### `SchemaEditRequest` (interface)
 
 ```ts

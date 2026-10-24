@@ -14,6 +14,10 @@
  * retrigger itself (see {@link HOOK_SETTLE_MS}) and it can outlive `close()`
  * (see {@link CodegenWatcherHandle.close}).
  *
+ * `lunora dev` serves Studio from this same process, and a Studio schema or
+ * policy edit runs codegen in its own request. The watcher's event for that
+ * write therefore runs only the hook, not codegen again.
+ *
  * The Vite and framework-worker flavors don't reach here — their ongoing
  * regeneration is owned by `@lunora/vite`'s codegen plugin, which runs the same
  * hook from its own `buildStart` and watcher, with the same self-retrigger
@@ -39,6 +43,7 @@ import {
 } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
 import type { Project } from "ts-morph";
 import { ts } from "ts-morph";
 
@@ -263,7 +268,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     let closed = false;
     let running = false;
     let hookRunning = false;
-    let pending: string | undefined;
+    // `codegen: false` is a burst made only of studio writes, whose handler already
+    // ran codegen. A run queued behind it for anything else needs codegen again.
+    let pending: undefined | { codegen: boolean; reason: string };
     let settledAt = 0;
     let idle: Promise<void> = Promise.resolve();
     const project = createReusableProject(options.projectRoot, watchDirectory);
@@ -278,12 +285,12 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         resolveReady = resolve;
     });
 
-    const enqueue = (reason: string): void => {
+    const enqueue = (reason: string, codegen: boolean): void => {
         if (closed) {
             return;
         }
 
-        pending = reason;
+        pending = { codegen: codegen || pending?.codegen === true, reason };
 
         if (running) {
             return;
@@ -303,7 +310,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
                     // not write is the one way to make a bad state worse.
-                    if (!runOnce(options, lunoraDirectory, next, project)) {
+                    if (next.codegen && !runOnce(options, lunoraDirectory, next.reason, project)) {
                         continue;
                     }
 
@@ -360,7 +367,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         })();
     };
 
-    enqueue("startup");
+    enqueue("startup", true);
 
     const unavailable = (cause: string): CodegenWatcherHandle => {
         options.logger.warn(`codegen watch unavailable (${cause}) — schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`);
@@ -388,7 +395,15 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         return unavailable(`no such directory: ${watchDirectory}`);
     }
 
-    const onEvent = (filename: string | null): void => {
+    // Files under `lunora/` changed in the current debounce burst, classified
+    // once it fires. Classifying each event would treat the second event one
+    // write raises (macOS reports a rename twice) as a developer save.
+    const burst = new Set<string>();
+    // Set by a change that cannot be a studio write: an unnamed event, or one
+    // under an RPC service folder.
+    let burstNeedsCodegen = false;
+
+    const onEvent = (path: string | undefined, label: string): void => {
         // Skip anything a `postcodegen` run wrote, so a hook that touches a
         // watched file doesn't retrigger it: while it runs, and for a settle
         // window after it exits. See HOOK_SETTLE_MS.
@@ -401,7 +416,16 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 timer = undefined;
             }
 
+            burst.clear();
+            burstNeedsCodegen = false;
+
             return;
+        }
+
+        if (path === undefined) {
+            burstNeedsCodegen = true;
+        } else {
+            burst.add(path);
         }
 
         if (timer) {
@@ -409,7 +433,14 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         }
 
         timer = setTimeout(() => {
-            enqueue(`change: ${filename ?? "?"}`);
+            // A studio handler ran codegen from its own write before the event
+            // arrived, so a burst of nothing but those needs only the hook.
+            const echoes = [...burst].map((changed) => consumeStudioWrite(changed));
+            const codegen = burstNeedsCodegen || echoes.includes(false);
+
+            burst.clear();
+            burstNeedsCodegen = false;
+            enqueue(`change: ${label}`, codegen);
         }, debounceMs);
     };
 
@@ -418,19 +449,26 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     try {
         watcher = watch(watchDirectory, { recursive: true }, (_event, filename) => {
-            // Skip writes to the generated output so regeneration doesn't retrigger itself.
-            if (typeof filename === "string" && filename.split(PATH_SEGMENT_SEPARATOR).includes("_generated")) {
+            if (typeof filename !== "string") {
+                onEvent(undefined, "?");
+
                 return;
             }
 
-            onEvent(filename);
+            // Skip writes to the generated output so regeneration doesn't retrigger itself, and the
+            // temporary file a studio write renames into place: the rename raises its own event.
+            if (filename.split(PATH_SEGMENT_SEPARATOR).includes("_generated") || filename.endsWith(STUDIO_WRITE_TEMP_SUFFIX)) {
+                return;
+            }
+
+            onEvent(join(watchDirectory, filename), filename);
         });
 
         for (const service of readServiceBindings(options.projectRoot).services) {
             if (service.rpcEntrypoint !== undefined) {
                 const serviceWatcher = watch(dirname(service.wranglerPath), { recursive: true }, (_event, filename) => {
                     if (typeof filename === "string" && SERVICE_SOURCE_RE.test(filename) && !filename.split(PATH_SEGMENT_SEPARATOR).includes("node_modules")) {
-                        onEvent(filename);
+                        onEvent(undefined, filename);
                     }
                 });
 
