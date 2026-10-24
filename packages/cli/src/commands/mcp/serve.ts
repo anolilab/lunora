@@ -274,30 +274,63 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}${awaitingDocument}\n`,
     );
 
-    // The editor keeps its tool list until it hears otherwise, so announce each rewrite of the document.
-    // A watch that cannot start or fails later costs only those announcements: each call still reads the file.
+    // The editor keeps its tool list until it hears otherwise, so announce each change to the document,
+    // including its arrival on a fresh checkout. The watch sits on the nearest directory that exists, and
+    // moves down to `_generated` once codegen creates it. A watch that cannot start or fails costs only
+    // those announcements: each call still reads the file.
+    const generatedDirectory = dirname(specPath);
     const watchFailed = (error: unknown): void => {
-        writeError(`lunora mcp serve --functions: the tool list will not be announced on a rewrite — ${String(error)}\n`);
+        writeError(`lunora mcp serve --functions: the tool list will not be announced on a change — ${String(error)}\n`);
     };
-    let watcher: FSWatcher | undefined;
+    const watchTarget = (): string => {
+        if (existsSync(generatedDirectory)) {
+            return generatedDirectory;
+        }
 
-    try {
-        watcher = watch(dirname(specPath), (_event, fileName) => {
-            if (fileName === "openrpc.json") {
-                server.sendToolListChanged?.().catch((error: unknown) => {
-                    writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
-                });
-            }
-        });
-        watcher.on("error", watchFailed);
-    } catch (error: unknown) {
-        watchFailed(error);
-    }
+        const lunoraDirectory = dirname(generatedDirectory);
+
+        return existsSync(lunoraDirectory) ? lunoraDirectory : options.cwd;
+    };
+    let documentPresent = existsSync(specPath);
+    let watched: { directory: string; watcher: FSWatcher } | undefined;
+    const watchChanges = (): void => {
+        const directory = watchTarget();
+
+        if (watched?.directory === directory) {
+            return;
+        }
+
+        watched?.watcher.close();
+        watched = undefined;
+
+        try {
+            const watcher = watch(directory, (_event, fileName) => {
+                const present = existsSync(specPath);
+                const changed = fileName === "openrpc.json" || present !== documentPresent;
+
+                documentPresent = present;
+                watchChanges();
+
+                if (changed) {
+                    server.sendToolListChanged?.().catch((error: unknown) => {
+                        writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
+                    });
+                }
+            });
+
+            watcher.on("error", watchFailed);
+            watched = { directory, watcher };
+        } catch (error: unknown) {
+            watchFailed(error);
+        }
+    };
+
+    watchChanges();
 
     try {
         await waitForClose(server);
     } finally {
-        watcher?.close();
+        watched?.watcher.close();
 
         // Closing the server releases its cached client, which may hold a stream's socket open.
         try {
