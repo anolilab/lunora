@@ -179,14 +179,36 @@ describe(projectCelldConfig, () => {
         ]);
     });
 
+    it("gives a placeholder D1 database with no name an id of its own, per worker and binding", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({
+            d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }],
+            name: "app",
+        });
+
+        expect(config["d1_databases"]).toStrictEqual([{ binding: "DB", database_id: "app-DB" }]);
+    });
+
+    it("keeps KV bindings that differ only by case apart", () => {
+        expect.assertions(1);
+
+        const { config } = projectCelldConfig({ kv_namespaces: [{ binding: "CACHE" }, { binding: "cache" }], name: "app" });
+
+        expect(config["kv_namespaces"]).toStrictEqual([
+            { binding: "CACHE", id: "app-CACHE" },
+            { binding: "cache", id: "app-cache" },
+        ]);
+    });
+
     it("gives each id-less KV namespace its own id, keeping the ids it already has", () => {
         expect.assertions(1);
 
         const { config } = projectCelldConfig({ kv_namespaces: [{ binding: "KV" }, { binding: "CACHE" }, { binding: "OWN", id: "sessions" }], name: "app" });
 
         expect(config["kv_namespaces"]).toStrictEqual([
-            { binding: "KV", id: "app-kv" },
-            { binding: "CACHE", id: "app-cache" },
+            { binding: "KV", id: "app-KV" },
+            { binding: "CACHE", id: "app-CACHE" },
             { binding: "OWN", id: "sessions" },
         ]);
     });

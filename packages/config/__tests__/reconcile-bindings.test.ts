@@ -950,7 +950,7 @@ describe("reconcileWranglerBindings", () => {
 
         expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
         expect(readConfig().hyperdrive).toBeUndefined();
-        expect(result.added).toContain("KV (Workers KV, created on deploy)");
+        expect(result.added).toContain("KV (Workers KV, celld namespace lunora-app-KV)");
     });
 
     it.each([

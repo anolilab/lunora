@@ -22,6 +22,7 @@ import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } f
 import { containerBuildTag } from "@lunora/container";
 import { readJsonSync } from "@visulima/fs";
 
+import celldBindingId from "../celld/celld-binding-id";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
@@ -412,7 +413,10 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
         return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
     }
 
-    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
+    // celld creates nothing on deploy: the label names the id its projection derives.
+    const label = target === "celld" ? `KV (Workers KV, celld namespace ${celldBindingId(parsed.name, "KV")})` : "KV (Workers KV, created on deploy)";
+
+    return { added: [label], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**

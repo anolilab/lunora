@@ -33,6 +33,7 @@ import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import ensureGitignoreEntries from "../ensure-gitignore";
+import celldBindingId from "./celld-binding-id";
 
 /** The projected config's filename. */
 const CELLD_CONFIG_FILE = ".celld.wrangler.json";
@@ -191,16 +192,23 @@ const projectWorkflowExports = (exports: unknown): { bindings: Config[]; rest: C
 
 /**
  * Give each D1 database still carrying reconcile's Cloudflare placeholder its
- * name as the id. celld takes any id as the fleet-wide identity, so every
- * project left with the placeholder would otherwise share one database.
+ * name as the id, or `<worker>-<binding>` when it has none. celld takes any id
+ * as the fleet-wide identity, so every project left with the placeholder would
+ * otherwise share one database.
  */
-const projectD1Databases = (databases: unknown): unknown =>
+const projectD1Databases = (databases: unknown, workerName: unknown): unknown =>
     Array.isArray(databases)
-        ? databases.map((database: unknown) =>
-              isRecord(database) && database["database_id"] === D1_PLACEHOLDER_ID && typeof database["database_name"] === "string"
-                  ? { ...database, database_id: database["database_name"] }
-                  : database,
-          )
+        ? databases.map((database: unknown) => {
+              if (!isRecord(database) || database["database_id"] !== D1_PLACEHOLDER_ID) {
+                  return database;
+              }
+
+              if (typeof database["database_name"] === "string") {
+                  return { ...database, database_id: database["database_name"] };
+              }
+
+              return typeof database["binding"] === "string" ? { ...database, database_id: celldBindingId(workerName, database["binding"]) } : database;
+          })
         : databases;
 
 /**
@@ -208,17 +216,14 @@ const projectD1Databases = (databases: unknown): unknown =>
  * create on Cloudflare) an id celld can use: `<worker>-<binding>`, so two
  * namespaces of one Worker stay apart.
  */
-const projectKvNamespaces = (namespaces: unknown, workerName: unknown): unknown => {
-    const worker = typeof workerName === "string" && workerName.length > 0 ? workerName : "lunora";
-
-    return Array.isArray(namespaces)
+const projectKvNamespaces = (namespaces: unknown, workerName: unknown): unknown =>
+    Array.isArray(namespaces)
         ? namespaces.map((namespace: unknown) =>
               isRecord(namespace) && namespace["id"] === undefined && typeof namespace["binding"] === "string"
-                  ? { ...namespace, id: `${worker}-${namespace["binding"].toLowerCase()}` }
+                  ? { ...namespace, id: celldBindingId(workerName, namespace["binding"]) }
                   : namespace,
           )
         : namespaces;
-};
 
 /**
  * Project a parsed wrangler config onto what celld accepts.
@@ -249,7 +254,7 @@ const projectCelldConfig = (config: Config): { config: Config; dropped: string[]
                 break;
             }
             case "d1_databases": {
-                projected[key] = projectD1Databases(value);
+                projected[key] = projectD1Databases(value, config["name"]);
 
                 break;
             }
