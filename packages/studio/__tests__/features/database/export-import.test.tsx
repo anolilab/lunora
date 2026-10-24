@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ExportImportPanel } from "../../../src/features/database/export-import";
-import type { ExportRow } from "../../../src/lib/admin";
+import type { ColumnMeta, ExportRow } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -13,14 +13,35 @@ const EXPORT_ROWS: ExportRow[] = [
     { doc: { __id__: "m2", text: "world" }, table: "messages" },
 ];
 
-/** A server whose shard holds `rowsByTable`; `exportShard` answers one table per call, as the panel asks for it. */
-const createClient = (rowsByTable?: Record<string, ExportRow[]>): MockClientHooks =>
+/** Every `messages` column is text, which is what a CSV cell is when the table declares nothing else. */
+const TEXT_COLUMNS: ColumnMeta[] = [
+    { name: "id", optional: false, type: "string" },
+    { name: "text", optional: false, type: "string" },
+];
+
+/** The typed columns the coercion tests import into: one per kind a CSV cell is coerced to. */
+const TYPED_COLUMNS: ColumnMeta[] = [
+    { name: "id", optional: false, type: "string" },
+    { name: "count", optional: false, type: "number" },
+    { name: "active", optional: false, type: "boolean" },
+    { name: "amount", optional: false, type: "bigint" },
+];
+
+/**
+ * A server whose shard holds `rowsByTable`, with `columns` as the `messages` table's columns; `exportShard` answers one table per call, as
+ * the panel asks for it.
+ */
+const createClient = (rowsByTable?: Record<string, ExportRow[]>, columns: ColumnMeta[] = TEXT_COLUMNS): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
                 return Object.entries(rowsByTable ?? { messages: EXPORT_ROWS }).map(([name, rows]) => {
                     return { name, rowCount: rows.length };
                 });
+            }
+
+            if (reference === ADMIN_FUNCTIONS.describeTable) {
+                return { columns };
             }
 
             if (reference === ADMIN_FUNCTIONS.exportShard) {
@@ -30,9 +51,10 @@ const createClient = (rowsByTable?: Record<string, ExportRow[]>): MockClientHook
             }
 
             if (reference === ADMIN_FUNCTIONS.importShard) {
-                const { rows } = args as { rows: ExportRow[] };
+                const { dryRun, rows } = args as ImportArgs;
 
-                return { conflicts: 0, errors: [], inserted: { messages: rows.length } };
+                // A check writes nothing, so it reports nothing inserted.
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -53,6 +75,69 @@ const importText = (text: string): void => {
     fireEvent.click(screen.getByTestId("ei-import"));
     fireEvent.click(screen.getByTestId("ei-import-confirm"));
 };
+
+/**
+ * Choose a base-ui select item. The item commits a mouse selection only after a pointer-down on it, so a bare click is ignored.
+ */
+const pickOption = (option: HTMLElement): void => {
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+};
+
+/** Pick `text` as a CSV file, choose `table` in the target-table picker, then confirm the import. */
+const importCsv = async (text: string, table: string): Promise<void> => {
+    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([text], "rows.csv", { type: "text/csv" })] } });
+    fireEvent.click(await screen.findByTestId("ei-csv-table"));
+    pickOption(await screen.findByRole("option", { name: table }));
+    fireEvent.click(screen.getByTestId("ei-import"));
+    fireEvent.click(screen.getByTestId("ei-import-confirm"));
+};
+
+/** The rows and first line of each `importShard` call, in order. */
+type ImportArgs = { dryRun?: boolean; rows: ExportRow[]; startLine: number };
+
+/** The `importShard` calls that wrote rows: the panel sends `dryRun: false` on each, so a check can never be counted as a write. */
+const importCalls = (mock: MockClientHooks): ImportArgs[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard)
+        .map((call) => call[1] as ImportArgs)
+        .filter((args) => args.dryRun === false);
+
+/** The `importShard` calls that only checked their rows, in the order the panel sent them. */
+const dryChecks = (mock: MockClientHooks): ImportArgs[] =>
+    callsTo(mock, ADMIN_FUNCTIONS.importShard)
+        .map((call) => call[1] as ImportArgs)
+        .filter((args) => args.dryRun === true);
+
+/**
+ * A server that answers `importShard` for a 1200-row file. A check (`dryRun: true`) refuses the row on `badLine` when a chunk holds it, and
+ * a write inserts every row it is sent.
+ */
+const createCheckingClient = (badLine?: number): MockClientHooks =>
+    createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: 0 }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.importShard) {
+                const { dryRun, rows, startLine } = args as ImportArgs;
+                const refused = badLine !== undefined && badLine >= startLine && badLine < startLine + rows.length;
+
+                if (dryRun === true && refused) {
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION_ERROR", line: badLine, message: "text must be a string", table: "messages" }],
+                        inserted: {},
+                    };
+                }
+
+                // A check writes nothing, so it reports nothing inserted.
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+    });
 
 /** Click Download and capture the Blob handed to `URL.createObjectURL`. */
 const downloadBlob = (): { blobs: Blob[] } => {
@@ -151,9 +236,7 @@ describe("exportImportPanel", () => {
         const importResult = await screen.findByTestId("ei-import-result");
 
         expect(importResult.textContent).toContain("Inserted 1200");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { rows: unknown[]; startLine: number }).startLine)).toStrictEqual([
-            1, 501, 1001,
-        ]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
     });
 
     it("cuts a chunk early when its rows would exceed the byte ceiling, so wide rows stay under the body limit", async () => {
@@ -171,7 +254,7 @@ describe("exportImportPanel", () => {
         const importResult = await screen.findByTestId("ei-import-result");
 
         expect(importResult.textContent).toContain("Inserted 4");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 3]);
     });
 
     it("refuses a row whose wire encoding is too wide, even when its NDJSON line is short", async () => {
@@ -203,7 +286,7 @@ describe("exportImportPanel", () => {
 
         await screen.findByTestId("ei-import-result");
 
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard).map((call) => (call[1] as { startLine: number }).startLine)).toStrictEqual([1, 3]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 3]);
     });
 
     it("refuses a single row too wide for any request before writing a chunk", async () => {
@@ -246,8 +329,12 @@ describe("exportImportPanel", () => {
         let imports = 0;
 
         const mock = createMockClient({
-            query: (reference): unknown => {
+            query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.importShard) {
+                    if ((args as { dryRun?: boolean }).dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
                     imports += 1;
 
                     if (imports === 2) {
@@ -272,7 +359,7 @@ describe("exportImportPanel", () => {
 
         expect(error.textContent).toContain("Import stopped after 500 rows: connection reset");
         expect(importResult.textContent).toContain("Inserted 500");
-        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(2);
+        expect(importCalls(mock)).toHaveLength(2);
     });
 
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
@@ -293,6 +380,11 @@ describe("exportImportPanel", () => {
 
                 if (reference === ADMIN_FUNCTIONS.exportShard) {
                     return { rows: [{ doc: { __id__: "l1", amount: 42n, blob }, table: "ledger" }] };
+                }
+
+                // The check the panel sends first is not a write, so it is not part of the round trip.
+                if ((args as { dryRun?: boolean }).dryRun === true) {
+                    return { conflicts: 0, errors: [], inserted: {} };
                 }
 
                 imported.push(...(args as { rows: ExportRow[] }).rows);
@@ -319,5 +411,280 @@ describe("exportImportPanel", () => {
 
         expect((row?.doc as Record<string, unknown>)["amount"]).toBe(42n);
         expect(new Uint8Array((row?.doc as Record<string, unknown>)["blob"] as ArrayBuffer)).toStrictEqual(new Uint8Array([1, 2, 3, 4]));
+    });
+
+    it("imports a CSV file into the picked table, keying each row by the header and omitting empty cells", async () => {
+        expect.assertions(1);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv('id,text\nm3,"again, twice"\nm4,\n', "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows).toStrictEqual([
+            { doc: { id: "m3", text: "again, twice" }, table: "messages" },
+            { doc: { id: "m4" }, table: "messages" },
+        ]);
+    });
+
+    it("keeps import disabled for a CSV file until a target table is picked", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File(["id\n1\n"], "rows.csv", { type: "text/csv" })] } });
+
+        await screen.findByTestId("ei-csv-table");
+
+        expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(true);
+
+        fireEvent.click(await screen.findByTestId("ei-csv-table"));
+        pickOption(await screen.findByRole("option", { name: "messages" }));
+
+        expect(screen.getByTestId("ei-import").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("writes nothing when any CSV record is malformed, and names the record", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        // The header is record 1, so index 1000 is record 1001.
+        const lines = ["id,text", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},hello`)];
+
+        lines[1000] = "m999";
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: line 1001: expected 2 cells, found 1.");
+    });
+
+    it("numbers a large CSV import by record, the header being record 1, across chunks", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        const lines = ["id,text", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},hello`)];
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("Inserted 1200");
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([2, 502, 1002]);
+    });
+
+    it("rejects a CSV whose header repeats a name before writing, naming the header", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text,id\n1,a,2\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: The header “id” appears more than once.");
+    });
+
+    it("refuses a header-only CSV without calling the server", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text\r\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("The CSV has no data rows after the header.");
+    });
+
+    it("shows a server row error against its record number", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTable) {
+                    return { columns: TEXT_COLUMNS };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION", line: 3, message: "text must be a string", table: "messages" }],
+                        inserted: {},
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await importCsv("id,text\n1,a\n2,b\n", "messages");
+
+        const errors = await screen.findByTestId("ei-import-errors");
+
+        expect(errors.textContent).toBe("line 3 (messages): text must be a string");
+    });
+
+    it("coerces a number column to a number, so the writer receives a value it accepts", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,count\nm1,42\nm2,1.5e2\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["count"])).toStrictEqual([42, 150]);
+    });
+
+    it("coerces a boolean column to true or false, in any case", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,active\nm1,TRUE\nm2,false\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["active"])).toStrictEqual([true, false]);
+    });
+
+    it("coerces a bigint column to a bigint, exact past 2^53", async () => {
+        expect.assertions(1);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,amount\nm1,9007199254740993\nm2,-12\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(importCalls(mock)[0]?.rows.map((row) => row.doc["amount"])).toStrictEqual([9_007_199_254_740_993n, -12n]);
+    });
+
+    it("writes nothing when one cell does not fit its column type, and names the record and column", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+        // The header is record 1, so index 1000 is record 1001.
+        const lines = ["id,count", ...Array.from({ length: 1200 }, (_, index) => `m${index.toString()},${index.toString()}`)];
+
+        lines[1000] = "m999,x";
+
+        render(renderPanel(mock));
+
+        await importCsv(lines.join("\n"), "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe("Invalid CSV: line 1001: column “count” must be a number, got “x”.");
+    });
+
+    it("sends a column named __proto__ to the server as a field of its own, beside the others", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, [
+            { name: "kind", optional: false, type: "string" },
+            { name: "__proto__", optional: false, type: "string" },
+        ]);
+
+        render(renderPanel(mock));
+
+        await importCsv("kind,__proto__\na,surprise\n", "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        const [row] = importCalls(mock)[0]?.rows ?? [];
+
+        expect(Object.keys(row?.doc ?? {})).toStrictEqual(["kind", "__proto__"]);
+        expect(Object.getOwnPropertyDescriptor(row?.doc, "__proto__")?.value).toBe("surprise");
+    });
+
+    it("checks every chunk before writing, and writes nothing when a row in the last chunk would be refused", async () => {
+        expect.assertions(4);
+
+        const mock = createCheckingClient(1101);
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const errors = await screen.findByTestId("ei-import-errors");
+        const error = await screen.findByTestId("ei-error");
+
+        expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
+        expect(importCalls(mock)).toHaveLength(0);
+        expect(errors.textContent).toBe("line 1101 (messages): text must be a string");
+        expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
+    });
+
+    it("stops at the first check that reports a write, since the server ignored the dry-run flag", async () => {
+        expect.assertions(3);
+
+        // A server that predates dry runs answers a check like a real import: it inserts the rows and says so.
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    return { conflicts: 0, errors: [], inserted: { messages: (args as ImportArgs).rows.length } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toBe("This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent.");
+        expect(dryChecks(mock)).toHaveLength(1);
+        expect(importCalls(mock)).toHaveLength(0);
+    });
+
+    it("checks every chunk in order, then writes the same chunks", async () => {
+        expect.assertions(2);
+
+        const mock = createCheckingClient();
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
     });
 });

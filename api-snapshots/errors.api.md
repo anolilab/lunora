@@ -724,6 +724,10 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Live topic publish forbidden";
     };
+    readonly GLOBAL_DRY_RUN_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Global table dry run not supported";
+    };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global table import not configured";

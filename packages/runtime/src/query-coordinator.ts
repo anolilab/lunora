@@ -552,6 +552,8 @@ interface ImportFanOutRequest {
      * starting-line-number for error attribution is carried in `startLine`.
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
+    dryRun?: boolean;
     headers?: Record<string, string>;
 }
 
@@ -1925,7 +1927,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                     namespace,
                     batch.shardKey,
                     prepareShardRpc({
-                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                        args: { dryRun: request.dryRun === true, rows: [...batch.rows], startLine: batch.startLine ?? 1 },
                         functionPath: "__lunora_admin__:importShard",
                         headers: request.headers,
                     }),

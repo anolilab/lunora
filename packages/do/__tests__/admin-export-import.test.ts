@@ -378,6 +378,13 @@ class ExportShardImpl extends ShardDO {
     }
 }
 
+class RejectingImportShard extends ExportShardImpl {
+    // eslint-disable-next-line class-methods-use-this -- override stub; simulates a storage failure mid-import
+    protected override async runShardImport(): Promise<never> {
+        throw new Error("storage unavailable");
+    }
+}
+
 describe("shardDO admin export/import dispatch", () => {
     let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
@@ -443,6 +450,17 @@ describe("shardDO admin export/import dispatch", () => {
 
         expect(body.result.inserted).toEqual({ users: 1 });
         expect(body.result.errors).toEqual([]);
+    });
+
+    it("answers a rejected importShard with the structured error envelope", async () => {
+        expect.assertions(2);
+
+        const shard = new RejectingImportShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importShard, { rows: [] }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toHaveProperty("error.code", "RPC_FAILED");
     });
 
     it("rejects without an admin token", async () => {

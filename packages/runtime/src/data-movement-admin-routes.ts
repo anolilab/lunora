@@ -108,6 +108,7 @@ interface DataMovementAdminRouteDeps {
     streamingImport: (
         request: Request,
         headers: Record<string, string>,
+        dryRun: boolean,
     ) => Promise<{
         conflicts: number;
         errors: ReadonlyArray<ImportRowError>;
@@ -378,7 +379,10 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await streamingImport(request, forwardedHeaders);
+        // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
+        const dryRun = new URL(request.url).searchParams.get("dryRun") === "true";
+
+        const result = await streamingImport(request, forwardedHeaders, dryRun);
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
