@@ -96,6 +96,19 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(schema, { counts: { ids: 3 } })).toThrow(/by_big_flag/u);
     });
 
+    it("counts a parent id once however often existingIds lists it", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            users: defineTable({ name: v.string() }),
+            links: defineTable({ kind: v.number().min(1).max(1), userId: v.id("users") }).index("by_user_kind", ["userId", "kind"], { unique: true }),
+        });
+        const options = { existingIds: { users: ["u-1", "u-1", "u-2"] }, only: ["links"] };
+
+        expect(new Set(rowsOf(seedPlan(schema, { ...options, counts: { links: 2 } }), "links").map((row) => row.userId)).size).toBe(2);
+        expect(() => seedPlan(schema, { ...options, counts: { links: 3 } })).toThrow(/by_user_kind/u);
+    });
+
     it("spreads a through table over several parents when one parent table alone covers the batch", () => {
         expect.hasAssertions();
 

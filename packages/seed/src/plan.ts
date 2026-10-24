@@ -157,7 +157,9 @@ const fkPoolFor = (
     const existing = existingIds[fkTable] ?? [];
 
     if (fkTable !== table) {
-        const pool = [...(idsByTable.get(fkTable) ?? []), ...existing];
+        // Deduplicated, first seen first: a pool's size is the number of distinct parents a unique deal can spend, and a
+        // same-seed rerun regenerates ids that `existingIds` already lists.
+        const pool = [...new Set([...(idsByTable.get(fkTable) ?? []), ...existing])];
 
         return () => pool;
     }
