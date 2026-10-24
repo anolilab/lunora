@@ -35,10 +35,19 @@ interface EditableFilter {
     /**
      * Dot-separated field names nested under `column`, as typed (`city`,
      * `geo.city`). Absent or empty addresses the column itself. {@link toFilterClauses}
-     * splits it into the wire `path`; a dot is never part of a field name, so the join
-     * and split round-trip exactly.
+     * splits it into the wire `path`, dropping empty segments.
      */
     path?: string;
+
+    /**
+     * The exact wire `path` this row carries when it was hydrated or suggested
+     * rather than typed. The server accepts a field name that itself holds a dot
+     * (`["a.b"]`), which the dotted {@link EditableFilter.path} text cannot tell
+     * from two segments, so splitting that text back would address a different
+     * field. Cleared when the operator edits the path box, since the text is then
+     * the source of truth.
+     */
+    pathSegments?: string[];
     value: string;
 }
 
@@ -77,11 +86,15 @@ const coerceFilterValue = (value: string): number | string => {
  * JSON boolean element is only found by a boolean, so `true` and `false` become
  * booleans here; any other text takes the same coercion as every operator. `eq`
  * and `ne` never reach this: `true` there stays text, as it always has.
+ *
+ * A value in double quotes is the text between them, never coerced: the match is
+ * typed, so `10` finds the number and `"10"` finds the string (`"true"` the text).
  */
 const coerceHasValue = (value: string): boolean | number | string => {
     const trimmed = value.trim();
+    const quoted = trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : undefined;
 
-    return trimmed === "true" || trimmed === "false" ? trimmed === "true" : coerceFilterValue(value);
+    return quoted ?? (trimmed === "true" || trimmed === "false" ? trimmed === "true" : coerceFilterValue(value));
 };
 
 /** The wire value of a typed row: `has` has its own boolean-aware coercion, every other operator the numeric one. */
@@ -97,8 +110,23 @@ const isVacuous = (filter: EditableFilter): boolean => {
     return filter.operator !== "eq" && filter.operator !== "ne" && filter.literal === undefined && filter.value.trim() === "";
 };
 
-/** The wire `path` for a typed nested path: its segments, or `undefined` when the box is blank. */
-const wirePath = (path: string | undefined): string[] | undefined => (path === undefined || path.trim() === "" ? undefined : path.trim().split("."));
+/**
+ * The wire `path` for a row: the segments it carries verbatim, else its typed text
+ * split on dots, or `undefined` when nothing names a field. Empty segments (`geo.`
+ * while typing, `a..b`) are dropped, because the server refuses one outright.
+ */
+const wirePath = (filter: EditableFilter): string[] | undefined => {
+    if (filter.pathSegments !== undefined) {
+        return filter.pathSegments;
+    }
+
+    const segments = (filter.path ?? "")
+        .split(".")
+        .map((segment) => segment.trim())
+        .filter((segment) => segment !== "");
+
+    return segments.length === 0 ? undefined : segments;
+};
 
 /**
  * Convert the UI's string-valued filter rows into wire {@link FilterClause}s:
@@ -126,7 +154,7 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
     filters
         .filter((filter) => filter.column !== "" && !isVacuous(filter))
         .map((filter) => {
-            const path = wirePath(filter.path);
+            const path = wirePath(filter);
             const pathField = path === undefined ? {} : { path };
 
             if (filter.operator === "contains") {
@@ -142,13 +170,13 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
         });
 
 /**
- * Apply an edit to a filter row, dropping any pinned literal: the operator has
- * touched the row, so its text is the source of truth again. Rebuilt field by
- * field rather than spread-and-delete, so a field added to `EditableFilter`
+ * Apply a column or value edit to a filter row, dropping any pinned literal: the
+ * operator has touched the row, so its text is the source of truth again. Rebuilt
+ * field by field rather than spread-and-delete, so a field added to `EditableFilter`
  * later has to be considered here rather than silently surviving an edit.
  */
 const typedFilter = (filter: EditableFilter, patch: Partial<EditableFilter>): EditableFilter => {
-    return { column: filter.column, operator: filter.operator, path: filter.path, value: filter.value, ...patch };
+    return { column: filter.column, operator: filter.operator, path: filter.path, pathSegments: filter.pathSegments, value: filter.value, ...patch };
 };
 
 /**
@@ -250,7 +278,9 @@ const DataFilters = ({
         const index = Number(event.currentTarget.dataset.index);
         const next = event.currentTarget.value;
 
-        onFiltersChange(filters.map((filter, position) => (position === index ? typedFilter(filter, { path: next }) : filter)));
+        // Only the path was edited: the value box was not touched, so a pinned literal
+        // (a facet click on the text "123") must survive rather than be re-coerced.
+        onFiltersChange(filters.map((filter, position) => (position === index ? { ...filter, path: next, pathSegments: undefined } : filter)));
     };
 
     const changeValue = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -339,7 +369,7 @@ const DataFilters = ({
                         data-index={index}
                         data-testid="db-filter-value"
                         onChange={changeValue}
-                        placeholder="value"
+                        placeholder={filter.operator === "has" ? t('value ("10" in quotes matches text)') : "value"}
                         value={filter.value}
                     />
                     <button aria-label="Remove filter" data-index={index} data-testid="db-filter-remove" onClick={removeFilter} type="button">

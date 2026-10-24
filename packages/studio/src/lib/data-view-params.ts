@@ -84,8 +84,11 @@ const isFilterClause = (entry: unknown): entry is FilterClause => {
     const candidate = entry as { column?: unknown; operator?: unknown; path?: unknown };
 
     // A clause whose path is malformed is dropped whole: keeping it with the path
-    // stripped would test the parent field under the operator the URL asked for.
-    const pathIsValid = candidate.path === undefined || (Array.isArray(candidate.path) && candidate.path.every((segment) => typeof segment === "string"));
+    // stripped would test the parent field under the operator the URL asked for. An
+    // empty segment is malformed too — the server refuses it, and hydration would
+    // erase a lone one into "no path".
+    const pathIsValid =
+        candidate.path === undefined || (Array.isArray(candidate.path) && candidate.path.every((segment) => typeof segment === "string" && segment !== ""));
 
     return (
         typeof candidate.column === "string" &&

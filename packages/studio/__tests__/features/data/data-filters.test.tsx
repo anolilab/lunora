@@ -144,6 +144,50 @@ describe("toFilterClauses — nested paths and array membership", () => {
     });
 });
 
+describe("toFilterClauses — path segments and typed has values", () => {
+    it("drops empty segments of a typed path, and omits the path when none is left", () => {
+        expect.assertions(1);
+
+        expect(
+            toFilterClauses([
+                { column: "address", operator: "eq", path: "geo.", value: "Berlin" },
+                { column: "address", operator: "eq", path: "a..b", value: "Berlin" },
+                { column: "address", operator: "eq", path: ".", value: "Berlin" },
+            ]),
+        ).toStrictEqual([
+            { column: "address", operator: "eq", path: ["geo"], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["a", "b"], value: "Berlin" },
+            { column: "address", operator: "eq", value: "Berlin" },
+        ]);
+    });
+
+    it("sends a row's carried segments verbatim, so a dotted field name is not split", () => {
+        expect.assertions(1);
+
+        expect(toFilterClauses([{ column: "address", operator: "eq", path: "a.b", pathSegments: ["a.b"], value: "x" }])).toStrictEqual([
+            { column: "address", operator: "eq", path: ["a.b"], value: "x" },
+        ]);
+    });
+
+    it("sends a double-quoted has value as text and an unquoted one by its type", () => {
+        expect.assertions(1);
+
+        expect(
+            toFilterClauses([
+                { column: "tags", operator: "has", value: '"10"' },
+                { column: "tags", operator: "has", value: '"true"' },
+                { column: "tags", operator: "has", value: "10" },
+                { column: "tags", operator: "has", value: '"' },
+            ]),
+        ).toStrictEqual([
+            { column: "tags", operator: "has", value: "10" },
+            { column: "tags", operator: "has", value: "true" },
+            { column: "tags", operator: "has", value: 10 },
+            { column: "tags", operator: "has", value: '"' },
+        ]);
+    });
+});
+
 describe("toFilterClauses — typed booleans", () => {
     it("sends has true and has false as JSON booleans, so they match a boolean element", () => {
         expect.assertions(1);
@@ -193,6 +237,44 @@ describe("dataFilters — nested path and has", () => {
         fireEvent.change(within(row).getByTestId("db-filter-operator"), { target: { value: "has" } });
 
         expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "has", path: "", value: "Berlin" }]);
+    });
+
+    it("keeps a pinned literal when only the path is edited, and drops the carried segments", () => {
+        expect.assertions(2);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+        const pinned: EditableFilter = { column: "address", literal: ["123"], operator: "eq", path: "a.b", pathSegments: ["a.b"], value: "123" };
+
+        render(<DataFilters columns={COLUMNS} filters={[pinned]} onFiltersChange={onFiltersChange} onSearchChange={noop()} search="" />);
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-path"), { target: { value: "a.c" } });
+
+        const [edited] = onFiltersChange.mock.lastCall?.[0] as EditableFilter[];
+
+        expect(edited).toMatchObject({ literal: ["123"], path: "a.c" });
+        expect(toFilterClauses([edited as EditableFilter])).toStrictEqual([{ column: "address", operator: "eq", path: ["a", "c"], value: "123" }]);
+    });
+
+    it("keeps a row's carried segments when the value is edited", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+
+        render(
+            <DataFilters
+                columns={COLUMNS}
+                filters={[{ column: "address", operator: "eq", path: "a.b", pathSegments: ["a.b"], value: "x" }]}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={noop()}
+                search=""
+            />,
+        );
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-value"), { target: { value: "y" } });
+
+        expect(toFilterClauses(onFiltersChange.mock.lastCall?.[0] as EditableFilter[])).toStrictEqual([
+            { column: "address", operator: "eq", path: ["a.b"], value: "y" },
+        ]);
     });
 
     it("keeps a row's path when the value is edited", () => {

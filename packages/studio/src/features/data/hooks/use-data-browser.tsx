@@ -60,6 +60,7 @@ const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter
         return {
             column: clause.column,
             path: (clause.path ?? []).join("."),
+            ...(clause.path === undefined || clause.path.length === 0 ? {} : { pathSegments: clause.path }),
             ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
             operator: clause.operator,
             value: clause.value === undefined ? "" : facetValueText(clause.value),

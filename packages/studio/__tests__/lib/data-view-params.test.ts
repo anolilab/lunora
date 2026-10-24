@@ -114,6 +114,8 @@ describe("dataViewParams", () => {
         const filters = JSON.stringify([
             { column: "address", operator: "eq", path: "city", value: "Berlin" },
             { column: "address", operator: "eq", path: ["city", 2], value: "Berlin" },
+            { column: "address", operator: "eq", path: [""], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
             { column: "status", operator: "eq", value: "active" },
         ]);
 
