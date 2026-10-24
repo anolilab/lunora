@@ -880,6 +880,30 @@ const trimLeadingToolRows = (rows: ReadonlyArray<AgentMessageRow>): AgentMessage
 };
 
 /**
+ * Read the newest {@link DEFAULT_HISTORY_LIMIT} rows, widening while the window holds
+ * only tool results. One assistant turn can emit more results than the window holds,
+ * which would leave every row an orphan; its assistant row is then further back, and
+ * dropping the window would send the model neither the results nor the conversation.
+ * @experimental
+ */
+const readHistoryWindow = async (read: (limit: number) => Promise<ReadonlyArray<AgentMessageRow>>): Promise<AgentMessageRow[]> => {
+    let limit = DEFAULT_HISTORY_LIMIT;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- each widening depends on the previous window's contents
+        const rows = await read(limit);
+        const trimmed = trimLeadingToolRows(rows);
+
+        // A short window is the whole thread, so there is nothing further back to find.
+        if (trimmed.length > 0 || rows.length < limit) {
+            return trimmed;
+        }
+
+        limit *= 2;
+    }
+};
+
+/**
  * Decide the compaction split for a turn: when `compaction` is configured and the
  * history exceeds `maxMessages`, return the `older` messages to summarize and the
  * `recent` tail to keep verbatim (the most recent `keepRecent`, default
@@ -1078,7 +1102,7 @@ const generateTurn = async (turnContext: TurnContext, turn: number, steps: Reado
                 ? await compactIncrementally(turnContext)
                 : await compactHistory(
                       turnContext,
-                      trimLeadingToolRows((await run(listMessages, { key: threadKey, limit: DEFAULT_HISTORY_LIMIT })) as AgentMessageRow[]),
+                      await readHistoryWindow(async (limit) => (await run(listMessages, { key: threadKey, limit })) as AgentMessageRow[]),
                   );
 
         let prepared: PreparedTurn = {
@@ -1921,4 +1945,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction, trimLeadingToolRows };
+export { addUsage, approvalTimeoutMs, compactHistory, readHistoryWindow, runAgentLoop, splitForCompaction, trimLeadingToolRows };
