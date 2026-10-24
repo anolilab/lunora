@@ -1,3 +1,22 @@
+## @lunora/studio [1.0.0-alpha.338](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.337...@lunora/studio@1.0.0-alpha.338) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.254
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/react:** upgraded to 1.0.0-alpha.259
+* **@lunora/mail:** upgraded to 1.0.0-alpha.121
+* **@lunora/notify:** upgraded to 1.0.0-alpha.94
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
 ## @lunora/studio [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.336...@lunora/studio@1.0.0-alpha.337) (2026-10-23)
 
 ### Features
