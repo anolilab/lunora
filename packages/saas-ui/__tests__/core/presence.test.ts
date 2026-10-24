@@ -30,6 +30,20 @@ describe("presenceRoster", () => {
         expect(presenceRoster([member({ sessionId: "a" }), member({ sessionId: "b" })], undefined).total).toBe(2);
     });
 
+    it("keeps an anonymous tab apart from a signed-in user whose id it borrows as its session id", () => {
+        const roster = presenceRoster(
+            [
+                member({ data: { name: "Ada" }, lastSeen: NOW - 5000, sessionId: "tab-1", userId: "u1" }),
+                member({ data: { name: "Not Ada" }, lastSeen: NOW, sessionId: "u1" }),
+            ],
+            "u1",
+        );
+
+        expect(roster.total).toBe(2);
+        expect(roster.entries.find((entry) => entry.isSelf)?.name).toBe("Ada");
+        expect(new Set(roster.entries.map((entry) => entry.key)).size).toBe(2);
+    });
+
     it("puts the viewer first, then the most recently active", () => {
         const roster = presenceRoster(
             [

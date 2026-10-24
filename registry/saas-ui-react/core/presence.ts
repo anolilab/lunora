@@ -23,10 +23,10 @@ interface PresenceMemberLike {
 interface RosterEntry {
     /** `true` for the viewer's own entry, so a view can label it "you". */
     isSelf: boolean;
-    /** Stable key — the user id when known, else the session id. */
+    /** Unique, stable key for list rendering — namespaced, so a user id and a session id that read the same stay two entries. */
     key: string;
     lastSeen: number;
-    /** Display name from the awareness blob, falling back to the key. */
+    /** Display name from the awareness blob, falling back to the user id, else the session id. */
     name: string;
 }
 
@@ -65,15 +65,18 @@ const presenceRoster = (members: ReadonlyArray<PresenceMemberLike>, currentUserI
     for (const member of members) {
         // An anonymous viewer is keyed by tab: there is nothing else to collapse
         // them by, and merging two strangers into one entry is worse than
-        // showing two.
-        const key = member.userId ?? member.sessionId;
+        // showing two. The two id spaces are namespaced because `sessionId` is
+        // client-chosen: an anonymous tab that picks a signed-in user's id as its
+        // session id must not fold into (and rename) that user's entry.
+        const label = member.userId ?? member.sessionId;
+        const key = member.userId === undefined ? `session:${member.sessionId}` : `user:${member.userId}`;
         const name = explicitName(member);
         let entry = byPerson.get(key);
 
         if (entry) {
             entry.lastSeen = Math.max(entry.lastSeen, member.lastSeen);
         } else {
-            entry = { isSelf: member.userId !== undefined && member.userId === currentUserId, key, lastSeen: member.lastSeen, name: key };
+            entry = { isSelf: member.userId !== undefined && member.userId === currentUserId, key, lastSeen: member.lastSeen, name: label };
             byPerson.set(key, entry);
         }
 

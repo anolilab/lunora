@@ -125,6 +125,41 @@ describe("deriveOverviewStats", () => {
         ]);
     });
 
+    describe("when the feed page is full", () => {
+        const full = (createdAt: (index: number) => number) =>
+            Array.from({ length: 50 }, (_, index) => activity({ action: "project.created", actorId: "u1", createdAt: createdAt(index) }));
+        const notes = (rows: ReturnType<typeof full>) =>
+            Object.fromEntries(deriveOverviewStats({ activity: rows, projects: [] }, NOW).map((tile) => [tile.id, tile.note]));
+
+        it("marks a window the page never leaves as a lower bound", () => {
+            expect(notes(full((index) => NOW - index * 60_000))).toStrictEqual({
+                activity: "at least — last 24 hours, latest 50 events counted",
+                actors: "at least — last 7 days, latest 50 events counted",
+                archived: undefined,
+                projects: undefined,
+            });
+        });
+
+        it("leaves a window the page reaches back past exact", () => {
+            // The oldest of the 50 is 3 days old: the 24 hour window is fully inside the page, the 7 day one is not.
+            expect(notes(full((index) => NOW - index * (DAY / 16)))).toMatchObject({
+                activity: "last 24 hours",
+                actors: "at least — last 7 days, latest 50 events counted",
+            });
+        });
+    });
+
+    it("does not flag a short feed, however recent", () => {
+        const rows = [activity({ action: "project.created", actorId: "u1", createdAt: NOW })];
+
+        expect(deriveOverviewStats({ activity: rows, projects: [] }, NOW).map((tile) => tile.note)).toStrictEqual([
+            undefined,
+            undefined,
+            "last 24 hours",
+            "last 7 days",
+        ]);
+    });
+
     it("recognises a brand-new tenant instead of showing it four zeroes", () => {
         expect(isFirstRun({ activity: [], projects: [] })).toBe(true);
         expect(isFirstRun({ activity: [], projects: [project({ name: "Alpha" })] })).toBe(false);

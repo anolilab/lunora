@@ -21,6 +21,16 @@ interface StatTile {
 const DAY = 86_400_000;
 
 /**
+ * Rows `api.saas.overview` returns of the activity feed — restated from the
+ * `saas` item's `SAAS_ACTIVITY_PAGE`, as `types.ts` restates the row shapes: this
+ * package cannot import the item. The two windows below are counted over those
+ * rows only, so past this many events the counts stop being exact.
+ */
+const ACTIVITY_PAGE = 50;
+
+const atLeastNote = (window: string): string => `at least — last ${window}, latest ${ACTIVITY_PAGE.toString()} events counted`;
+
+/**
  * Four tiles: active projects, archived, activity in the last 24h, and the
  * number of distinct people who did something this week. The last one is the
  * only tile that says anything about the *team*, which is why it earns a place
@@ -36,6 +46,11 @@ const deriveOverviewStats = (payload: OverviewPayload, now: number): ReadonlyArr
     let today = 0;
     const weekActors = new Set<string>();
 
+    // The feed is newest-first and capped, so a window the page never leaves is
+    // cut short: its tile is a lower bound, not a count.
+    const oldest = payload.activity.at(-1)?.createdAt;
+    const truncatedWithin = (cutoff: number): boolean => payload.activity.length >= ACTIVITY_PAGE && oldest !== undefined && oldest > cutoff;
+
     for (const row of payload.activity) {
         if (row.createdAt > dayCutoff) {
             today += 1;
@@ -49,8 +64,8 @@ const deriveOverviewStats = (payload: OverviewPayload, now: number): ReadonlyArr
     return [
         { id: "projects", label: "Active projects", value: counts.active },
         { id: "archived", label: "Archived", value: counts.archived },
-        { id: "activity", label: "Events today", note: "last 24 hours", value: today },
-        { id: "actors", label: "People active", note: "last 7 days", value: weekActors.size },
+        { id: "activity", label: "Events today", note: truncatedWithin(dayCutoff) ? atLeastNote("24 hours") : "last 24 hours", value: today },
+        { id: "actors", label: "People active", note: truncatedWithin(weekCutoff) ? atLeastNote("7 days") : "last 7 days", value: weekActors.size },
     ];
 };
 
