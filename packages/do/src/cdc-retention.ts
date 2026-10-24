@@ -56,9 +56,10 @@ const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
  * A malformed value reads as the default rather than as a tighter window — the
  * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
  *
- * The default is withheld when only `LUNORA_CDC_PAYLOAD_RETENTION` is set: that
- * operator asked for compaction, and a row window they never configured would
- * delete changelog rows the payload setting is meant to keep.
+ * The default is withheld when `LUNORA_CDC_LOG_RETENTION` is unset and only
+ * `LUNORA_CDC_PAYLOAD_RETENTION` is set: that operator asked for compaction, and a
+ * row window they never configured would delete changelog rows the payload setting
+ * is meant to keep. A malformed row window is not "unset" and still gets the default.
  * @returns the row count to keep, or `undefined` when row retention is switched off
  */
 const resolveCdcLogRetention = (environment: unknown): number | undefined => {
@@ -74,7 +75,10 @@ const resolveCdcLogRetention = (environment: unknown): number | undefined => {
         return configured;
     }
 
-    return envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION") === undefined ? DEFAULT_CDC_LOG_RETENTION_ROWS : undefined;
+    // A present-but-malformed row window is a typo, not an absence: only a genuinely unset knob defers to payload-only compaction.
+    const unset = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+
+    return unset && envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION") !== undefined ? undefined : DEFAULT_CDC_LOG_RETENTION_ROWS;
 };
 
 /**
