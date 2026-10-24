@@ -239,6 +239,27 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
     return values;
 };
 
+/** Kinds whose cells the studio's CSV import reads from text, so a column reporting them has to say so even when written as a union. */
+const COERCED_SCALAR_KINDS: ReadonlySet<string> = new Set(["bigint", "boolean", "date", "number", "timestamp"]);
+
+/**
+ * The scalar member of `v.union(<scalar>, v.null())` (or `v.literal(null)`), or `undefined` for any other validator. That union accepts
+ * exactly what `<scalar>.nullable()` does, which is reported as the scalar's own kind plus `nullable`; left as `"union"` the importer cannot
+ * tell it holds numbers and every cell stays text for the server to refuse. A wider union keeps `"union"`: its members are not all one type.
+ */
+const nullableScalarMember = (validator: ValidatorIR): ValidatorIR | undefined => {
+    const [first, second] = validator.kind === "union" ? (validator.members ?? []) : [];
+
+    if (first === undefined || second === undefined || validator.members?.length !== 2) {
+        return undefined;
+    }
+
+    const isNull = (member: ValidatorIR): boolean => member.kind === "null" || (member.kind === "literal" && member.literalValue === "null");
+    const scalar = isNull(second) ? first : second;
+
+    return isNull(first) !== isNull(second) && COERCED_SCALAR_KINDS.has(scalar.kind) ? scalar : undefined;
+};
+
 /**
  * Column map per table for the studio's schema diagram: `{ table: [{ name, type,
  * optional, pk?, ref?, isStorage? }] }`. Mirrors {@link buildTableReferences} /
@@ -255,7 +276,9 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
  * per-field decisions read on their own rather than nested two loops deep.
  */
 const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: ReadonlyMap<string, KeyedRelationIR["onDelete"]>): EmittedColumn => {
-    const resolved = unwrapOptional(validator);
+    const unwrapped = unwrapOptional(validator);
+    const nullableScalar = nullableScalarMember(unwrapped);
+    const resolved = nullableScalar ?? unwrapped;
     const column: EmittedColumn = { name: field, optional: isOptionalOnInsert(validator), type: resolved.kind };
 
     if (resolved.kind === "id" && resolved.tableName !== undefined) {
@@ -287,7 +310,7 @@ const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: Rea
 
     // `.nullable()` flips `notNull` off. Absent column metadata means the field
     // carries no modifiers at all, which is not-null.
-    if (resolved.column?.notNull === false) {
+    if (resolved.column?.notNull === false || nullableScalar !== undefined) {
         column.nullable = true;
     }
 
