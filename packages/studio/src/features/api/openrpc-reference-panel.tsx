@@ -7,7 +7,7 @@ import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
 import { useT } from "../../i18n/i18n-context";
 import type { OpenRpcDocument } from "./openapi/openrpc-model";
-import parseOpenRpc, { rpcMethodsOf } from "./openapi/openrpc-model";
+import { parseOpenRpc, rpcMethodsOf } from "./openapi/openrpc-model";
 import ReferenceView from "./openapi/reference-view";
 
 interface OpenRpcReferencePanelProps {

@@ -95,6 +95,5 @@ const parseOpenRpc = (raw: unknown): ApiModel => {
     };
 };
 
-export default parseOpenRpc;
-export { rpcMethodsOf };
+export { parseOpenRpc, rpcMethodsOf };
 export type { OpenRpcDocument };
