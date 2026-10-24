@@ -11,6 +11,7 @@
  * editor spawns this process when the project opens — routinely before
  * `lunora dev` is running — and keeps it alive across every restart afterwards.
  */
+import type { FSWatcher } from "node:fs";
 import { existsSync, readFileSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -61,6 +62,8 @@ interface McpServeResult {
  * test drive the blocking path with a stub.
  */
 interface ClosableServer {
+    /** Closes the server and releases what it holds, such as a cached client's socket. */
+    close?: () => Promise<void>;
     onclose?: () => void;
     /** Tells the connected client its tool list changed. Only a function server has one to change. */
     sendToolListChanged?: () => Promise<void>;
@@ -227,6 +230,9 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         loaded = readSpec();
         server = await connect({
             allowWrites: options.allowWrites === true,
+            onReloadError: (error: unknown) => {
+                writeError(`lunora mcp serve --functions: kept the last tool list — the rewritten document did not load: ${String(error)}\n`);
+            },
             openRpcSpec: specNow,
             url: deploymentUrl,
             version: options.version,
@@ -249,18 +255,36 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     );
 
     // The editor keeps its tool list until it hears otherwise, so announce each rewrite of the document.
-    const watcher = watch(dirname(specPath), (_event, fileName) => {
-        if (fileName === "openrpc.json") {
-            server.sendToolListChanged?.().catch((error: unknown) => {
-                writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
-            });
-        }
-    });
+    // A watch that cannot start or fails later costs only those announcements: each call still reads the file.
+    const watchFailed = (error: unknown): void => {
+        writeError(`lunora mcp serve --functions: the tool list will not be announced on a rewrite — ${String(error)}\n`);
+    };
+    let watcher: FSWatcher | undefined;
+
+    try {
+        watcher = watch(dirname(specPath), (_event, fileName) => {
+            if (fileName === "openrpc.json") {
+                server.sendToolListChanged?.().catch((error: unknown) => {
+                    writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
+                });
+            }
+        });
+        watcher.on("error", watchFailed);
+    } catch (error: unknown) {
+        watchFailed(error);
+    }
 
     try {
         await waitForClose(server);
     } finally {
-        watcher.close();
+        watcher?.close();
+
+        // Closing the server releases its cached client, which may hold a stream's socket open.
+        try {
+            await server.close?.();
+        } catch (error: unknown) {
+            writeError(`lunora mcp serve --functions: could not close the server — ${String(error)}\n`);
+        }
     }
 
     return { code: 0, deployment: undefined };
