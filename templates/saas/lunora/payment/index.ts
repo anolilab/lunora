@@ -106,6 +106,9 @@ const appOrigin = (): string => {
     return new URL(value).origin;
 };
 
+/** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
+const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
+
 /**
  * Who the subscription belongs to.
  *
@@ -119,7 +122,10 @@ const appOrigin = (): string => {
  * is also why `lunora/server.ts` relaxes `.payment()`'s default authorizer,
  * which would only admit a reference equal to the caller's user id.
  */
-const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string } | null> } }): Promise<string> => {
+const billingReference = async (
+    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; orgRole?: string } | null> } },
+    { adminOnly = false }: { adminOnly?: boolean } = {},
+): Promise<string> => {
     const identity = await ctx.auth.getIdentity();
 
     if (!identity) {
@@ -130,6 +136,12 @@ const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ acti
 
     if (!identity.activeOrganizationId) {
         throw new LunoraError("UNPROCESSABLE", "billing is per-organization — create or switch to one first");
+    }
+
+    // better-auth joins several roles with commas (`"admin,owner"`), so test
+    // membership rather than equality.
+    if (adminOnly && !(identity.orgRole?.split(",").some((role) => BILLING_ADMIN_ROLES.has(role.trim())) ?? false)) {
+        throw new LunoraError("FORBIDDEN", "only an organization admin or owner can change billing");
     }
 
     return identity.activeOrganizationId;
@@ -150,10 +162,11 @@ const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) 
 
 /**
  * Start a checkout session and hand the client the redirect URL. The reference
- * is the caller's active organisation — see {@link billingReference}.
+ * is the caller's active organisation — see {@link billingReference}. Admins and
+ * owners only: a subscription bills the whole organisation.
  */
 export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
-    const referenceId = await billingReference(ctx);
+    const referenceId = await billingReference(ctx, { adminOnly: true });
 
     if (!PURCHASABLE_PRICE_IDS.has(priceId)) {
         throw new LunoraError("UNPROCESSABLE", "unknown price — pick a plan from the catalog in lunora/plans.ts");
@@ -198,9 +211,10 @@ export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; 
 /**
  * Open the billing portal for the caller's organisation (customer derived from
  * the payment store). The portal sends the customer back to the billing page.
+ * Admins and owners only: it can change the plan, the payment method or cancel.
  */
 export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
-    const referenceId = await billingReference(ctx);
+    const referenceId = await billingReference(ctx, { adminOnly: true });
 
     return ctx.payments.createPortalSession(referenceId, billingPage());
 });
