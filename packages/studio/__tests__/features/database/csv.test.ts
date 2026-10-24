@@ -238,6 +238,13 @@ describe("coerceCsvDocuments", () => {
         expect(coerced("day", "2026-10-23T08:30")).toBe(Date.UTC(2026, 9, 23, 8, 30));
     });
 
+    it("reads whole-number epoch milliseconds into a date or timestamp column, with surrounding spaces", () => {
+        expect.assertions(2);
+
+        expect(coerced("stamp", "1761206400000")).toBe(1_761_206_400_000);
+        expect(coerced("stamp", " -12345678901234 ")).toBe(-12_345_678_901_234);
+    });
+
     it("rejects a date cell that is neither ISO-8601 nor epoch milliseconds, including a date that does not exist", () => {
         expect.assertions(4);
 
@@ -250,6 +257,28 @@ describe("coerceCsvDocuments", () => {
                 value: text,
             });
         }
+    });
+
+    it("rejects bare numbers in a date column that are not epoch milliseconds: a serial date, a compact date, a year, epoch seconds, a fraction", () => {
+        expect.assertions(6);
+
+        for (const text of ["45352", "20260301", "2026", "1761206400", "1.5", "-3e2"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,day\nm1,${text}\n`), kinds))).toStrictEqual({
+                column: "day",
+                expected: "date",
+                kind: "cell-type",
+                record: 2,
+                value: text,
+            });
+        }
+    });
+
+    it("trims the spaces after a comma from boolean and bigint cells, as it does for number and date cells", () => {
+        expect.assertions(1);
+
+        const [document] = coerceCsvDocuments(parseCsvDocuments("amount, active\n 42, true\n"), kinds);
+
+        expect(document?.doc).toStrictEqual({ active: true, amount: 42n });
     });
 
     it("reads a boolean column as true or false, in any case", () => {
@@ -308,10 +337,10 @@ describe("coerceCsvDocuments", () => {
         });
     });
 
-    it("rejects a bigint cell that is not an integer, including decimals, exponents, hex and padding", () => {
-        expect.assertions(5);
+    it("rejects a bigint cell that is not an integer, including decimals, exponents, hex and a plus sign", () => {
+        expect.assertions(4);
 
-        for (const text of ["1.5", "1e3", "0x1F", " 4", "+4"]) {
+        for (const text of ["1.5", "1e3", "0x1F", "+4"]) {
             expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,amount\nm1,${text}\n`), kinds))).toMatchObject({
                 column: "amount",
                 expected: "bigint",

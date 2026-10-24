@@ -220,6 +220,13 @@ const INTEGER_TEXT = /^-?\d+$/u;
  */
 const DECIMAL_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 
+/**
+ * Epoch milliseconds as a date cell may hold them: whole digits, at least 11 of them (a date from late April 1970 on). A shorter run is
+ * ambiguous with a spreadsheet serial date (`45352`), a compact `YYYYMMDD`, a year, or epoch seconds, and would be stored as a moment in
+ * January 1970 with no error.
+ */
+const EPOCH_MILLIS_TEXT = /^-?\d{11,}$/u;
+
 /** `YYYY-MM-DD`. */
 const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
@@ -291,17 +298,19 @@ const parseIsoDate = (text: string): number | undefined => {
 };
 
 /**
- * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes epoch milliseconds or an ISO-8601
- * date. Both are trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take the integer text and
- * keep it exact. Any other kind stays text, and the server validator decides what it accepts.
+ * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes whole-number epoch milliseconds or an
+ * ISO-8601 date. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
+ * the integer text and keep it exact. Any other kind stays text, and the server validator decides what it accepts.
  */
 const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     if (kind === "bigint") {
-        return INTEGER_TEXT.test(text) ? { kind: "ok", value: BigInt(text) } : { expected: "bigint", kind: "rejected" };
+        const trimmed = text.trim();
+
+        return INTEGER_TEXT.test(trimmed) ? { kind: "ok", value: BigInt(trimmed) } : { expected: "bigint", kind: "rejected" };
     }
 
     if (kind === "boolean") {
-        const lower = text.toLowerCase();
+        const lower = text.trim().toLowerCase();
 
         if (lower === "true" || lower === "false") {
             return { kind: "ok", value: lower === "true" };
@@ -317,7 +326,8 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     }
 
     if (kind === "date" || kind === "timestamp") {
-        const millis = parseIsoDate(text.trim()) ?? parseDecimal(text);
+        const trimmed = text.trim();
+        const millis = parseIsoDate(trimmed) ?? (EPOCH_MILLIS_TEXT.test(trimmed) ? Number(trimmed) : undefined);
 
         return millis === undefined ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
     }
