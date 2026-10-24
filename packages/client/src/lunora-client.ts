@@ -221,7 +221,6 @@ import {
     errorEnvelopeOf,
     reconstructError,
     reconstructErrorWithRetryAfter,
-    responseHeadersRecord,
     withResponseHeaders,
 } from "./wire-errors";
 
@@ -4775,9 +4774,10 @@ class LunoraClient {
         try {
             body = await response.json();
         } catch {
-            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`, {
-                headers: responseHeadersRecord(response.headers),
-            });
+            throw withResponseHeaders(
+                new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`),
+                response.headers,
+            );
         }
 
         const envelope = errorEnvelopeOf(body);
@@ -4793,9 +4793,10 @@ class LunoraClient {
                 throw withResponseHeaders(reconstructError(envelope), response.headers);
             }
 
-            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`, {
-                headers: responseHeadersRecord(response.headers),
-            });
+            throw withResponseHeaders(
+                new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`),
+                response.headers,
+            );
         }
 
         // Each entry is dispatched as an independent single call server-side, so
