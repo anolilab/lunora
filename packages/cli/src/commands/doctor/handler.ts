@@ -401,8 +401,9 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
 };
 
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
-const checkD1Placeholders = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
-    if (parsed === undefined) {
+const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    // celld's projection replaces the placeholder with a name-derived id, so it never reaches a deploy there.
+    if (parsed === undefined || (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld") {
         return;
     }
 
@@ -928,7 +929,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     checkWrangler(cwd, parsed, path, findings);
     checkCloudflareCliConfig(cwd, findings);
-    checkD1Placeholders(parsed, findings);
+    checkD1Placeholders(cwd, parsed, findings);
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);
     checkR2Lifecycle(parsed, findings);

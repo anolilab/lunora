@@ -981,6 +981,20 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("d1 placeholder on a celld project", () => {
+        // celld's projection gives the placeholder a name-derived id, so a deploy never sees it.
+        it("does not fail a celld project for the placeholder reconcile used to write", async () => {
+            expect.assertions(1);
+
+            seed(workdir, PLACEHOLDER_WRANGLER);
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+    });
+
     describe("celld toolchain", () => {
         // `lunora dev` and a dry-run deploy never touch the fleet bucket, so a
         // dev-only celld project must not fail doctor for lacking one.
