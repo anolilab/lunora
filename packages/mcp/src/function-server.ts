@@ -322,12 +322,6 @@ const callFunctionTool = async (
     }
 };
 
-/**
- * The client for the deployment the server should call now. It is built when a call
- * first sees a URL, and rebuilt when the URL moves. The bearer is set on both the HTTP
- * client and the WebSocket one, because a stream authenticates through the latter.
- * `release` closes the cached client, which ends any stream socket it opened.
- */
 /** One deployment client, with the calls that are still using it. */
 interface ClientEntry {
     calls: number;
@@ -341,6 +335,12 @@ interface ClientLease {
     done: () => void;
 }
 
+/**
+ * The client for the deployment the server should call now. It is built when a call
+ * first sees a URL, and rebuilt when the URL moves. The bearer is set on both the HTTP
+ * client and the WebSocket one, because a stream authenticates through the latter.
+ * `release` closes every cached client, which ends any stream socket they opened.
+ */
 const clientFor = (options: FunctionMcpServerOptions): { acquire: () => ClientLease | undefined; release: () => void } => {
     let current: ClientEntry | undefined;
     // Clients replaced or dropped while calls still use them. Each closes once its last call ends.
@@ -358,11 +358,15 @@ const clientFor = (options: FunctionMcpServerOptions): { acquire: () => ClientLe
     };
 
     // The server is closing: every client closes now, whatever calls are still on it.
-    const release = (): void => {
+    const retireCurrent = (): void => {
         if (current !== undefined) {
             retire(current);
             current = undefined;
         }
+    };
+
+    const release = (): void => {
+        retireCurrent();
 
         for (const entry of retiring) {
             retiring.delete(entry);
@@ -375,18 +379,13 @@ const clientFor = (options: FunctionMcpServerOptions): { acquire: () => ClientLe
 
         // A URL that returns later gets a fresh client, even when it is the same string.
         if (url === undefined || url.length === 0) {
-            if (current !== undefined) {
-                retire(current);
-                current = undefined;
-            }
+            retireCurrent();
 
             return undefined;
         }
 
         if (current?.url !== url) {
-            if (current !== undefined) {
-                retire(current);
-            }
+            retireCurrent();
 
             const client = new LunoraClient({ fetch: options.fetch, url, WebSocket: options.WebSocket });
 
