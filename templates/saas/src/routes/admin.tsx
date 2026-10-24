@@ -1,3 +1,4 @@
+import type { SubscriptionError } from "@lunora/react";
 import { useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
@@ -21,8 +22,23 @@ export const Route = createFileRoute("/admin")({
  * project each one (`lunora/auth/index.ts`).
  */
 function AdminPage() {
-    const rows = useQuery(api.saas.listOrganizations, {});
+    // A query the server refuses never resolves, so `rows` would stay `undefined`
+    // and the list would load forever. The refusal arrives here instead.
+    const [failure, setFailure] = useState<SubscriptionError>();
+    const rows = useQuery(api.saas.listOrganizations, {}, { onError: setFailure });
     const [now] = useState(() => Date.now());
+
+    if (failure) {
+        return (
+            <main className="lu-saas-card" style={{ margin: "3rem auto", maxWidth: "44rem" }}>
+                <p role="alert">
+                    {failure.code === "FORBIDDEN" || failure.code === "UNAUTHORIZED"
+                        ? "This page is for platform admins."
+                        : "Could not load organizations — try again."}
+                </p>
+            </main>
+        );
+    }
 
     return (
         <main style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }}>
