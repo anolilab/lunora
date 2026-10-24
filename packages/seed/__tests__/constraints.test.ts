@@ -1,8 +1,9 @@
 import { defineSchema, defineTable } from "@lunora/server";
 import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { copycat } from "../src/copycat";
 import { generateValue } from "../src/generate-value";
 import { seedPlan } from "../src/plan";
 import { planUniqueDeal } from "../src/unique-value";
@@ -67,6 +68,26 @@ describe("generateValue — validator constraints the generator must honour", ()
         }
 
         expect([...lengths].toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
+    });
+
+    it("treats an infinite array maximum as no maximum", () => {
+        expect.hasAssertions();
+
+        const validator = v.array(v.string()).max(Number.POSITIVE_INFINITY);
+        // Stubbed because forwarding an infinite count to the real generator never returns.
+        const times = vi.spyOn(copycat, "times").mockReturnValue([]);
+
+        try {
+            generateValue(validator, "tags", "input", NOW);
+
+            expect(times.mock.calls[0]![1]).toStrictEqual([1, 3]);
+        } finally {
+            times.mockRestore();
+        }
+
+        for (let index = 0; index < 50; index += 1) {
+            expect(accepts(validator, generateValue(validator, "tags", ["inf", index], NOW))).toBe(true);
+        }
     });
 
     it("refuses array limits no whole length satisfies", () => {

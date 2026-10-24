@@ -439,7 +439,8 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
 
             // A length is a whole number, so a fractional limit admits only the integers inside it.
             const fewest = constraints.minItems === undefined ? undefined : Math.max(0, Math.ceil(constraints.minItems));
-            const most = constraints.maxItems === undefined ? undefined : Math.floor(constraints.maxItems);
+            // An infinite maximum is a limit the array never reaches, the same as none.
+            const most = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? undefined : Math.floor(constraints.maxItems);
             const lowest = fewest ?? Math.max(0, Math.min(1, most ?? 1));
             const highest = most ?? Math.max(3, lowest);
 
