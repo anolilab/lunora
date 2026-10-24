@@ -91,13 +91,12 @@ describe("ctx-db.deleteAll", () => {
         await expect(writer.deleteAll("messages")).resolves.toStrictEqual({ deleted: 0 });
     });
 
-    it("actually erases a .global() table instead of no-op'ing through a pinned id", async () => {
+    it("actually erases a .global() table instead of no-op'ing", async () => {
         expect.assertions(3);
 
-        // A `.global()` row lives in D1, so the by-id delete only reaches it through
-        // `globalFallback()` — which is skipped when a table is pinned (the by-id IDOR
-        // guard). Pinning here made every delete a silent no-op: an inflated count,
-        // surviving rows, and an infinite loop once the table held >= chunkSize rows.
+        // A `.global()` row lives in D1, so a delete that never reaches the D1 writer
+        // is a silent no-op: an inflated count, surviving rows, and an infinite loop
+        // once the table held >= chunkSize rows.
         const rows = new Map<string, Record<string, unknown>>([
             ["p1", { _id: "p1", userId: "u1" }],
             ["p2", { _id: "p2", userId: "u2" }],
