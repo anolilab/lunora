@@ -53,11 +53,16 @@ const inclusiveAbove = (exclusive: number, maximum: number | undefined, integer:
         return above;
     }
 
-    const halfway = maximum === undefined ? above : (exclusive + maximum) / 2;
+    // A maximum at or below the bound keeps the overshoot, so resolveRange refuses it.
+    if (maximum === undefined || above <= maximum || maximum <= exclusive) {
+        return above;
+    }
 
-    // A float interval narrower than the epsilon still has values: its midpoint is strictly
-    // inside it. A maximum at or below the bound keeps the overshoot, so resolveRange refuses it.
-    return maximum !== undefined && above > maximum && halfway > exclusive ? halfway : above;
+    // A float interval narrower than the step still has values: its midpoint is strictly inside it,
+    // and where the midpoint rounds back onto the bound the (inclusive) maximum is the value left.
+    const halfway = (exclusive + maximum) / 2;
+
+    return halfway > exclusive ? halfway : maximum;
 };
 
 /**

@@ -95,6 +95,19 @@ describe("generateValue — validator constraints the generator must honour", ()
         expect(() => generateValue(v.array(v.string()).min(1.2).max(1.8), "tags", "input", NOW)).toThrow(/no whole array length/u);
     });
 
+    it("keeps the maximum when a relative step past an exclusive minimum overshoots it", () => {
+        expect.hasAssertions();
+
+        const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum: 1e15, maximum: 1e15 + 0.125 } } } as unknown as Validator;
+
+        for (let index = 0; index < 5; index += 1) {
+            const value = generateValue(validator, "amount", ["tight", index], NOW) as number;
+
+            expect(value).toBeGreaterThan(1e15);
+            expect(value).toBeLessThanOrEqual(1e15 + 0.125);
+        }
+    });
+
     it("seeds 1 for an integer column with exclusive minimum 0.5 and maximum 1", () => {
         expect.hasAssertions();
 
