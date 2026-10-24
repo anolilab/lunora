@@ -544,6 +544,9 @@ describe("createWorker — aiChat admin RPC", () => {
 
         expect(body["partial"]).toBe(true);
         expect(body["toolCalls"] as unknown[]).toHaveLength(MAX_TOOL_CALLS);
+        // The last round asked for yet another tool and wrote nothing else, so
+        // stripping its fence leaves no prose — the turn must still say something.
+        expect(body["reply"]).toContain("limit on tool calls");
     });
 
     it("applies the CHARACTER budget too, not just the turn count", async () => {

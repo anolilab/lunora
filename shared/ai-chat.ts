@@ -496,6 +496,10 @@ const TOOL_FENCE = "```tool";
 /** Closing fence. */
 const CODE_FENCE = "```";
 
+/** What a turn says when its last allowed round asked for yet another tool and wrote no prose of its own. */
+const TOOL_LIMIT_REPLY =
+    "I reached the limit on tool calls for one turn before I could finish an answer. The tool calls recorded with this turn show what I looked at.";
+
 /**
  * The first tool request in a reply, or `undefined`.
  *
@@ -906,7 +910,18 @@ const generateChat = async (
         // is stripped for the same reason the approval arm strips one — the fence
         // is machinery, and this arm is the other place a reply is RETURNED.
         if (request === undefined || round === MAX_TOOL_CALLS) {
-            return { degraded: false, partial: request !== undefined, reply: request === undefined ? reply : withoutToolBlock(reply), toolCalls, truncated };
+            const answer = request === undefined ? reply : withoutToolBlock(reply);
+
+            return {
+                degraded: false,
+                partial: request !== undefined,
+                // A final round that only asked for another tool leaves nothing once
+                // the fence is stripped; say so rather than hand back a blank turn
+                // after all that tool work.
+                reply: answer === "" ? TOOL_LIMIT_REPLY : answer,
+                toolCalls,
+                truncated,
+            };
         }
 
         const call = validateTool(request, level);
