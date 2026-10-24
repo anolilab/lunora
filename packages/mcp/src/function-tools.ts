@@ -152,12 +152,12 @@ const outputShapeOf = (result: unknown): FunctionShape["output"] => {
 };
 
 /** The function's `args` parameter. An absent one means the function declares no arguments. */
-const argsOf = (method: Schema): { argsSchema: Schema } => {
+const argsOf = (method: Schema): Schema => {
     const { params } = method;
     const argsParameter: unknown = Array.isArray(params) ? params.find((parameter: unknown) => isSchema(parameter) && parameter["name"] === "args") : undefined;
     const schema: unknown = isSchema(argsParameter) ? argsParameter["schema"] : undefined;
 
-    return { argsSchema: isSchema(schema) ? schema : { properties: {}, type: "object" } };
+    return isSchema(schema) ? schema : { properties: {}, type: "object" };
 };
 
 /**
@@ -185,7 +185,7 @@ const shapeOf = (method: unknown): FunctionShape | undefined => {
     const description = method["x-lunora-description"];
 
     return {
-        ...argsOf(method),
+        argsSchema: argsOf(method),
         ...(typeof description === "string" ? { description } : {}),
         kind,
         // A stream has no single result, so no output shape is declared for it, even if the document carries one.
