@@ -144,6 +144,9 @@ interface OrganizationRecord {
     slug: string;
 }
 
+/** Upper bound on write-then-recount rounds in {@link projectOrganization}. */
+const MAX_PROJECTION_ROUNDS = 3;
+
 /**
  * Project one organisation into `saas_organizations` — the `.global()` table the
  * admin screen reads and the billing page takes its seat count from.
@@ -155,23 +158,37 @@ interface OrganizationRecord {
  * lands on reaches the same D1 table every other shard does.
  *
  * The member count is re-read rather than kept as a delta, so a missed or
- * repeated hook cannot leave the number permanently off by one. A failure is
- * logged and swallowed: better-auth has already committed the change, so
- * failing the request would tell the user their organisation was not created
+ * repeated hook cannot leave the number permanently off by one. Two hooks can
+ * overlap, though, and the one that counted first can write last — so after each
+ * write the count is taken again, and written again if it moved. Whichever write
+ * lands last was followed by a recount, which converges on the real number; the
+ * rounds are capped so a membership storm cannot hold the request open. A
+ * failure is logged and swallowed: better-auth has already committed the change,
+ * so failing the request would tell the user their organisation was not created
  * when it was. The next event for that organisation re-projects the whole row.
  */
 const projectOrganization = async (env: AuthEnv, organization: OrganizationRecord, fields: { status?: string } = {}): Promise<void> => {
     try {
         const { adapter } = await getAuth(env).$context;
-        const seats = await adapter.count({ model: "member", where: [{ field: "organizationId", value: organization.id }] });
+        const shard = createShardClient(env.SHARD, { shardKey: "__root__" });
+        let written: number | undefined;
 
-        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.saas.syncOrganization, {
-            name: organization.name,
-            organizationId: organization.id,
-            seats,
-            slug: organization.slug,
-            ...fields,
-        });
+        for (let round = 0; round < MAX_PROJECTION_ROUNDS; round += 1) {
+            const seats = await adapter.count({ model: "member", where: [{ field: "organizationId", value: organization.id }] });
+
+            if (seats === written) {
+                break;
+            }
+
+            await shard.call(internal.saas.syncOrganization, {
+                name: organization.name,
+                organizationId: organization.id,
+                seats,
+                slug: organization.slug,
+                ...fields,
+            });
+            written = seats;
+        }
     } catch (error) {
         // eslint-disable-next-line no-console -- the admin projection is best-effort; surface the drift in Worker logs
         console.error("[saas] could not project organization", { error, organizationId: organization.id });
