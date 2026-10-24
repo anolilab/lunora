@@ -9,7 +9,7 @@ import type { McpTool } from "../src/compose";
 import { createToolServer } from "../src/compose";
 import { createLocalMcpServer } from "../src/local";
 import { createLunoraMcpServer } from "../src/server";
-import { errorFromThrown, errorResult, okStructured } from "../src/tool-result";
+import { errorFromThrown, errorResult, ok, okStructured } from "../src/tool-result";
 
 describe("errorResult", () => {
     it("is isError with the code and message in both structuredContent and one text block", () => {
@@ -179,5 +179,35 @@ describe("error results survive a real SDK client", () => {
         expect(query).toHaveBeenCalledTimes(1);
 
         await sdkClient.close();
+    });
+});
+
+describe("ok serialises collections a v.any() field can carry", () => {
+    it("writes a Map as an object keyed by its keys, and a Set as an array, instead of {}", () => {
+        expect.assertions(2);
+
+        const { content } = ok({ byId: new Map([["a", 1]]), tags: new Set(["x", "y"]) });
+        const { text } = content[0] as { text: string };
+
+        expect(JSON.parse(text)).toStrictEqual({ byId: { a: 1 }, tags: ["x", "y"] });
+        expect(text).not.toContain("{}");
+    });
+
+    it("keeps a Map's keys distinct when one is a number and another the same text", () => {
+        expect.assertions(1);
+
+        const { content } = ok({
+            byKey: new Map<unknown, string>([
+                [1, "number"],
+                ["1", "text"],
+            ]),
+        });
+
+        expect(JSON.parse((content[0] as { text: string }).text)).toStrictEqual({
+            byKey: [
+                [1, "number"],
+                ["1", "text"],
+            ],
+        });
     });
 });

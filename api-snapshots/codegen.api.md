@@ -358,6 +358,7 @@ interface FunctionIR {
         kind: "room";
         name: string;
     };
+    description?: string;
     exportName: string;
     expose?: {
         cache?: ExposeCacheIR;

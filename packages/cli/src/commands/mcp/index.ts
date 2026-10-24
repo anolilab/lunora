@@ -20,6 +20,7 @@ const mcpCommand: Command = {
         ["lunora mcp uninstall --print", "Show what would be removed, without removing it"],
         ["lunora mcp serve", "Run the stdio MCP server (this is what your editor spawns)"],
         ["lunora mcp serve --allow-writes", "Also expose the mutation/action tools"],
+        ["lunora mcp serve --functions --token $MY_USER_TOKEN", "Expose one tool per app function, running as that user (needs apiSpec openrpc)"],
         ["lunora mcp serve --token $LUNORA_ADMIN_TOKEN", "Expose the observability tools (logs, issues, advisories, insights, migrations) too"],
     ],
     group: "Develop",
@@ -41,6 +42,12 @@ const mcpCommand: Command = {
         },
         { description: "install/uninstall: this project's config instead of the machine-wide one", name: "project", type: Boolean },
         { description: "serve: also expose the mutation/action tools (default: read-only)", name: "allow-writes", type: Boolean },
+        {
+            description:
+                "serve: one tool per app function, from lunora/_generated/openrpc.json, run as the bearer given by --token. Never uses the admin token. Needs apiSpec openrpc",
+            name: "functions",
+            type: Boolean,
+        },
         // Both halves declared: a `no-*`-only declaration makes cerebro synthesize
         // `--docs` by cloning this description, so `--help` showed the positive
         // flag as "skip the documentation tools".
@@ -67,6 +74,7 @@ export type McpOptions = CreateOptions<{
     "docs-only": boolean | undefined;
     "docs-url": string | undefined;
     force: boolean | undefined;
+    functions: boolean | undefined;
     global: boolean | undefined;
     list: boolean | undefined;
     "local-only": boolean | undefined;
