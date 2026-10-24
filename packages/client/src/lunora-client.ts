@@ -1477,6 +1477,8 @@ class LunoraClient {
             this.restartTabCoordinatorForIdentity();
         }
 
+        this.bounceForRefreshedBearer(previousIdentity, newIdentity, previousToken, token);
+
         this.syncReadCacheToCredential(wasAwaitingReconfirm);
 
         // Notify token listeners only on an actual token change (useAuth refetch).
@@ -4459,6 +4461,18 @@ class LunoraClient {
         // Stop cross-tab coordination and release the BroadcastChannel.
         this.tabCoordinator?.stop();
         this.tabCoordinator = undefined;
+    }
+
+    /**
+     * A refreshed bearer under an unchanged identity. An open upgrade keeps the
+     * token it was made with for its whole life, so without a reconnect the
+     * socket stays on a credential that was rotated out. A warm bounce, not
+     * `reconnectCold`: the subscriptions resume from their cursors.
+     */
+    private bounceForRefreshedBearer(previousIdentity: string | null, newIdentity: string | null, previousToken: string | null, token: string | null): void {
+        if (this.authTokenOnUpgrade && newIdentity === previousIdentity && previousToken !== null && token !== null && previousToken !== token) {
+            this.bounceShardSockets();
+        }
     }
 
     /** Guard shared by every public entry point: a closed client accepts no further calls. */

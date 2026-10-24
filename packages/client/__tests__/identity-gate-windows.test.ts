@@ -631,6 +631,69 @@ describe("f5 — a frame already queued on a retired socket", () => {
         client.close();
     });
 
+    it("reconnects a bearer-upgrade socket warm when the same subject's token rotates", async () => {
+        expect.assertions(3);
+
+        sockets.length = 0;
+
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: cookieSessionFetch(null),
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(true),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        // Sign in, so the socket is replaced once with the bearer on its upgrade.
+        const anonymous = sockets.at(-1);
+
+        anonymous?.open();
+
+        const replaced = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
+        });
+
+        client.setAuthToken("tok-a", "user-a");
+        anonymous?.flushClose();
+        await replaced;
+        onSocketCreated = undefined;
+
+        const signedIn = sockets.at(-1);
+
+        signedIn?.open();
+
+        const subscribeId = signedIn?.sent.find((message) => message.type === "subscribe")?.id;
+
+        signedIn?.receive({ cursor: 3, data: [{ _id: "t1", text: "row" }], id: subscribeId, type: "data" });
+
+        const rotated = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
+        });
+
+        // Same subject, new token: the open upgrade still carries "tok-a".
+        client.setAuthToken("tok-b", "user-a");
+        signedIn?.flushClose();
+        await rotated;
+        onSocketCreated = undefined;
+
+        const warm = sockets.at(-1);
+
+        warm?.open();
+
+        const resubscribe = warm?.sent.find((message) => message.type === "subscribe");
+
+        expect(signedIn?.closed).toBe(true);
+        expect(warm).not.toBe(signedIn);
+        // Warm: the resubscribe resumes from the cursor the rotated socket had reached.
+        expect(resubscribe).toHaveProperty("query.sinceSeq", 3);
+
+        client.close();
+    });
+
     it("leaves a socket whose transport cannot carry the bearer alone on sign-in", () => {
         expect.assertions(2);
 
