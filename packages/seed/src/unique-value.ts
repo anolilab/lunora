@@ -191,7 +191,9 @@ const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: 
     // Only an exclusive lower bound (`.positive()`): still an open range, so count up from the
     // first whole number above it rather than shrinking the column to the default window.
     if (constraints.maximum === undefined && constraints.minimumFromExclusive === true) {
-        const first = Math.floor(constraints.exclusiveMinimum ?? 0) + 1;
+        // Below -2^53 `floor + 1` rounds back onto the bound, which the column forbids; the lowest
+        // safe integer is strictly above such a bound and is where `first + index` is injective.
+        const first = Math.max(Math.floor(constraints.exclusiveMinimum ?? 0) + 1, -Number.MAX_SAFE_INTEGER);
 
         // Past 2^53 `first + index` repeats; `minimum` is the one value `constraintsOf` proved is above the bound.
         if (first > Number.MAX_SAFE_INTEGER) {

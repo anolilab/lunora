@@ -131,6 +131,25 @@ describe("generateValue — validator constraints the generator must honour", ()
         });
     });
 
+    describe.each([
+        ["a float", {}],
+        ["an integer", { type: "integer" }],
+    ])("an exclusive minimum below the safe integers, %s column", (_label, extra) => {
+        it.each([-(2 ** 53), -(2 ** 54), -1e20])("deals distinct values strictly above %s", (exclusiveMinimum) => {
+            expect.hasAssertions();
+
+            const validator = { ...v.number(), _meta: { constraints: { exclusiveMinimum, ...extra } } } as unknown as Validator;
+            const { valueAt } = planUniqueDeal(
+                { hasServerDefault: false, kind: "number", name: "amount", nullable: false, optional: false, unique: true, validator },
+                { now: NOW, table: "t" },
+            );
+            const values = Array.from({ length: 4 }, (_, index) => valueAt(index, () => 0) as number);
+
+            expect(values.every((value) => value > exclusiveMinimum)).toBe(true);
+            expect(new Set(values).size).toBe(values.length);
+        });
+    });
+
     it("refuses a second row for a unique integer range past the safe integers", () => {
         expect.hasAssertions();
 
