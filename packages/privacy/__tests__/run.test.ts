@@ -413,6 +413,68 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.endsWith("/export.zip"))).toStrictEqual([winnerKey]);
     });
 
+    it("deletes its files when another run made the export ready before this run's ready step", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        let runWinner: (() => Promise<unknown>) | undefined;
+        const writing: MemoryFiles = {
+            ...files,
+            put: async (requestId, file) => {
+                const key = await files.put(requestId, file);
+                const run = runWinner;
+
+                // The other run finishes while this one is still assembling, so the ready step never runs its callback.
+                if (file.name.endsWith("/export.zip") && run !== undefined) {
+                    runWinner = undefined;
+                    await run();
+                }
+
+                return key;
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, files: writing, store });
+        const opened = await privacy.requestExport();
+
+        runWinner = async () => privacy.runExport(opened.id);
+
+        const loser = await privacy.runExport(opened.id);
+        const winnerKey = store.rows.get(opened.id)?.storageKey;
+
+        expect(loser).toStrictEqual({ archiveKey: winnerKey, status: "ready" });
+        expect([...new Set([...files.files.keys()].map((key) => key.split("/")[1]))]).toStrictEqual([winnerKey?.split("/")[1]]);
+    });
+
+    it("deletes the part it wrote when another run made the export ready between two collect steps", async () => {
+        const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
+        const store = memoryRequests();
+        const files = memoryFiles();
+        let runWinner: (() => Promise<unknown>) | undefined;
+        const writing: MemoryFiles = {
+            ...files,
+            put: async (requestId, file) => {
+                const key = await files.put(requestId, file);
+                const run = runWinner;
+
+                if (file.name.endsWith("/parts/tasks.json") && run !== undefined) {
+                    runWinner = undefined;
+                    await run();
+                }
+
+                return key;
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, datasets: [tasks, second], files: writing, store });
+        const opened = await privacy.requestExport();
+
+        runWinner = async () => privacy.runExport(opened.id);
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+
+        const winnerKey = store.rows.get(opened.id)?.storageKey;
+
+        expect([...new Set([...files.files.keys()].map((key) => key.split("/")[1]))]).toStrictEqual([winnerKey?.split("/")[1]]);
+    });
+
     it("deletes the part it wrote when a later collect step finds the request no longer processing", async () => {
         const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
         const store = memoryRequests();

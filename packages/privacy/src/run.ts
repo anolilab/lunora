@@ -344,16 +344,27 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
     let runId: string | undefined;
 
     // A run that stops after writing removes what it wrote, and only that: another run of the export keeps its files.
+    // A ready request may point at this run's archive (a throw after the ready write lands here as `ready`), so the
+    // files stay only when the request's live archive is this run's own. A run that wrote nothing has nothing to remove.
     const stop = async (status: RequestStatus): Promise<ExportOutcome> => {
         const id = runId;
 
-        // A ready request may point at this run's archive: a throw after the ready write lands here as `ready`.
-        // The export's expiry removes the files then.
-        if (id !== undefined && status !== "ready") {
-            await steps.do("discard", async () => deleteRunFiles(scope.ports.files, requestId, id));
+        if (id === undefined) {
+            return { status };
         }
 
-        return { status };
+        return steps.do("discard", async (): Promise<ExportOutcome> => {
+            const current = status === "ready" ? await requireRequest(scope.ports.store, requestId) : undefined;
+            const live = current?.storageKey;
+
+            if (live?.includes(`/${id}/`) === true) {
+                return { status };
+            }
+
+            await deleteRunFiles(scope.ports.files, requestId, id);
+
+            return live === undefined ? { status } : { archiveKey: live, status };
+        });
     };
 
     await loadStep(scope, steps, requestId);
@@ -426,7 +437,8 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return live === undefined ? { status: current.status } : { archiveKey: live, status: current.status };
         });
 
-        return ready.value ?? { status: ready.status };
+        // No value means the step's callback never ran: the request had already left `processing`.
+        return ready.value ?? (await stop(ready.status));
     } catch (error) {
         return await stop(await failStep(scope, steps, requestId, failureDetail(error)));
     }
