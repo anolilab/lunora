@@ -9,15 +9,18 @@
  *   - **heartbeat** (mutation) — upsert the caller's presence row for a room and
  *     stamp `lastSeen = now`. Keyed by `(roomId, sessionId)`, so a re-heartbeat
  *     *patches* the existing row: subscribers receive a single-row delta, not an
- *     insert/delete churn that would re-send the whole present list.
+ *     insert/delete churn that would re-send the whole present list. A session
+ *     that joins the room also reclaims the room's expired rows, so closed tabs
+ *     cannot pile up between sweeps nobody scheduled.
  *   - **listPresent** (query) — the non-expired members of a room, newest
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
  *     so no client-side reaping is needed.
  *   - **sweep** (internal mutation) — hard-delete the expired rows for a room.
  *     Stale rows already vanish from `listPresent` via the read-time filter; this
- *     only reclaims storage. It's *internal* (server-only) so a client can't
- *     trigger bulk deletes — wire it to a cron / `runAfter` if you want it.
+ *     only reclaims storage — and a joining session already does that for its
+ *     own room. It's *internal* (server-only) so a client can't trigger bulk
+ *     deletes — wire it to a cron / `runAfter` to also reclaim rooms nobody joins.
  *
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
@@ -25,6 +28,7 @@
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 
+import type { MutationCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
 import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
@@ -66,6 +70,23 @@ interface PresenceMember {
     /** Authenticated user id, when known. */
     userId?: string;
 }
+
+/**
+ * Hard-delete the rows of `roomId` last seen at or before `cutoff`. One room's
+ * expired members are a small set sharing the mutation's snapshot, so the
+ * deletes go out together.
+ */
+const deleteExpired = async (ctx: MutationCtx, roomId: string, cutoff: number): Promise<number> => {
+    const stale = await ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
+        .filter((row) => (row["lastSeen"] as number) <= cutoff)
+        .collect();
+
+    await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
+
+    return stale.length;
+};
 
 /**
  * Upsert the caller's presence row for `roomId` and stamp `lastSeen = now`.
@@ -134,7 +155,14 @@ export const heartbeat = mutation
             ...(userId === undefined ? {} : { userId }),
         };
 
-        await (existing ? ctx.db.patch(existing["_id"] as never, row) : ctx.db.insert(PRESENCE_TABLE, row));
+        if (existing) {
+            await ctx.db.patch(existing["_id"] as never, row);
+        } else {
+            // A new session is the one moment the room grows, and the only write
+            // that is certain to happen: reclaim what the room has outgrown first.
+            await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS);
+            await ctx.db.insert(PRESENCE_TABLE, row);
+        }
 
         return { lastSeen };
     });
@@ -179,19 +207,7 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
  * `listPresent` via the read-time TTL filter, so this is purely housekeeping.
  */
 export const sweep = internalMutation.input({ roomId: v.string() }).mutation(async ({ args: { roomId }, ctx }): Promise<{ deleted: number }> => {
-    const cutoff = ctx.now - PRESENCE_TTL_MS;
-
-    const stale = await ctx.db
-        .query(PRESENCE_TABLE)
-        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
-        .filter((row) => (row["lastSeen"] as number) <= cutoff)
-        .collect();
-
-    // One room's expired members is a small set sharing the mutation's
-    // snapshot — fire the deletes together.
-    await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
-
-    return { deleted: stale.length };
+    return { deleted: await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS) };
 });
 
 export type { PresenceMember };
