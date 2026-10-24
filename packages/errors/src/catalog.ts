@@ -605,6 +605,7 @@ export const ERROR_CATALOG = {
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
+    GLOBAL_DRY_RUN_UNSUPPORTED: { status: 400, title: "Global table dry run not supported" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */

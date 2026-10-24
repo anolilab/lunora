@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 189 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 190 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -432,6 +432,10 @@ The message names each failed shard key and its error. Re-run the export once th
 ### `GLOBALS_NOT_CONFIGURED`
 
 `400` — Global-table introspector not configured
+
+### `GLOBAL_DRY_RUN_UNSUPPORTED`
+
+`400` — Global table dry run not supported
 
 ### `GLOBAL_NOT_CONFIGURED`
 
