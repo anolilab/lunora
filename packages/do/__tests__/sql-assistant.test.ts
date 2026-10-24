@@ -283,6 +283,28 @@ describe("generateFilter", () => {
         expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
     });
 
+    it("passes a has clause with a scalar value through", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"has","path":["tags"],"value":"x"},{"column":"status","operator":"has","value":3}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded ? undefined : result.clauses).toHaveLength(2);
+    });
+
+    it("degrades the whole suggestion when a has clause has no scalar value, rather than widening the rest", async () => {
+        expect.assertions(2);
+
+        const ai = binding(
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":null}]',
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":{"a":1}}]',
+        );
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+        expect(ai.run).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    });
+
     it("keeps the valid clauses when only some are bad", async () => {
         expect.assertions(1);
 

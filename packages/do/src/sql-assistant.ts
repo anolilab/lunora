@@ -239,6 +239,10 @@ const assistantPath = (raw: unknown): { path?: string[] } | undefined => {
     return raw.length === 0 ? {} : { path: raw };
 };
 
+/** The value kinds an array-membership (`has`) filter can look for. */
+const isMembershipScalar = (value: unknown): boolean =>
+    typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+
 /**
  * Validate a model-proposed filter set against the table's REAL columns.
  *
@@ -263,6 +267,13 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>): Assis
         const nested = assistantPath(path);
 
         if (typeof column === "string" && known.has(column) && typeof operator === "string" && FILTER_OPERATORS.has(operator) && nested !== undefined) {
+            // The filter row is a text input, so a non-scalar `has` value renders blank and the
+            // browser discards the row. Dropping only that clause would widen the rest of the
+            // set, which bulk actions then run against; refuse the whole suggestion instead.
+            if (operator === "has" && !isMembershipScalar(value)) {
+                return undefined;
+            }
+
             clauses.push({ column, operator, ...nested, value });
         }
     }
