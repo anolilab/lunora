@@ -192,4 +192,22 @@ describe("ok serialises collections a v.any() field can carry", () => {
         expect(JSON.parse(text)).toStrictEqual({ byId: { a: 1 }, tags: ["x", "y"] });
         expect(text).not.toContain("{}");
     });
+
+    it("keeps a Map's keys distinct when one is a number and another the same text", () => {
+        expect.assertions(1);
+
+        const { content } = ok({
+            byKey: new Map<unknown, string>([
+                [1, "number"],
+                ["1", "text"],
+            ]),
+        });
+
+        expect(JSON.parse((content[0] as { text: string }).text)).toStrictEqual({
+            byKey: [
+                [1, "number"],
+                ["1", "text"],
+            ],
+        });
+    });
 });

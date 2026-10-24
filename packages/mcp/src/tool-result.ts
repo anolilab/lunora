@@ -21,8 +21,9 @@ import type { ToolInputSchema, ToolOutputSchema, ToolResult } from "./tool-types
  * a tool error) and serializes an `ArrayBuffer` to `{}` / a `Uint8Array` to an
  * index-keyed object (silent corruption). Map every bigint → its decimal string
  * and every bytes leaf → base64 so the model sees a faithful value instead. A `Map`
- * or `Set` (what a `v.any()` field can carry) would serialize to `{}`, so a Map
- * becomes an object keyed by its keys as strings, and a Set becomes an array.
+ * or `Set` (what a `v.any()` field can carry) would serialize to `{}`. A Map with only
+ * string keys becomes an object; any other Map becomes its `[key, value]` pairs, so
+ * keys such as `1` and `"1"` stay distinct. A Set becomes an array.
  */
 const jsonResultReplacer = (_key: string, value: unknown): unknown => {
     if (typeof value === "bigint") {
@@ -30,7 +31,7 @@ const jsonResultReplacer = (_key: string, value: unknown): unknown => {
     }
 
     if (value instanceof Map) {
-        return Object.fromEntries(value);
+        return [...value.keys()].every((key) => typeof key === "string") ? Object.fromEntries(value) : [...value];
     }
 
     if (value instanceof Set) {
