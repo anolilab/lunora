@@ -41,6 +41,7 @@ import checkCimdFetchFlag from "./cimd-checks";
 import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
+import checkQueryStringRedaction from "./observability-redaction-checks";
 import checkPaidProducts from "./paid-product-checks";
 import checkServices from "./service-checks";
 
@@ -84,6 +85,7 @@ const DOCTOR_CODES = [
     "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
+    "observability-query-unredacted",
     "paid-product-bound",
     "paid-product-unknown",
     "r2-lifecycle-unset",
@@ -940,6 +942,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkCpuLimit(parsed, findings);
     checkR2Lifecycle(parsed, findings);
     checkObservabilitySampling(parsed, findings);
+    checkQueryStringRedaction(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);

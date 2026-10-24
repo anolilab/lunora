@@ -1162,6 +1162,66 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("observability query-string redaction", () => {
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const redactionFinding = (result: Awaited<ReturnType<typeof runDoctor>>) =>
+            result.findings.find((finding) => finding.code === "observability-query-unredacted");
+
+        it("warns when an explicit block keeps query strings in request logs", async () => {
+            expect.assertions(3);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0.1 } }));
+
+            const finding = redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("top level");
+            expect(finding?.fix).toContain("redact_query_string");
+        });
+
+        it("names each env whose own block keeps query strings", async () => {
+            expect.assertions(2);
+
+            seed(
+                workdir,
+                wranglerWith({
+                    env: { production: { observability: { enabled: true, redact_query_string: true } }, staging: { observability: { enabled: true } } },
+                    observability: { enabled: true, head_sampling_rate: 0.1, redact_query_string: true },
+                }),
+            );
+
+            const finding = redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("env.staging");
+            expect(finding?.message).not.toContain("env.production");
+        });
+
+        it("is quiet when the block redacts query strings", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0.1, redact_query_string: true } }));
+
+            expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("is quiet when logging is disabled", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: false } }));
+
+            expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("is quiet for an absent block, because the reconciled default redacts", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(redactionFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
     describe("durable object class budget", () => {
         /** A Cloudflare namespaces response reporting `total` classes on the account. */
         const namespacesApi = (total: number): typeof globalThis.fetch =>
