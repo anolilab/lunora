@@ -71,8 +71,10 @@ interface AiChatRpcDeps {
      * Injected rather than imported. Omit it and a turn simply runs without tools.
      * `headers` is resolved per request by the caller because an Access-authorized
      * admin presents no bearer of their own — see `resolveAdminForwardContext`.
+     * `env` is the request's own, because that resolution runs the app's
+     * `resolveIdentity`, which may read a binding off it.
      */
-    forwardToShard?: (request: Request) => Promise<{ forward: ForwardToShard; headers: Record<string, string> }>;
+    forwardToShard?: (request: Request, env: unknown) => Promise<{ forward: ForwardToShard; headers: Record<string, string> }>;
 
     /** The app's Workers `AI` binding, or undefined when none is wired. */
     getBinding: () => AiRunBinding | undefined;
@@ -88,7 +90,7 @@ interface AiChatRpcDeps {
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
-type AiChatRpcHandler = (request: Request, args: Record<string, unknown>) => Promise<Response>;
+type AiChatRpcHandler = (request: Request, args: Record<string, unknown>, env: unknown) => Promise<Response>;
 
 /** What {@link AI_AVAILABLE_OP} answers. Mirrored by `AiAvailableResult` in `@lunora/studio`. */
 interface AiAvailableResult {
@@ -154,6 +156,9 @@ const TOOL_OPS: Readonly<Record<ForwardedToolName, string>> = {
     runSql: "__lunora_admin__:runSql",
 };
 
+/** The admin op that lists a shard's tables, used when a turn arrives without any grounding. */
+const LIST_TABLES_OP = "__lunora_admin__:listTables";
+
 /**
  * Build a tool runner over the worker's forwarder.
  *
@@ -167,11 +172,16 @@ const TOOL_OPS: Readonly<Record<ForwardedToolName, string>> = {
  * "is this new capability safe". `runSql`'s statement has already passed
  * `classifyStatement` in the engine before it arrives.
  */
-const chatToolRunner =
-    (forward: ForwardToShard, shardKey: string, headers: Record<string, string>, request: Request): ChatToolRunner =>
-    async (call: ForwardedToolCall): Promise<unknown> => {
-        const path = TOOL_OPS[call.name];
-        const response = await forward(request, path, call.sql === undefined ? {} : { sql: call.sql }, shardKey, headers);
+const chatToolRunner = (
+    forward: ForwardToShard,
+    shardKey: string,
+    headers: Record<string, string>,
+    request: Request,
+    schema: ReadonlyArray<SchemaFact>,
+): ChatToolRunner => {
+    /** One forwarded admin read, decoded. */
+    const read = async (path: string, args: Record<string, unknown>): Promise<unknown> => {
+        const response = await forward(request, path, args, shardKey, headers);
 
         // A non-2xx body is an error envelope, not data. Without this check it was
         // JSON-stringified into an observation prefixed "Tool result:", telling the
@@ -187,6 +197,41 @@ const chatToolRunner =
 
         return decodeWire(body.result);
     };
+
+    /**
+     * The tables `describeTables` is asked about.
+     *
+     * The op answers only for tables it is NAMED — with none it returns an empty
+     * map, so the tool handed the model nothing. The model names no tables (the
+     * tool takes no arguments), so it is asked about the ones the console grounded
+     * the turn in, or about every table the shard has when the turn came with none
+     * (an error opened from a page that holds no schema).
+     */
+    const tablesToDescribe = async (): Promise<string[]> => {
+        if (schema.length > 0) {
+            return schema.map((fact) => fact.table);
+        }
+
+        const listed = await read(LIST_TABLES_OP, {});
+
+        return Array.isArray(listed)
+            ? listed
+                  .map((table: { name?: unknown }) => table.name)
+                  .filter((name): name is string => typeof name === "string")
+                  .slice(0, MAX_SCHEMA_FACTS)
+            : [];
+    };
+
+    return async (call: ForwardedToolCall): Promise<unknown> => {
+        const path = TOOL_OPS[call.name];
+
+        if (call.name === "describeTables") {
+            return read(path, { tables: await tablesToDescribe() });
+        }
+
+        return read(path, call.sql === undefined ? {} : { sql: call.sql });
+    };
+};
 
 /**
  * Build the `__lunora_admin__:aiChat` handler.
@@ -213,7 +258,7 @@ const chatToolRunner =
  * surface already follows.
  */
 const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
-    const handle = async (request: Request, args: Record<string, unknown>): Promise<Response> => {
+    const handle = async (request: Request, args: Record<string, unknown>, env: unknown): Promise<Response> => {
         deps.assertAdmin(request);
 
         const binding = deps.getBinding();
@@ -255,7 +300,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
             binding === undefined || deps.forwardToShard === undefined
                 ? undefined
                 : await (async (): Promise<ChatToolRunner> => {
-                      const { forward, headers } = await (deps.forwardToShard as NonNullable<AiChatRpcDeps["forwardToShard"]>)(request);
+                      const { forward, headers } = await (deps.forwardToShard as NonNullable<AiChatRpcDeps["forwardToShard"]>)(request, env);
 
                       /*
                        * The shard the console has OPEN, named by the caller — which
@@ -270,7 +315,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                       const named = args["shardKey"];
                       const shardKey = typeof named === "string" && named !== "" ? named : deps.defaultShardKey();
 
-                      return chatToolRunner(forward, shardKey, headers, request);
+                      return chatToolRunner(forward, shardKey, headers, request, schema);
                   })();
 
         const level = deps.optInLevel();

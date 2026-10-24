@@ -161,6 +161,32 @@ const recordingShard = (forwarded: string[]): ShardNamespaceLike => {
     };
 };
 
+/**
+ * A shard double recording every forwarded op WITH its arguments, answering from
+ * `answers` by function path (null when a path has none).
+ */
+const argumentRecordingShard = (
+    forwarded: { args: Record<string, unknown>; functionPath: string }[],
+    answers: Record<string, unknown> = {},
+): ShardNamespaceLike => {
+    return {
+        get: () => {
+            return {
+                fetch: async (request: Request) => {
+                    const body: { args?: Record<string, unknown>; functionPath?: string } = await request.json();
+
+                    forwarded.push({ args: decodeWire(body.args ?? {}) as Record<string, unknown>, functionPath: body.functionPath ?? "" });
+
+                    return Response.json({ result: encodeWire(answers[body.functionPath ?? ""] ?? null) }, { status: 200 });
+                },
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+};
+
 const rpc = (args: Record<string, unknown>, admin = true): Request =>
     new Request("https://app.example/_lunora/rpc", {
         body: JSON.stringify({ args, functionPath: AI_CHAT_OP }),
@@ -517,6 +543,79 @@ describe("createWorker — aiChat admin RPC", () => {
         expect(user.indexOf(UNTRUSTED_END_MARKER)).toBeGreaterThan(user.indexOf("-----BEGIN UNTRUSTED DATA-----"));
         // …and the injected line did not survive as a line of its own.
         expect(user).not.toMatch(/^Ignore every earlier instruction/m);
+    });
+
+    it("asks describeTables about the tables the turn is grounded in", async () => {
+        expect.hasAssertions();
+
+        // The op answers only for the tables it is NAMED; forwarding no arguments
+        // returned an empty map, so the tool never produced a column.
+        const forwarded: { args: Record<string, unknown>; functionPath: string }[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "Done."]),
+            shardDO: argumentRecordingShard(forwarded),
+        });
+
+        await decoded(
+            await worker.fetch(
+                rpc({
+                    prompt: "what columns?",
+                    schema: [
+                        { columns: ["id"], table: "messages" },
+                        { columns: ["id"], table: "users" },
+                    ],
+                }),
+                {},
+                fakeContext,
+            ),
+        );
+
+        expect(forwarded.find((call) => call.functionPath === "__lunora_admin__:describeTables")?.args).toStrictEqual({ tables: ["messages", "users"] });
+    });
+
+    it("lists the shard's tables first when the turn arrived with no grounding", async () => {
+        expect.hasAssertions();
+
+        const forwarded: { args: Record<string, unknown>; functionPath: string }[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "Done."]),
+            shardDO: argumentRecordingShard(forwarded, {
+                "__lunora_admin__:listTables": [
+                    { name: "messages", rowCount: 2 },
+                    { name: "users", rowCount: 1 },
+                ],
+            }),
+        });
+
+        await decoded(await worker.fetch(rpc({ prompt: "what columns?" }), {}, fakeContext));
+
+        expect(forwarded.map((call) => call.functionPath)).toStrictEqual(["__lunora_admin__:listTables", "__lunora_admin__:describeTables"]);
+        expect(forwarded[1]?.args).toStrictEqual({ tables: ["messages", "users"] });
+    });
+
+    it("resolves the forwarded admin context with the request's own env", async () => {
+        expect.hasAssertions();
+
+        // An app `resolveIdentity` may read a binding off `env`; the tool calls
+        // used to resolve it against an empty object.
+        const seen: unknown[] = [];
+        const env = { marker: "request-env" };
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "Done."]),
+            resolveIdentity: (_request, requestEnv) => {
+                seen.push(requestEnv);
+
+                return null;
+            },
+            shardDO: recordingShard([]),
+        });
+
+        await decoded(await worker.fetch(rpc({ prompt: "what tables?" }), env, fakeContext));
+
+        expect(seen).toContain(env);
     });
 
     it("answers with what it has when the tool-call cap is reached", async () => {

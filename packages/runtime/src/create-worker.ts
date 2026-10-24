@@ -824,8 +824,9 @@ interface WorkerOptions {
      * `__lunora_admin__:aiChat` admin RPC). Served HERE at the worker rather than
      * on a shard because the DO's admin dispatch is single-threaded and a
      * conversation would hold it open — see `ai-chat-rpc.ts`. Pass `env.AI`. Omit
-     * it and the RPC responds `AI_CHAT_NOT_CONFIGURED`; a caller without a valid
-     * admin bearer always gets `ADMIN_FORBIDDEN` first (default-closed).
+     * it and a turn degrades with reason `no-ai-binding`, which hides the panel;
+     * a caller without a valid admin bearer always gets `ADMIN_FORBIDDEN` first
+     * (default-closed).
      *
      * The three one-shot assistant RPCs are unaffected — they stay on the shard,
      * reading the same binding through `ctx.ai`.
@@ -3563,8 +3564,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
          * bearer, and the DO's own gate trusts only the static bearer — so that
          * deployment class had every tool call answered 403 by the shard.
          */
-        forwardToShard: async (request) => {
-            const context = await resolveAdminForwardContext(request, {});
+        forwardToShard: async (request, env) => {
+            const context = await resolveAdminForwardContext(request, env);
 
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- defined further down this closure and only ever read per request; the same exception this file already takes for `resolvedSecurity`
             return { forward: forwardRpcToShard, headers: context.headers };
@@ -3660,7 +3661,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * proceed. A fan-out envelope is never worker-served. The fan-out-only
      * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
      */
-    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope): Promise<Response | undefined> => {
+    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope, env: unknown): Promise<Response | undefined> => {
         if (envelope.fanOut) {
             return undefined;
         }
@@ -3691,11 +3692,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (envelope.functionPath === AI_CHAT_OP) {
-            return aiChat(request, envelope.args ?? {});
+            return aiChat(request, envelope.args ?? {}, env);
         }
 
         if (envelope.functionPath === AI_AVAILABLE_OP) {
-            return aiAvailable(request, envelope.args ?? {});
+            return aiAvailable(request, envelope.args ?? {}, env);
         }
 
         return authJurisdictionMove(request, envelope.functionPath, envelope.args ?? {});
@@ -4713,7 +4714,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to a shard: the D1-backed auth-audit read and the notify
         // device-list read (both admin-gated). A returned Response short-circuits
         // dispatch; `undefined` continues normal routing.
-        const reservedResponse = await serveReservedWorkerRpc(request, envelope);
+        const reservedResponse = await serveReservedWorkerRpc(request, envelope, env);
 
         if (reservedResponse !== undefined) {
             return reservedResponse;
