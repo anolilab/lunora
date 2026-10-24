@@ -415,22 +415,16 @@ describe("createFunctionMcpServer when the OpenRPC document is rewritten while i
             createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
         );
 
-        spec = {
-            methods: [method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT })],
-            openrpc: "1.3.2",
-        };
+        const billing = method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT });
+        const notes = method("notes:list", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT });
+
+        spec = { methods: [billing], openrpc: "1.3.2" };
 
         const removed = await client.listTools();
 
         expect(removed.tools.map((tool) => tool.name)).toStrictEqual(["billing_get"]);
 
-        spec = {
-            methods: [
-                ...(spec as { methods: unknown[] }).methods,
-                method("notes:list", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT }),
-            ],
-            openrpc: "1.3.2",
-        };
+        spec = { methods: [billing, notes], openrpc: "1.3.2" };
 
         const added = await client.listTools();
 
