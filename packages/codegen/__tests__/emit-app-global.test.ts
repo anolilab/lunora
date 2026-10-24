@@ -11,11 +11,12 @@ import baseOptions from "./emit-app-options";
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
     it("wires options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
+        expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
         expect(output).toContain("const buildGlobalImporter =");
     });
 

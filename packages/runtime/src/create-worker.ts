@@ -1265,6 +1265,14 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
 
     /**
+     * Set when `importGlobals` honours `dryRun` and writes nothing for it. A dry
+     * run (`?dryRun=true`) that targets global rows is refused unless this is
+     * set, because an importer written before the flag existed would ignore it
+     * and insert the rows.
+     */
+    importGlobalsSupportsDryRun?: boolean;
+
+    /**
      * Restrict every Durable Object this worker reaches — shard DOs, the
      * scheduler DO, the fan-out coordinator, subscriptions — to a Cloudflare
      * data-residency jurisdiction (`"eu"`, `"us"`, `"fedramp"`). The runtime
