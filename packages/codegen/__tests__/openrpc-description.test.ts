@@ -59,6 +59,27 @@ export const remove = mutation({ args: {}, handler: async () => {} });
         expect(methodNamed("notes:list")?.["x-lunora-description"]).toBe("Lists the notes in a folder, newest first.");
     });
 
+    it("describes a re-exported registration by the comment on its export, not the bundle it was declared in", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "reexport.ts"),
+            `import { query } from "@lunora/server";
+
+/** The bundle's comment, which the export does not carry. */
+const bundle = { list: query({ args: {}, handler: async () => [] }) };
+
+/** The exported comment. */
+export const list = bundle.list;
+`,
+            "utf8",
+        );
+
+        runCodegen({ apiSpec: "openrpc", projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(methodNamed("reexport:list")?.["x-lunora-description"]).toBe("The exported comment.");
+    });
+
     it("omits the extension for a registration with no doc comment", () => {
         expect.assertions(2);
 
