@@ -626,7 +626,7 @@ describe("f5 — a frame already queued on a retired socket", () => {
 
         expect(replacement).not.toBe(socket);
         // Cold: no resume point from the anonymous socket.
-        expect(resubscribe).not.toHaveProperty("sinceSeq");
+        expect(resubscribe).not.toHaveProperty("query.sinceSeq");
 
         client.close();
     });
@@ -690,6 +690,62 @@ describe("f5 — a frame already queued on a retired socket", () => {
         expect(warm).not.toBe(signedIn);
         // Warm: the resubscribe resumes from the cursor the rotated socket had reached.
         expect(resubscribe).toHaveProperty("query.sinceSeq", 3);
+
+        client.close();
+    });
+
+    it("reconnects a bearer-upgrade socket cold on sign-out", async () => {
+        expect.assertions(4);
+
+        sockets.length = 0;
+
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: cookieSessionFetch(null),
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(true),
+        });
+
+        client.setAuthToken("tok-a", "user-a");
+
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => seen.push(value));
+
+        const signedIn = sockets.at(-1);
+
+        signedIn?.open();
+
+        const subscribeId = signedIn?.sent.find((message) => message.type === "subscribe")?.id;
+
+        signedIn?.receive({ cursor: 3, data: [{ _id: "t1", text: "A's private row" }], id: subscribeId, type: "data" });
+
+        const replaced = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
+        });
+
+        // The open upgrade still presents "tok-a"; it must not outlive the sign-out.
+        client.setAuthToken(null);
+
+        expect(signedIn?.closed).toBe(true);
+        expect(seen.at(-1)).toBeUndefined();
+
+        signedIn?.flushClose();
+        await replaced;
+        onSocketCreated = undefined;
+
+        const anonymous = sockets.at(-1);
+
+        anonymous?.open();
+
+        const resubscribe = anonymous?.sent.find((message) => message.type === "subscribe");
+
+        expect(anonymous).not.toBe(signedIn);
+        // Cold: no resume point from the signed-in socket.
+        expect(resubscribe).not.toHaveProperty("query.sinceSeq");
 
         client.close();
     });

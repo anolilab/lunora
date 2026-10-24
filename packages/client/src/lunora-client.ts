@@ -1395,7 +1395,10 @@ class LunoraClient {
         // on it is a new session, not the same one getting a name.
         const subjectFirstNamed = !tokenChanged && token === null && previousIdentity === null && subjectWasConfirmed && !wasKnownNobody;
 
-        if (newIdentity !== previousIdentity) {
+        const identityChanged = newIdentity !== previousIdentity;
+        let evicted = false;
+
+        if (identityChanged) {
             if (sameCredential) {
                 // The token is unchanged (same credential) — the identity label
                 // just got more stable (a subject resolved). Migrate queued writes
@@ -1426,51 +1429,20 @@ class LunoraClient {
                 this.restampConnectionIdentity(previousIdentity, newIdentity);
                 this.reseedFromHydratedCache();
             } else {
-                // A genuine credential change — reject the in-memory offline
-                // writes that can no longer replay as the identity now signed in.
-                // Writes whose stamp still matches (or is still undecidable) are
-                // kept: this path is reached on a plain sign-in too, where the
-                // queue belongs to the very user who just signed in.
-                this.rejectQueuedForIdentityChange(previousIdentity);
-                this.warnRefreshWithoutSubject(previousToken, token);
-
-                // And evict what the PREVIOUS identity left live. A socket pins
-                // its credential in the upgrade URL and cannot be rotated in
-                // place, so without this it keeps delivering the previous user's
-                // rows (see `ShardConnection.identity`), and every subscription
-                // keeps replaying the last of them to each new subscriber.
-                //
-                // Only when there WAS a previous identity, the same test
-                // `rejectQueuedForIdentityChange` applies to the read cache: a
-                // sign-in from signed-out has no other user's session to retire,
-                // so nothing is evicted there (a bearer sign-in still reconnects,
-                // below).
-                //
-                // Except under a cookie session the server said was nobody's:
-                // its socket is authenticated by the cookie as it was at the
-                // upgrade — anonymous — and keeps serving that, never the user
-                // who signed in since, until it is replaced.
-                if (leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
-                    this.evictPreviousIdentitySession();
-                } else if (this.authTokenOnUpgrade && previousToken === null && token !== null) {
-                    // A bearer sign-in from signed-out. No other user's session
-                    // to retire, but the open sockets upgraded anonymously, and a
-                    // transport that carries the bearer on the upgrade (React
-                    // Native's `Authorization` header) presents it only on a new
-                    // socket. A browser socket never carries it, so its views are
-                    // not blanked for nothing. Cold, so no view resumes from an
-                    // anonymous cursor.
-                    this.resetRoomSends();
-                    this.reconnectCold();
-                }
+                evicted = this.retirePreviousIdentity(previousIdentity, wasKnownNobody, previousToken, token);
             }
+        }
 
+        // An eviction already reconnected every socket cold.
+        if (!evicted) {
+            this.applyUpgradeBearer(this.reconcileUpgradeBearer(previousToken, token, identityChanged));
+        }
+
+        if (identityChanged) {
             // Last, so drained/restamped writes settle before the new group's
             // leader election begins.
             this.restartTabCoordinatorForIdentity();
         }
-
-        this.bounceForRefreshedBearer(previousIdentity, newIdentity, previousToken, token);
 
         this.syncReadCacheToCredential(wasAwaitingReconfirm);
 
@@ -4457,13 +4429,76 @@ class LunoraClient {
     }
 
     /**
-     * A refreshed bearer under an unchanged identity. An open upgrade keeps the
-     * token it was made with for its whole life, so without a reconnect the
-     * socket stays on a credential that was rotated out. A warm bounce, not
-     * `reconnectCold`: the subscriptions resume from their cursors.
+     * A genuine credential change: reject the queued writes that can no longer
+     * replay as the incoming identity, and evict the session the previous one
+     * left live. `true` when it evicted, which reconnects every socket cold.
      */
-    private bounceForRefreshedBearer(previousIdentity: string | null, newIdentity: string | null, previousToken: string | null, token: string | null): void {
-        if (this.authTokenOnUpgrade && newIdentity === previousIdentity && previousToken !== null && token !== null && previousToken !== token) {
+    private retirePreviousIdentity(previousIdentity: string | null, wasKnownNobody: boolean, previousToken: string | null, token: string | null): boolean {
+        // Writes whose stamp still matches (or is still undecidable) are
+        // kept: this path is reached on a plain sign-in too, where the
+        // queue belongs to the very user who just signed in.
+        this.rejectQueuedForIdentityChange(previousIdentity);
+        this.warnRefreshWithoutSubject(previousToken, token);
+
+        // And evict what the PREVIOUS identity left live. A socket pins
+        // its credential in the upgrade URL and cannot be rotated in
+        // place, so without this it keeps delivering the previous user's
+        // rows (see `ShardConnection.identity`), and every subscription
+        // keeps replaying the last of them to each new subscriber.
+        // Sign-out under an upgrade bearer lands here too: it leaves the
+        // previous identity behind.
+        //
+        // Only when there WAS a previous identity, the same test
+        // `rejectQueuedForIdentityChange` applies to the read cache: a
+        // sign-in from signed-out has no other user's session to retire,
+        // so nothing is evicted there (a bearer sign-in still reconnects,
+        // see `reconcileUpgradeBearer`).
+        //
+        // Except under a cookie session the server said was nobody's:
+        // its socket is authenticated by the cookie as it was at the
+        // upgrade — anonymous — and keeps serving that, never the user
+        // who signed in since, until it is replaced.
+        if (!leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
+            return false;
+        }
+
+        this.evictPreviousIdentitySession();
+
+        return true;
+    }
+
+    /**
+     * How the open sockets must follow a bearer change when the transport
+     * presents the bearer on the upgrade (React Native's `Authorization`
+     * header). An open upgrade keeps the token it was made with for its whole
+     * life, and a browser socket never carries it, so without
+     * `authTokenOnUpgrade` nothing reconnects.
+     *
+     * A sign-in from signed-out is `"cold"`: the sockets upgraded anonymously,
+     * and no view may resume from an anonymous cursor. A refreshed bearer under
+     * an unchanged identity is `"warm"`: the subscriptions resume from their
+     * cursors.
+     *
+     * A sign-out or an account switch leaves a previous identity behind and is
+     * evicted by `setAuthToken` before this is asked.
+     */
+    private reconcileUpgradeBearer(previousToken: string | null, token: string | null, identityChanged: boolean): "cold" | "none" | "warm" {
+        if (!this.authTokenOnUpgrade || token === null || previousToken === token) {
+            return "none";
+        }
+
+        if (identityChanged) {
+            return previousToken === null ? "cold" : "none";
+        }
+
+        return previousToken === null ? "none" : "warm";
+    }
+
+    private applyUpgradeBearer(reconnect: "cold" | "none" | "warm"): void {
+        if (reconnect === "cold") {
+            this.resetRoomSends();
+            this.reconnectCold();
+        } else if (reconnect === "warm") {
             this.bounceShardSockets();
         }
     }
