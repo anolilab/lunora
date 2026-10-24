@@ -557,6 +557,7 @@ class LunoraClient {
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
     peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
     peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): {
+        answered: boolean;
         present: boolean;
         value: unknown;
     };
