@@ -14,6 +14,9 @@ const fixtures = join(dirname(fileURLToPath(import.meta.url)), "__tests__", "fix
 // of these, so the aliases are inert for every other suite.
 const registryItemAliases = {
     "#lunora/_generated/server.js": join(fixtures, "generated-server.ts"),
+    // Resolved from this package, because the items sit outside it and would look for it from `registry/`.
+    "@lunora/errors": fileURLToPath(import.meta.resolve("@lunora/errors")),
+    "@lunora/ratelimit": join(fixtures, "lunora-ratelimit.ts"),
     "@lunora/storage": join(fixtures, "lunora-storage.ts"),
     "cloudflare:workers": join(fixtures, "cloudflare-workers.ts"),
 };
