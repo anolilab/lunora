@@ -88,6 +88,16 @@ describe("generateSql", () => {
         }
     });
 
+    it("dISCARDS a numeric weekday: Cloudflare counts Sunday as 1, so 0 is rejected and 1-5 runs Sun-Thu", async () => {
+        expect.assertions(2);
+
+        const sunday = await generateCron(binding("0 0 * * 0"), { prompt: "every sunday" });
+        const weekdays = await generateCron(binding("0 9 * * 1-5"), { prompt: "weekdays at nine" });
+
+        expect(sunday.degraded).toBe(true);
+        expect(weekdays.degraded).toBe(true);
+    });
+
     it("retries once before giving up, so one bad completion is not fatal", async () => {
         expect.assertions(2);
 
@@ -393,7 +403,7 @@ describe("extractCron", () => {
     it("takes the expression out of a fenced, prose-wrapped answer", () => {
         expect.assertions(1);
 
-        expect(extractCron("Here you go:\n```\n0 3 * * 1-5\n```")).toBe("0 3 * * 1-5");
+        expect(extractCron("Here you go:\n```\n0 3 * * MON-FRI\n```")).toBe("0 3 * * MON-FRI");
     });
 
     it("strips the quoting a model wraps a one-liner in", () => {
@@ -413,9 +423,9 @@ describe("generateCron", () => {
     it("returns a validated 5-field expression", async () => {
         expect.assertions(1);
 
-        const result = await generateCron(binding("0 3 * * 1-5"), { prompt: "every weekday at 3am" });
+        const result = await generateCron(binding("0 3 * * MON-FRI"), { prompt: "every weekday at 3am" });
 
-        expect(result.degraded ? undefined : result.cron).toBe("0 3 * * 1-5");
+        expect(result.degraded ? undefined : result.cron).toBe("0 3 * * MON-FRI");
     });
 
     it("dISCARDS a 6-field seconds-leading expression that wrangler deploy would reject", async () => {

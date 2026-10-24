@@ -37,14 +37,21 @@ const MONTH_VALUES: Readonly<Record<string, number>> = {
     sep: 9,
 };
 
-/** Weekday names cron accepts, lowercased, mapped to their field value. */
-const DAY_VALUES: Readonly<Record<string, number>> = { fri: 5, mon: 1, sat: 6, sun: 0, thu: 4, tue: 2, wed: 3 };
+/**
+ * Weekday names cron accepts, lowercased, mapped to their field value.
+ *
+ * Cloudflare numbers the week 1 (Sunday) to 7 (Saturday), not the 0 or 1 = Monday
+ * of classic cron, so these are the platform's numbers.
+ */
+const DAY_VALUES: Readonly<Record<string, number>> = { fri: 6, mon: 2, sat: 7, sun: 1, thu: 5, tue: 3, wed: 4 };
 
 /** One cron field's accepted range, plus the names that stand in for numbers. */
 interface FieldSpec {
     readonly max: number;
     readonly min: number;
     readonly names?: Readonly<Record<string, number>>;
+    /** Reject bare numbers: only the names are unambiguous across cron dialects. */
+    readonly namesOnly?: boolean;
 }
 
 /** The five fields, in order: minute, hour, day-of-month, month, day-of-week. */
@@ -53,8 +60,9 @@ const FIELDS: ReadonlyArray<FieldSpec> = [
     { max: 23, min: 0 },
     { max: 31, min: 1 },
     { max: 12, min: 1, names: MONTH_VALUES },
-    // 7 as well as 0 for Sunday — both are standard, and models emit either.
-    { max: 7, min: 0, names: DAY_VALUES },
+    // Names only: a model writes `1-5` meaning Mon-Fri, which Cloudflare (1 =
+    // Sunday) runs as Sun-Thu, and `0` for Sunday, which `wrangler deploy` rejects.
+    { max: 7, min: 1, names: DAY_VALUES, namesOnly: true },
 ];
 
 /** How many fields a deployable expression has. */
@@ -78,7 +86,7 @@ const valueOf = (token: string | undefined, spec: FieldSpec): number | undefined
         return named;
     }
 
-    return SMALL_INTEGER.test(token) ? Number(token) : undefined;
+    return spec.namesOnly !== true && SMALL_INTEGER.test(token) ? Number(token) : undefined;
 };
 
 /** True when `value` is present and inside the field's range. */
