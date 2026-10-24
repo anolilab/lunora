@@ -423,8 +423,8 @@ catalogs:
       specifier: ^10.11.1
       version: 10.11.1
     fallow:
-      specifier: 3.31.0
-      version: 3.31.0
+      specifier: 3.34.0
+      version: 3.34.0
     prettier:
       specifier: 3.9.9
       version: 3.9.9
@@ -1227,7 +1227,7 @@ importers:
         version: 0.1.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       prettier:
         specifier: catalog:lint
         version: 3.9.9
@@ -1528,7 +1528,7 @@ importers:
         version: 5.0.0(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(oxlint@1.81.0)(supports-color@10.2.2)(typescript@6.0.3)(zod@4.6.5)
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       happy-dom:
         specifier: catalog:web
         version: 20.14.5
@@ -1640,7 +1640,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -1695,7 +1695,7 @@ importers:
         version: 1.0.0
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       tailwindcss:
         specifier: catalog:vite
         version: 4.3.3
@@ -2512,7 +2512,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -2640,7 +2640,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       sqlite-vec:
         specifier: catalog:sql
         version: 0.1.9
@@ -2726,7 +2726,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -2820,7 +2820,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       kysely:
         specifier: catalog:sql
         version: 0.29.6
@@ -2984,7 +2984,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3021,7 +3021,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3154,7 +3154,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       semver:
         specifier: catalog:node
         version: 7.8.5
@@ -3212,7 +3212,7 @@ importers:
         version: 6.2.5
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -3255,7 +3255,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3340,7 +3340,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       prettier:
         specifier: catalog:lint
         version: 3.9.9
@@ -3422,7 +3422,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3465,7 +3465,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3526,7 +3526,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3569,7 +3569,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3600,7 +3600,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3661,7 +3661,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3691,7 +3691,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3718,7 +3718,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3761,7 +3761,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3816,7 +3816,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       mysql-memory-server:
         specifier: catalog:sql
         version: 1.17.0
@@ -3889,7 +3889,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3935,7 +3935,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -3990,7 +3990,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4061,7 +4061,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       h3:
         specifier: ^1.15.11
         version: 1.15.11
@@ -4113,7 +4113,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4174,7 +4174,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       stripe:
         specifier: catalog:payment
         version: 23.0.0(@types/node@26.6.4)
@@ -4207,7 +4207,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4280,7 +4280,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4317,7 +4317,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4399,7 +4399,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4482,7 +4482,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4534,7 +4534,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4604,7 +4604,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       jsdom:
         specifier: catalog:frontend
         version: 30.1.2(@noble/hashes@2.2.0)
@@ -4659,7 +4659,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -4821,7 +4821,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       hono:
         specifier: catalog:http
         version: 4.13.13
@@ -4876,7 +4876,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4910,7 +4910,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4950,7 +4950,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5017,7 +5017,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5075,7 +5075,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5130,7 +5130,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       jsdom:
         specifier: catalog:frontend
         version: 30.1.2(@noble/hashes@2.2.0)
@@ -5191,7 +5191,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5243,7 +5243,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5379,7 +5379,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       jsdom:
         specifier: catalog:frontend
         version: 30.1.2(@noble/hashes@2.2.0)
@@ -5437,7 +5437,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       rollup-plugin-svelte:
         specifier: catalog:build
         version: 7.2.3(rollup@4.63.1)(svelte@5.57.1(@typescript-eslint/types@8.71.0))
@@ -5516,7 +5516,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5550,7 +5550,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5593,7 +5593,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
@@ -5642,7 +5642,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5712,7 +5712,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -5770,7 +5770,7 @@ importers:
         version: 0.28.2
       fallow:
         specifier: catalog:lint
-        version: 3.31.0
+        version: 3.34.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -8226,43 +8226,43 @@ packages:
     resolution: {integrity: sha512-bsxD8WLS5lIj7aaoCx1YJkktqYj5vlBUE6HWzu2Q51ksrGJ0H737ECCKlFU7Yf8Br45z9t99frBp/J7kzbMPAg==}
     engines: {node: ^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0, npm: '>=10'}
 
-  '@fallow-cli/darwin-arm64@3.31.0':
-    resolution: {integrity: sha512-dF6yAuy27hmfRoVIAQd4DzF+o7kYZXk+iGree4fUDCmV8/4CBiy16UgS2lGRDOK5f+60rpxotHI8lZJxJVLhhw==}
+  '@fallow-cli/darwin-arm64@3.34.0':
+    resolution: {integrity: sha512-x4tNB82CUF++90QR2QesQOtnIMrhW7UO1Y6ffWuAC0ZDlWbP7qb4KAqEXrD0latrIwEdBQXktyAj1tTEpSKJdQ==}
     cpu: [arm64]
     os: [darwin]
 
-  '@fallow-cli/darwin-x64@3.31.0':
-    resolution: {integrity: sha512-Ecc+iWGCdGPPzs5WZTMc7JR6hsk8fnz5FgW9OaBTGoEt+VXjaftgcczt5ZnQ0JGeoNkLMcGZoTRR3rgyIhGN2w==}
+  '@fallow-cli/darwin-x64@3.34.0':
+    resolution: {integrity: sha512-OcvZRFzHAH1vSrxdEOTOGVcoW0TOR5ko4+1ehVFXk6JMbdkj3X4mebXjz4UU/RIfajmniE8pizStnFPPoQkZ4g==}
     cpu: [x64]
     os: [darwin]
 
-  '@fallow-cli/linux-arm64-gnu@3.31.0':
-    resolution: {integrity: sha512-r3pP/05e166wHojqCsPd5VKcNuuaQqgI9Pn0wFHHn5z4IScnJ3+c/dtHoDiTycjbljelvA9BtPIHHGLpQwSCdA==}
+  '@fallow-cli/linux-arm64-gnu@3.34.0':
+    resolution: {integrity: sha512-+HuqJ7nHXLVsmHq7AHaLlLf8ml4qYv7IisxEiQUPthMCo+fsPi9CcdXhHcn/x+mOtcE/1vPLPgKCyWivZTiXTA==}
     cpu: [arm64]
     os: [linux]
 
-  '@fallow-cli/linux-arm64-musl@3.31.0':
-    resolution: {integrity: sha512-SGszyguijybUH+BF4Sw5G6ZwMN/dst8osnd1LZwNJU9RVMtXetzJkqgN6GEYH4WPc/sF/HnZzGdML5EECbt6Zw==}
+  '@fallow-cli/linux-arm64-musl@3.34.0':
+    resolution: {integrity: sha512-pI7ZcB3FYV9FuE9FotpvKN/RZ4nsiWcI77HLd+GRUTEQf/I4xjg91/c8dBjOCq7FBb2gq5EV6WkQBxBKcSN1XA==}
     cpu: [arm64]
     os: [linux]
 
-  '@fallow-cli/linux-x64-gnu@3.31.0':
-    resolution: {integrity: sha512-AwrK0b1TyImD/f3v84X1inxD2YqFDLM8VA8P7B9w5LvHnSuSoKAcbKURVevZHx7W3AbOPQabQ+oZTGNuRrqnyg==}
+  '@fallow-cli/linux-x64-gnu@3.34.0':
+    resolution: {integrity: sha512-nvqgcvF9jhO47tJhUiJFA12mj+Ei7aM0ipcV/uzkjkO4GR1bzaV7VODlU5JjwlN+NxXHxQLCNVaJikdX3a4k6w==}
     cpu: [x64]
     os: [linux]
 
-  '@fallow-cli/linux-x64-musl@3.31.0':
-    resolution: {integrity: sha512-/tUsbshrv7ZjJAyhhBG179C48uY7UsQbyXBx2V7Z8rXtgS3ry+JchutFLn0wL0zoa0Kt9rlweM0CHCdr/dEWVA==}
+  '@fallow-cli/linux-x64-musl@3.34.0':
+    resolution: {integrity: sha512-VH1NjbvLiY1dOXdNIhnWFvgS7ZDKTJhsestfSEWX1rJZoExIu9Fnpct0LEwhckhvQ2IqCg26DGhx/TZkCBc5Sw==}
     cpu: [x64]
     os: [linux]
 
-  '@fallow-cli/win32-arm64-msvc@3.31.0':
-    resolution: {integrity: sha512-PitieOar3H5NgxSKQiB0wSJjuR/87/mlt5ZeI49gaEqiGnxKNH2E+EPE3LUQSLyBsCcNH0YsTBadpz3WpFoWzg==}
+  '@fallow-cli/win32-arm64-msvc@3.34.0':
+    resolution: {integrity: sha512-o4y7orN2+RPUvI8RK2KhH+neO2xdbJypS06iYtvx4krNGXAd2VP1MImQGVSD0Lej9oDXUNVOMDb2JSSvamSwbA==}
     cpu: [arm64]
     os: [win32]
 
-  '@fallow-cli/win32-x64-msvc@3.31.0':
-    resolution: {integrity: sha512-TubWjDJSNYB3O146k33xcXIhMl7txOKJyMcui+AFTC1jxfUF1awBoNuZT6fPR6/mDV5NV9Bo8SLWG/hJN8igBQ==}
+  '@fallow-cli/win32-x64-msvc@3.34.0':
+    resolution: {integrity: sha512-YxehTJxGtJQQCvdA2+av9y+PsFK1niAxjF3fDPvZYjnVNjeVd/CB1aGL+NkCkkRB2q9VWPp2g+AdV6QAbtX30g==}
     cpu: [x64]
     os: [win32]
 
@@ -18991,13 +18991,13 @@ packages:
     resolution: {integrity: sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==}
     engines: {node: '>=18'}
 
-  fallow-type-aware@3.31.0:
-    resolution: {integrity: sha512-kE4l8so/qyyP2RHvmLwz9ch637xVHRGy8gyeKQ4X0DNhmdxvvctxqLzFNXrWOJaEaQkpAL+x3mZArtGzhG42MA==}
+  fallow-type-aware@3.34.0:
+    resolution: {integrity: sha512-44HHnbjos8vqsmwxAkfFBWstgvp+knjX8L47kk1zxCmTFiNQ8jVd4vxpLP4WniJuLZP1HDAensnJKOxuE6Ysdw==}
     engines: {node: '>=20'}
     hasBin: true
 
-  fallow@3.31.0:
-    resolution: {integrity: sha512-grYLCk3DoKFR1jbdJhI6t2AXou0SecJa0Thg/rULTNd8tU9/eGLKRCwzmYqZhkWXEbxT7Oh4TGNNUZXO6+KzuQ==}
+  fallow@3.34.0:
+    resolution: {integrity: sha512-+G/GsTdXQmixP7uuJKqJc5Fwp0H24TP+5QvAzjuVXKqGFyPCFhlNoaGzQ6XLr/VqZkbIbtA4fUJOBDg7HEjIqw==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -28524,28 +28524,28 @@ snapshots:
 
   '@faker-js/faker@10.5.0': {}
 
-  '@fallow-cli/darwin-arm64@3.31.0':
+  '@fallow-cli/darwin-arm64@3.34.0':
     optional: true
 
-  '@fallow-cli/darwin-x64@3.31.0':
+  '@fallow-cli/darwin-x64@3.34.0':
     optional: true
 
-  '@fallow-cli/linux-arm64-gnu@3.31.0':
+  '@fallow-cli/linux-arm64-gnu@3.34.0':
     optional: true
 
-  '@fallow-cli/linux-arm64-musl@3.31.0':
+  '@fallow-cli/linux-arm64-musl@3.34.0':
     optional: true
 
-  '@fallow-cli/linux-x64-gnu@3.31.0':
+  '@fallow-cli/linux-x64-gnu@3.34.0':
     optional: true
 
-  '@fallow-cli/linux-x64-musl@3.31.0':
+  '@fallow-cli/linux-x64-musl@3.34.0':
     optional: true
 
-  '@fallow-cli/win32-arm64-msvc@3.31.0':
+  '@fallow-cli/win32-arm64-msvc@3.34.0':
     optional: true
 
-  '@fallow-cli/win32-x64-msvc@3.31.0':
+  '@fallow-cli/win32-x64-msvc@3.34.0':
     optional: true
 
   '@fastify/accept-negotiator@2.0.1': {}
@@ -41284,24 +41284,24 @@ snapshots:
 
   fake-indexeddb@6.2.5: {}
 
-  fallow-type-aware@3.31.0:
+  fallow-type-aware@3.34.0:
     dependencies:
       typescript: 6.0.3
     optional: true
 
-  fallow@3.31.0:
+  fallow@3.34.0:
     dependencies:
       detect-libc: 2.1.2
     optionalDependencies:
-      '@fallow-cli/darwin-arm64': 3.31.0
-      '@fallow-cli/darwin-x64': 3.31.0
-      '@fallow-cli/linux-arm64-gnu': 3.31.0
-      '@fallow-cli/linux-arm64-musl': 3.31.0
-      '@fallow-cli/linux-x64-gnu': 3.31.0
-      '@fallow-cli/linux-x64-musl': 3.31.0
-      '@fallow-cli/win32-arm64-msvc': 3.31.0
-      '@fallow-cli/win32-x64-msvc': 3.31.0
-      fallow-type-aware: 3.31.0
+      '@fallow-cli/darwin-arm64': 3.34.0
+      '@fallow-cli/darwin-x64': 3.34.0
+      '@fallow-cli/linux-arm64-gnu': 3.34.0
+      '@fallow-cli/linux-arm64-musl': 3.34.0
+      '@fallow-cli/linux-x64-gnu': 3.34.0
+      '@fallow-cli/linux-x64-musl': 3.34.0
+      '@fallow-cli/win32-arm64-msvc': 3.34.0
+      '@fallow-cli/win32-x64-msvc': 3.34.0
+      fallow-type-aware: 3.34.0
 
   fast-deep-equal@3.1.3: {}
 
