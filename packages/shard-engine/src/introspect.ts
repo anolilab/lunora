@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import { decodeWire, encodeWire, WIRE_TAG } from "@lunora/wire";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "@lunora/wire";
 // Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
@@ -1400,20 +1400,30 @@ const buildArrayContains = (
 };
 
 /**
- * The JSON text a nested leaf holding `value` is stored as, when that is a
- * wire-tagged frame (bigint, bytes, date, map, set …). The document writer stores
+ * The JSON text a nested leaf holding `value` is stored as, when `value` is not a
+ * plain JSON scalar, array or object. The document writer stores
  * `JSON.stringify(encodeWire(…))`, so the same text compares equal to what
- * `json_extract` returns for the leaf.
- * @returns the frame text, or `undefined` when the value is stored as a plain JSON scalar, array or object
+ * `json_extract` returns for the leaf. That covers a wire-typed value itself
+ * (bigint, bytes, date, map, set …) and an object or array that holds one
+ * anywhere inside: `{ n: 1n }` is stored as `{"n":["$lunora.wire$","bigint","1"]}`,
+ * which neither `JSON.stringify` (it throws on a bigint) nor a plain projection
+ * reproduces.
+ * @returns the stored text, or `undefined` when the value is stored exactly as `JSON.stringify` would write it
+ * @throws LunoraError `BAD_REQUEST` when the value cannot be stored at all
  */
-const nestedWireFrameText = (value: unknown): string | undefined => {
+const nestedStoredText = (value: unknown): string | undefined => {
     if (value === null || value === undefined || typeof value === "string" || typeof value === "boolean") {
         return undefined;
     }
 
-    const encoded = encodeWire(value);
-
-    return Array.isArray(encoded) && encoded[0] === WIRE_TAG ? JSON.stringify(encoded) : undefined;
+    try {
+        return needsWireEncoding(value) ? JSON.stringify(encodeWire(value)) : undefined;
+    } catch (error: unknown) {
+        // `encodeWire` throws a bare `TypeError` for a non-plain object and a
+        // `RangeError` past its depth cap, which would reach the caller as an
+        // opaque redacted failure.
+        throw new LunoraError("BAD_REQUEST", `this filter value cannot be compared: ${error instanceof Error ? error.message : String(error)}`);
+    }
 };
 
 /**
@@ -1426,13 +1436,14 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
     // stored as the wire-tagged array, and `json_extract` hands that array back as
     // JSON text. The scalar `filterBindValue` produces for a top-level field never
     // equals it, so equality would miss the row and inequality would select it.
-    const frame = nestedWireFrameText(clause.value);
+    // The same holds for an object or array that holds one of them.
+    const frame = nestedStoredText(clause.value);
 
     if (frame !== undefined) {
         if (clause.operator !== "eq" && clause.operator !== "ne") {
             throw new LunoraError(
                 "BAD_REQUEST",
-                `a bigint, bytes, date, map or set value nested under ${clause.column} can only be compared with = or <>, got ${clause.operator}`,
+                `a value nested under ${clause.column} that holds a bigint, bytes, date, map or set can only be compared with = or <>, got ${clause.operator}`,
             );
         }
 
@@ -1502,7 +1513,21 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
             throw new LunoraError("BAD_REQUEST", `"contains" is not supported on bigint column ${clause.column} — use =, <, > instead`);
         }
 
-        return { params: [...pathParameters, filterValueText(clause.value)], sql: containsSql(expression) };
+        const term = filterValueText(clause.value);
+
+        if (path.length === 0) {
+            return { params: [...pathParameters, term], sql: containsSql(expression) };
+        }
+
+        // A nested leaf has no declared kind, so its stored shape is checked here: a
+        // bigint, bytes, date, map or set sits as a wire-tagged array and an object or
+        // array as JSON text, and `json_extract` returns either as text a search for
+        // `bigint` or a field name would hit, then bulk delete would remove the row.
+        // Only a text or numeric leaf holds a value the operator can have typed.
+        return {
+            params: [...pathParameters, ...pathParameters, term],
+            sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) IN ('text', 'integer', 'real') AND ${containsSql(expression)})`,
+        };
     }
 
     if (clause.value === null && (clause.operator === "eq" || clause.operator === "ne")) {
@@ -1534,6 +1559,19 @@ const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINA
     .join(" AND ");
 
 /**
+ * Excludes the two leading elements of a wire frame (`["$lunora.wire$","bigint","123"]`):
+ * the tag and the type name are the codec's, not a value the operator stored, so a
+ * search for `bigint` or `date` must not select the row (and a bulk delete must not
+ * remove it). The payload from element 2 on stays searchable, because it is the
+ * value itself: the digits of a bigint, the epoch of a date. A sibling lookup by
+ * `parent` id rather than by `path`, so no stored key is ever parsed as a JSON path.
+ * A user array that starts with the tag is stored inside an `arr` frame and its
+ * first two elements are hidden from search too, which can only lose a match.
+ */
+const wireFrameTagExclusion = (documentExpression: string): string =>
+    `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}'))`;
+
+/**
  * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
  * at any depth — never its keys.
  *
@@ -1560,7 +1598,7 @@ const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINA
  * a string built per leaf — is only materialised for leaves that matched.
  */
 const documentValuesContainSql = (documentExpression: string): string =>
-    `(${containsSql(documentExpression)} AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION}))`;
+    `(${containsSql(documentExpression)} AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION} AND ${wireFrameTagExclusion(documentExpression)}))`;
 
 /** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
 // eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point

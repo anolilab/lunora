@@ -392,6 +392,135 @@ describe("readTablePage — nested paths and array membership", () => {
         });
     });
 
+    // Rows go through the real encoder so a nested bigint, Date or bytes is stored
+    // exactly as the writer would store it. A separate table keeps the exact-list
+    // assertions of the block above untouched.
+    describe("composite values and text search under a nested path", () => {
+        beforeEach(() => {
+            const rows: [string, Record<string, unknown>][] = [
+                ["c1", { meta: { box: { n: 1n }, count: 42, list: [new Date(3), new Uint8Array([1])], note: "bigint here" } }],
+                ["c2", { meta: { box: { n: 2n }, count: 7, list: [new Date(4)], note: "plain" } }],
+                ["c3", { meta: { box: { name: "bigint" }, count: 7, flag: true, list: ["a"] } }],
+            ];
+
+            database.raw(`CREATE TABLE "composite" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+
+            for (const [id, document] of rows) {
+                database.sql.exec(`INSERT INTO "composite" VALUES (?, ?, ?)`, id, 1, encodeDocJson(document));
+            }
+        });
+
+        const compositeIds = (filters: FilterClause[]): string[] =>
+            readTablePage(database.sql, { filters, table: "composite" }).rows.map((row) => (row as { id: string }).id);
+        const selectedIds = (filters: FilterClause[]): string[] => selectMatchingIds(database.sql, { filters, table: "composite" }).ids;
+
+        it("compares an object holding a bigint against its stored text, on a page and in a bulk-delete scan", () => {
+            expect.assertions(4);
+
+            const eq: FilterClause = { column: "meta", operator: "eq", path: ["box"], value: { n: 1n } };
+            const ne: FilterClause = { ...eq, operator: "ne" };
+
+            expect(compositeIds([eq])).toStrictEqual(["c1"]);
+            expect(selectedIds([eq])).toStrictEqual(["c1"]);
+            // `ne` must not select the row holding that very value.
+            expect(compositeIds([ne])).toStrictEqual(["c2", "c3"]);
+            expect(selectedIds([ne])).toStrictEqual(["c2", "c3"]);
+        });
+
+        it("compares an array holding a Date and bytes against its stored text", () => {
+            expect.assertions(4);
+
+            const eq: FilterClause = { column: "meta", operator: "eq", path: ["list"], value: [new Date(3), new Uint8Array([1])] };
+            const ne: FilterClause = { ...eq, operator: "ne" };
+
+            expect(compositeIds([eq])).toStrictEqual(["c1"]);
+            expect(selectedIds([eq])).toStrictEqual(["c1"]);
+            expect(compositeIds([ne])).toStrictEqual(["c2", "c3"]);
+            expect(selectedIds([ne])).toStrictEqual(["c2", "c3"]);
+        });
+
+        it("still compares a plain object and array byte for byte", () => {
+            expect.assertions(2);
+
+            expect(compositeIds([{ column: "meta", operator: "eq", path: ["box"], value: { name: "bigint" } }])).toStrictEqual(["c3"]);
+            expect(compositeIds([{ column: "meta", operator: "eq", path: ["list"], value: ["a"] }])).toStrictEqual(["c3"]);
+        });
+
+        it("refuses a range comparison on a composite that holds a wire-typed child", () => {
+            expect.assertions(1);
+
+            expect(rejectionOf(() => compositeIds([{ column: "meta", operator: "gt", path: ["box"], value: { n: 1n } }]))?.code).toBe("BAD_REQUEST");
+        });
+
+        it("keeps eq and ne on a scalar exact complements over the rows that hold it", () => {
+            expect.assertions(2);
+
+            // c1 holds a number at `count`; every row has one, so the two sets partition the table.
+            expect(compositeIds([{ column: "meta", operator: "eq", path: ["count"], value: 7 }])).toStrictEqual(["c2", "c3"]);
+            expect(compositeIds([{ column: "meta", operator: "ne", path: ["count"], value: 7 }])).toStrictEqual(["c1"]);
+        });
+
+        it("does not let contains match the codec tag of a nested bigint, Date or bytes", () => {
+            expect.assertions(5);
+
+            for (const [path, term] of [
+                [["box", "n"], "bigint"],
+                [["box", "n"], "lunora"],
+                [["box", "n"], "wire"],
+                [["list"], "date"],
+                [["list"], "bytes"],
+            ] as const) {
+                expect(compositeIds([{ column: "meta", operator: "contains", path: [...path], value: term }])).toStrictEqual([]);
+            }
+        });
+
+        it("does not select a row for a bulk delete only because its nested leaf is a codec tag", () => {
+            expect.assertions(2);
+
+            expect(selectedIds([{ column: "meta", operator: "contains", path: ["box", "n"], value: "bigint" }])).toStrictEqual([]);
+            expect(selectedIds([{ column: "meta", operator: "contains", path: ["list"], value: "date" }])).toStrictEqual([]);
+        });
+
+        it("does not let contains read an object's keys or an array's text", () => {
+            expect.assertions(2);
+
+            expect(compositeIds([{ column: "meta", operator: "contains", path: ["box"], value: "name" }])).toStrictEqual([]);
+            expect(compositeIds([{ column: "meta", operator: "contains", path: ["list"], value: "a" }])).toStrictEqual([]);
+        });
+
+        it("does not let a table-wide search match the codec tag of a nested value, on a page or in a bulk-delete scan", () => {
+            expect.assertions(6);
+
+            const searched = (search: string): string[] =>
+                readTablePage(database.sql, { search, table: "composite" }).rows.map((row) => (row as { id: string }).id);
+            const selected = (search: string): string[] => selectMatchingIds(database.sql, { search, table: "composite" }).ids;
+
+            // c2 holds only `2n`, a Date and no text of its own: it matches `bigint` or `date` through the tag alone.
+            expect(searched("bigint")).toStrictEqual(["c1", "c3"]);
+            expect(selected("bigint")).toStrictEqual(["c1", "c3"]);
+            expect(selected("date")).toStrictEqual([]);
+            expect(selected("bytes")).toStrictEqual([]);
+            expect(selected("lunora")).toStrictEqual([]);
+            expect(selected("wire")).toStrictEqual([]);
+        });
+
+        it("keeps the stored payload of a nested wire-typed value searchable", () => {
+            expect.assertions(1);
+
+            // c2 holds the Date with epoch 4 and nothing else containing a 4; c1 holds 42.
+            expect(selectMatchingIds(database.sql, { search: "4", table: "composite" }).ids).toStrictEqual(["c1", "c2"]);
+        });
+
+        it("keeps contains working on a nested string and a nested number", () => {
+            expect.assertions(4);
+
+            expect(compositeIds([{ column: "meta", operator: "contains", path: ["note"], value: "BIGINT" }])).toStrictEqual(["c1"]);
+            expect(compositeIds([{ column: "meta", operator: "contains", path: ["box", "name"], value: "bigint" }])).toStrictEqual(["c3"]);
+            expect(compositeIds([{ column: "meta", operator: "contains", path: ["count"], value: "42" }])).toStrictEqual(["c1"]);
+            expect(selectedIds([{ column: "meta", operator: "contains", path: ["note"], value: "bigint" }])).toStrictEqual(["c1"]);
+        });
+    });
+
     describe("parameter budget", () => {
         // Each doc-field `eq` clause binds two parameters: its JSON path and its value.
         const eqClauses = (count: number): FilterClause[] =>
