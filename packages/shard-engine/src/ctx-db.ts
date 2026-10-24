@@ -52,6 +52,7 @@ import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
+import { assertWithinBatchCap, DEFAULT_BATCH_LIMIT, resolveBatchCap } from "../../../shared/batch-cap";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
@@ -126,7 +127,6 @@ import type {
     TableDefinitionLike,
     TableReaderLike,
 } from "./schema-types";
-import { DEFAULT_BATCH_LIMIT } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
@@ -493,30 +493,16 @@ const MAX_PROBE_BRANCHES = WORKERD_SQLITE_LIMITS.boundParams;
  */
 const ITERATOR_PAGE_SIZE = 128;
 
+/** A refused batch is a `400`, so the caller sees a clear failure rather than a silent slow path. */
+const batchLimitError = (message: string): LunoraError => new LunoraError("BATCH_LIMIT_EXCEEDED", message, { status: 400 });
+
 /**
  * Reject an over-cap batch write before any row is touched. Enforced by the
  * writer below; the RLS guard delegates its batch methods straight to this
  * writer, so the cap holds whether the guard or the raw writer is outermost.
- * (The RLS middleware in `@lunora/server` keeps its own mirror of this check
- * because its `deleteMany`/`patchMany` loop per-id rather than delegating.)
- * Throws a `400`-class structural error (same shape as the other ctx-db
- * structural throws) so the caller sees a clear failure, not a silent slow path.
  */
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
-    // `Infinity` lifts the cap, so it passes; any other limit must be a non-negative integer.
-    if (limit !== undefined && limit !== Number.POSITIVE_INFINITY && (!Number.isInteger(limit) || limit < 0)) {
-        throw new LunoraError("BATCH_LIMIT_EXCEEDED", `${op}: batch limit must be a non-negative integer`, { status: 400 });
-    }
-
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
-
-    if (count > cap) {
-        throw new LunoraError(
-            "BATCH_LIMIT_EXCEEDED",
-            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
-            { status: 400 },
-        );
-    }
+    assertWithinBatchCap(count, resolveBatchCap(limit, op, batchLimitError), op, batchLimitError);
 };
 
 /**
@@ -534,16 +520,14 @@ const readBatchMatches = async (
     limit: number | undefined,
     op: string,
 ): Promise<Record<string, unknown>[]> => {
-    // Validate the limit before the read, so a bad one never reaches it.
-    assertBatchLimit(0, limit, op);
-
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
+    // Validated before the read, so a bad limit never reaches it.
+    const cap = resolveBatchCap(limit, op, batchLimitError);
     const { page } = await source.findMany(tableName, Number.isFinite(cap) ? { limit: cap + 1, omitContinueCursor: true, where } : { where });
 
     if (page.length > cap) {
         // `Math.max` keeps the throw here (not in deleteMany/patchMany) even if
         // the count and the read ever disagree.
-        assertBatchLimit(Math.max(await source.count(tableName, { where }), page.length), limit, op);
+        assertWithinBatchCap(Math.max(await source.count(tableName, { where }), page.length), cap, op, batchLimitError);
     }
 
     return page;

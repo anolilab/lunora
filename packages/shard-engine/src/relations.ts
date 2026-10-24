@@ -50,7 +50,7 @@ import type {
     ThroughRelationDefinitionLike,
     ValidatorLike,
 } from "./schema-types";
-import { DEFAULT_BATCH_LIMIT, FAN_OUT_BUDGET } from "./schema-types";
+import { FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -637,6 +637,13 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
  */
 const CASCADE_MAX_ROWS = 10_000;
 
+/**
+ * Holder rows an `onDelete` walk reads per page after its probe. Holders are
+ * processed one at a time either way, so this sets how many rows one read
+ * brings back, not how much work runs between reads.
+ */
+const CASCADE_PAGE_SIZE = 500;
+
 /** The parent being deleted and the backend callbacks {@link applyOnDelete} acts through. */
 interface ApplyOnDeleteOptions {
     deletedId: string;
@@ -714,7 +721,7 @@ const walkHolderPages = async (
             await apply(holderId);
         }
 
-        if (page.length < DEFAULT_BATCH_LIMIT) {
+        if (page.length < CASCADE_PAGE_SIZE) {
             return;
         }
 
@@ -789,7 +796,7 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
     const { action, field, holderTable, label, probe, referencedValue } = plan;
 
     await walkHolderPages(
-        () => findHolders(holderTable, field, referencedValue, { limit: DEFAULT_BATCH_LIMIT }),
+        () => findHolders(holderTable, field, referencedValue, { limit: CASCADE_PAGE_SIZE }),
         (holderId) => (action === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, field)),
         () => overLimitError(tableName, label, action),
         `onDelete on "${tableName}" made no progress: ${label} rows still match after being processed`,
@@ -826,7 +833,7 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
  * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
  * `CASCADE_LIMIT` before any holder of any relation of the parent is touched.
  * The first relation applied walks its probed ids as its first page; every
- * later one reads its own. Holders are then re-read {@link DEFAULT_BATCH_LIMIT}
+ * later one reads its own. Holders are then re-read {@link CASCADE_PAGE_SIZE}
  * at a time from the start until a page comes back short — a processed holder
  * no longer matches (deleted, soft-deleted, or its FK nulled). A short page
  * ends the walk, the probe included, so a holder inserted mid-cascade (by a
