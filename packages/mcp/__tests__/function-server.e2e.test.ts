@@ -402,3 +402,44 @@ describe("createFunctionMcpServer when the deployment URL resolves per call", ()
         await client.close();
     });
 });
+
+describe("createFunctionMcpServer when the OpenRPC document is rewritten while it runs", () => {
+    it("lists and calls the tools of the document as it is now, not as it was when the server started", async () => {
+        expect.assertions(3);
+
+        let spec: unknown = SPEC;
+        const deployed = deployment(() => {
+            return { body: { result: { id: "n1", total: 1 } }, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ fetch: deployed.fetch, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+
+        spec = {
+            methods: [method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT })],
+            openrpc: "1.3.2",
+        };
+
+        const removed = await client.listTools();
+
+        expect(removed.tools.map((tool) => tool.name)).toStrictEqual(["billing_get"]);
+
+        spec = {
+            methods: [
+                ...(spec as { methods: unknown[] }).methods,
+                method("notes:list", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT }),
+            ],
+            openrpc: "1.3.2",
+        };
+
+        const added = await client.listTools();
+
+        expect(added.tools.map((tool) => tool.name)).toStrictEqual(["billing_get", "notes_list"]);
+
+        await client.callTool({ arguments: { args: { id: "n1" } }, name: "notes_list" });
+
+        expect(deployed.calls[0]?.functionPath).toBe("notes:list");
+
+        await client.close();
+    });
+});

@@ -39,7 +39,13 @@ interface FunctionMcpServerOptions {
     fetch?: typeof fetch;
     /** The MCP server name clients show. Defaults to `lunora`. */
     name?: string;
-    /** The `openRpcSpec` export of `_generated/openrpc`. */
+
+    /**
+     * The `openRpcSpec` export of `_generated/openrpc`, or a function returning it. A
+     * function is called on every `tools/list` and `tools/call`, so the tools follow a
+     * document that codegen rewrites while the server runs. Return the same object
+     * while the document is unchanged: a different object rebuilds the tools.
+     */
     openRpcSpec: unknown;
     /** The CALLER's bearer. Writes need one: the confirmation digest is keyed by it. */
     token?: string;
@@ -303,10 +309,26 @@ const clientFor = (options: FunctionMcpServerOptions): { clientOf: () => LunoraC
 // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
 const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
-    const { definitions, routes } = functionToolsFromOpenRpc(options.openRpcSpec, { allowWrites });
+    const resolveSpec = (): unknown => (typeof options.openRpcSpec === "function" ? (options.openRpcSpec as () => unknown)() : options.openRpcSpec);
+    const buildTools = (spec: unknown): { spec: unknown; tools: FunctionTools } => {
+        return { spec, tools: functionToolsFromOpenRpc(spec, { allowWrites }) };
+    };
+    let served = buildTools(resolveSpec());
+    const toolsNow = (): FunctionTools => {
+        const spec = resolveSpec();
+
+        if (spec !== served.spec) {
+            served = buildTools(spec);
+        }
+
+        return served.tools;
+    };
     const { clientOf, release } = clientFor(options);
     // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
-    const server = new Server({ name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
+    const server = new Server(
+        { name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version },
+        { capabilities: { tools: { listChanged: true } } },
+    );
 
     // `serveStateless` closes the server after every request, and the SDK has no hook on
     // close that a caller does not already own (`onclose` is set by the CLI). So the
@@ -319,7 +341,7 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
     };
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...definitions] };
+        return { tools: [...toolsNow().definitions] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
@@ -351,7 +373,7 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
                   }),
         };
 
-        return callFunctionTool(client, routes, request.params.name, request.params.arguments ?? {}, allowWrites, context);
+        return callFunctionTool(client, toolsNow().routes, request.params.name, request.params.arguments ?? {}, allowWrites, context);
     });
 
     return server;

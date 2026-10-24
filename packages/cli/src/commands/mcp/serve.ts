@@ -11,8 +11,8 @@
  * editor spawns this process when the project opens — routinely before
  * `lunora dev` is running — and keeps it alive across every restart afterwards.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync, watch } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { readLiveDevServerState } from "@lunora/config";
 import { resolveAdminToken } from "@lunora/config/studio-host";
@@ -62,6 +62,14 @@ interface McpServeResult {
  */
 interface ClosableServer {
     onclose?: () => void;
+    /** Tells the connected client its tool list changed. Only a function server has one to change. */
+    sendToolListChanged?: () => Promise<void>;
+}
+
+/** The OpenRPC document as it was last read, with the mtime it was read at. */
+interface LoadedSpec {
+    mtimeMs: number;
+    spec: unknown;
 }
 
 /** Hostnames that are unambiguously this machine. */
@@ -194,12 +202,32 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     // is running, and the server keeps the URL current when the dev server moves.
     const deploymentUrl = (): string | undefined => options.url ?? readLiveDevServerState(options.cwd)?.url;
 
+    // Codegen rewrites the document after a function is added or renamed, so the tools follow
+    // it: the server re-reads it on each `tools/list` and `tools/call`, and only when its
+    // mtime has moved. A rewrite caught half-done keeps the last complete document.
+    const readSpec = (): LoadedSpec => {
+        return { mtimeMs: statSync(specPath).mtimeMs, spec: JSON.parse(readFileSync(specPath, "utf8")) as unknown };
+    };
+    let loaded: LoadedSpec;
+    const specNow = (): unknown => {
+        try {
+            if (statSync(specPath).mtimeMs !== loaded.mtimeMs) {
+                loaded = readSpec();
+            }
+        } catch {
+            // Mid-rewrite the file can be briefly absent or half-written: serve what was last read.
+        }
+
+        return loaded.spec;
+    };
+
     let server: ClosableServer;
 
     try {
+        loaded = readSpec();
         server = await connect({
             allowWrites: options.allowWrites === true,
-            openRpcSpec: JSON.parse(readFileSync(specPath, "utf8")) as unknown,
+            openRpcSpec: specNow,
             url: deploymentUrl,
             version: options.version,
             ...(options.token === undefined || options.token.length === 0 ? {} : { token: options.token }),
@@ -220,7 +248,20 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
         `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}\n`,
     );
 
-    await waitForClose(server);
+    // The editor keeps its tool list until it hears otherwise, so announce each rewrite of the document.
+    const watcher = watch(dirname(specPath), (_event, fileName) => {
+        if (fileName === "openrpc.json") {
+            server.sendToolListChanged?.().catch((error: unknown) => {
+                writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
+            });
+        }
+    });
+
+    try {
+        await waitForClose(server);
+    } finally {
+        watcher.close();
+    }
 
     return { code: 0, deployment: undefined };
 };

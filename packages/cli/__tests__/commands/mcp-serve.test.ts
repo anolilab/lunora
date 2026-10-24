@@ -213,8 +213,69 @@ describe("lunora mcp serve", () => {
             );
 
             expect(code).toBe(0);
-            expect(connect.mock.calls[0]?.[0].openRpcSpec).toStrictEqual({ methods: [] });
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [] });
             expect(connect.mock.calls[0]?.[0]).not.toHaveProperty("token");
+        });
+
+        it("--functions announces each rewrite of the OpenRPC document, and serves the rewritten one", async () => {
+            expect.assertions(3);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, JSON.stringify({ methods: [] }), "utf8");
+
+            let markReady: () => void = () => undefined;
+            const ready = new Promise<void>((resolve) => {
+                markReady = resolve;
+            });
+            let announce: () => void = () => undefined;
+            const announced = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            let closeServer: () => void = () => undefined;
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(async () => {
+                const server: ClosableServer = {
+                    sendToolListChanged: async () => {
+                        announce();
+                    },
+                };
+
+                Object.defineProperty(server, "onclose", {
+                    set(handler: () => void) {
+                        closeServer = handler;
+                    },
+                });
+
+                return server;
+            });
+
+            const serving = runMcpServe(
+                {
+                    cwd: workdir,
+                    functions: true,
+                    url: "http://localhost:8787",
+                    version: "1.0.0",
+                    writeError: (message) => {
+                        if (message.includes("ready")) {
+                            markReady();
+                        }
+                    },
+                },
+                undefined,
+                connect,
+            );
+
+            // The watcher is set up right after the ready line, so a rewrite past it is seen.
+            await ready;
+            writeFileSync(specPath, JSON.stringify({ methods: [{ name: "notes:list" }] }), "utf8");
+            await announced;
+
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [{ name: "notes:list" }] });
+
+            closeServer();
+
+            await expect(serving).resolves.toStrictEqual({ code: 0, deployment: undefined });
+            expect(connect).toHaveBeenCalledTimes(1);
         });
 
         it("is read-only unless --allow-writes is passed", async () => {
