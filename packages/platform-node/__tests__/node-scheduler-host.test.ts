@@ -145,6 +145,45 @@ describe("createNodeSchedulerHost", () => {
         }
     });
 
+    it("retries a claim that failed with the database busy instead of stranding the job", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-scheduler-"));
+        const path = join(directory, "scheduler.sqlite3");
+        const delivered: string[] = [];
+        // No busy wait, so the claim throws SQLITE_BUSY at once while the other connection holds the write lock.
+        const database = new Database(path, { timeout: 0 });
+        const otherProcess = new Database(path);
+        const host = createNodeSchedulerHost(database, {
+            onDispatch: (functionPath: string): void => {
+                delivered.push(functionPath);
+            },
+        });
+
+        try {
+            await host.scheduler.schedule("jobs:run", {}, { delayMs: 50 });
+
+            otherProcess.exec("BEGIN IMMEDIATE");
+
+            await vi.advanceTimersByTimeAsync(100);
+
+            expect(delivered).toStrictEqual([]);
+
+            otherProcess.exec("COMMIT");
+
+            await vi.advanceTimersByTimeAsync(5000);
+
+            expect(delivered).toStrictEqual(["jobs:run"]);
+        } finally {
+            host.dispose();
+            database.close();
+            otherProcess.close();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("starts when another process adds the claim column between its check and its ALTER", async () => {
         expect.assertions(1);
 

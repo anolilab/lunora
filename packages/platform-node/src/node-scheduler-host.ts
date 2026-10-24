@@ -78,6 +78,8 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 const CLAIM_LEASE_MS = 60_000;
 // Renewed well inside the lease, so a handler that runs past it keeps the row.
 const CLAIM_RENEW_MS = CLAIM_LEASE_MS / 3;
+// A claim that throws (SQLITE_BUSY while another process holds the write lock) is retried after this.
+const CLAIM_RETRY_MS = 1000;
 
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
@@ -354,10 +356,22 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
 
         const now = Date.now();
-        const row = claimJob.get(now, id, now, now - CLAIM_LEASE_MS);
+        let row: JobRow | undefined;
 
-        if (row === undefined) {
-            followUnclaimedJob(id);
+        try {
+            row = claimJob.get(now, id, now, now - CLAIM_LEASE_MS);
+
+            if (row === undefined) {
+                followUnclaimedJob(id);
+
+                return;
+            }
+        } catch {
+            // The timer is already spent and the row is still pending, so without a re-arm nothing
+            // would run it again until the next construction.
+            if (!closed && isOpen()) {
+                armJob(id, Date.now() + CLAIM_RETRY_MS);
+            }
 
             return;
         }
