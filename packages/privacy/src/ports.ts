@@ -33,7 +33,8 @@ interface DataPort {
 
 /**
  * Where a request's files are kept between steps and in the end. `put` must key a request's
- * files under `${requestId}/`, so listing that prefix finds every file the request wrote.
+ * files under `${requestId}/` and keep the file's name in the key, so listing that prefix finds
+ * every file the request wrote and an export run finds its own by the id its names start with.
  */
 interface StorePort {
     /** Remove one stored object. Removing a key that is not there is not an error. */

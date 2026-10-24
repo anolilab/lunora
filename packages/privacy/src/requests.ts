@@ -11,7 +11,7 @@ import { LunoraError } from "@lunora/errors";
 import type { DeadlinePolicy } from "./deadlines";
 import { DEFAULT_DEADLINES, dueAt, extendedDueAt } from "./deadlines";
 import type { RequestStatus, RequestType } from "./lifecycle";
-import { canCancel, canExtend, erasureGraceUntil, isRequestStatus, isTerminal, transition } from "./lifecycle";
+import { canCancel, canExtend, erasureGraceUntil, isTerminal, transition } from "./lifecycle";
 
 /** A request as the service sees it. */
 interface RequestRecord {
@@ -29,81 +29,6 @@ interface RequestRecord {
     readonly subjectId: string;
     readonly type: RequestType;
 }
-
-/**
- * A request as a workflow step returns it: every date as an ISO string, so the result survives
- * the JSON round trip a durable host stores it through. An unset field is left out, as JSON would.
- */
-const toStepRecord = (record: RequestRecord): Readonly<Record<string, string>> => {
-    const step: Record<string, string> = {};
-
-    for (const [key, value] of Object.entries(record)) {
-        if (value !== undefined) {
-            step[key] = value instanceof Date ? value.toISOString() : String(value);
-        }
-    }
-
-    return step;
-};
-
-const malformedStep = (field: string): LunoraError => new LunoraError("INTERNAL", `A workflow step returned a privacy request with a malformed "${field}".`);
-
-/**
- * Read a request back from its step form, with every date a `Date` again. The step store is
- * outside the package, so every field is checked here and a malformed one throws.
- */
-const fromStepRecord = (step: unknown): RequestRecord => {
-    if (typeof step !== "object" || step === null) {
-        throw malformedStep("record");
-    }
-
-    const fields = new Map<string, unknown>(Object.entries(step));
-
-    const text = (key: string): string => {
-        const value = fields.get(key);
-
-        if (typeof value !== "string") {
-            throw malformedStep(key);
-        }
-
-        return value;
-    };
-    const date = (key: string): Date => {
-        const value = new Date(text(key));
-
-        if (Number.isNaN(value.getTime())) {
-            throw malformedStep(key);
-        }
-
-        return value;
-    };
-    const has = (key: string): boolean => fields.get(key) !== undefined;
-
-    const status = text("status");
-    const type = text("type");
-
-    if (!isRequestStatus(status)) {
-        throw malformedStep("status");
-    }
-
-    if (type !== "export" && type !== "erasure") {
-        throw malformedStep("type");
-    }
-
-    return {
-        dueAt: date("dueAt"),
-        id: text("id"),
-        receivedAt: date("receivedAt"),
-        status,
-        subjectId: text("subjectId"),
-        type,
-        ...(has("erasureGraceUntil") ? { erasureGraceUntil: date("erasureGraceUntil") } : {}),
-        ...(has("expiresAt") ? { expiresAt: date("expiresAt") } : {}),
-        ...(has("extendedDueAt") ? { extendedDueAt: date("extendedDueAt") } : {}),
-        ...(has("reason") ? { reason: text("reason") } : {}),
-        ...(has("storageKey") ? { storageKey: text("storageKey") } : {}),
-    };
-};
 
 /** The storage the service needs. The app implements it over `ctx.db`. */
 interface RequestStore {
@@ -190,7 +115,11 @@ const cancelRequest = async (store: RequestStore, input: { id: string; now: Date
 
     const status = transition(record.status, "cancelled");
 
-    await store.update(record.id, { status });
+    // Conditional on the status read above: a run that started in the meantime must not be overwritten.
+    if (!(await store.claim(record.id, record.status, { status }))) {
+        throw new LunoraError("UNPROCESSABLE", `A ${record.type} request can no longer be cancelled.`);
+    }
+
     await store.addEvent(record.id, input.now, "cancelled");
 
     return { ...record, status };
@@ -212,4 +141,4 @@ const extendRequest = async (store: RequestStore, input: { deadlines?: DeadlineP
     return { ...record, extendedDueAt: extended, reason: input.reason };
 };
 
-export { cancelRequest, type ErasureSettings, extendRequest, fromStepRecord, openRequest, type RequestRecord, type RequestStore, requireRequest, toStepRecord };
+export { cancelRequest, type ErasureSettings, extendRequest, openRequest, type RequestRecord, type RequestStore, requireRequest };

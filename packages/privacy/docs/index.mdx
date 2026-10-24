@@ -61,7 +61,7 @@ export const privacyConfig = {
                   newId: () => crypto.randomUUID(),
               }
             : // A workflow step has no `ctx.db`: every port call goes through the internal `privacyPort` mutation.
-              remotePorts((call) => ctx.run(internal.privacy.privacyPort, call)),
+              remotePorts((call, options) => ctx.run(internal.privacy.privacyPort, call, options)),
 };
 
 export const privacyFor = definePrivacy(privacyConfig);

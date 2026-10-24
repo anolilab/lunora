@@ -5,7 +5,7 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { setup } from "./harness";
+import { exportFileOf, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -112,7 +112,7 @@ describe("retention during erasure", () => {
 
         await privacy.runExport(opened.id);
 
-        const archive = unzipSync(files.files.get(`${opened.id}/export.zip`) as Uint8Array);
+        const archive = unzipSync(files.files.get(exportFileOf(files, opened.id, "export.zip")) as Uint8Array);
         const manifest = JSON.parse(new TextDecoder().decode(archive["manifest.json"])) as { datasets: { id: string; restricted: boolean }[] };
 
         expect(manifest.datasets.map(({ id, restricted }) => [id, restricted])).toStrictEqual([

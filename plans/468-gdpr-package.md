@@ -501,6 +501,14 @@ no-op, so a redelivered start is safe.
 
 ### 4.6 Export workflow (`privacyExport`)
 
+**Implemented file layout (supersedes the paths below).** Each export run takes a run id from a
+journaled step and writes its files under `<requestId>/<runId>/`: `parts/<dataset>.json`,
+`export.zip` and `summary.pdf`. A run that loses the ready claim deletes only its own files, so
+two runs of one export never touch each other's archive. **Upgrade:** an export in flight across
+this change fails at its assemble step, because its journaled collect steps were recorded under the
+old flat names. An operator retries it. This is accepted as a documented breaking change on `alpha`;
+no read fallback for the old names.
+
 **Steps:**
 
 1. `privacy/v1/export/begin`: mark the request `processing`.

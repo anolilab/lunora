@@ -96,6 +96,10 @@ export const memoryFiles = (): MemoryFiles => {
  * A data port over per-table row counts. Each erase batch clears up to 100 rows
  * from every table, as a real port would, and `remaining` reports what is left.
  */
+/** The key of a file an export run wrote, which sits under the request id and then the run id. */
+export const exportFileOf = (files: MemoryFiles, requestId: string, name: string): string =>
+    [...files.files.keys()].find((key) => key.startsWith(`${requestId}/`) && key.endsWith(`/${name}`)) ?? `${requestId}/<no ${name}>`;
+
 export const memoryData = (initial: Readonly<Record<string, number>> = {}): DataPort & { rows: Record<string, number> } => {
     const rows: Record<string, number> = { ...initial };
 

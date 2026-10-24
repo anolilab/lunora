@@ -163,6 +163,118 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_table_unclassified: "notes"/u);
     });
 
+    it("classifies a table by a v.id of the users table even when its owner column has another name", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.optional(v.id("users")) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("leaves a table alone when its v.id names a table that is not a user table", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    tags: defineTable({ label: v.string(), postId: v.id("posts") }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).not.toThrow();
+    });
+
+    it("classifies a v.id of a renamed auth user table as user data", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: {
+                "privacy.ts": `import { authDataset, definePrivacy } from "@lunora/privacy";\n\nexport const auth = authDataset({ user: "people" });\n\nexport const privacy = definePrivacy({ datasets: [auth] });\n`,
+            },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.optional(v.id("people")) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("classifies a table by a nullable v.id of the users table, a union with v.null()", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), author: v.union(v.id("users"), v.null()) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("classifies a table by a v.id of the users table nested in a v.object column", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), meta: v.object({ owner: v.id("users") }) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
+    it("classifies a table by a v.id of the users table in a v.object whose fields are a const", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: { "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nexport const privacy = definePrivacy({ datasets: [] });\n` },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const metaFields = { owner: v.id("users") };
+
+export default defineSchema({
+    notes: defineTable({ body: v.string(), meta: v.object(metaFields) }),
+});
+`,
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_table_unclassified: "notes"/u);
+    });
+
     it("checks a table whose name starts with privacy_", () => {
         expect.assertions(1);
 

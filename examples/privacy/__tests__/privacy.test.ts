@@ -91,8 +91,9 @@ describe("privacy example", () => {
         const part = await t.run(async (ctx) =>
             appCtx(ctx)
                 .db.query("exportFiles")
-                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id).eq("name", "parts/tasks.json"))
-                .first(),
+                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id))
+                .collect()
+                .then((rows) => rows.find((row) => row.name.endsWith("/parts/tasks.json"))),
         );
         const stored = JSON.parse(part?.body ?? "{}") as { tables: { tasks: { title: string }[] } };
 
@@ -101,8 +102,9 @@ describe("privacy example", () => {
         const archive = await t.run(async (ctx) =>
             appCtx(ctx)
                 .db.query("exportFiles")
-                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id).eq("name", "export.zip"))
-                .first(),
+                .withIndex("byRequestAndName", (q) => q.eq("requestId", request.id))
+                .collect()
+                .then((rows) => rows.find((row) => row.name.endsWith("/export.zip"))),
         );
 
         expect(archive?.encoding).toBe("base64");
