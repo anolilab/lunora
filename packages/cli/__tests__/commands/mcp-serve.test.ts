@@ -160,8 +160,8 @@ describe("lunora mcp serve", () => {
             expect((passed?.deployment as () => unknown)()).toStrictEqual({ url: "http://localhost:8787" });
         });
 
-        it("--functions asks for the generated OpenRPC document when it is missing", async () => {
-            expect.assertions(2);
+        it("--functions starts before the document exists, with no functions, and says how to create it", async () => {
+            expect.assertions(3);
 
             const written: string[] = [];
             const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
@@ -172,8 +172,32 @@ describe("lunora mcp serve", () => {
                 connect,
             );
 
-            expect(code).toBe(1);
+            expect(code).toBe(0);
             expect(written.join("")).toContain("lunora codegen --api-spec openrpc");
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+        });
+
+        it("--functions reports a document that exists but does not parse, once, and keeps serving no functions", async () => {
+            expect.assertions(3);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, "{ not json", "utf8");
+
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            const openRpcSpec = connect.mock.calls[0]?.[0].openRpcSpec as () => unknown;
+
+            expect(openRpcSpec()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+            expect(openRpcSpec()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+            expect(written.filter((message) => message.includes("did not load"))).toHaveLength(1);
         });
 
         it("--functions starts before lunora dev is running, and finds the deployment on a later call", async () => {

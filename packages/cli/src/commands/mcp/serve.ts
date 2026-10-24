@@ -200,35 +200,46 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     const writeError = options.writeError ?? writeToStderr;
     const specPath = join(options.cwd, "lunora", "_generated", "openrpc.json");
 
-    if (!existsSync(specPath)) {
-        writeError(`lunora mcp serve --functions: ${specPath} is missing. Run \`lunora codegen --api-spec openrpc\` first.\n`);
-
-        return { code: 1, deployment: undefined };
-    }
-
     // Resolved on every call, not once: the editor starts this process before `lunora dev`
     // is running, and the server keeps the URL current when the dev server moves.
     const deploymentUrl = (): string | undefined => options.url ?? readLiveDevServerState(options.cwd)?.url;
 
-    // Codegen rewrites the document after a function is added or renamed, so the tools follow
-    // it: the server re-reads it on each `tools/list` and `tools/call`, and only when its
-    // mtime has moved. A rewrite caught half-done keeps the last complete document.
-    const readSpec = (): LoadedSpec => {
-        return { mtimeMs: statSync(specPath).mtimeMs, spec: JSON.parse(readFileSync(specPath, "utf8")) as unknown };
+    // A document that exists but cannot be parsed is reported once per modification time, so a
+    // file that stays broken is not repeated on every `tools/list`.
+    let reportedMtime: number | undefined;
+    const reloadFailed = (error: unknown): void => {
+        writeError(`lunora mcp serve --functions: kept the last tool list — the rewritten document did not load: ${String(error)}\n`);
     };
-    let loaded: LoadedSpec;
+
+    // Codegen rewrites the file in place, so the tools follow it: each `tools/list` and `tools/call`
+    // re-reads it when its mtime has moved. A half-written rewrite fails to parse, and the last
+    // complete document keeps serving. A missing file means no functions yet (the editor may start
+    // before codegen has run) or that OpenRPC was turned off, so the tools are removed until it exists.
+    let loaded: LoadedSpec = { mtimeMs: -1, spec: NO_FUNCTIONS };
     const specNow = (): unknown => {
+        let mtimeMs: number;
+
         try {
-            if (statSync(specPath).mtimeMs !== loaded.mtimeMs) {
-                loaded = readSpec();
-            }
+            mtimeMs = statSync(specPath).mtimeMs;
         } catch (error: unknown) {
-            // Codegen rewrites the file in place, so a missing file means it was removed: OpenRPC was
-            // turned off, and the server must stop offering the functions it described.
-            if (isMissing(error) && loaded.spec !== NO_FUNCTIONS) {
+            if (!isMissing(error)) {
+                reloadFailed(error);
+            } else if (loaded.spec !== NO_FUNCTIONS) {
                 loaded = { mtimeMs: -1, spec: NO_FUNCTIONS };
             }
-            // A half-written rewrite can fail to parse; then the last complete document still serves.
+
+            return loaded.spec;
+        }
+
+        if (mtimeMs !== loaded.mtimeMs) {
+            try {
+                loaded = { mtimeMs, spec: JSON.parse(readFileSync(specPath, "utf8")) as unknown };
+            } catch (error: unknown) {
+                if (reportedMtime !== mtimeMs) {
+                    reportedMtime = mtimeMs;
+                    reloadFailed(error);
+                }
+            }
         }
 
         return loaded.spec;
@@ -237,12 +248,9 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     let server: ClosableServer;
 
     try {
-        loaded = readSpec();
         server = await connect({
             allowWrites: options.allowWrites === true,
-            onReloadError: (error: unknown) => {
-                writeError(`lunora mcp serve --functions: kept the last tool list — the rewritten document did not load: ${String(error)}\n`);
-            },
+            onReloadError: reloadFailed,
             openRpcSpec: specNow,
             url: deploymentUrl,
             version: options.version,
@@ -260,8 +268,10 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     const url = deploymentUrl();
     const target = url === undefined || url.length === 0 ? "no deployment yet (start `lunora dev` or pass --url; calls fail until one runs)" : url;
 
+    const awaitingDocument = existsSync(specPath) ? "" : " (no openrpc.json yet: run `lunora codegen --api-spec openrpc`; the functions appear once it exists)";
+
     writeError(
-        `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}\n`,
+        `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}${awaitingDocument}\n`,
     );
 
     // The editor keeps its tool list until it hears otherwise, so announce each rewrite of the document.
