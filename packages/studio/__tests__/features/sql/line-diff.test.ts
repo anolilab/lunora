@@ -42,10 +42,13 @@ describe("lineDiff", () => {
     it("handles an empty side without inventing a line", () => {
         expect.assertions(2);
 
-        expect(lineDiff("", "SELECT 1")).toStrictEqual([
-            { kind: "removed", text: "" },
-            { kind: "added", text: "SELECT 1" },
-        ]);
+        expect(lineDiff("", "SELECT 1")).toStrictEqual([{ kind: "added", text: "SELECT 1" }]);
         expect(lineDiff("SELECT 1", "SELECT 1")).toHaveLength(1);
+    });
+
+    it("does not report a dropped trailing newline as a changed last line", () => {
+        expect.assertions(1);
+
+        expect(render("SELECT *\nFROM users\n", "SELECT *\nFROM users")).toBe(" SELECT *\n FROM users");
     });
 });

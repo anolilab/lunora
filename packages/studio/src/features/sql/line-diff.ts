@@ -5,6 +5,14 @@ interface DiffLine {
 }
 
 /**
+ * `"".split("\n")` is `[""]` and a final `\n` leaves a trailing `""`; both would
+ * diff as a phantom blank line. The model rarely preserves the operator's trailing
+ * newline, so a rewrite whose only change is that newline must not show a removal.
+ */
+const TRAILING_NEWLINE = /\n$/u;
+const toLines = (text: string): string[] => (text === "" ? [] : text.replace(TRAILING_NEWLINE, "").split("\n"));
+
+/**
  * A line-level unified diff, for showing an AI rewrite before it is accepted.
  *
  * Hand-rolled rather than pulled from a package because the whole algorithm is
@@ -22,8 +30,8 @@ interface DiffLine {
  * addition. Add word-level marking if statements start arriving on one long line.
  */
 const lineDiff = (before: string, after: string): DiffLine[] => {
-    const from = before.split("\n");
-    const to = after.split("\n");
+    const from = toLines(before);
+    const to = toLines(after);
     const width = to.length + 1;
     // Flat, not nested: one allocation, and the row stride is explicit at every
     // read rather than hidden behind a second index.
