@@ -265,6 +265,23 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(exact, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
     });
 
+    it("refuses a url column covered by a single-column unique index, as .unique() does", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            links: defineTable({ website: v.string().url() }).index("by_website", ["website"], { unique: true }),
+        });
+
+        expect(() => seedPlan(schema, { counts: { links: 5 } })).toThrow(/format "uri"/u);
+
+        const supplied = seedPlan(schema, {
+            counts: { links: 5 },
+            overrides: { links: { website: ({ index }: { index: number }) => `https://example.com/${String(index)}` } },
+        });
+
+        expect(new Set(rowsOf(supplied, "links").map((row) => row.website)).size).toBe(5);
+    });
+
     it("checks a later index that shares a column an earlier index dealt", () => {
         expect.hasAssertions();
 

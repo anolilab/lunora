@@ -503,6 +503,32 @@ const planCompositeDeals = (
 };
 
 /**
+ * The deal for one unique column, except that a column the caller overrides is not refused for a shape
+ * the seeder cannot make unique (a `.url()` or `.pattern()` string): the refusal tells the caller to
+ * supply the values, so supplying them has to clear it. `undefined` then means "no deal".
+ */
+const planColumnDeal = (
+    field: FieldSpec,
+    pool: ReadonlyArray<string> | undefined,
+    options: { now: number; table: string },
+    overridden: boolean,
+): UniqueDeal | undefined => {
+    if (pool !== undefined) {
+        return planUniqueFkDeal(pool, options.table, field.name);
+    }
+
+    try {
+        return planUniqueDeal(field, options);
+    } catch (error) {
+        if (overridden && error instanceof LunoraError) {
+            return undefined;
+        }
+
+        throw error;
+    }
+};
+
+/**
  * Decide how every `.unique()` column of one table deals its values, and fail
  * fast when a column cannot produce as many distinct values as the batch asks
  * for — otherwise the collision only surfaces later as a raw UNIQUE-constraint
@@ -560,10 +586,16 @@ const planUniqueDeals = (
             continue;
         }
 
-        const deal = pool === undefined ? planUniqueDeal(field, { now, table }) : planUniqueFkDeal(pool, table, field.name);
+        const overridden = Object.hasOwn(tableOverrides, field.name);
+        const deal = planColumnDeal(field, pool, { now, table }, overridden);
+
+        if (deal === undefined) {
+            continue;
+        }
+
         const required = offset + count;
 
-        if (required > deal.capacity && !Object.hasOwn(tableOverrides, field.name)) {
+        if (required > deal.capacity && !overridden) {
             throw new LunoraError(
                 "BAD_REQUEST",
                 `cannot seed ${String(required)} rows into "${table}": unique column "${field.name}" has only ${String(deal.capacity)} possible values`,
