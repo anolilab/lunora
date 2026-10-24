@@ -202,20 +202,22 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
          * Never over the operator's work. `setDraft` replaces the whole draft and,
          * on a tab linked to a saved query, auto-saves over that query too — so an
          * Insert pressed with unsaved or saved SQL on screen would destroy it with
-         * no confirmation and no undo. Only an empty draft is replaced; otherwise
-         * the statement opens in a tab of its own, and at the tab cap (where making
-         * room would close something) it is appended instead.
+         * no confirmation and no undo. Only an empty, unlinked draft is replaced;
+         * otherwise the statement opens in a tab of its own. At the tab cap, where
+         * making room would close something, it is appended to this tab instead —
+         * detached from its saved query first, so the append cannot be auto-saved
+         * into it.
          */
-        if (draft.trim() === "") {
+        if (draft.trim() === "" && activeId === null) {
             setDraft(insertRequest.sql);
         } else if (!openEditorTab(insertRequest.sql)) {
-            setDraft(`${draft.trimEnd()}\n\n${insertRequest.sql}`);
+            patchActiveTab({ activeId: null, sql: draft.trim() === "" ? insertRequest.sql : `${draft.trimEnd()}\n\n${insertRequest.sql}` });
         }
         // `setDraft` and the tab opener are real dependencies and are listed. They
         // are re-created every render, so this effect re-runs often — but
         // `takeInsert` clears the request by id, so every run after the first is a
         // no-op, and no suppression is needed to make that true.
-    }, [draft, insertRequest, openEditorTab, takeInsert, setDraft]);
+    }, [activeId, draft, insertRequest, openEditorTab, patchActiveTab, takeInsert, setDraft]);
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
     const rpc = useAssistantRpc(shardKey);

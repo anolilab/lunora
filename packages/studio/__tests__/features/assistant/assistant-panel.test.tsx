@@ -372,6 +372,34 @@ describe("assistantPanel", () => {
         });
     });
 
+    it("leaves a linked saved query alone when the assistant inserts into its emptied tab", async () => {
+        expect.hasAssertions();
+
+        // An emptied draft is "empty", but on a linked tab `setDraft` also writes
+        // through to the saved query — so the insert must still go to a new tab.
+        const key = "lunora-studio-sql-queries";
+
+        localStorage.setItem(key, JSON.stringify([{ id: "q1", name: "Saved", sql: "SELECT 1" }]));
+
+        render(renderPanel(chatMock("Try this:\n```sql\nSELECT count(*) FROM messages\n```")));
+        await openChat();
+
+        fireEvent.click(await screen.findByTestId("sql-query-q1"));
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "" } });
+
+        const stored = (): string => (JSON.parse(localStorage.getItem(key) ?? "[]") as { sql: string }[])[0]?.sql ?? "";
+
+        ask("how many messages?");
+        fireEvent.click(await screen.findByTestId("assistant-insert"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT count(*) FROM messages");
+        });
+
+        expect(screen.getAllByTestId(/^sql-tab-select-/)).toHaveLength(2);
+        expect(stored()).toBe("");
+    });
+
     it("shows the statement the turn wants to run, and does not run it", async () => {
         expect.hasAssertions();
 
