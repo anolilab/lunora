@@ -215,6 +215,56 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(new Set(rowsOf(plan, "files").map((row) => `${String(row.file)}|${String(row.kind)}`)).size).toBe(5);
     });
 
+    it("refuses a second row for a unique array capped at zero items", () => {
+        expect.hasAssertions();
+
+        const column = defineSchema({ boxes: defineTable({ tags: v.array(v.string()).max(0).unique() }) });
+        const indexed = defineSchema({ boxes: defineTable({ tags: v.array(v.string()).max(0) }).index("by_tags", ["tags"], { unique: true }) });
+
+        expect(rowsOf(seedPlan(column, { counts: { boxes: 1 } }), "boxes")).toHaveLength(1);
+        expect(() => seedPlan(column, { counts: { boxes: 2 } })).toThrow(/unique column "tags" has only 1 possible values/u);
+        expect(() => seedPlan(indexed, { counts: { boxes: 2 } })).toThrow(/unique column "tags" has only 1 possible values/u);
+    });
+
+    it("deals every distinct array a finite element domain allows, and no more", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ boxes: defineTable({ bits: v.array(v.boolean()).max(2).unique() }) });
+        const bits = rowsOf(seedPlan(schema, { counts: { boxes: 7 } }), "boxes").map((row) => JSON.stringify(row.bits));
+
+        expect(new Set(bits).size).toBe(7);
+        expect(() => seedPlan(schema, { counts: { boxes: 8 } })).toThrow(/unique column "bits" has only 7 possible values/u);
+
+        const open = defineSchema({ boxes: defineTable({ bits: v.array(v.boolean()).unique() }) });
+        const openBits = rowsOf(seedPlan(open, { counts: { boxes: 40 } }), "boxes").map((row) => JSON.stringify(row.bits));
+
+        expect(new Set(openBits).size).toBe(40);
+
+        const lengths = defineSchema({ boxes: defineTable({ xs: v.array(v.literal("x")).min(2).max(5).unique() }) });
+        const xs = rowsOf(seedPlan(lengths, { counts: { boxes: 4 } }), "boxes").map((row) => (row.xs as string[]).length);
+
+        expect(xs.toSorted((left, right) => left - right)).toStrictEqual([2, 3, 4, 5]);
+        expect(() => seedPlan(lengths, { counts: { boxes: 5 } })).toThrow(/has only 4 possible values/u);
+    });
+
+    it("counts the arrays a finite element domain can form towards a composite's capacity", () => {
+        expect.hasAssertions();
+
+        const capped = defineSchema({
+            flags: defineTable({ on: v.boolean(), tags: v.array(v.literal("x")).max(1) }).index("by_tags_on", ["tags", "on"], { unique: true }),
+        });
+        const pairs = new Set(rowsOf(seedPlan(capped, { counts: { flags: 4 } }), "flags").map((row) => JSON.stringify([row.tags, row.on])));
+
+        expect(pairs.size).toBe(4);
+        expect(() => seedPlan(capped, { counts: { flags: 5 } })).toThrow(/by_tags_on/u);
+
+        const exact = defineSchema({
+            flags: defineTable({ on: v.boolean(), tags: v.array(v.literal("x")).min(1).max(1) }).index("by_tags_on", ["tags", "on"], { unique: true }),
+        });
+
+        expect(() => seedPlan(exact, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
+    });
+
     it("makes a single-column unique index behave like .unique()", () => {
         expect.hasAssertions();
 

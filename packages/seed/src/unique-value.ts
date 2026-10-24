@@ -1,10 +1,11 @@
 import { LunoraError } from "@lunora/errors";
+import type { Validator } from "@lunora/values";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isEpochColumn, NUMBER_RANGE, resolveRange } from "./generate-value";
+import { arrayLengths, BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isEpochColumn, NUMBER_RANGE, resolveRange } from "./generate-value";
 import type { FieldSpec } from "./introspect";
-import { metaOf } from "./introspect";
+import { metaOf, unwrapOptional } from "./introspect";
 
 /**
  * How a `.unique()` column turns a row's ABSOLUTE index into a value no other
@@ -299,6 +300,103 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
 const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: string): UniqueDeal => domainDeal(pool, table, column);
 
 /**
+ * Every value a validator can produce when that set is finite and known: an enum, a boolean, a
+ * literal, `null`, or a union of those. `undefined` when it is open (a string, a number, an id, …).
+ */
+const finiteDomain = (validator: Validator): ReadonlyArray<unknown> | undefined => {
+    const inner = unwrapOptional(validator);
+    const { enum: enumValues } = constraintsOf(inner);
+
+    if (Array.isArray(enumValues) && enumValues.length > 0) {
+        return [...new Set<unknown>(enumValues)];
+    }
+
+    switch (inner.kind) {
+        case "boolean": {
+            return [false, true];
+        }
+
+        case "literal": {
+            return [metaOf(inner).value];
+        }
+
+        case "null": {
+            // eslint-disable-next-line unicorn/no-null -- null is the domain value of a v.null() member
+            return [null];
+        }
+
+        case "union": {
+            const domains = (metaOf(inner).members ?? []).map((member) => finiteDomain(member));
+
+            return domains.length > 0 && domains.every((domain) => domain !== undefined) ? [...new Set(domains.flat())] : undefined;
+        }
+
+        default: {
+            return undefined;
+        }
+    }
+};
+
+/**
+ * The deal for an array column.
+ *
+ * An array of an open element type (strings, numbers, ids) is built from the per-cell hash and so is
+ * distinct per row in practice, which is the {@link anonymousDeal}. That only holds when the array can
+ * hold something: one capped at zero items is always `[]`. And one over a FINITE element domain has a
+ * countable number of arrays (`v.array(v.boolean()).max(2)` has seven), so it is enumerated by length
+ * and then by element, which makes the planner refuse a batch past that count instead of repeating one.
+ */
+const arrayDeal = (field: FieldSpec, constraints: Constraints): UniqueDeal => {
+    const element = metaOf(field.validator).inner;
+    const [lowest, generated] = arrayLengths(constraints, field.name);
+
+    // No element validator generates `[]` always.
+    if (element === undefined || generated <= 0) {
+        return { capacity: 1, valueAt: () => [] };
+    }
+
+    const domain = finiteDomain(element);
+
+    if (domain === undefined) {
+        return anonymousDeal;
+    }
+
+    // The generator's own floor is one item when `minItems` is unset and its ceiling three when
+    // `maxItems` is; the schema admits the empty array and any length.
+    const shortest = constraints.minItems === undefined ? 0 : lowest;
+    const highest = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : generated;
+    const base = domain.length;
+    const lengths = highest - shortest + 1;
+    // One element value only ever forms one array per length.
+    let capacity = base === 1 ? lengths : 0;
+
+    for (let length = shortest; base > 1 && length <= highest && capacity <= Number.MAX_SAFE_INTEGER; length += 1) {
+        capacity += base ** length;
+    }
+
+    return {
+        capacity: capacity > Number.MAX_SAFE_INTEGER ? Number.POSITIVE_INFINITY : capacity,
+        valueAt: (index) => {
+            let rest = index;
+            let length = shortest;
+
+            // Shorter arrays first; within a length, `rest` read as base-`base` digits picks the elements.
+            while (base > 1 && rest >= base ** length) {
+                rest -= base ** length;
+                length += 1;
+            }
+
+            if (base === 1) {
+                length += rest;
+                rest = 0;
+            }
+
+            return Array.from({ length }, (_, position) => domain[Math.floor(rest / base ** position) % base]);
+        },
+    };
+};
+
+/**
  * Decide how one `.unique()` column deals its values.
  *
  * A string column is the only shape whose value still comes from the normal
@@ -322,6 +420,10 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         case "any":
         case "string": {
             return stringDeal(constraints, table, field.name);
+        }
+
+        case "array": {
+            return arrayDeal(field, constraints);
         }
 
         case "bigint": {
@@ -387,7 +489,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         default: {
-            // `id`, `storage`, `array`, `object`, `record` — every one of these
+            // `id`, `storage`, `object`, `record` — every one of these
             // derives from the per-cell hash (a uuid, or a composite built from
             // uuids), so it is already distinct per row.
             return anonymousDeal;
@@ -431,8 +533,7 @@ const planCompositeMemberDeal = (field: FieldSpec, options: UniqueDealOptions): 
  * which is distinct per row in practice but has no count the planner can prove: an `id`, storage id,
  * array, object, record or open union, or a string whose format (a `.url()`) an index tag would
  * break. A composite index holding one is left to the generator once its counted members run out,
- * rather than refused. A column with at most one value, such as an array capped at zero items, is
- * not one.
+ * rather than refused. An array whose value is countable (see {@link arrayDeal}) is not one.
  */
 const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean => {
     const constraints = constraintsOf(field.validator);
@@ -445,7 +546,7 @@ const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean =
         );
     }
 
-    return planUniqueDeal(field, options) === anonymousDeal && !(field.kind === "array" && (constraints.maxItems ?? 1) <= 0);
+    return planUniqueDeal(field, options) === anonymousDeal;
 };
 
 export { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };

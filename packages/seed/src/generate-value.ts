@@ -422,6 +422,28 @@ const generateNumber = (input: unknown, constraints: Constraints, fieldName: str
     return copycat.float(input, { max, min });
 };
 
+/**
+ * The shortest and longest array a column's `minItems` / `maxItems` admit, which the generator draws a
+ * length from and the `.unique()` deal counts distinct arrays over. Shared so the two cannot disagree.
+ */
+const arrayLengths = (constraints: Constraints, fieldName: string): readonly [lowest: number, highest: number] => {
+    // A length is a whole number, so a fractional limit admits only the integers inside it.
+    const fewest = constraints.minItems === undefined ? undefined : Math.max(0, Math.ceil(constraints.minItems));
+    // An infinite maximum is a limit the array never reaches, the same as none.
+    const most = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? undefined : Math.floor(constraints.maxItems);
+    const lowest = fewest ?? Math.max(0, Math.min(1, most ?? 1));
+    const highest = most ?? Math.max(3, lowest);
+
+    if (highest < lowest) {
+        return refuseColumn(
+            fieldName,
+            `declares minItems ${String(constraints.minItems)} and maxItems ${String(constraints.maxItems)}, which no whole array length satisfies`,
+        );
+    }
+
+    return [lowest, highest];
+};
+
 const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number): unknown => {
     const inner = unwrapOptional(validator);
     const constraints = constraintsOf(inner);
@@ -442,19 +464,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 return [];
             }
 
-            // A length is a whole number, so a fractional limit admits only the integers inside it.
-            const fewest = constraints.minItems === undefined ? undefined : Math.max(0, Math.ceil(constraints.minItems));
-            // An infinite maximum is a limit the array never reaches, the same as none.
-            const most = constraints.maxItems === undefined || constraints.maxItems === Number.POSITIVE_INFINITY ? undefined : Math.floor(constraints.maxItems);
-            const lowest = fewest ?? Math.max(0, Math.min(1, most ?? 1));
-            const highest = most ?? Math.max(3, lowest);
-
-            if (highest < lowest) {
-                return refuseColumn(
-                    fieldName,
-                    `declares minItems ${String(constraints.minItems)} and maxItems ${String(constraints.maxItems)}, which no whole array length satisfies`,
-                );
-            }
+            const [lowest, highest] = arrayLengths(constraints, fieldName);
 
             return copycat.times(input, [lowest, highest], (itemInput) => generateValue(element, fieldName, itemInput, now));
         }
@@ -574,5 +584,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isEpochColumn, NUMBER_RANGE, resolveRange };
+export { arrayLengths, BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isEpochColumn, NUMBER_RANGE, resolveRange };
 export type { Constraints };
