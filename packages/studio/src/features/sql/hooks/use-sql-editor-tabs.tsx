@@ -107,6 +107,13 @@ interface SqlEditorTabsModel {
     readonly onCloseAll: () => void;
     readonly onCloseOthers: () => void;
     readonly onCloseToRight: () => void;
+
+    /**
+     * Open `sql` as a new unlinked tab and switch to it. Answers `false` without
+     * opening anything once MAX_TABS are open: the caller decides what to do then,
+     * because making room would close someone's work.
+     */
+    readonly openEditorTab: (sql: string) => boolean;
     readonly openTabMenu: (id: string, event: React.MouseEvent) => void;
     /** The active tab's ephemeral output — its last run's result/error/pane. */
     readonly output: TabOutput;
@@ -163,16 +170,25 @@ const useSqlEditorTabs = (seedTab: () => SqlTab): SqlEditorTabsModel => {
         });
     };
 
-    // Add a new empty tab and switch to it (no-op once MAX_TABS are open).
-    const addEditorTab = (): void => {
+    const openEditorTab = (sql: string): boolean => {
         if (tabs.length >= MAX_TABS) {
-            return;
+            return false;
         }
 
-        const fresh = makeTab();
+        // The draft is passed to `makeTab` rather than written afterwards:
+        // `patchActiveTab` closes over THIS render's active tab, so a `setDraft`
+        // right after switching would land on the tab being left.
+        const fresh = makeTab(sql);
 
         setTabs((current) => addTab(current, fresh));
         setActiveTabId(fresh.id);
+
+        return true;
+    };
+
+    // Add a new empty tab and switch to it (no-op once MAX_TABS are open).
+    const addEditorTab = (): void => {
+        openEditorTab("");
     };
 
     // Commit a new tab set + active id, pruning ephemeral output down to the
@@ -276,6 +292,7 @@ const useSqlEditorTabs = (seedTab: () => SqlTab): SqlEditorTabsModel => {
         onCloseAll,
         onCloseOthers,
         onCloseToRight,
+        openEditorTab,
         openTabMenu,
         output,
         patchActiveOutput,

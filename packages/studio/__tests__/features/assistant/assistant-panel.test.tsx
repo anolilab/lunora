@@ -344,6 +344,34 @@ describe("assistantPanel", () => {
         expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toBe(false);
     });
 
+    it("opens an inserted statement in a new tab instead of replacing the open draft", async () => {
+        expect.hasAssertions();
+
+        // `setDraft` replaces the whole draft — and auto-saves over a linked saved
+        // query. An Insert pressed over unsaved work must not throw it away.
+        render(renderPanel(chatMock("Try this:\n```sql\nSELECT count(*) FROM messages\n```")));
+        await openChat();
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1" } });
+        ask("how many messages?");
+        fireEvent.click(await screen.findByTestId("assistant-insert"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT count(*) FROM messages");
+        });
+
+        const tabs = screen.getAllByTestId(/^sql-tab-select-/);
+
+        expect(tabs).toHaveLength(2);
+
+        // The original draft is still there, one tab over.
+        fireEvent.click(tabs[0] as HTMLElement);
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT 1");
+        });
+    });
+
     it("shows the statement the turn wants to run, and does not run it", async () => {
         expect.hasAssertions();
 
