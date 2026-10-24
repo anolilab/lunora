@@ -388,7 +388,8 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
  * Skipped, leaving the columns to the generator, when a member is already unique on
  * its own (the index is then satisfied), a self-reference (its pool is not known
  * yet), a foreign key with no parents, a server-filled column, or is overridden.
- * ponytail: a column shared by two composite indexes keeps the first deal; one shared digit space if that ever comes up.
+ * A column an earlier composite index already dealt keeps that deal, and any later index containing
+ * it is skipped as a whole, so the column never takes two digits.
  */
 const planCompositeDeal = (
     index: UniqueIndexSpec,

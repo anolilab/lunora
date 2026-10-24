@@ -56,7 +56,7 @@ describe("seedPlan — dangling foreign keys", () => {
         expect(() => seedPlan(schema, { counts: { nodes: 3 } })).toThrow(/"parentId"/u);
     });
 
-    it("resolves a cycle across tables in a second pass, leaving no dangling id", () => {
+    it("resolves a cycle across tables by pre-assigning parent ids, leaving no dangling id", () => {
         expect.hasAssertions();
 
         const schema = defineSchema({
