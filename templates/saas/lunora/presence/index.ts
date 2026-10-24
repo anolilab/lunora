@@ -10,8 +10,8 @@
  *     stamp `lastSeen = now`. Keyed by `(roomId, sessionId)`, so a re-heartbeat
  *     *patches* the existing row: subscribers receive a single-row delta, not an
  *     insert/delete churn that would re-send the whole present list. A session
- *     that joins the room also reclaims the room's expired rows, so closed tabs
- *     cannot pile up between sweeps nobody scheduled.
+ *     that joins the room also reclaims a batch of the room's expired rows, so closed
+ *     tabs cannot pile up between sweeps nobody scheduled.
  *   - **listPresent** (query) — the non-expired members of a room, newest
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
@@ -72,16 +72,23 @@ interface PresenceMember {
 }
 
 /**
- * Hard-delete the rows of `roomId` last seen at or before `cutoff`. One room's
- * expired members are a small set sharing the mutation's snapshot, so the
+ * Expired rows a joining session reclaims at most. A room nobody swept can hold
+ * far more than one mutation may read and delete, and a join that threw on that
+ * backlog would never insert its own row. The rest go on later joins and `sweep`.
+ */
+const JOIN_CLEANUP_BATCH = 50;
+
+/**
+ * Hard-delete up to `limit` rows of `roomId` last seen at or before `cutoff`
+ * (all of them without one). Rows sharing the mutation's snapshot, so the
  * deletes go out together.
  */
-const deleteExpired = async (ctx: MutationCtx, roomId: string, cutoff: number): Promise<number> => {
-    const stale = await ctx.db
+const deleteExpired = async (ctx: MutationCtx, roomId: string, cutoff: number, limit?: number): Promise<number> => {
+    const expired = ctx.db
         .query(PRESENCE_TABLE)
         .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
-        .filter((row) => (row["lastSeen"] as number) <= cutoff)
-        .collect();
+        .filter((row) => (row["lastSeen"] as number) <= cutoff);
+    const stale = limit === undefined ? await expired.collect() : await expired.take(limit);
 
     await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
 
@@ -160,7 +167,7 @@ export const heartbeat = mutation
         } else {
             // A new session is the one moment the room grows, and the only write
             // that is certain to happen: reclaim what the room has outgrown first.
-            await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS);
+            await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS, JOIN_CLEANUP_BATCH);
             await ctx.db.insert(PRESENCE_TABLE, row);
         }
 

@@ -23,12 +23,19 @@ interface CatalogPlan {
     priceId?: string;
     /** Minor units (cents). `0` renders as "Free". */
     priceMinor: number;
-    /** Maximum members. `undefined` means unmetered. */
+    /**
+     * Maximum members. `undefined` means unmetered. Shown on the billing page's seat
+     * meter and handed to the payment entitlements; nothing here stops an invitation
+     * at the limit. `saas_organizations.plan` is not yet synced from the
+     * subscription, so a cap keyed on it would hold paying organisations to the
+     * free allowance — sync the plan first, then enforce in better-auth's
+     * `membershipLimit`.
+     */
     seats?: number;
 }
 
 export const PLANS: ReadonlyArray<CatalogPlan> = [
-    { blurb: "One organization, three projects", currency: "USD", features: [], id: "free", name: "Free", priceMinor: 0, seats: 1 },
+    { blurb: "One member, to try it out", currency: "USD", features: [], id: "free", name: "Free", priceMinor: 0, seats: 1 },
     {
         blurb: "Your whole team, unlimited projects",
         currency: "USD",

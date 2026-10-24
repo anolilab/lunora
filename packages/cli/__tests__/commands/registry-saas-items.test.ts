@@ -152,6 +152,10 @@ const createDatabase = (unique: Record<string, string[][]>) => {
                         return query;
                     },
                     first: async () => rows(table).find((row) => predicate(row)) ?? null,
+                    take: async (limit: number) =>
+                        rows(table)
+                            .filter((row) => predicate(row))
+                            .slice(0, limit),
                     withIndex: (_name: string, build: (q: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
                         const bound: Row = {};
                         const q = {
@@ -265,14 +269,18 @@ describe("saas kit functions", () => {
             expect(rows("saas_organizations")[0]).toMatchObject({ seats: 2, status: "deleted" });
         });
 
-        it("does not insert a tombstone for an organisation it never saw", async () => {
-            expect.assertions(1);
+        it("tombstones an organisation it never saw, so a hook landing after the deletion cannot revive it", async () => {
+            expect.assertions(3);
 
             const { rows, saas, writer } = await setup();
+            const admin = { ...writer, auth: { ...signedIn({ appRole: "admin" }), userId: "admin-1" } };
 
-            await saas.syncOrganization({ args: { ...org, status: "deleted" }, ctx: writer });
+            await saas.syncOrganization({ args: { ...org, seats: 0, status: "deleted" }, ctx: writer });
+            await saas.syncOrganization({ args: { ...org, seats: 1 }, ctx: writer });
 
-            expect(rows("saas_organizations")).toHaveLength(0);
+            expect(rows("saas_organizations")).toHaveLength(1);
+            expect(rows("saas_organizations")[0]).toMatchObject({ slug: "~deleted~org-1", status: "deleted" });
+            await expect(saas.listOrganizations({ ctx: admin })).resolves.toStrictEqual([]);
         });
     });
 
@@ -370,6 +378,24 @@ describe("presence heartbeat", () => {
                 .map((row) => `${String(row["sessionId"])}@${String(row["roomId"])}`)
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual(["closed-tab@other-room", "new-tab@lobby", "open-tab@lobby"]);
+    });
+
+    it("reclaims a bounded batch, so a backlog cannot stop a new session joining", async () => {
+        expect.assertions(2);
+
+        const table = database.rows("presence_present");
+
+        for (let index = 0; index < 120; index += 1) {
+            table.push({ _id: `bulk-${String(index)}`, lastSeen: NOW - TTL - 1, roomId: "lobby", sessionId: `gone-${String(index)}` });
+        }
+
+        await call("new-tab");
+
+        const lobby = database.rows("presence_present").filter((row) => row["roomId"] === "lobby");
+
+        // 121 expired rows (the 120 plus `closed-tab`): 50 go, 71 wait for the next join or a sweep.
+        expect(lobby.filter((row) => (row["lastSeen"] as number) <= NOW - TTL)).toHaveLength(71);
+        expect(lobby.map((row) => row["sessionId"])).toContain("new-tab");
     });
 
     it("leaves expired rows alone on a re-heartbeat, which does not grow the room", async () => {
