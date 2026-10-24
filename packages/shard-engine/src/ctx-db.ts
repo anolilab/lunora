@@ -2853,15 +2853,40 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
-     * Delete one `.global()` row by id straight on the D1 writer, skipping the
-     * shard-local probe. Charges the meter exactly as the by-id fallback in
-     * `delete` does (a delete costs a row and no bytes, and D1 does not roll back
-     * with the DO's transaction).
+     * Delete `.global()` rows by id straight on the D1 writer, skipping the
+     * shard-local probe. These deletes return before `onWrite`, so they charge
+     * the meter here: a row and no bytes each, as `onWrite` charges a local
+     * delete. Every id is charged before the first one crosses, because D1 does
+     * not roll back with the DO's transaction: a ceiling breach must refuse the
+     * whole batch before any row is gone.
+     *
+     * `expectedTable` pins each id on the D1 side. Only the unpinned by-id
+     * `delete` leaves it undefined; anything that knows the table pins it, since
+     * an unpinned D1 delete resolves the id across every `.global()` table.
+     * `batch`, when given, sends the ids through the D1 writer's own batch delete
+     * if it has one.
      */
-    const deleteGlobalById = async (global: DatabaseWriterLike, tableName: string, id: string, deleteOptions?: { hard?: boolean }): Promise<void> => {
-        meterWrite(undefined);
-        // Pinned: an unpinned D1 delete resolves the id across every `.global()` table, so an id two tables hold would be erased from the wrong one.
-        await global.delete(id, tableName, deleteOptions);
+    const deleteGlobalByIds = async (
+        global: DatabaseWriterLike,
+        expectedTable: string | undefined,
+        ids: ReadonlyArray<string>,
+        deleteOptions?: { hard?: boolean },
+        batch?: { options: { limit?: number } | undefined },
+    ): Promise<{ deleted: number }> => {
+        for (let charged = 0; charged < ids.length; charged += 1) {
+            meterWrite(undefined);
+        }
+
+        if (batch !== undefined && global.deleteMany !== undefined) {
+            return global.deleteMany(ids, batch.options, expectedTable);
+        }
+
+        for (const id of ids) {
+            // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
+            await global.delete(id, expectedTable, deleteOptions);
+        }
+
+        return { deleted: ids.length };
     };
 
     /**
@@ -3289,17 +3314,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(expectedTable);
 
                 if (global) {
-                    // A delete carries no document, so it costs a row and no
-                    // bytes — exactly what `onWrite` charges for the local paths
-                    // (see its docblock). Charged here because this branch
-                    // returns before that hook, and before the boundary because
-                    // D1 does not roll back with the DO's transaction. Without
-                    // it, `deleteWhere` over a `.global()` table — which routes
-                    // through `deleteMany` to here — was free of the meter
-                    // entirely, however many rows it removed.
-                    meterWrite(undefined);
-
-                    await global.delete(id, expectedTable, deleteOptions);
+                    await deleteGlobalByIds(global, expectedTable, [id], deleteOptions);
                 }
 
                 return;
@@ -3481,7 +3496,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                     for (const id of ids) {
                         // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                        await (global === undefined ? writer.delete(id, tableName, deleteOptions) : deleteGlobalById(global, tableName, id, deleteOptions));
+                        await (global === undefined ? writer.delete(id, tableName, deleteOptions) : deleteGlobalByIds(global, tableName, [id], deleteOptions));
                         deleted += 1;
                     }
 
@@ -3521,30 +3536,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // writer's own `findMany` (which rejects an unknown table). The
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
-            const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
-            const matches = await readBatchMatches(source, tableName, where, batchOptions?.limit, "deleteWhere");
+            const global = globalWriterFor(tableName, "deleteWhere");
+            const matches = await readBatchMatches(global ?? writer, tableName, where, batchOptions?.limit, "deleteWhere");
             const ids = matches.map((row) => String(row["_id"]));
 
             // A global table's rows live in D1, never in this DO: skip the local
             // by-id probe and hand the ids straight to the global writer.
-            const global = globalWriterFor(tableName, "deleteWhere");
-
             if (global) {
-                for (let charged = 0; charged < ids.length; charged += 1) {
-                    meterWrite(undefined);
-                }
-
-                if (global.deleteMany === undefined) {
-                    // The D1 writer has no batch delete; delete per id, as the local path does.
-                    for (const id of ids) {
-                        // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
-                        await global.delete(id, tableName);
-                    }
-
-                    return { deleted: ids.length };
-                }
-
-                return global.deleteMany(ids, batchOptions, tableName);
+                return deleteGlobalByIds(global, tableName, ids, undefined, { options: batchOptions });
             }
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and
