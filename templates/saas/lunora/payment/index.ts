@@ -57,6 +57,8 @@ import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
+import { PLANS } from "../plans.js";
+
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
  *
@@ -140,11 +142,22 @@ const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ acti
 const billingPage = (outcome?: "cancel" | "success"): string => `${appOrigin()}/settings/billing${outcome === undefined ? "" : `?checkout=${outcome}`}`;
 
 /**
+ * The prices the catalog sells. `priceId` arrives from the client, and a price the
+ * provider accepts but `PLANS` does not list would charge the organisation for a
+ * subscription that unlocks no plan — the pricing page only ever offers these.
+ */
+const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) => (plan.priceId === undefined ? [] : [plan.priceId])));
+
+/**
  * Start a checkout session and hand the client the redirect URL. The reference
  * is the caller's active organisation — see {@link billingReference}.
  */
 export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
     const referenceId = await billingReference(ctx);
+
+    if (!PURCHASABLE_PRICE_IDS.has(priceId)) {
+        throw new LunoraError("UNPROCESSABLE", "unknown price — pick a plan from the catalog in lunora/plans.ts");
+    }
 
     const result = await ctx.payments.createCheckout({
         cancelUrl: billingPage("cancel"),
