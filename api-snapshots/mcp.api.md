@@ -54,6 +54,7 @@ interface FunctionMcpServerOptions {
     allowWrites?: boolean;
     fetch?: typeof fetch;
     name?: string;
+    onReloadError?: (error: unknown) => void;
     openRpcSpec: unknown;
     token?: string;
     url: string | (() => string | undefined);
