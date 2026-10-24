@@ -980,12 +980,9 @@ describe("lunora dev", () => {
 
             expect(result.code).toBe(1);
             expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
-            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
-            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
-                main: "src/server.ts",
-                name: "app",
-                vars: { WORKER_ENV: "development" },
-            });
+            // The session writes the projection once its toolchain probe has passed;
+            // planning must leave the project untouched until then.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
             // A crashed app is already gone; only a stop the user asks for stops the session.
             expect(stopped).toBe(0);
         });
@@ -1034,7 +1031,7 @@ describe("lunora dev", () => {
         });
 
         it("stops before anything is served when the celld session cannot start", async () => {
-            expect.assertions(1);
+            expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
 
@@ -1053,6 +1050,9 @@ describe("lunora dev", () => {
             });
 
             expect(result.code).toBe(EXIT_CODE.FAILURE);
+            // A session that cannot start has written no projection and touched no `.gitignore`.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+            expect(existsSync(join(workdir, ".gitignore"))).toBe(false);
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
