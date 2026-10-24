@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.68...@lunora/errors@1.0.0-alpha.69) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
 ## @lunora/errors [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.67...@lunora/errors@1.0.0-alpha.68) (2026-10-20)
 
 ### Bug Fixes
