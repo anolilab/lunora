@@ -2,7 +2,7 @@ import type { CronJobInfo } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CronTriggersPanel } from "../../../src/features/logs/cron-triggers-panel";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -38,7 +38,19 @@ const describeSchedule = (text: string): void => {
     fireEvent.click(screen.getByTestId("cron-assistant-generate"));
 };
 
+/** Install a `navigator.clipboard` whose `writeText` settles as `write` says. */
+const stubClipboard = (write: Promise<void>): void => {
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: vi.fn<(text: string) => Promise<void>>(async () => write) },
+    });
+};
+
 describe("cronScheduleAssistant", () => {
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis.navigator, "clipboard");
+    });
+
     it("offers the expression to copy — the trigger list itself stays read-only", async () => {
         expect.assertions(2);
 
@@ -74,5 +86,33 @@ describe("cronScheduleAssistant", () => {
         await screen.findByTestId("cron-empty");
 
         expect(screen.queryByTestId("cron-assistant")).toBeNull();
+    });
+
+    it("acknowledges a copy only once the browser accepted the write", async () => {
+        expect.assertions(1);
+
+        stubClipboard(Promise.resolve());
+        render(renderPanel(cronMock(true, "0 3 * * MON-FRI")));
+        describeSchedule("every weekday at 3am");
+        fireEvent.click(await screen.findByTestId("cron-assistant-copy"));
+
+        await expect(screen.findByText("Copied")).resolves.toBeDefined();
+    });
+
+    it("does not claim success when the clipboard write is rejected", async () => {
+        expect.assertions(1);
+
+        const rejected = Promise.reject(new Error("denied"));
+
+        // Handled up front so the rejection is not reported as unhandled before the click.
+        rejected.catch(() => undefined);
+        stubClipboard(rejected);
+        render(renderPanel(cronMock(true, "0 3 * * MON-FRI")));
+        describeSchedule("every weekday at 3am");
+        fireEvent.click(await screen.findByTestId("cron-assistant-copy"));
+        // The rejection settles in a microtask after the click; let it land.
+        await rejected.catch(() => undefined);
+
+        expect(screen.getByTestId("cron-assistant-copy").textContent).toBe("Copy");
     });
 });

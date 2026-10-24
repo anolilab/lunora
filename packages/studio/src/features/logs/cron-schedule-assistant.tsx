@@ -63,8 +63,18 @@ const CronScheduleAssistant = (): ReactElement | null => {
             return;
         }
 
-        fireAndForget(clipboard.writeText(cron));
-        setCopied(true);
+        // Acknowledge only once the browser accepted the write: a rejected one
+        // (permission denied, unfocused document) must not read as "Copied".
+        const write = async (): Promise<void> => {
+            try {
+                await clipboard.writeText(cron);
+                setCopied(true);
+            } catch {
+                setCopied(false);
+            }
+        };
+
+        fireAndForget(write());
     };
 
     return (
