@@ -448,8 +448,8 @@ catalogs:
       specifier: 3.0.28
       version: 3.0.28
     postal-mime:
-      specifier: 3.0.1
-      version: 3.0.1
+      specifier: 4.0.8
+      version: 4.0.8
   mcp:
     '@cfworker/json-schema':
       specifier: ^4.1.1
@@ -3910,7 +3910,7 @@ importers:
         version: 3.0.28(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.10)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))
       postal-mime:
         specifier: catalog:mail
-        version: 3.0.1
+        version: 4.0.8
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -22349,8 +22349,9 @@ packages:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
 
-  postal-mime@3.0.1:
-    resolution: {integrity: sha512-N86EnYOxZjW1uHQIgSXnnRdnJz+wxmtDsnk3C4R/9rQ1utj8A2znauXZ3Q3+stCHxG5ckY4/NrO09WiPU6rcdQ==}
+  postal-mime@4.0.8:
+    resolution: {integrity: sha512-nnAgc4a9hn7zYuQmX4C7LU+fN47kR5S8cE8zvB/vZ2NimNDbaj+ISZJ9qe3CKIfn2uOTwwz4nQeIyljvdFNgOA==}
+    engines: {node: '>=20'}
 
   postcss-calc@10.1.1:
     resolution: {integrity: sha512-NYEsLHh8DgG/PRH2+G9BTuUdtf9ViS+vdoQ0YA5OQdGsfN4ztiwtDWNtBl9EKeqNMFnIu8IKZ0cLxEQ5r5KVMw==}
@@ -45274,7 +45275,7 @@ snapshots:
 
   possible-typed-array-names@1.1.0: {}
 
-  postal-mime@3.0.1: {}
+  postal-mime@4.0.8: {}
 
   postcss-calc@10.1.1(postcss@8.5.28):
     dependencies:
