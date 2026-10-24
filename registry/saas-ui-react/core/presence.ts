@@ -39,10 +39,11 @@ interface Roster {
     total: number;
 }
 
-const displayName = (member: PresenceMemberLike, key: string): string => {
+/** The awareness blob's name, or `undefined` when it carries none worth showing. */
+const explicitName = (member: PresenceMemberLike): string | undefined => {
     const name = member.data?.["name"];
 
-    return typeof name === "string" && name.trim() !== "" ? name : key;
+    return typeof name === "string" && name.trim() !== "" ? name : undefined;
 };
 
 /**
@@ -56,26 +57,30 @@ const displayName = (member: PresenceMemberLike, key: string): string => {
  */
 const presenceRoster = (members: ReadonlyArray<PresenceMemberLike>, currentUserId: string | undefined, cap = 8): Roster => {
     const byPerson = new Map<string, RosterEntry>();
+    // Heartbeat time of the row each entry's name came from, so a later row
+    // with a name wins over an earlier nameless one, and the freshest of two
+    // named tabs wins over the staler.
+    const namedAt = new Map<string, number>();
 
     for (const member of members) {
         // An anonymous viewer is keyed by tab: there is nothing else to collapse
         // them by, and merging two strangers into one entry is worse than
         // showing two.
         const key = member.userId ?? member.sessionId;
-        const existing = byPerson.get(key);
+        const name = explicitName(member);
+        let entry = byPerson.get(key);
 
-        if (existing) {
-            existing.lastSeen = Math.max(existing.lastSeen, member.lastSeen);
-
-            continue;
+        if (entry) {
+            entry.lastSeen = Math.max(entry.lastSeen, member.lastSeen);
+        } else {
+            entry = { isSelf: member.userId !== undefined && member.userId === currentUserId, key, lastSeen: member.lastSeen, name: key };
+            byPerson.set(key, entry);
         }
 
-        byPerson.set(key, {
-            isSelf: member.userId !== undefined && member.userId === currentUserId,
-            key,
-            lastSeen: member.lastSeen,
-            name: displayName(member, key),
-        });
+        if (name !== undefined && member.lastSeen >= (namedAt.get(key) ?? Number.NEGATIVE_INFINITY)) {
+            entry.name = name;
+            namedAt.set(key, member.lastSeen);
+        }
     }
 
     const sorted = [...byPerson.values()].toSorted((a, b) => {
