@@ -2474,6 +2474,25 @@ describe("dataBrowser — filter by cell value", () => {
         expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
     });
 
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+        "withholds the filter action on the non-finite number %s, which the stored form never equals",
+        async (value) => {
+            expect.assertions(1);
+
+            const mock = createNullableCellClient([{ __id__: "m1", note: value, text: "hello" }]);
+
+            render(renderBrowser(mock, { pageSize: 10 }));
+
+            fireEvent.click(await screen.findByTestId("db-table-messages"));
+            await screen.findByTestId("db-page");
+
+            fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+            await screen.findByTestId("grid-cell-value");
+
+            expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+        },
+    );
+
     it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
         expect.assertions(2);
 
