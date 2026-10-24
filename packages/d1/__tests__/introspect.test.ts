@@ -688,6 +688,22 @@ describe("d1 introspect — operators and nested paths on the global path", () =
         expect((error as Error).message).toContain("binds 101 parameters");
     });
 
+    it("refuses a sensitive-column facet whose count binds more than 100 parameters, before running it", async () => {
+        expect.assertions(3);
+
+        harness.ddl(`CREATE TABLE "user" ("id" TEXT PRIMARY KEY, "email" TEXT, "passwordHash" TEXT)`);
+        harness.ddl(`INSERT INTO "user" VALUES ('u1', 'a@example.com', 'hash')`);
+
+        const filters = Array.from({ length: 101 }, () => {
+            return { column: "email", value: "a@example.com" };
+        });
+        const error = await facetGlobalColumn(recordingExec, schema, { column: "passwordHash", filters, table: "user" }).catch((error_: unknown) => error_);
+
+        expect(error).toMatchObject({ code: "BAD_REQUEST" });
+        expect((error as Error).message).toContain("binds 101 parameters");
+        expect(countStatement()).toBeUndefined();
+    });
+
     it("runs a facet whose statement binds exactly 100 parameters, and refuses 101", async () => {
         expect.assertions(2);
 

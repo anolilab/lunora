@@ -528,6 +528,10 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const quoted = quoteIdentifier(table);
     const { params: whereParams, where: whereSql } = buildEqPredicate(schema, table, columns, options.filters);
 
+    // The count below binds only the filters, and runs before the ordinary
+    // facet statement's own check (which adds its LIMIT).
+    assertParameterBudget(table, whereParams.length);
+
     // Faceting a sensitive column on an external table would expose the very
     // values the page browser redacts — collapse it to one masked bucket instead.
     if (globalTableDefinition(schema, table) === undefined && SENSITIVE_COLUMN.test(column)) {
