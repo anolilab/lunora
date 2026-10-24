@@ -633,6 +633,41 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("leaves a ready export ready, with its archive, when the erasure cannot delete the archive, and expires it on the retry", async () => {
+        const files = memoryFiles();
+        let failDelete = true;
+        const flaky: MemoryFiles = {
+            ...files,
+            delete: async (key) => {
+                if (failDelete && key.endsWith("/export.zip")) {
+                    throw new Error("storage unavailable");
+                }
+
+                await files.delete(key);
+            },
+        };
+        const { operator, privacy, store } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, files: flaky });
+        const exported = await privacy.requestExport();
+
+        await privacy.runExport(exported.id);
+
+        const archiveKey = store.rows.get(exported.id)?.storageKey;
+        const erasure = await privacy.requestErasure();
+
+        // The status moves only after the files are gone, so a failed delete cannot leave an expired export pointing at a live archive.
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("ready");
+        expect(archiveKey === undefined ? false : files.files.has(archiveKey)).toBe(true);
+
+        failDelete = false;
+
+        await operator.admin.retry(erasure.id);
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "completed" });
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
     it("expires an export that turned ready after the erasure's files step", async () => {
         const store = memoryRequests();
         const { files, privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { eu } from "../src/eu";
 import type { DataPort } from "../src/ports";
-import { durableStep, memoryData, memoryRequests, setup, SUBJECT, throughJson } from "./harness";
+import { durableStep, memoryData, memoryFiles, memoryRequests, setup, SUBJECT, throughJson } from "./harness";
 
 const failingCollect = (): DataPort => {
     return {
@@ -65,6 +65,65 @@ describe("exportHandler", () => {
 
         expect(store.rows.get(opened.id)?.status).toBe("ready");
         expect(storageKey === undefined ? false : files.files.has(storageKey)).toBe(true);
+    });
+
+    it("advertises no archive when the export was expired before the retried ready step", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        let loseResponse = true;
+        let staleRead = false;
+        const flaky = {
+            ...store,
+            get: async (id: string) => {
+                const row = await store.get(id);
+
+                // The retry's first read is served from a replica that has not seen the expiry yet.
+                if (staleRead && row !== undefined) {
+                    staleRead = false;
+
+                    return { ...row, status: "processing" as const };
+                }
+
+                return row;
+            },
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const claimed = await store.claim(id, from, patch);
+
+                // The ready claim commits and its answer is lost; an erasure then expires the export and removes the archive.
+                if (patch.status === "ready" && claimed && loseResponse) {
+                    loseResponse = false;
+                    staleRead = true;
+
+                    const row = store.rows.get(id);
+
+                    await Promise.all([...files.files.keys()].map(async (key) => files.delete(key)));
+                    store.rows.set(id, { ...row!, status: "expired" });
+
+                    throw new Error("connection reset");
+                }
+
+                return claimed;
+            },
+        };
+        const { privacy, runExportWorkflow } = setup({ files, store: flaky });
+        const opened = await privacy.requestExport();
+        const results = new Map<string, unknown>();
+        const { step } = durableStep();
+
+        await runExportWorkflow(opened.id, {
+            ...step,
+            do: async (name, run) => {
+                const result = await step.do(name, run);
+
+                results.set(name, result);
+
+                return result;
+            },
+        });
+
+        // The step's own answer is the wrapper (read from the stale replica), and its value is what the callback returned.
+        expect(results.get("ready")).toStrictEqual({ status: "processing", value: { status: "expired" } });
+        expect(store.rows.get(opened.id)?.status).toBe("expired");
     });
 
     it("retries a crashed step on its own, and a replay runs no finished step again", async () => {
