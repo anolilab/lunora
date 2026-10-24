@@ -28,12 +28,22 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { MissingBuildOutputError } from "../build-output-error";
+import { D1_PLACEHOLDER_ID } from "../cloudflare/reconcile-bindings";
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
+import ensureGitignoreEntries from "../ensure-gitignore";
+import celldBindingId from "./celld-binding-id";
 
 /** The projected config's filename. */
 const CELLD_CONFIG_FILE = ".celld.wrangler.json";
+
+/**
+ * The celld state and projections, kept out of git. A service projection inlines
+ * its own `.dev.vars` as `vars` (see {@link planCelldServiceConfig}), so an
+ * un-ignored one would commit that file's secrets.
+ */
+const CELLD_IGNORE_PATTERNS = [".celld/", ".celld.wrangler.json", ".celld.service.*.wrangler.json"];
 
 /** Where `@cloudflare/vite-plugin` records the config of the last `vite build`. */
 const VITE_DEPLOY_REDIRECT = join(".wrangler", "deploy", "config.json");
@@ -181,6 +191,41 @@ const projectWorkflowExports = (exports: unknown): { bindings: Config[]; rest: C
 };
 
 /**
+ * Give each D1 database still carrying reconcile's Cloudflare placeholder its
+ * name as the id, or `<worker>-<binding>` when it has none. celld takes any id
+ * as the fleet-wide identity, so every project left with the placeholder would
+ * otherwise share one database.
+ */
+const projectD1Databases = (databases: unknown, workerName: unknown): unknown =>
+    Array.isArray(databases)
+        ? databases.map((database: unknown) => {
+              if (!isRecord(database) || database["database_id"] !== D1_PLACEHOLDER_ID) {
+                  return database;
+              }
+
+              if (typeof database["database_name"] === "string") {
+                  return { ...database, database_id: database["database_name"] };
+              }
+
+              return typeof database["binding"] === "string" ? { ...database, database_id: celldBindingId(workerName, database["binding"]) } : database;
+          })
+        : databases;
+
+/**
+ * Give each id-less KV namespace (the shape reconcile writes, for wrangler to
+ * create on Cloudflare) an id celld can use: `<worker>-<binding>`, so two
+ * namespaces of one Worker stay apart.
+ */
+const projectKvNamespaces = (namespaces: unknown, workerName: unknown): unknown =>
+    Array.isArray(namespaces)
+        ? namespaces.map((namespace: unknown) =>
+              isRecord(namespace) && namespace["id"] === undefined && typeof namespace["binding"] === "string"
+                  ? { ...namespace, id: celldBindingId(workerName, namespace["binding"]) }
+                  : namespace,
+          )
+        : namespaces;
+
+/**
  * Project a parsed wrangler config onto what celld accepts.
  * @param config The parsed wrangler config.
  * @returns the projected config and every key removed from it. A removed key
@@ -205,6 +250,16 @@ const projectCelldConfig = (config: Config): { config: Config; dropped: string[]
         switch (key) {
             case "containers": {
                 projected[key] = projectContainers(value, dropped);
+
+                break;
+            }
+            case "d1_databases": {
+                projected[key] = projectD1Databases(value, config["name"]);
+
+                break;
+            }
+            case "kv_namespaces": {
+                projected[key] = projectKvNamespaces(value, config["name"]);
 
                 break;
             }
@@ -424,12 +479,14 @@ const adjustBuildOutput = (
 /**
  * What `wrangler dev --var WORKER_ENV:development` marks on Cloudflare:
  * without it the runtime treats the dev worker as production (live mail, no
- * queue capture). `vars` from the config win, and `.dev.vars` beats both.
+ * queue capture). It beats a `WORKER_ENV` in the config's `vars`, as wrangler's
+ * `--var` does; `.dev.vars` still beats it — celld reads the app's file last, and a
+ * service's inlined one comes in as `devVariables`, applied over the marker.
  */
-const markDevelopment = (projected: Config): Config => {
+const markDevelopment = (projected: Config, devVariables: Readonly<Record<string, string>> = {}): Config => {
     const variables = isRecord(projected["vars"]) ? projected["vars"] : {};
 
-    return { ...projected, vars: { WORKER_ENV: "development", ...variables } };
+    return { ...projected, vars: { ...variables, WORKER_ENV: "development", ...devVariables } };
 };
 
 /**
@@ -480,7 +537,20 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
     return {
         configPath,
         dropped: build.reported,
+        vars: isRecord(projected["vars"]) ? projected["vars"] : {},
         write: () => {
+            // Best-effort, unlike a service projection's: this one carries only what the
+            // committed wrangler config already does, so a read-only checkout still runs.
+            // A build's projection lands in the build output, which is no place for a
+            // `.gitignore` and is ignored already.
+            if (!fromBuild) {
+                try {
+                    ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
+                } catch {
+                    // The projection is no secret; an unignored one is only noise in `git status`.
+                }
+            }
+
             writeFileSync(configPath, contents);
 
             // Removed on a `--dry-run` too: celld refuses the file outright, so
@@ -527,15 +597,19 @@ const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedCo
         ? Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map(({ key, value }) => [key, value]))
         : {};
     const rebased = rebaseMigrationDirectories(rebasePaths(config, serviceDirectory, root), own, serviceDirectory, root);
-    const variables = isRecord(rebased["vars"]) ? rebased["vars"] : {};
     // The Worker name is the service's own config; keep it from steering the file name.
     const configPath = join(root, `.celld.service.${name.replaceAll(/[^\w.-]/gu, "-")}.wrangler.json`);
-    const contents = `${JSON.stringify(markDevelopment({ ...rebased, vars: { ...variables, ...devVariables } }), undefined, 4)}\n`;
+    const projected = markDevelopment(rebased, devVariables);
+    const contents = `${JSON.stringify(projected, undefined, 4)}\n`;
 
     return {
         configPath,
         dropped,
+        vars: isRecord(projected["vars"]) ? projected["vars"] : {},
         write: () => {
+            // Fails closed: the file inlines the service's `.dev.vars`, so it is never
+            // written unless the ignore that keeps it out of git is in place first.
+            ensureGitignoreEntries(root, CELLD_IGNORE_PATTERNS);
             writeFileSync(configPath, contents);
         },
     };

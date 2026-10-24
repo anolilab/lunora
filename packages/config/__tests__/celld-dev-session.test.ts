@@ -24,6 +24,11 @@ const freePort = async (): Promise<number> =>
         });
     });
 
+/** A toolchain probe that finds nothing wrong, so the session does not look for `celld` on this host. */
+const noProblems = async (): Promise<{ errors: string[]; warnings: string[] }> => {
+    return { errors: [], warnings: [] };
+};
+
 interface Started {
     child: ChildProcess;
     config: string;
@@ -89,7 +94,7 @@ describe("celld dev session", () => {
 
         const started: Started[] = [];
         const port = await freePort();
-        const session = await startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld(started) });
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port, projectRoot: root, spawn: fakeCelld(started) });
 
         expect(started.map(({ config }) => config)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
         // Never on the app's port, which would answer the app's traffic while it is down.
@@ -115,7 +120,7 @@ describe("celld dev session", () => {
         expect.assertions(1);
 
         const started: Started[] = [];
-        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
 
         // started[0] registered the service and was stopped; started[1] is the app.
         started[1]?.child.emit("exit", 3);
@@ -129,6 +134,7 @@ describe("celld dev session", () => {
         expect.assertions(1);
 
         const session = await startCelldDevSession({
+            probe: noProblems,
             log: () => {},
             port: await freePort(),
             projectRoot: root,
@@ -149,9 +155,52 @@ describe("celld dev session", () => {
         const port = await freePort();
         const holder = createServer().listen(port, "127.0.0.1");
 
-        await expect(startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(/already in use/u);
+        await expect(startCelldDevSession({ probe: noProblems, log: () => {}, port, projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(
+            /already in use/u,
+        );
 
         holder.close();
+    });
+
+    it("refuses to start, before spawning anything, when the celld toolchain has an error", async () => {
+        expect.assertions(2);
+
+        const started: Started[] = [];
+
+        await expect(
+            startCelldDevSession({
+                log: () => {},
+                port: await freePort(),
+                probe: async () => {
+                    return { errors: ["celld is not on PATH"], warnings: [] };
+                },
+                projectRoot: root,
+                spawn: fakeCelld(started),
+            }),
+        ).rejects.toThrow(/celld is not on PATH/u);
+        expect(started).toHaveLength(0);
+    });
+
+    it("logs a toolchain warning and still starts", async () => {
+        expect.assertions(1);
+
+        const started: Started[] = [];
+        const lines: string[] = [];
+        const session = await startCelldDevSession({
+            log: (line) => {
+                lines.push(line);
+            },
+            port: await freePort(),
+            probe: async () => {
+                return { errors: [], warnings: ["celld 0.5.0 is older than 0.6.1"] };
+            },
+            projectRoot: root,
+            spawn: fakeCelld(started),
+        });
+
+        expect(lines).toContain("celld 0.5.0 is older than 0.6.1");
+
+        await session.stop();
     });
 
     it("refuses to start without the services lunora.config declares", async () => {
@@ -159,8 +208,8 @@ describe("celld dev session", () => {
 
         writeFileSync(join(root, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/missing" } } };\n`);
 
-        await expect(startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(
-            /could not read the lunora\.config services/u,
-        );
+        await expect(
+            startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) }),
+        ).rejects.toThrow(/could not read the lunora\.config services/u);
     });
 });

@@ -21,6 +21,8 @@ import { readServiceBindings } from "@lunora/codegen";
 import type { DevProcess, DevProcessSpawner } from "../dev-process";
 import { acceptsConnection, startDevProcess } from "../dev-process";
 import { planCelldConfig, planCelldServiceConfig } from "./celld-config";
+import type { CelldToolchainProbe } from "./celld-toolchain";
+import { probeCelldToolchain } from "./celld-toolchain";
 
 /** How long one `celld dev` gets to accept connections. */
 const READY_TIMEOUT_MS = 60_000;
@@ -47,6 +49,8 @@ interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     /** Port the app serves on. */
     port: number;
+    /** Checks the celld toolchain before anything starts; defaults to the host's `celld` and `PATH`. */
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -117,6 +121,15 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
     const notice = (line: string, stream: CelldLineOrigin["stream"] = "stdout"): void => {
         log(line, { stream, tag: "celld" });
     };
+    const toolchain = await (options.probe ?? (() => probeCelldToolchain({ env: process.env, purpose: "dev" })))();
+
+    for (const warning of toolchain.warnings) {
+        notice(warning, "stderr");
+    }
+
+    if (toolchain.errors.length > 0) {
+        throw new Error(toolchain.errors.join("; "));
+    }
 
     if (await acceptsConnection(port)) {
         throw new Error(`port ${String(port)} is already in use — stop whatever is serving there (another dev server?), or pick another worker port`);

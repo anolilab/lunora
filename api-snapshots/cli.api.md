@@ -112,6 +112,7 @@ interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
     bundleMetaPath?: string;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
     clientBuildEnvironment?: string;
     clientBuildOutputJson?: boolean;
     clientBuildRan?: boolean;
@@ -1192,6 +1193,7 @@ interface ListRemoteSecretsInputs {
     cwd: string;
     env?: string;
     runner?: SecretListRunner;
+    target?: string;
     temporary?: boolean;
 }
 ```

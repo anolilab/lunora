@@ -340,6 +340,26 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
     });
 
+    it("names the D1 database id after the worker on celld, which takes any id, and does not warn", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "celld" });
+
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "lunora-app", database_name: "lunora-app" }]);
+        expect(result.warnings.join(" ")).not.toMatch(/placeholder database_id/u);
+    });
+
+    it("keeps the placeholder D1 id on node, so a later Cloudflare deploy still finds it", () => {
+        expect.assertions(2);
+
+        reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "node" });
+        const cloudflare = reconcileWranglerBindings(root, baseInferred({ needsD1: true }));
+
+        // The deploy gate refuses only this literal; a name-derived id would ship an unbound DB.
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-app" }]);
+        expect(cloudflare.changed).toBe(false);
+    });
+
     it("adds the parameterless ai binding when @lunora/ai is inferred", () => {
         expect.assertions(2);
 
@@ -911,14 +931,26 @@ describe("reconcileWranglerBindings", () => {
         expect(reconcileWranglerBindings(root, baseInferred({ usesKv: true })).added).toStrictEqual([]);
     });
 
-    it.each(["node", "celld"])("writes no KV or Hyperdrive binding for the %s target, and says what to add instead", (target) => {
+    it("writes no KV or Hyperdrive binding for the node target, and says what to add instead", () => {
         expect.assertions(3);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target });
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "node" });
 
         expect(readConfig().kv_namespaces).toBeUndefined();
         expect(readConfig().hyperdrive).toBeUndefined();
         expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
+    });
+
+    // The celld projection derives the id; one written here would follow a later
+    // switch to Cloudflare into a deploy that needs the id-less shape.
+    it("writes a celld KV binding without an id, as on Cloudflare, and no Hyperdrive binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "celld" });
+
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
+        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(result.added).toContain("KV (Workers KV, celld namespace lunora-app-KV)");
     });
 
     it.each([
