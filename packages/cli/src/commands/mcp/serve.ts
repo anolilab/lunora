@@ -69,6 +69,11 @@ interface ClosableServer {
     sendToolListChanged?: () => Promise<void>;
 }
 
+/** A document with no functions: what the server serves once the document has been removed. */
+const NO_FUNCTIONS: unknown = { methods: [], openrpc: "1.3.2" };
+
+const isMissing = (error: unknown): boolean => error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+
 /** The OpenRPC document as it was last read, with the mtime it was read at. */
 interface LoadedSpec {
     mtimeMs: number;
@@ -217,8 +222,13 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
             if (statSync(specPath).mtimeMs !== loaded.mtimeMs) {
                 loaded = readSpec();
             }
-        } catch {
-            // Mid-rewrite the file can be briefly absent or half-written: serve what was last read.
+        } catch (error: unknown) {
+            // Codegen rewrites the file in place, so a missing file means it was removed: OpenRPC was
+            // turned off, and the server must stop offering the functions it described.
+            if (isMissing(error) && loaded.spec !== NO_FUNCTIONS) {
+                loaded = { mtimeMs: -1, spec: NO_FUNCTIONS };
+            }
+            // A half-written rewrite can fail to parse; then the last complete document still serves.
         }
 
         return loaded.spec;

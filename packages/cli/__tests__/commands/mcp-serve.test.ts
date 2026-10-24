@@ -278,6 +278,65 @@ describe("lunora mcp serve", () => {
             expect(connect).toHaveBeenCalledTimes(1);
         });
 
+        it("--functions stops offering the functions of a document that codegen removed", async () => {
+            expect.assertions(2);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, JSON.stringify({ methods: [{ name: "notes:list" }] }), "utf8");
+
+            let markReady: () => void = () => undefined;
+            const ready = new Promise<void>((resolve) => {
+                markReady = resolve;
+            });
+            let announce: () => void = () => undefined;
+            const announced = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            let closeServer: () => void = () => undefined;
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(async () => {
+                const server: ClosableServer = {
+                    sendToolListChanged: async () => {
+                        announce();
+                    },
+                };
+
+                Object.defineProperty(server, "onclose", {
+                    set(handler: () => void) {
+                        closeServer = handler;
+                    },
+                });
+
+                return server;
+            });
+
+            const serving = runMcpServe(
+                {
+                    cwd: workdir,
+                    functions: true,
+                    url: "http://localhost:8787",
+                    version: "1.0.0",
+                    writeError: (message) => {
+                        if (message.includes("ready")) {
+                            markReady();
+                        }
+                    },
+                },
+                undefined,
+                connect,
+            );
+
+            await ready;
+            rmSync(specPath);
+            await announced;
+
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+
+            closeServer();
+
+            await expect(serving).resolves.toStrictEqual({ code: 0, deployment: undefined });
+        });
+
         it("is read-only unless --allow-writes is passed", async () => {
             expect.assertions(2);
 
