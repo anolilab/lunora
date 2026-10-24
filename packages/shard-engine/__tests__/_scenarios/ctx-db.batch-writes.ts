@@ -189,7 +189,7 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
                 await expect(writer.deleteMany(ids)).rejects.toThrow(/exceeds the limit of 500/);
             });
 
-            it.each([Number.POSITIVE_INFINITY, -1])("deleteWhere rejects limit %s before reading", async (limit) => {
+            it.each([-1, 1.5, Number.NaN])("deleteWhere rejects limit %s before reading", async (limit) => {
                 expect.assertions(2);
 
                 const { writer } = setupWriter();
@@ -227,6 +227,25 @@ const runBatchWriteScenarios = (factory: () => SqlHarness): void => {
 
                 // Nothing was deleted — the cap is checked before any write.
                 await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(600);
+            });
+
+            it("an Infinity limit lifts the cap on deleteWhere and deleteMany", async () => {
+                expect.assertions(3);
+
+                const { writer } = setupWriter();
+
+                await writer.insertMany(
+                    "messages",
+                    Array.from({ length: 600 }, (_, index) => row(index)),
+                    { limit: 1000 },
+                );
+
+                await expect(writer.deleteWhere("messages", { channelId: "c1" }, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 600 });
+                await expect(writer.findMany("messages", { limit: 1000 }).then((page) => page.page)).resolves.toHaveLength(0);
+
+                const ids = Array.from({ length: 501 }, (_, index) => `m${String(index)}`);
+
+                await expect(writer.deleteMany(ids, { limit: Number.POSITIVE_INFINITY })).resolves.toStrictEqual({ deleted: 501 });
             });
 
             it("deleteWhere removes every row matching the predicate", async () => {

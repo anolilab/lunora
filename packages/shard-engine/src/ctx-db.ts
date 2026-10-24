@@ -503,7 +503,8 @@ const ITERATOR_PAGE_SIZE = 128;
  * structural throws) so the caller sees a clear failure, not a silent slow path.
  */
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
-    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+    // `Infinity` lifts the cap, so it passes; any other limit must be a non-negative integer.
+    if (limit !== undefined && limit !== Number.POSITIVE_INFINITY && (!Number.isInteger(limit) || limit < 0)) {
         throw new LunoraError("BATCH_LIMIT_EXCEEDED", `${op}: batch limit must be a non-negative integer`, { status: 400 });
     }
 
@@ -522,8 +523,9 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
  * Read the rows a `deleteWhere`/`patchWhere` will touch, rejecting an over-cap
  * match before decoding it. The read stops one row past the cap — enough to
  * know the batch is too big — and only the over-cap path pays a `COUNT(*)` so
- * the error still reports the real number of matches. A limit that is not a
- * non-negative integer is rejected before the read.
+ * the error still reports the real number of matches. An `Infinity` limit
+ * reads every match; any other limit that is not a non-negative integer is
+ * rejected before the read.
  */
 const readBatchMatches = async (
     source: DatabaseWriterLike,
@@ -532,11 +534,11 @@ const readBatchMatches = async (
     limit: number | undefined,
     op: string,
 ): Promise<Record<string, unknown>[]> => {
-    // Validate the limit before the read so `cap + 1` is always a finite integer.
+    // Validate the limit before the read, so a bad one never reaches it.
     assertBatchLimit(0, limit, op);
 
     const cap = limit ?? DEFAULT_BATCH_LIMIT;
-    const { page } = await source.findMany(tableName, { limit: cap + 1, omitContinueCursor: true, where });
+    const { page } = await source.findMany(tableName, Number.isFinite(cap) ? { limit: cap + 1, omitContinueCursor: true, where } : { where });
 
     if (page.length > cap) {
         // `Math.max` keeps the throw here (not in deleteMany/patchMany) even if

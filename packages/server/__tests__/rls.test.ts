@@ -2025,6 +2025,19 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(1);
     });
 
+    it("deleteWhere accepts an Infinity limit and reads every match instead of a capped page", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "P", table: "plain" }]);
+
+        const handler = lunora.action
+            .use(rlsForTest<TestContext>([]))
+            .action(async ({ ctx }) => ctx.db.deleteWhere("plain", {}, { limit: Number.POSITIVE_INFINITY }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(database.calls.find((call) => call.method === "findMany")?.args).not.toHaveProperty("limit");
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 
