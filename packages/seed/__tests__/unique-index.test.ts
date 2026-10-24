@@ -265,6 +265,32 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(exact, { counts: { flags: 3 } })).toThrow(/by_tags_on/u);
     });
 
+    it("checks a later index that shares a column an earlier index dealt", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            flags: defineTable({ a: v.boolean(), b: v.boolean(), c: v.literal("k") })
+                .index("by_a_b", ["a", "b"], { unique: true })
+                .index("by_a_c", ["a", "c"], { unique: true }),
+        });
+
+        expect(rowsOf(seedPlan(schema, { counts: { flags: 2 } }), "flags")).toHaveLength(2);
+        expect(() => seedPlan(schema, { counts: { flags: 3 } })).toThrow(/by_a_c/u);
+    });
+
+    it("lets a later index that contains every column of an earlier one reuse its deal", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            flags: defineTable({ a: v.boolean(), b: v.boolean(), c: v.literal("k") })
+                .index("by_a_b", ["a", "b"], { unique: true })
+                .index("by_a_b_c", ["a", "b", "c"], { unique: true }),
+        });
+        const rows = rowsOf(seedPlan(schema, { counts: { flags: 4 } }), "flags");
+
+        expect(new Set(rows.map((row) => `${String(row.a)}|${String(row.b)}`)).size).toBe(4);
+    });
+
     it("makes a single-column unique index behave like .unique()", () => {
         expect.hasAssertions();
 

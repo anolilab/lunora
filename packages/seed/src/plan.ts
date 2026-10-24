@@ -356,9 +356,14 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
     const rawDigit = (valueIndex: number, position: number): number =>
         Math.floor(valueIndex / (strides[position] as number)) % (carriers[position] as Carrier).deal.capacity;
 
+    const chain = carriers.map(({ deal, field }) => {
+        return { capacity: deal.capacity, name: field.name };
+    });
+
     for (const [position, { deal, field }] of carriers.entries()) {
         deals.set(field.name, {
             capacity,
+            chain,
             valueAt: (valueIndex, generate) => {
                 let shift = 0;
 
@@ -391,8 +396,11 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
  * Skipped, leaving the columns to the generator, when a member is already unique on
  * its own (the index is then satisfied), a self-reference (its pool is not known
  * yet), a foreign key with no parents, a server-filled column, or is overridden.
- * A column an earlier composite index already dealt keeps that deal, and any later index containing
- * it is skipped as a whole, so the column never takes two digits.
+ * A column an earlier composite index already dealt keeps that deal, so it never takes two digits.
+ * A later index sharing such a column is still checked: it is distinct for as many rows as the
+ * earlier index's leading carriers it holds are, and otherwise only through the members it deals
+ * itself (a shared column further down the earlier index repeats with that index's rhythm, so
+ * counting it would promise combinations the rows do not reach).
  */
 const planCompositeDeal = (
     index: UniqueIndexSpec,
@@ -411,7 +419,6 @@ const planCompositeDeal = (
     const undealable = (field: FieldSpec): boolean =>
         field.unique ||
         field.fkTable === table ||
-        deals.has(field.name) ||
         Object.hasOwn(tableOverrides, field.name) ||
         (field.hasServerDefault && field.fkTable === undefined) ||
         (field.fkTable !== undefined && poolOf(field).length === 0);
@@ -422,7 +429,19 @@ const planCompositeDeal = (
 
     // Foreign keys first, then closed domains, then the members a deal would rewrite; the sort is stable,
     // so declaration order breaks ties.
+    const shared = members.filter((field) => deals.has(field.name));
+    // Rows the already-dealt members keep apart: the longest run of an earlier index's leading carriers that all sit in this one.
+    const covered = Math.max(
+        1,
+        ...shared.map(({ name }) => {
+            const chain = deals.get(name)?.chain ?? [];
+            const run = chain.findIndex((link) => !names.includes(link.name));
+
+            return chain.slice(0, run === -1 ? undefined : run).reduce((product, link) => product * link.capacity, 1);
+        }),
+    );
     const candidates = members
+        .filter((field) => !deals.has(field.name))
         .map((field) => {
             if (field.fkTable !== undefined) {
                 return { carrier: { deal: planUniqueFkDeal(poolOf(field), table, field.name), field }, rank: 0 };
@@ -436,19 +455,21 @@ const planCompositeDeal = (
         .toSorted((left, right) => left.rank - right.rank);
     const required = offset + count;
     const carriers: Carrier[] = [];
-    let capacity = 1;
+    let carried = 1;
 
     // Foreign keys and closed domains always carry: their dealt value is one the generator could have
     // produced, and dealing them whatever the batch size keeps a pair a function of the row index, so a
     // later call never repeats one. A rewriting member carries only when those fall short.
     for (const { carrier, rank } of candidates) {
-        if (rank === 2 && capacity >= required) {
+        if (rank === 2 && Math.max(carried, covered) >= required) {
             break;
         }
 
         carriers.push(carrier);
-        capacity *= carrier.deal.capacity;
+        carried *= carrier.deal.capacity;
     }
+
+    const capacity = Math.max(carried, covered);
 
     // A hash-derived member (a `.url()`, a storage id, an array) is distinct per row but uncountable, so
     // it can cover what the counted members cannot; only an index made of counted members is refused.
@@ -459,7 +480,7 @@ const planCompositeDeal = (
         );
     }
 
-    assignDigits(carriers, capacity, deals);
+    assignDigits(carriers, carried, deals);
 };
 
 /** Deal every multi-column `unique` index of one table; see {@link planCompositeDeal}. */

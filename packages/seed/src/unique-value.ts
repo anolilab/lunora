@@ -23,6 +23,13 @@ interface UniqueDeal {
     capacity: number;
 
     /**
+     * Set on a composite-index member: that index's carriers in digit order, each with its own number
+     * of values. The tuple of any leading run of them is distinct for every row below the product of
+     * their capacities, which is what a later index sharing those columns can rely on.
+     */
+    chain?: ReadonlyArray<{ capacity: number; name: string }>;
+
+    /**
      * The value for one row.
      * @param index the row's absolute index, always below {@link UniqueDeal.capacity}.
      * @param generate produces the value the normal generator would have emitted; called only by the arms that build on it.
