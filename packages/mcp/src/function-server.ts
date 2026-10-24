@@ -210,6 +210,19 @@ const runStream = async (
 
     const chunks: unknown[] = [];
     let collectedLength = 0;
+    // Progress is queued in order rather than awaited per chunk. Awaiting let a burst of chunks
+    // overflow the client's buffer before the cap was checked, so the caller saw BACKPRESSURE
+    // where the documented PAYLOAD_TOO_LARGE belongs. A failed send cancels the stream.
+    let sent: Promise<unknown> = Promise.resolve();
+    let sendFailure: { error: unknown } | undefined;
+    const queueProgress = (chunkIndex: number, chunkJson: string): void => {
+        sent = sent
+            .then(() => (sendFailure === undefined ? progress?.(chunkIndex, chunkJson) : undefined))
+            .catch((error: unknown) => {
+                sendFailure = { error };
+                iterable.cancel();
+            });
+    };
 
     try {
         for await (const chunk of iterable) {
@@ -237,10 +250,19 @@ const runStream = async (
             }
 
             chunks.push(chunk);
-            await progress?.(chunks.length - 1, chunkJson);
+
+            if (progress !== undefined) {
+                queueProgress(chunks.length - 1, chunkJson);
+            }
         }
     } finally {
         signal?.removeEventListener("abort", onAbort);
+    }
+
+    await sent;
+
+    if (sendFailure !== undefined) {
+        throw sendFailure.error;
     }
 
     // A cancel ends the iterator as a normal completion, so the chunks are a prefix of the
@@ -306,26 +328,65 @@ const callFunctionTool = async (
  * client and the WebSocket one, because a stream authenticates through the latter.
  * `release` closes the cached client, which ends any stream socket it opened.
  */
-const clientFor = (options: FunctionMcpServerOptions): { clientOf: () => LunoraClient | undefined; release: () => void } => {
-    let current: { client: LunoraClient; url: string } | undefined;
+/** One deployment client, with the calls that are still using it. */
+interface ClientEntry {
+    calls: number;
+    client: LunoraClient;
+    url: string;
+}
 
-    const release = (): void => {
-        current?.client.close();
-        current = undefined;
+/** A call's hold on a client. `done` releases it, and it is safe to call more than once. */
+interface ClientLease {
+    client: LunoraClient;
+    done: () => void;
+}
+
+const clientFor = (options: FunctionMcpServerOptions): { acquire: () => ClientLease | undefined; release: () => void } => {
+    let current: ClientEntry | undefined;
+    // Clients replaced or dropped while calls still use them. Each closes once its last call ends.
+    const retiring = new Set<ClientEntry>();
+
+    const closeWhenIdle = (entry: ClientEntry): void => {
+        if (entry.calls === 0 && retiring.delete(entry)) {
+            entry.client.close();
+        }
     };
 
-    const clientOf = (): LunoraClient | undefined => {
+    const retire = (entry: ClientEntry): void => {
+        retiring.add(entry);
+        closeWhenIdle(entry);
+    };
+
+    // The server is closing: every client closes now, whatever calls are still on it.
+    const release = (): void => {
+        if (current !== undefined) {
+            retire(current);
+            current = undefined;
+        }
+
+        for (const entry of retiring) {
+            retiring.delete(entry);
+            entry.client.close();
+        }
+    };
+
+    const acquire = (): ClientLease | undefined => {
         const url = typeof options.url === "function" ? options.url() : options.url;
 
         // A URL that returns later gets a fresh client, even when it is the same string.
         if (url === undefined || url.length === 0) {
-            release();
+            if (current !== undefined) {
+                retire(current);
+                current = undefined;
+            }
 
             return undefined;
         }
 
         if (current?.url !== url) {
-            current?.client.close();
+            if (current !== undefined) {
+                retire(current);
+            }
 
             const client = new LunoraClient({ fetch: options.fetch, url, WebSocket: options.WebSocket });
 
@@ -334,13 +395,28 @@ const clientFor = (options: FunctionMcpServerOptions): { clientOf: () => LunoraC
                 client.setWsToken(options.token);
             }
 
-            current = { client, url };
+            current = { calls: 0, client, url };
         }
 
-        return current.client;
+        const entry = current;
+
+        entry.calls += 1;
+
+        let held = true;
+
+        return {
+            client: entry.client,
+            done: (): void => {
+                if (held) {
+                    held = false;
+                    entry.calls -= 1;
+                    closeWhenIdle(entry);
+                }
+            },
+        };
     };
 
-    return { clientOf, release };
+    return { acquire, release };
 };
 
 /**
@@ -358,7 +434,7 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
         return { spec, tools: functionToolsFromOpenRpc(spec, { allowWrites }) };
     };
     let served = buildTools(resolveSpec());
-    const { clientOf, release } = clientFor(options);
+    const { acquire, release } = clientFor(options);
     // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
     const server = new Server(
         { name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version },
@@ -406,16 +482,16 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
-        let client: LunoraClient | undefined;
+        let lease: ClientLease | undefined;
 
         try {
-            client = clientOf();
+            lease = acquire();
         } catch (error: unknown) {
             // A URL resolver that throws is a failed call, not a failed request.
             return errorFromThrown(error);
         }
 
-        if (client === undefined) {
+        if (lease === undefined) {
             return errorResult(
                 "SERVICE_UNAVAILABLE",
                 "no Lunora deployment URL is available yet. Start `lunora dev` or set the deployment URL, then call the tool again.",
@@ -437,7 +513,12 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
                   }),
         };
 
-        return callFunctionTool(client, toolsNow().routes, request.params.name, request.params.arguments ?? {}, allowWrites, context);
+        // The lease keeps the client open until this call ends, even if the URL moves on meanwhile.
+        try {
+            return await callFunctionTool(lease.client, toolsNow().routes, request.params.name, request.params.arguments ?? {}, allowWrites, context);
+        } finally {
+            lease.done();
+        }
     });
 
     return server;

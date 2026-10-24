@@ -27,6 +27,9 @@ const streamFrames: { script: Script } = { script: () => [] };
 class StreamSocket {
     public static readonly sent: Frame[] = [];
 
+    /** The socket most recently opened, so a test can deliver a frame to a stream that is still open. */
+    public static readonly live: { socket?: StreamSocket } = {};
+
     /** Resolvers waiting for a frame of a given type to be sent. A milestone, so a test never polls. */
     private static readonly waiters: { resolve: () => void; type: string }[] = [];
 
@@ -43,12 +46,18 @@ class StreamSocket {
         });
     }
 
+    /** Delivers a server frame to the most recently opened socket, as the server would once a stream has more to say. */
+    public static deliver(reply: Frame): void {
+        StreamSocket.live.socket?.dispatch("message", { data: JSON.stringify(reply) });
+    }
+
     public readonly url: string;
 
     private readonly listeners = new Map<string, ((event: unknown) => void)[]>();
 
     public constructor(url: string) {
         this.url = url;
+        StreamSocket.live.socket = this;
         queueMicrotask(() => {
             this.dispatch("open", {});
         });
@@ -342,6 +351,44 @@ describe("a stream tool over a real SDK client", () => {
 
         expect(StreamSocket.sent.filter((frame) => frame["type"] === "unsubscribe")).toStrictEqual([{ id: streamId, type: "unsubscribe" }]);
         expect(StreamSocket.sent.filter((frame) => frame["type"] === "stream")).toHaveLength(1);
+
+        await client.close();
+    });
+});
+
+describe("a stream tool when the deployment URL moves while it is open", () => {
+    afterEach(resetStreamDouble);
+
+    it("keeps the stream open on the deployment it started on, until it completes there", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("WebSocket", StreamSocket);
+
+        let url = "https://old.example";
+        // The chunk arrives, and the stream then stays open until the test completes it.
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            { data: CHUNKS[0], id, type: "chunk" },
+        ];
+
+        const httpFetch = vi.fn<typeof fetch>(async () => Response.json({ result: [] }, { headers: { "content-type": "application/json" } }));
+        const client = await connected(createFunctionMcpServer({ fetch: httpFetch, openRpcSpec: SPEC, token: "test-caller", url: () => url }));
+        const pending = client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" });
+
+        await StreamSocket.whenSent("stream");
+
+        url = "https://new.example";
+
+        await client.callTool({ name: "messages_list" });
+
+        const streamId = String(StreamSocket.sent.find((frame) => frame["type"] === "stream")?.["id"]);
+
+        StreamSocket.deliver({ id: streamId, type: "complete" });
+
+        const result = await pending;
+
+        expect(result.isError ?? false).toBe(false);
+        expect(chunksOf(result.content)).toStrictEqual([CHUNKS[0]]);
 
         await client.close();
     });

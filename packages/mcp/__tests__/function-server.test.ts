@@ -256,7 +256,27 @@ describe("callFunctionTool — streams", () => {
             signal: controller.signal,
         });
 
-        expect(result.content[0]?.text).toContain("after 1 chunk(s)");
+        // Progress is queued, so the stream may read on past the chunk that was reported before the abort lands.
+        expect(result.content[0]?.text).toMatch(/was cancelled before it completed, after \d+ chunk\(s\)/);
+    });
+
+    it("refuses a burst past the chunk cap as too large, even while progress is slow to send", async () => {
+        expect.assertions(1);
+
+        const stream = streamOf(
+            Array.from({ length: MAX_STREAM_CHUNKS + 2 }, (_, index) => {
+                return { index };
+            }),
+        );
+        const client = { stream: vi.fn<() => unknown>(() => stream), url: "https://app.example.workers.dev" } as unknown as LunoraClient;
+        const result = await callFunctionTool(client, routesFor(false), "feed_tail", { args: { room: "r1" } }, false, {
+            progress: () =>
+                new Promise<void>(() => {
+                    // Never settles: the cap has to be reported while the send is still pending.
+                }),
+        });
+
+        expect(result.structuredContent).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
     });
 
     it("returns every chunk of a stream that yields exactly the cap", async () => {
