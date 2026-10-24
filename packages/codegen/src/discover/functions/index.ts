@@ -210,14 +210,14 @@ const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): Discove
  * above `export const name = query(...)`; tags are dropped. `export default`
  * carries no statement JSDoc, so it yields nothing.
  */
-const jsDocumentDescriptionOf = (statement: VariableStatement | undefined): string | undefined => {
+const descriptionOfStatement = (statement: VariableStatement | undefined): string | undefined => {
     const text = statement?.getJsDocs().at(-1)?.getDescription().trim();
 
     return text === "" ? undefined : text;
 };
 
 const documentDescriptionOf = (call: CallExpression): string | undefined =>
-    jsDocumentDescriptionOf(call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor)));
+    descriptionOfStatement(call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor)));
 
 /**
  * The JSDoc of the exported statement that names `exportName`. A re-export such as
@@ -225,7 +225,7 @@ const documentDescriptionOf = (call: CallExpression): string | undefined =>
  * sits in an earlier declaration of the bundle, so the call's own comment is the wrong one.
  */
 const exportedDescriptionOf = (source: SourceFile, exportName: string): string | undefined =>
-    jsDocumentDescriptionOf(
+    descriptionOfStatement(
         source
             .getVariableStatements()
             .find((statement) => statement.isExported() && statement.getDeclarations().some((declaration) => declaration.getName() === exportName)),
