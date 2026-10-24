@@ -68,6 +68,37 @@ describe("assistantProvider", () => {
         expect(result.current.sessions).toHaveLength(1);
     });
 
+    it("refreshes a reused session's schema from the new seed and keeps its transcript", () => {
+        expect.assertions(4);
+
+        // A conversation opened before the schema probe landed holds an empty set;
+        // reopening it from the editor must hand the model the facts the editor has
+        // now, or every later turn is grounded in a database with no tables.
+        const { result } = render();
+
+        act(() => {
+            result.current.openAssistant({ schema: [], shardKey: "", title: "SQL console" });
+        });
+
+        const first = result.current.activeId ?? "";
+
+        act(() => {
+            result.current.setTurns(first, [{ role: "user", text: "hello" }]);
+            result.current.openAssistant({ schema: [{ columns: ["id"], table: "messages" }], shardKey: "", title: "SQL console" });
+        });
+
+        expect(result.current.activeId).toBe(first);
+        expect(result.current.sessions[0]?.schema).toStrictEqual([{ columns: ["id"], table: "messages" }]);
+        expect(result.current.sessions[0]?.turns).toHaveLength(1);
+
+        // A seed that carries no schema leaves the grounding alone.
+        act(() => {
+            result.current.openAssistant({ title: "SQL console" });
+        });
+
+        expect(result.current.sessions[0]?.schema).toHaveLength(1);
+    });
+
     it("evicts the oldest session past the cap without stranding the active one", () => {
         expect.assertions(2);
 

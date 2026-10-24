@@ -245,6 +245,10 @@ const start = (current: AssistantState, seed: AssistantSeed | undefined): Assist
 /** One session by id, or `undefined`. Hoisted so the actions that need it stay one nesting level shallower. */
 const sessionById = (sessions: ReadonlyArray<AssistantSession>, id: string): AssistantSession | undefined => sessions.find((session) => session.id === id);
 
+/** One session's grounding replaced, transcript untouched. Hoisted for the same reason as {@link retold}. */
+const withSchema = (sessions: ReadonlyArray<AssistantSession>, id: string, schema: ReadonlyArray<SchemaFact>): ReadonlyArray<AssistantSession> =>
+    sessions.map((session) => (session.id === id ? { ...session, schema } : session));
+
 /** One session dropped. Hoisted for the same reason as {@link retold}. */
 const without = (sessions: ReadonlyArray<AssistantSession>, id: string): ReadonlyArray<AssistantSession> => sessions.filter((session) => session.id !== id);
 
@@ -336,6 +340,11 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
                         ...current,
                         draft: seed?.draft === undefined ? current.draft : { id: current.seq + 1, text: seed.draft },
                         open: true,
+                        // The opener probes the schema afresh each time, and the facts a
+                        // session was created with may be stale — or empty, when the first
+                        // open beat the probe. The transcript is kept; only the grounding
+                        // moves, and a seed that carries none leaves it alone.
+                        sessions: seed?.schema === undefined ? current.sessions : withSchema(current.sessions, active.id, seed.schema),
                         seq: current.seq + 1,
                     };
                 });
@@ -434,6 +443,7 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
         unavailable: availability.data?.available === false,
     };
 
+    // react-doctor-disable-next-line react-doctor/context-provider-value-from-unmemoized-local-literal -- React Compiler memoises `value` (babel-plugin-react-compiler in packem.config.ts) and `actions` is identity-stable
     return <AssistantContext value={value}>{children}</AssistantContext>;
 };
 
