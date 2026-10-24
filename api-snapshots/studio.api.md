@@ -2062,6 +2062,7 @@ const MESSAGE_IDS: readonly [
     "Copy",
     "Copied",
     "Cell value",
+    "Filter by this value",
     "Close",
     "Form",
     "Invalid JSON",

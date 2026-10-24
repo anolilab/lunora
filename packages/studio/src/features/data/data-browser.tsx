@@ -41,6 +41,25 @@ const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
 const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
     new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
 
+/**
+ * Whether a cell's stored value can be turned into a facet-style equality filter.
+ * Limited to the scalars an equality comparison matches faithfully: a SQLite
+ * scalar or a JSON boolean (which binds as 0/1 against `json_extract`). A NaN or
+ * infinite number survives the wire codec but is stored in its tagged form, which
+ * the bound number never equals, so it is withheld too. `undefined`
+ * is a field absent from this document, which the filter reads as NULL, so it
+ * qualifies too. An object, array or blob would bind as serialised text that the
+ * stored form never equals, so the action is withheld rather than filtering to
+ * zero rows.
+ */
+const isFilterableCellValue = (value: unknown): boolean =>
+    value === undefined ||
+    value === null ||
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value)) ||
+    typeof value === "boolean" ||
+    typeof value === "bigint";
+
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
@@ -338,7 +357,7 @@ export const DataBrowser = ({
 
     // Which overlay is open. Separate from the render preferences above: these five
     // fields are read here and nowhere else, and `onInspect` is read only by the page.
-    const inspection = useRowInspection();
+    const inspection = useRowInspection(JSON.stringify([selectedTable, queryShardKey]));
 
     // The row awaiting a cascade-impact confirmation, or null when none is open.
     const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
@@ -581,6 +600,14 @@ export const DataBrowser = ({
                     bucket={storageColumns.get(expandedCell.column)}
                     column={expandedCell.column}
                     onClose={closeExpandedCell}
+                    onFilter={
+                        isFilterableCellValue(expandedCell.storedValue)
+                            ? () => {
+                                  facetFilter(expandedCell.column, expandedCell.storedValue ?? null);
+                                  closeExpandedCell();
+                              }
+                            : undefined
+                    }
                     resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
                     value={expandedCell.value}
                 />

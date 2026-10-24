@@ -195,6 +195,17 @@ describe("d1 introspect", () => {
             expect(page.rows[0]).toMatchObject({ _id: "o1", name: "Acme" });
         });
 
+        it("matches the NULL group when an eq filter carries a null value (a NULL cell's filter)", async () => {
+            expect.assertions(2);
+
+            await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, NULL, 1)`, []);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "name", value: null }], table: "organizations" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]).toMatchObject({ _id: "o3" });
+        });
+
         it("maps a displayed `_id` filter to the physical `id` column", async () => {
             expect.assertions(2);
 
