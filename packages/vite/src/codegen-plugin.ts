@@ -25,6 +25,7 @@ import {
 } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { consumeStudioWrite } from "@lunora/config/studio-host";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
@@ -817,6 +818,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     rpcServiceDirectories.some((directory) => isInside(normalized, directory));
 
                 if (!inRpcService && !isCodegenInput(normalized)) {
+                    return;
+                }
+
+                // A studio handler wrote this file and regenerated from it already; a second run would repeat it.
+                if (consumeStudioWrite(normalized)) {
                     return;
                 }
 

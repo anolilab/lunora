@@ -3264,6 +3264,12 @@ const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse
 const assetContentType: (fileName: string) => string;
 ```
 
+### `consumeStudioWrite` (const)
+
+```ts
+const consumeStudioWrite: (path: string, now?: number) => boolean;
+```
+
 ### `createStudioMiddleware` (const)
 
 ```ts

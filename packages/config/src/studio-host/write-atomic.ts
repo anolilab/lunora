@@ -14,6 +14,8 @@
  */
 import { renameSync, rmSync, writeFileSync } from "node:fs";
 
+import { recordStudioWrite } from "./studio-writes";
+
 /** Write source atomically (temp file + rename), cleaning up the temp file on failure. */
 const writeFileAtomic = (path: string, text: string): void => {
     const temporaryPath = `${path}.lunora-tmp`;
@@ -21,6 +23,7 @@ const writeFileAtomic = (path: string, text: string): void => {
     try {
         writeFileSync(temporaryPath, text, "utf8");
         renameSync(temporaryPath, path);
+        recordStudioWrite(path, text);
     } catch (error) {
         rmSync(temporaryPath, { force: true });
 

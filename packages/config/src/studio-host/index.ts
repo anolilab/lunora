@@ -29,5 +29,6 @@ export type { LocalEndpointContext, LocalEndpointHandler, LocalEndpointRequest, 
 // `serveJsonHandler` applies the shared CSRF gate itself, so a host gets that
 // defense by routing through it — no per-host copy of the check to drift.
 export { serveJsonHandler } from "./serve-json-handler";
+export { consumeStudioWrite } from "./studio-writes";
 export { ALLOW_FORWARDED_ENV, headerValue, isLoopbackAddress, transportRejectionReason } from "./transport-guard";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";
