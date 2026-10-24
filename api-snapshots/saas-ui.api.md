@@ -234,6 +234,7 @@ interface ProjectsView {
 ```ts
 interface Roster {
     entries: ReadonlyArray<RosterEntry>;
+    includesSelf: boolean;
     overflow: number;
     total: number;
 }

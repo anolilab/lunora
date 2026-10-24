@@ -33,6 +33,8 @@ interface RosterEntry {
 interface Roster {
     /** Everyone present, self first, then most recently active. */
     entries: ReadonlyArray<RosterEntry>;
+    /** Whether the viewer is among {@link Roster.total}, even when `cap` left them out of `entries`. */
+    includesSelf: boolean;
     /** People beyond the cap. `0` when everyone fits. */
     overflow: number;
     /** Distinct people, ignoring the cap. */
@@ -94,12 +96,17 @@ const presenceRoster = (members: ReadonlyArray<PresenceMemberLike>, currentUserI
         return b.lastSeen - a.lastSeen;
     });
 
-    return { entries: sorted.slice(0, cap), overflow: Math.max(0, sorted.length - cap), total: sorted.length };
+    return {
+        entries: sorted.slice(0, cap),
+        includesSelf: sorted.some((entry) => entry.isSelf),
+        overflow: Math.max(0, sorted.length - cap),
+        total: sorted.length,
+    };
 };
 
 /** The sentence a roster is actually read as — "3 other people are here". */
 const presenceSummary = (roster: Roster): string => {
-    const others = roster.entries.some((entry) => entry.isSelf) ? roster.total - 1 : roster.total;
+    const others = roster.includesSelf ? roster.total - 1 : roster.total;
 
     if (roster.total === 0) {
         return "No one else is here";

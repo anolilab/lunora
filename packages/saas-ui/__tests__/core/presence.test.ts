@@ -99,6 +99,13 @@ describe("presenceSummary", () => {
         expect(presenceSummary(roster)).toBe("1 other person is here");
     });
 
+    it("does not count a viewer the avatar cap hid as someone else", () => {
+        const members = [member({ sessionId: "t1", userId: "u1" })];
+
+        expect(presenceSummary(presenceRoster(members, "u1", 0))).toBe("Only you are here");
+        expect(presenceSummary(presenceRoster([...members, member({ sessionId: "t2", userId: "u2" })], "u1", 0))).toBe("1 other person is here");
+    });
+
     it("says something useful when you are alone, and when nobody is", () => {
         expect(presenceSummary(presenceRoster([member({ sessionId: "t1", userId: "u1" })], "u1"))).toBe("Only you are here");
         expect(presenceSummary(presenceRoster([], "u1"))).toBe("No one else is here");
