@@ -140,7 +140,7 @@ describe("dashboardsPanel", () => {
                     // A y column the result does not have. `SqlResultChart` drops a
                     // SUGGESTED shape in that case — but accepting it was a click,
                     // so the widget stores it as a choice and the shape holds.
-                    return { result: { chart: { kind: "line", x: "author", y: ["absent"] }, degraded: false } };
+                    return { chart: { kind: "line", x: "author", y: ["absent"] }, degraded: false };
                 }
 
                 throw new Error(`unexpected ${reference}`);
@@ -182,7 +182,7 @@ describe("dashboardsPanel", () => {
                     // `inferChart` swallows this and answers `undefined`, which is
                     // also what it answers for "no change" — so without the alert a
                     // failure and a no-op are indistinguishable to the operator.
-                    return { result: { degraded: true, reason: "unavailable" } };
+                    return { degraded: true, reason: "unavailable" };
                 }
 
                 throw new Error(`unexpected ${reference}`);

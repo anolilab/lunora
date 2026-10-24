@@ -20,7 +20,7 @@ const cronMock = (available: boolean, cron?: string): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiCronExpression) {
-                return { result: cron === undefined ? { degraded: true, reason: "unsafe-response" } : { cron, degraded: false } };
+                return cron === undefined ? { degraded: true, reason: "unsafe-response" } : { cron, degraded: false };
             }
 
             return undefined;

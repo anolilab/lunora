@@ -3345,7 +3345,7 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
                 if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
                     return new Promise((resolve) => {
                         finishAi = (clauses) => {
-                            resolve({ result: { clauses, degraded: false } });
+                            resolve({ clauses, degraded: false });
                         };
                     });
                 }

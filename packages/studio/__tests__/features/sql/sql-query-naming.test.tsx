@@ -26,7 +26,7 @@ const namingMock = (available: boolean): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiNameQuery) {
-                return { result: { degraded: false, description: "The 50 newest rows in messages.", title: "Recent messages" } };
+                return { degraded: false, description: "The 50 newest rows in messages.", title: "Recent messages" };
             }
 
             if (reference === ADMIN_FUNCTIONS.listTables) {

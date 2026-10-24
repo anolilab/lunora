@@ -187,9 +187,8 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         begin("sql");
 
         try {
-            const { result } = (await client.query(AI_GENERATE_SQL, args, callOptions(shardKey))) as {
-                result: GenerateSqlResult;
-            };
+            // `client.query` has already unwrapped the `{ result }` envelope.
+            const result = (await client.query(AI_GENERATE_SQL, args, callOptions(shardKey))) as GenerateSqlResult;
 
             finish("sql", result.degraded ? result.reason : undefined);
 
@@ -270,7 +269,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         begin("filter");
 
         try {
-            const { result } = (await client.query(AI_TABLE_FILTER, { prompt, table }, callOptions(shardKey))) as { result: GenerateFilterResult };
+            const result = (await client.query(AI_TABLE_FILTER, { prompt, table }, callOptions(shardKey))) as GenerateFilterResult;
 
             finish("filter", result.degraded ? result.reason : undefined);
 
@@ -287,7 +286,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
 
         try {
             // Deliberately only the shape — see the hook docblock.
-            const { result: inferred } = (await client.query(AI_CHART_CONFIG, result, callOptions(shardKey))) as { result: GenerateChartResult };
+            const inferred = (await client.query(AI_CHART_CONFIG, result, callOptions(shardKey))) as GenerateChartResult;
 
             finish("chart", inferred.degraded ? inferred.reason : undefined);
 
@@ -303,7 +302,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         begin("name");
 
         try {
-            const { result } = (await client.query(AI_NAME_QUERY, { sql }, callOptions(shardKey))) as { result: GenerateQueryNameResult };
+            const result = (await client.query(AI_NAME_QUERY, { sql }, callOptions(shardKey))) as GenerateQueryNameResult;
 
             finish("name", result.degraded ? result.reason : undefined);
 
@@ -319,7 +318,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         begin("cron");
 
         try {
-            const { result } = (await client.query(AI_CRON_EXPRESSION, { prompt }, callOptions(shardKey))) as { result: GenerateCronResult };
+            const result = (await client.query(AI_CRON_EXPRESSION, { prompt }, callOptions(shardKey))) as GenerateCronResult;
 
             finish("cron", result.degraded ? result.reason : undefined);
 

@@ -18,7 +18,7 @@ const aiMock = (sql: string, available = true): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiGenerateSql) {
-                return { result: { degraded: false, sql } };
+                return { degraded: false, sql };
             }
 
             if (reference === ADMIN_FUNCTIONS.listTables) {
