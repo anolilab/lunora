@@ -802,10 +802,15 @@ const probeRelation = async (options: ApplyOnDeleteOptions, holderTable: string,
  *
  * **Bounded.** Holders are counted first with an ids-only read of
  * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
- * `CASCADE_LIMIT` before any holder of any relation of the parent is touched. The probed ids
- * are processed first, then re-read {@link DEFAULT_BATCH_LIMIT} at a time from
- * the start (catching holders inserted mid-cascade) until a page comes back short — a processed holder no longer matches (deleted,
- * soft-deleted, or its FK nulled). The ceiling is per relation per level: a
+ * `CASCADE_LIMIT` before any holder of any relation of the parent is touched.
+ * The first relation applied walks its probed ids as its first page; every
+ * later one reads its own. Holders are then re-read {@link DEFAULT_BATCH_LIMIT}
+ * at a time from the start until a page comes back short — a processed holder
+ * no longer matches (deleted, soft-deleted, or its FK nulled). A short page
+ * ends the walk, the probe included, so a holder inserted mid-cascade (by a
+ * trigger, say) is only caught by a re-read that runs after it was inserted:
+ * one inserted after the last page was read keeps referencing the deleted
+ * parent. The ceiling is per relation per level: a
  * nested cascade is only counted when its own parent is deleted, so a
  * grandchild relation over the ceiling throws after the levels above it have
  * already run. A DO-local cascade inside a mutation rolls back with it; in an
@@ -823,8 +828,7 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
         (holderId) => (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field)),
         () => overLimitError(tableName, holderTable, relation),
         `onDelete on "${tableName}" made no progress: ${reference} rows still match after being processed`,
-        // The probe already holds every holder's id; walking it first leaves only
-        // holders inserted mid-cascade for the re-reads.
+        // The probe already holds every holder's id, so walking it saves the first read.
         // Only the first plan applied can trust its probe. Any earlier plan may have removed some of these ids — a nested
         // cascade reaches holder tables other than its own — and a set-null on a gone row throws NOT_FOUND.
         probeIsCurrent ? probe : undefined,
