@@ -42,12 +42,17 @@ const SqlQueryRename = ({
             return;
         }
 
+        const startedName = name;
+        const startedDescription = description;
+
         const draft = async (): Promise<void> => {
             const suggestion = await rpc.nameQuery(query.sql);
 
+            // The inputs stay editable while the model works, so a field the
+            // operator touched since the request left is theirs, not the model's.
             if (suggestion !== undefined) {
-                setName(suggestion.title);
-                setDescription(suggestion.description);
+                setName((current) => (current === startedName ? suggestion.title : current));
+                setDescription((current) => (current === startedDescription ? suggestion.description : current));
             }
         };
 

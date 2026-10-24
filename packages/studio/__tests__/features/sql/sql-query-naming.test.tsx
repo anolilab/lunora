@@ -37,6 +37,36 @@ const namingMock = (available: boolean): MockClientHooks =>
         },
     });
 
+/** Like {@link namingMock}, but the model only answers once `release` is called. */
+const gatedNamingMock = (): { mock: MockClientHooks; release: () => void } => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+
+    const mock = createMockClient({
+        query: async (reference): Promise<unknown> => {
+            if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                return { available: true, level: "schema" };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.aiNameQuery) {
+                await gate;
+
+                return { degraded: false, description: "The 50 newest rows in messages.", title: "Recent messages" };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: 0 }];
+            }
+
+            return { columns: [], rowCount: 0, rows: [], truncated: false };
+        },
+    });
+
+    return { mock, release };
+};
+
 describe("saved-query naming", () => {
     afterEach(() => {
         localStorage.clear();
@@ -89,5 +119,30 @@ describe("saved-query naming", () => {
         await expect(screen.findByTestId("sql-query-name")).resolves.toBeDefined();
 
         expect(screen.queryByTestId("sql-query-suggest-name")).toBeNull();
+    });
+
+    it("keeps a field the operator edited while the suggestion was pending", async () => {
+        expect.assertions(2);
+
+        localStorage.setItem(QUERY_KEY, JSON.stringify(SAVED));
+
+        const { mock, release } = gatedNamingMock();
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("sql-query-rename-open-q1"));
+        fireEvent.click(await screen.findByTestId("sql-query-suggest-name"));
+
+        const name = await screen.findByTestId<HTMLInputElement>("sql-query-name");
+        const description = screen.getByTestId<HTMLInputElement>("sql-query-description");
+
+        fireEvent.change(name, { target: { value: "My own name" } });
+        release();
+
+        // The untouched field takes the draft, which marks the answer as applied.
+        await screen.findByDisplayValue("The 50 newest rows in messages.");
+
+        expect(description.value).toBe("The 50 newest rows in messages.");
+        expect(name.value).toBe("My own name");
     });
 });
