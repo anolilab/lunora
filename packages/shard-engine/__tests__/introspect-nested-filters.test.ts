@@ -521,6 +521,76 @@ describe("readTablePage — nested paths and array membership", () => {
         });
     });
 
+    describe("contains on a top-level document field", () => {
+        beforeEach(() => {
+            const rows: [string, Record<string, unknown>][] = [
+                // Each of t1-t3 holds a Date, Map or Set and no text of its own, so a tag-like term can only match through the codec's frame.
+                ["t1", { at: new Date(5), note: "alpha" }],
+                ["t2", { pairs: new Map([["k", 1]]), note: "beta" }],
+                ["t3", { group: new Set(["m"]), note: "gamma" }],
+                ["t4", { at: new Date(9), note: "date night", tags: ["red", "blue"], box: { name: "bigint", n: 42 } }],
+                ["t5", { tags: ["green"], box: { city: "Paris" }, flag: true, n: 7 }],
+            ];
+
+            database.raw(`CREATE TABLE "topc" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+
+            for (const [id, document] of rows) {
+                database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, id, 1, encodeDocJson(document));
+            }
+        });
+
+        const topIds = (column: string, value: string): string[] =>
+            readTablePage(database.sql, { filters: [{ column, operator: "contains", value }], table: "topc" }).rows.map((row) => (row as { id: string }).id);
+        const topSelected = (column: string, value: string): string[] =>
+            selectMatchingIds(database.sql, { filters: [{ column, operator: "contains", value }], table: "topc" }).ids;
+
+        it("does not select a row through the codec tag of a Date, Map or Set field", () => {
+            expect.assertions(8);
+
+            for (const [column, term] of [
+                ["at", "date"],
+                ["at", "wire"],
+                ["pairs", "map"],
+                ["pairs", "lunora"],
+                ["group", "set"],
+                ["group", "wire"],
+            ] as const) {
+                expect(topSelected(column, term)).toStrictEqual([]);
+            }
+
+            expect(topIds("at", "date")).toStrictEqual([]);
+            expect(topIds("group", "set")).toStrictEqual([]);
+        });
+
+        it("still selects a row by the real text of the same fields", () => {
+            expect.assertions(3);
+
+            // t4 stores the Date 9, t1 the Date 5: the payload stays searchable, the frame's tag and type name do not.
+            expect(topSelected("at", "9")).toStrictEqual(["t4"]);
+            expect(topSelected("note", "DATE")).toStrictEqual(["t4"]);
+            expect(topSelected("group", "m")).toStrictEqual(["t3"]);
+        });
+
+        it("keeps contains working on a top-level string array, an object, a string and a number", () => {
+            expect.assertions(6);
+
+            expect(topIds("tags", "BLU")).toStrictEqual(["t4"]);
+            expect(topSelected("tags", "green")).toStrictEqual(["t5"]);
+            expect(topIds("box", "pari")).toStrictEqual(["t5"]);
+            expect(topSelected("box", "bigint")).toStrictEqual(["t4"]);
+            expect(topIds("note", "mm")).toStrictEqual(["t3"]);
+            expect(topIds("n", "7")).toStrictEqual(["t5"]);
+        });
+
+        it("does not let contains read an array's JSON punctuation or an object's keys", () => {
+            expect.assertions(3);
+
+            expect(topIds("tags", '"')).toStrictEqual([]);
+            expect(topIds("tags", ",")).toStrictEqual([]);
+            expect(topIds("box", "city")).toStrictEqual([]);
+        });
+    });
+
     describe("parameter budget", () => {
         // Each doc-field `eq` clause binds two parameters: its JSON path and its value.
         const eqClauses = (count: number): FilterClause[] =>

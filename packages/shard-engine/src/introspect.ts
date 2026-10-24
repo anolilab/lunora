@@ -1468,6 +1468,70 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
 };
 
 /**
+ * Excludes the two leading elements of a wire frame (`["$lunora.wire$","bigint","123"]`):
+ * the tag and the type name are the codec's, not a value the operator stored, so a
+ * search for `bigint` or `date` must not select the row (and a bulk delete must not
+ * remove it). The payload from element 2 on stays searchable, because it is the
+ * value itself: the digits of a bigint, the epoch of a date. A sibling lookup by
+ * `parent` id rather than by `path`, so no stored key is ever parsed as a JSON path.
+ * A user array that starts with the tag is stored inside an `arr` frame and its
+ * first two elements are hidden from search too, which can only lose a match.
+ */
+const wireFrameTagExclusion = (documentExpression: string): string =>
+    `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}'))`;
+
+/**
+ * `contains` on a top-level `__doc__` field. A scalar keeps the plain substring test
+ * over `json_extract` (the common case, no tree walk). An array or object is walked
+ * with `json_tree` and only its text, integer and real leaves are tested, never its
+ * keys or JSON punctuation. A Date, Map or Set is a wire-tagged array, so the tag and
+ * type name at elements 0 and 1 are excluded ({@link wireFrameTagExclusion}) — a
+ * search for `date` must not select the row, and a bulk delete must not remove it.
+ * Both trees are rooted at the same bound path so their node ids line up. Anything
+ * else (a boolean, a missing field) matches nothing.
+ * @returns the SQL conjunct and bound params
+ */
+const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
+    return {
+        params: [path, path, term, path, path, term, path],
+        sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real') AND ${containsSql("j.value")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
+    };
+};
+
+/** Compile a `contains` clause; see the per-shape notes inline. */
+const buildContainsClause = (
+    clause: FilterClause,
+    { expression, kind, pathParameters, physical }: { expression: string; kind: string | undefined; pathParameters: unknown[]; physical: boolean },
+): { params: unknown[]; sql: string } => {
+    const path = clause.path ?? [];
+    // The stored text of a bigint is a zero-padded sort key, so a substring
+    // test over it matches on the padding: `contains 100` hits every value.
+    if (kind === "bigint") {
+        throw new LunoraError("BAD_REQUEST", `"contains" is not supported on bigint column ${clause.column} — use =, <, > instead`);
+    }
+
+    const term = filterValueText(clause.value);
+
+    if (path.length === 0 && physical) {
+        return { params: [term], sql: containsSql(expression) };
+    }
+
+    if (path.length === 0) {
+        return buildTopLevelContains(quoteIdentifier(DOC_COLUMN), pathParameters[0], term);
+    }
+
+    // A nested leaf has no declared kind, so its stored shape is checked here: a
+    // bigint, bytes, date, map or set sits as a wire-tagged array and an object or
+    // array as JSON text, and `json_extract` returns either as text a search for
+    // `bigint` or a field name would hit, then bulk delete would remove the row.
+    // Only a text or numeric leaf holds a value the operator can have typed.
+    return {
+        params: [...pathParameters, ...pathParameters, term],
+        sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) IN ('text', 'integer', 'real') AND ${containsSql(expression)})`,
+    };
+};
+
+/**
  * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
  * `undefined` to skip it (an unknown column on a non-doc table). The compared
  * expression + bound path params come from {@link resolveColumnExpression}; the
@@ -1507,27 +1571,7 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
     const kind = physicalColumns.includes(clause.column) || path.length > 0 ? undefined : kinds?.[clause.column];
 
     if (clause.operator === "contains") {
-        // The stored text of a bigint is a zero-padded sort key, so a substring
-        // test over it matches on the padding: `contains 100` hits every value.
-        if (kind === "bigint") {
-            throw new LunoraError("BAD_REQUEST", `"contains" is not supported on bigint column ${clause.column} — use =, <, > instead`);
-        }
-
-        const term = filterValueText(clause.value);
-
-        if (path.length === 0) {
-            return { params: [...pathParameters, term], sql: containsSql(expression) };
-        }
-
-        // A nested leaf has no declared kind, so its stored shape is checked here: a
-        // bigint, bytes, date, map or set sits as a wire-tagged array and an object or
-        // array as JSON text, and `json_extract` returns either as text a search for
-        // `bigint` or a field name would hit, then bulk delete would remove the row.
-        // Only a text or numeric leaf holds a value the operator can have typed.
-        return {
-            params: [...pathParameters, ...pathParameters, term],
-            sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) IN ('text', 'integer', 'real') AND ${containsSql(expression)})`,
-        };
+        return buildContainsClause(clause, { expression, kind, pathParameters, physical: physicalColumns.includes(clause.column) });
     }
 
     if (clause.value === null && (clause.operator === "eq" || clause.operator === "ne")) {
@@ -1557,19 +1601,6 @@ const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
 const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINALS_KEY}"`]
     .map((prefix) => `substr(j.fullkey, 1, ${String(prefix.length + 1)}) NOT IN ('${prefix}.', '${prefix}[')`)
     .join(" AND ");
-
-/**
- * Excludes the two leading elements of a wire frame (`["$lunora.wire$","bigint","123"]`):
- * the tag and the type name are the codec's, not a value the operator stored, so a
- * search for `bigint` or `date` must not select the row (and a bulk delete must not
- * remove it). The payload from element 2 on stays searchable, because it is the
- * value itself: the digits of a bigint, the epoch of a date. A sibling lookup by
- * `parent` id rather than by `path`, so no stored key is ever parsed as a JSON path.
- * A user array that starts with the tag is stored inside an `arr` frame and its
- * first two elements are hidden from search too, which can only lose a match.
- */
-const wireFrameTagExclusion = (documentExpression: string): string =>
-    `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}'))`;
 
 /**
  * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
