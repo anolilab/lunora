@@ -133,6 +133,33 @@ describe("probeCelldToolchain", () => {
     });
 });
 
+describe("probeCelldToolchain with the default runner", () => {
+    // The tools are real scripts, so the lookup is the one `execFile` makes.
+    it.skipIf(process.platform === "win32")("looks the tools up on the PATH of the env it is given, not the host's", async () => {
+        expect.assertions(2);
+
+        const directory = mkdtempSync(join(tmpdir(), "celld-toolchain-"));
+
+        for (const [name, version] of [
+            ["celld", "celld 0.6.1"],
+            ["esbuild", "0.25.0"],
+        ] as const) {
+            writeFileSync(join(directory, name), `#!/bin/sh\necho "${version}"\n`);
+            chmodSync(join(directory, name), 0o755);
+        }
+
+        try {
+            await expect(probeCelldToolchain({ env: { ...BUCKET, PATH: directory }, purpose: "deploy" })).resolves.toStrictEqual({ errors: [], warnings: [] });
+            await expect(errorsOf({ env: { ...BUCKET, PATH: join(directory, "empty") }, purpose: "deploy" })).resolves.toStrictEqual([
+                "celld is not on PATH — install it (curl -fsSL https://celld.dev/install.sh | sh) to run the celld target",
+                "esbuild is not on PATH — celld bundles the worker with it",
+            ]);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+});
+
 describe(runCommand, () => {
     it("kills a command still running at the timeout and resolves it as timed out", async () => {
         expect.assertions(1);

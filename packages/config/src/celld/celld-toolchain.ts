@@ -41,7 +41,7 @@ type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Prom
 interface CelldToolchainProbeOptions {
     /** A `--dry-run` deploy bundles but writes nothing, so it does not need the bucket. */
     dryRun?: boolean;
-    /** The environment `CELLD_BUCKET` and `CELLD_ESBUILD` are read from. */
+    /** The environment `CELLD_BUCKET` and `CELLD_ESBUILD` are read from, and the tools are looked up and run with. */
     env?: Readonly<Record<string, string | undefined>>;
     /** `deploy` also needs the fleet bucket; a dev session does not. */
     purpose: "deploy" | "dev";
@@ -104,7 +104,7 @@ const runCommand = async (
 
         const launch = launchOptions(command, platform);
 
-        execFile(launch.command, [...args], { killSignal: "SIGKILL", shell: launch.shell, timeout: timeoutMs, windowsHide: true }, (error, stdout) => {
+        execFile(launch.command, [...args], { env, killSignal: "SIGKILL", shell: launch.shell, timeout: timeoutMs, windowsHide: true }, (error, stdout) => {
             // A hung tool was killed, so it has neither an exit code nor a launch error.
             if (error !== null && error.killed === true) {
                 resolve({ code: 1, error: TIMED_OUT, stdout });
@@ -167,7 +167,8 @@ const celldVersionWarning = (stdout: string): string | undefined => {
  * @returns the errors that stop it and the warnings that do not. Nothing is written.
  */
 const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise<CelldToolchainProbe> => {
-    const run = options.run ?? runCommand;
+    // The tools are looked up and launched with the same environment `CELLD_ESBUILD` is read from.
+    const run = options.run ?? ((command, args) => runCommand(command, args, { env: options.env }));
     const errors: string[] = [];
     const warnings: string[] = [];
     const celld = await run("celld", ["--version"]);
