@@ -373,6 +373,7 @@ interface EditableFilter {
     ];
     operator: FilterOperator;
     path?: string;
+    pathSegments?: string[];
     value: string;
 }
 ```
@@ -2865,6 +2866,7 @@ const MESSAGE_IDS: readonly [
     "has",
     "Nested field path",
     "nested path, e.g. geo.city",
+    "value (\"10\" in quotes matches text)",
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows."
 ];
