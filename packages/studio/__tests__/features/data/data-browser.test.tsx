@@ -2473,6 +2473,49 @@ describe("dataBrowser — filter by cell value", () => {
 
         expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
     });
+
+    it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [
+                        { name: "messages", rowCount: 1 },
+                        { name: "users", rowCount: 1 },
+                    ];
+                }
+
+                const { table } = args as { table: string };
+
+                return { columns: ["__id__", "note"], rows: [{ __id__: `${table}-1`, note: null }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-filter");
+
+        // A history navigation changes the table while the dialog is still mounted.
+        fireEvent.click(screen.getByTestId("db-table-users"));
+
+        await waitFor(() => {
+            if (screen.queryByTestId("grid-cell-dialog") !== null) {
+                throw new Error("dialog still open after the table changed");
+            }
+        });
+
+        expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+        expect(
+            mock.query.mock.calls.some(
+                (call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { filters?: FilterArg[] }).filters?.length,
+            ),
+        ).toBe(false);
+    });
 });
 
 interface ShardSwitchRow {
