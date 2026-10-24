@@ -36,9 +36,12 @@ interface Reply {
 }
 
 /** A deployment double. `reply` decides each response from the function path, and every call is recorded. */
+/** The `fetch` a deployment double stands in for. */
+type FetchDouble = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
 const deployment = (reply: (functionPath: string) => Reply) => {
     const calls: { args: unknown; authorization: string | null; functionPath: string; shardKey: unknown }[] = [];
-    const fetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
+    const fetch = vi.fn<FetchDouble>(async (_input, init) => {
         const sent: unknown = init?.body;
         const body = JSON.parse(typeof sent === "string" ? sent : "null") as { args: unknown; functionPath: string; shardKey: unknown };
         const authorization = new Headers(init?.headers).get("authorization");
@@ -463,6 +466,51 @@ describe("createFunctionMcpServer when the OpenRPC document is rewritten while i
         expect(called.structuredContent).toStrictEqual({ id: "b1", total: 3 });
         expect(onReloadError).toHaveBeenCalledTimes(1);
         expect(onReloadError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+        await client.close();
+    });
+});
+
+describe("createFunctionMcpServer when the MCP call is cancelled", () => {
+    it("aborts the deployment request of a query the client cancels", async () => {
+        expect.assertions(2);
+
+        // The request never answers, so the only way it ends is the cancellation reaching it.
+        let requestSignal: AbortSignal | undefined;
+        let markRequested: () => void = () => undefined;
+        const requested = new Promise<void>((resolve) => {
+            markRequested = resolve;
+        });
+        const fetch = vi.fn<FetchDouble>((_input, init) => {
+            requestSignal = init?.signal ?? undefined;
+            markRequested();
+
+            return new Promise<Response>(() => {
+                // Never settles: the request ends only when the cancellation reaches it.
+            });
+        });
+        const client = await connected(createFunctionMcpServer({ fetch, openRpcSpec: SPEC, token: CALLER_TOKEN, url: "https://app.example" }));
+        const controller = new AbortController();
+        const pending = client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" }, undefined, { signal: controller.signal });
+
+        await requested;
+
+        const aborted = new Promise<boolean>((resolve) => {
+            requestSignal?.addEventListener(
+                "abort",
+                () => {
+                    resolve(true);
+                },
+                { once: true },
+            );
+        });
+
+        controller.abort();
+
+        expect(requestSignal).toBeDefined();
+        await expect(aborted).resolves.toBe(true);
+
+        await pending.catch(() => undefined);
 
         await client.close();
     });

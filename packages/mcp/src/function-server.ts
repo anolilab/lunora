@@ -114,6 +114,7 @@ const runWrite = async (
     input: Record<string, unknown>,
     rawArgs: Record<string, unknown>,
     shardKey: string | undefined,
+    signal: AbortSignal | undefined,
 ): Promise<ToolResult> => {
     const kind: Extract<FunctionKind, "action" | "mutation"> = route.kind === "action" ? "action" : "mutation";
 
@@ -138,7 +139,12 @@ const runWrite = async (
     // the call offline. This mirrors the generic write path in `./tools`.
     const target = route.sensitiveArgs.length === 0 ? reference(route.path) : { __lunoraRef: route.path, sensitive: true as const };
 
-    const value = kind === "action" ? await client.action(target, args, { shardKey }) : await client.mutation(target, args, { onlineOnly: true, shardKey });
+    // The client refuses to send a write whose signal is already aborted, which covers an abort
+    // during the confirmation handshake. A write already on the wire is not retracted.
+    const value =
+        kind === "action"
+            ? await client.action(target, args, { shardKey, signal })
+            : await client.mutation(target, args, { onlineOnly: true, shardKey, signal });
 
     return resultOf(route, value);
 };
@@ -252,15 +258,19 @@ const callFunctionTool = async (
         const shardKey = shardKeyOf(input);
 
         if (route.kind === "query") {
-            return resultOf(route, await client.query(reference(route.path), coerceArgs(route.argsSchema, rawArgs), { shardKey }));
+            return resultOf(route, await client.query(reference(route.path), coerceArgs(route.argsSchema, rawArgs), { shardKey, signal: context.signal }));
         }
 
         if (route.kind === "stream") {
             return await runStream(client, route, coerceArgs(route.argsSchema, rawArgs), shardKey, context);
         }
 
-        return await runWrite(client, route, name, input, rawArgs, shardKey);
+        return await runWrite(client, route, name, input, rawArgs, shardKey, context.signal);
     } catch (error: unknown) {
+        if (context.signal?.aborted === true) {
+            return errorResult("CANCELLED", `the call to "${name}" was cancelled before it completed. A write already sent is not undone.`);
+        }
+
         return errorFromThrown(error);
     }
 };
