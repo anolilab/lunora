@@ -400,6 +400,54 @@ describe("assistantPanel", () => {
         expect(stored()).toBe("");
     });
 
+    it("prefills the composer once per seed and leaves what the operator typed alone", async () => {
+        expect.hasAssertions();
+
+        const Seeder = (): ReactElement => {
+            const assistant = useAssistant();
+
+            return (
+                <>
+                    <button
+                        aria-label="seed"
+                        data-testid="seed"
+                        onClick={() => {
+                            assistant?.openAssistant({ draft: "why is this slow?", title: "Seeded" });
+                        }}
+                        type="button"
+                    />
+                    {assistant !== undefined && assistant.open && <AssistantPanel assistant={assistant} />}
+                </>
+            );
+        };
+
+        render(
+            <LunoraProvider client={chatMock("unused").asClient}>
+                <AssistantProvider>
+                    <Seeder />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(screen.getByTestId("seed"));
+
+        const input = await screen.findByTestId<HTMLTextAreaElement>("assistant-input");
+
+        expect(input.value).toBe("why is this slow?");
+
+        // A re-render must not put the seed back over what was typed since…
+        fireEvent.change(input, { target: { value: "something else" } });
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("assistant-input").value).toBe("something else");
+
+        // …but the same text seeded AGAIN is a new seed and prefills again.
+        fireEvent.click(screen.getByTestId("seed"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLTextAreaElement>("assistant-input").value).toBe("why is this slow?");
+        });
+    });
+
     it("shows the statement the turn wants to run, and does not run it", async () => {
         expect.hasAssertions();
 

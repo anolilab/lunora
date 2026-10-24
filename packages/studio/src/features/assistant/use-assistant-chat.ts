@@ -64,7 +64,7 @@ const useAssistantChat = ({
 
     // The draft seed already applied, so a re-render does not re-prefill over
     // whatever the operator has since typed.
-    const appliedDraft = useRef<number | undefined>(undefined);
+    const [appliedDraft, setAppliedDraft] = useState<number | undefined>(undefined);
 
     /*
      * The turn in flight, if any — a ref because `pending` is a render-time value:
@@ -232,20 +232,18 @@ const useAssistantChat = ({
     /*
      * Apply a seeded draft once per seed id.
      *
-     * Prefilling is a write to state owned by this hook from a value owned by
-     * the provider, which is what an effect is for. Keyed by id so seeding the
-     * same text twice prefills twice, and guarded by a ref so a re-render never
-     * overwrites what the operator has typed since.
+     * Adjusted during render, as React documents for state that follows a prop,
+     * rather than in an effect: an effect painted the stale (empty) composer for
+     * one frame before the prefill. Keyed by id so seeding the same text twice
+     * prefills twice, and remembered in state so a re-render never overwrites what
+     * the operator has typed since.
      */
     const seededDraft = assistant.draft;
 
-    useEffect(() => {
-        if (seededDraft !== undefined && seededDraft.id !== appliedDraft.current) {
-            appliedDraft.current = seededDraft.id;
-            // react-doctor-disable-next-line react-doctor/no-derived-state -- a one-shot prefill, not a mirror: the operator edits the draft afterwards, so it cannot be derived from the seed
-            setDraft(seededDraft.text);
-        }
-    }, [seededDraft]);
+    if (seededDraft !== undefined && seededDraft.id !== appliedDraft) {
+        setAppliedDraft(seededDraft.id);
+        setDraft(seededDraft.text);
+    }
 
     /*
      * Ask a seeded question once.
