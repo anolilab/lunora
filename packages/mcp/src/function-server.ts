@@ -54,7 +54,6 @@ interface FunctionMcpServerOptions {
      * while the document is unchanged: a different object rebuilds the tools.
      */
     openRpcSpec: unknown;
-
     /** The CALLER's bearer. Writes need one: the confirmation digest is keyed by it. */
     token?: string;
 
@@ -64,7 +63,6 @@ interface FunctionMcpServerOptions {
      * `undefined` means no deployment is running yet, and the call says so.
      */
     url: string | (() => string | undefined);
-
     version?: string;
 
     /**
