@@ -2,7 +2,7 @@ import type { ConnectionStatus } from "./connection-state";
 import { dropConfirmedLayers, refoldSubscription } from "./optimistic-layers";
 import type { ShapeSubscriptionState } from "./shape-state";
 import type { SubscriptionError, SubscriptionState } from "./subscription";
-import { fanSubscriptionError } from "./subscription";
+import { fanSubscriptionError, setSubscriptionAck } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 
 /**
@@ -108,7 +108,7 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
     // What this tab's own socket acknowledged ends with that socket. A follower is answered by the leader's
     // mirrored values (which set these again), so the demoted tab's old answers must not count towards sync.
     for (const state of host.activeSubscriptions()) {
-        state.acked = false;
+        setSubscriptionAck(state, "idle");
         state.valueReceived = false;
     }
 

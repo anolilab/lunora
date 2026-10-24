@@ -6,6 +6,7 @@ import type { FunctionReference } from "../src/types";
 /** A direct `client.subscribe` caller joining a still-un-acked subscription must not re-send its frame. */
 
 interface MockSocket {
+    failSends: boolean;
     open: () => void;
     receive: (payload: unknown) => void;
     sent: string[];
@@ -16,6 +17,8 @@ const sockets: MockSocket[] = [];
 
 const createMockWebSocket = (): typeof WebSocket => {
     class WS {
+        public failSends = false;
+
         public readyState = 0;
 
         public sent: string[] = [];
@@ -45,6 +48,10 @@ const createMockWebSocket = (): typeof WebSocket => {
         }
 
         public send(data: string): void {
+            if (this.failSends) {
+                throw new Error("send failed");
+            }
+
             this.sent.push(data);
         }
 
@@ -209,5 +216,28 @@ describe("subscribe frame dedup", () => {
         client.subscribe(fnRef("todos.list"), {}, () => undefined);
 
         expect(subscribeFrames(socket)).toHaveLength(3);
+    });
+
+    it("lets a later subscribe send when the watchdog's retry could not go out", () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        const socket = latestSocket();
+
+        socket.open();
+
+        // The retry's `send` throws while the socket still reads open, and no close follows.
+        socket.failSends = true;
+        vi.advanceTimersByTime(10_000);
+        socket.failSends = false;
+
+        expect(subscribeFrames(socket)).toHaveLength(1);
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        expect(subscribeFrames(socket)).toHaveLength(2);
     });
 });

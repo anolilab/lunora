@@ -146,7 +146,7 @@ import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import { fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
@@ -1099,13 +1099,6 @@ class LunoraClient {
     private lastStatus: ConnectionStatus = "idle";
 
     private nextSubId = 0;
-
-    /**
-     * Subscriptions whose `subscribe` frame is on the wire and not yet acked,
-     * errored or dropped with the socket. Kept off the public `SubscriptionState`
-     * so the exported shape is unchanged.
-     */
-    private readonly subscribeInFlight = new WeakSet<SubscriptionState>();
 
     private nextStreamId = 0;
 
@@ -2567,7 +2560,7 @@ class LunoraClient {
             const ackless = follower || this.connectionGateState(state.shardKey).polling;
 
             // `acked` is no evidence there: a mirrored `settled` frame sets it without delivering a value.
-            if (!(ackless ? state.valueReceived : state.acked)) {
+            if (!(ackless ? state.valueReceived : state.ack === "acked")) {
                 pendingSubscriptions += 1;
             }
         }
@@ -2656,7 +2649,7 @@ class LunoraClient {
 
         const subscriptions: ClientDebugSubscription[] = this.subscriptions.all().map((state) => {
             return {
-                acked: state.acked,
+                acked: state.ack === "acked",
                 functionPath: state.fn.__lunoraRef,
                 id: state.id,
                 kind: "query",
@@ -2898,7 +2891,7 @@ class LunoraClient {
 
         return {
             // False for a subscription holding no answer: never answered, or blanked by a cold reconnect. Its `value` is then absence, not evidence.
-            answered: state !== undefined && (state.lastValue !== undefined || state.acked || state.valueReceived),
+            answered: state !== undefined && (state.lastValue !== undefined || state.ack === "acked" || state.valueReceived),
             present: state !== undefined,
             value: state?.lastValue,
         };
@@ -3989,7 +3982,7 @@ class LunoraClient {
             const cached = this.takeHydratedCache(function_.__lunoraRef, argsKey, options.shardKey);
 
             state = {
-                acked: false,
+                ack: "idle",
                 args: argsRecord,
                 argsKey,
                 callbacks: new Set<SubscriptionCallback>(),
@@ -7373,8 +7366,7 @@ class LunoraClient {
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
-                state.acked = false;
-                this.subscribeInFlight.delete(state);
+                setSubscriptionAck(state, "idle");
                 // A delta run is one socket's stream: whatever of it arrived ends with that socket.
                 state.pendingDeltaRun = undefined;
 
@@ -7477,7 +7469,7 @@ class LunoraClient {
         const conn = this.getConnection(state.shardKey);
 
         // A retry replaces a frame presumed lost, so it may go out while one is in flight.
-        if (conn?.wsState !== "open" || state.acked || (!isRetry && this.subscribeInFlight.has(state))) {
+        if (conn?.wsState !== "open" || state.ack === "acked" || (!isRetry && state.ack === "inflight")) {
             return false;
         }
 
@@ -7523,7 +7515,7 @@ class LunoraClient {
         });
 
         if (sent) {
-            this.subscribeInFlight.add(state);
+            setSubscriptionAck(state, "inflight");
         }
 
         if (sent && !isRetry) {
@@ -7540,31 +7532,35 @@ class LunoraClient {
      * shard still waking, a swallowed message) would otherwise leave the
      * subscription un-acked on a perfectly live socket until the next reconnect.
      * One retry, not a loop: a query that is merely slow must not be re-run repeatedly.
+     *
+     * The retry gets one ack window of its own (`final`), after which the frame is
+     * stood down so a later `subscribe()` can send again; otherwise a lost retry
+     * refuses every send until the next reconnect. Kept in `unackedWatchdogs`, so
+     * an ack or a teardown cancels either phase.
      */
-    private armUnackedWatchdog(conn: ShardConnection, state: SubscriptionState): void {
+    private armUnackedWatchdog(conn: ShardConnection, state: SubscriptionState, final = false): void {
         clearTimeout(conn.unackedWatchdogs.get(state.id));
         conn.unackedWatchdogs.set(
             state.id,
             setTimeout(() => {
-                const retried = !state.acked && this.subscriptions.getById(state.id) === state && this.sendSubscribeIfOpen(state, true);
+                if (final) {
+                    conn.unackedWatchdogs.delete(state.id);
+                    releaseSubscribeFrame(state);
 
-                this.settleSubscribeWatchdog(conn, state.id);
-
-                if (!retried) {
                     return;
                 }
 
-                // The retry is the watchdog's last frame. Once its own ack window passes
-                // unanswered, release the in-flight flag so a later `subscribe()` can send
-                // again; otherwise a lost retry refuses every send until the next reconnect.
-                // Kept in `unackedWatchdogs`, so an ack or a teardown clears it.
-                conn.unackedWatchdogs.set(
-                    state.id,
-                    setTimeout(() => {
-                        conn.unackedWatchdogs.delete(state.id);
-                        this.subscribeInFlight.delete(state);
-                    }, RESUBSCRIBE_ACK_TIMEOUT_MS),
-                );
+                const retried = state.ack !== "acked" && this.subscriptions.getById(state.id) === state && this.sendSubscribeIfOpen(state, true);
+
+                this.settleSubscribeWatchdog(conn, state.id);
+
+                if (retried) {
+                    this.armUnackedWatchdog(conn, state, true);
+                } else {
+                    // No retry went out, so no frame is outstanding: a `send` that threw on a
+                    // socket still reading "open" would otherwise refuse every later send.
+                    releaseSubscribeFrame(state);
+                }
             }, RESUBSCRIBE_ACK_TIMEOUT_MS),
         );
     }
@@ -7777,7 +7773,7 @@ class LunoraClient {
 
         if (state) {
             // The server answered with a rejection, so the frame is no longer outstanding.
-            this.subscribeInFlight.delete(state);
+            releaseSubscribeFrame(state);
 
             const subscriptionError = buildSubscriptionError(message);
 
@@ -7839,13 +7835,18 @@ class LunoraClient {
         // A poll's own refusal is ackless by construction, even on the pass that proves the origin reachable, before the gate reads `polling`.
         ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling,
     ): void {
-        const field = ackless ? "valueReceived" : "acked";
-
-        if (!state[field]) {
-            // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place, as `ackAndAdvanceCursor` does
-            state[field] = true;
-            this.emitSyncStatus();
+        if (ackless ? state.valueReceived : state.ack === "acked") {
+            return;
         }
+
+        if (ackless) {
+            // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place, as `ackAndAdvanceCursor` does
+            state.valueReceived = true;
+        } else {
+            setSubscriptionAck(state, "acked");
+        }
+
+        this.emitSyncStatus();
     }
 
     private handlePokeEnd(message: ServerPokeEndMessage, shardKey: string | undefined): void {
@@ -7902,8 +7903,7 @@ class LunoraClient {
      */
     private resnapshotSubscription(state: SubscriptionState): void {
         /* eslint-disable no-param-reassign -- reset the shared subscription state in place, as the other recovery paths do */
-        state.acked = false;
-        this.subscribeInFlight.delete(state);
+        setSubscriptionAck(state, "idle");
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
         state.pendingDeltaRun = undefined;
@@ -8107,10 +8107,9 @@ class LunoraClient {
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
-        const newlyAcked = !state.acked;
+        const newlyAcked = state.ack !== "acked";
 
-        state.acked = true;
-        this.subscribeInFlight.delete(state);
+        setSubscriptionAck(state, "acked");
 
         if (newlyAcked) {
             this.emitSyncStatus();
@@ -8448,8 +8447,7 @@ class LunoraClient {
         const state = this.subscriptions.getById(id);
 
         if (state) {
-            state.acked = false;
-            this.subscribeInFlight.delete(state);
+            setSubscriptionAck(state, "idle");
             this.emitSyncStatus();
             fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
@@ -9169,9 +9167,8 @@ class LunoraClient {
             state.pendingDeltaRun = undefined;
             // The resubscribe rides the next socket, so this one is no longer
             // acknowledged by anything.
-            state.acked = false;
+            setSubscriptionAck(state, "idle");
             state.valueReceived = false;
-            this.subscribeInFlight.delete(state);
 
             refoldSubscription(state, undefined);
         }

@@ -46,7 +46,7 @@ const subscription = (id: string, shardKey: string | undefined): SubscriptionSta
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
 const liveSubscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
     return {
-        acked: false,
+        ack: "idle",
         args: {},
         argsKey: "{}",
         callbacks: new Set<SubscriptionCallback>(),
@@ -166,14 +166,14 @@ describe("onStopBeingLeader", () => {
     it("forgets the answers its own socket gave, for shapes and acked queries", () => {
         expect.assertions(3);
 
-        const state = liveSubscription({ acked: true });
+        const state = liveSubscription({ ack: "acked" });
         const shape = { answered: true } as unknown as ShapeSubscriptionState;
         const { host } = fakeHost({ activeShapes: () => [shape], activeSubscriptions: () => [state] });
 
         onStopBeingLeader(host);
 
         expect(shape.answered).toBe(false);
-        expect(state.acked).toBe(false);
+        expect(state.ack).toBe("idle");
         expect(state.valueReceived).toBe(false);
     });
 });
