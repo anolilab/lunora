@@ -42,6 +42,25 @@ const isEntitling = (subscription: SubscriptionLike | undefined): subscription i
     subscription !== undefined && ENTITLING_STATES.has(subscription.state);
 
 /**
+ * Whether the provider still has a subscription for this tenant: anything but
+ * `canceled`. Wider than {@link isEntitling} on purpose — a `past_due` or
+ * `paused` subscription entitles nothing but is still billing, so a second
+ * checkout on top of it would bill the tenant twice.
+ */
+const isOpen = (subscription: SubscriptionLike | undefined): subscription is SubscriptionLike =>
+    subscription !== undefined && subscription.state !== "canceled";
+
+/**
+ * The one subscription a billing screen describes, out of every row stored for
+ * the tenant. A tenant that cancelled and later re-subscribed has both rows, in
+ * no promised order, so taking the first would show a dead plan next to a live
+ * one. Entitling beats merely open; a lone canceled row is returned last so the
+ * screen can still say what ended.
+ */
+const currentSubscription = <T extends SubscriptionLike>(subscriptions: ReadonlyArray<T> | undefined): T | undefined =>
+    subscriptions?.find((subscription) => isEntitling(subscription)) ?? subscriptions?.find((subscription) => isOpen(subscription)) ?? subscriptions?.[0];
+
+/**
  * The plan a tenant is actually on. Falls back to the catalog's free plan (the
  * first with no `priceId`) rather than to `undefined`, so a screen never has to
  * branch on "no subscription" separately from "on the free tier" — they are the
@@ -142,10 +161,14 @@ const pricingRows = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike 
             price: plan.priceMinor === 0 ? "Free" : formatMoney(plan.priceMinor, plan.currency),
         };
 
-        // A plan is purchasable when it has a provider price and is not the one
-        // you are already on. Downgrades go through the portal, which is the
-        // provider's job — proration is not a thing an app should reimplement.
-        return plan.priceId !== undefined && !base.current ? { ...base, priceId: plan.priceId, purchasable: true } : { ...base, purchasable: false };
+        // A plan is purchasable when it has a provider price and the tenant has no
+        // subscription yet. Checkout opens a NEW subscription, so offering it on
+        // top of an open one bills the tenant twice; every plan change — up or
+        // down — goes through the portal, which is the provider's job (proration
+        // is not a thing an app should reimplement).
+        return plan.priceId !== undefined && !base.current && !isOpen(subscription)
+            ? { ...base, priceId: plan.priceId, purchasable: true }
+            : { ...base, purchasable: false };
     });
 };
 
@@ -180,4 +203,16 @@ const subscriptionNotice = (subscription: SubscriptionLike | undefined): string 
 };
 
 export type { Plan, PricingRow, SeatUsage };
-export { currentPlan, formatMoney, isEntitled, isEntitling, notEntitledLabel, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice };
+export {
+    currentPlan,
+    currentSubscription,
+    formatMoney,
+    isEntitled,
+    isEntitling,
+    notEntitledLabel,
+    pricingRows,
+    seatAlert,
+    seatSummary,
+    seatUsage,
+    subscriptionNotice,
+};

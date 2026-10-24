@@ -163,13 +163,24 @@ const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) 
 /**
  * Start a checkout session and hand the client the redirect URL. The reference
  * is the caller's active organisation — see {@link billingReference}. Admins and
- * owners only: a subscription bills the whole organisation.
+ * owners only: a subscription bills the whole organisation. Refused while the
+ * organisation already has a subscription that is not canceled.
  */
 export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
     const referenceId = await billingReference(ctx, { adminOnly: true });
 
     if (!PURCHASABLE_PRICE_IDS.has(priceId)) {
         throw new LunoraError("UNPROCESSABLE", "unknown price — pick a plan from the catalog in lunora/plans.ts");
+    }
+
+    // A checkout opens a NEW subscription. Started on top of one the provider is
+    // still billing — `past_due` and `paused` included, not just `active` — it
+    // bills the organisation for both. A plan change goes through the portal.
+    // Two checkouts started before either webhook lands are not caught here.
+    const existing = await ctx.payments.listSubscriptions(referenceId);
+
+    if (existing.some((subscription) => subscription.state !== "canceled")) {
+        throw new LunoraError("CONFLICT", "this organization already has a subscription — change the plan from the billing portal");
     }
 
     const result = await ctx.payments.createCheckout({

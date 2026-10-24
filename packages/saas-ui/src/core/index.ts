@@ -11,7 +11,18 @@ export { groupActivityByDay } from "./activity";
 export type { AdminView, OrganizationSort } from "./admin-organizations";
 export { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "./admin-organizations";
 export type { Plan, PricingRow, SeatUsage } from "./billing";
-export { currentPlan, formatMoney, isEntitled, notEntitledLabel, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice } from "./billing";
+export {
+    currentPlan,
+    currentSubscription,
+    formatMoney,
+    isEntitled,
+    notEntitledLabel,
+    pricingRows,
+    seatAlert,
+    seatSummary,
+    seatUsage,
+    subscriptionNotice,
+} from "./billing";
 export type { FieldSpec, FormController, FormOptions, FormState } from "./create-form-controller";
 export { createFormController } from "./create-form-controller";
 export { dayKey, initials, planLabel, relativeTime } from "./format";

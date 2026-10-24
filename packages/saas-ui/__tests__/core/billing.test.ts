@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import type { Plan } from "../../src/core/billing";
-import { currentPlan, formatMoney, isEntitled, isEntitling, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice } from "../../src/core/billing";
+import {
+    currentPlan,
+    currentSubscription,
+    formatMoney,
+    isEntitled,
+    isEntitling,
+    pricingRows,
+    seatAlert,
+    seatSummary,
+    seatUsage,
+    subscriptionNotice,
+} from "../../src/core/billing";
 import type { SubscriptionLike } from "../../src/core/types";
 
 const PLANS: ReadonlyArray<Plan> = [
@@ -100,25 +111,54 @@ describe("seatUsage", () => {
 });
 
 describe("pricingRows", () => {
-    it("marks the current plan and offers only the others", () => {
+    it("marks the current plan and offers nothing else while a subscription is open", () => {
         expect(pricingRows(PLANS, subscription()).map((row) => [row.plan.id, row.current, row.purchasable])).toStrictEqual([
             ["free", false, false],
             ["pro", true, false],
-            ["scale", false, true],
+            ["scale", false, false],
         ]);
     });
 
+    it("does not offer a second checkout on a subscription that is failing to bill", () => {
+        // `past_due` drops the plan back to Free, but the provider is still billing it.
+        for (const state of ["past_due", "paused"]) {
+            expect(pricingRows(PLANS, subscription({ state })).some((row) => row.purchasable)).toBe(false);
+        }
+    });
+
     it("carries a priceId on exactly the purchasable rows", () => {
-        expect(pricingRows(PLANS, subscription()).map((row) => (row.purchasable ? row.priceId : undefined))).toStrictEqual([
-            undefined,
-            undefined,
-            "price_scale",
-        ]);
+        expect(pricingRows(PLANS, undefined).map((row) => (row.purchasable ? row.priceId : undefined))).toStrictEqual([undefined, "price_pro", "price_scale"]);
+    });
+
+    it("offers the paid plans again once the subscription is canceled", () => {
+        expect(pricingRows(PLANS, subscription({ state: "canceled" })).map((row) => row.purchasable)).toStrictEqual([false, true, true]);
     });
 
     it("renders a zero price as Free rather than as a currency", () => {
         expect(pricingRows(PLANS, undefined)[0]!.price).toBe("Free");
         expect(pricingRows(PLANS, undefined)[1]!.price).toContain("29");
+    });
+});
+
+describe("currentSubscription", () => {
+    const canceled = subscription({ priceId: "price_scale", state: "canceled" });
+    const active = subscription({ priceId: "price_pro" });
+
+    it("picks the entitling subscription whatever order the rows come in", () => {
+        expect(currentSubscription([canceled, active])).toBe(active);
+        expect(currentSubscription([active, canceled])).toBe(active);
+    });
+
+    it("prefers one still billing over a canceled row", () => {
+        const pastDue = subscription({ state: "past_due" });
+
+        expect(currentSubscription([canceled, pastDue])).toBe(pastDue);
+    });
+
+    it("falls back to a canceled row so the screen can say what ended, and to nothing when there are none", () => {
+        expect(currentSubscription([canceled])).toBe(canceled);
+        expect(currentSubscription<SubscriptionLike>([])).toBeUndefined();
+        expect(currentSubscription<SubscriptionLike>(undefined)).toBeUndefined();
     });
 });
 

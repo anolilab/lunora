@@ -15,8 +15,9 @@ interface PricingTableProps {
 }
 
 /**
- * The pricing table. Downgrades are not offered here on purpose — they go
- * through the provider's portal, because proration is not a thing an app should
+ * The pricing table. Plans are offered only while the tenant has no open
+ * subscription; changing plan goes through the provider's portal, because a
+ * second checkout would bill twice and proration is not a thing an app should
  * reimplement.
  */
 const PricingTable = ({ onSelect, plans, subscription }: PricingTableProps): ReactNode => (
