@@ -111,9 +111,12 @@ const uniquifyString = (value: string, index: number, constraints: Constraints):
     return `${value.slice(0, room)}${suffix}`;
 };
 
-/** A deal over a finite list of values, drawn without replacement in a fixed shuffled order. */
+/**
+ * A deal over a finite list of values, drawn without replacement in a fixed shuffled order. A repeated
+ * member (`v.union(v.literal("x"), v.literal("x"))`) is one value, so it must not count toward the capacity.
+ */
 const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: string): UniqueDeal => {
-    const order = shuffleDomain(domain, table, column);
+    const order = shuffleDomain([...new Set(domain)], table, column);
 
     return { capacity: order.length, valueAt: (index) => order[index % order.length] };
 };

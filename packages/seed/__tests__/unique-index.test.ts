@@ -28,6 +28,28 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(() => seedPlan(through, { counts: { authors: 3, books: 4, authorBooks: 13 } })).toThrow(/by_author_book/u);
     });
 
+    it("counts a repeated union literal once when dealing a composite index", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({ flag: v.boolean(), kind: v.union(v.literal("x"), v.literal("x")) }).index("by_kind_flag", ["kind", "flag"], { unique: true }),
+        });
+
+        expect(() => seedPlan(schema, { counts: { slots: 4 } })).toThrow(/by_kind_flag/u);
+
+        const rows = rowsOf(seedPlan(schema, { counts: { slots: 2 } }), "slots");
+
+        expect(new Set(rows.map((row) => `${row.kind as string}|${String(row.flag)}`)).size).toBe(2);
+    });
+
+    it("counts a repeated union literal once for a single unique column", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({ slots: defineTable({ kind: v.union(v.literal("x"), v.literal("x")).unique() }) });
+
+        expect(() => seedPlan(schema, { counts: { slots: 2 } })).toThrow(/unique column "kind" has only 1 possible values/u);
+    });
+
     it("carries a composite on an unbounded member when a zero-capacity string sits beside it", () => {
         expect.hasAssertions();
 
