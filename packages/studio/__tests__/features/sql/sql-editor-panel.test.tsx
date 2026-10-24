@@ -703,13 +703,12 @@ describe("sqlEditorPanel", () => {
 
     /*
      * The statement an Explain run is ABOUT is captured when the run starts and
-     * read when "Read this plan" is clicked — a ref, because nothing renders it.
+     * read when "Read this plan" is clicked, from the tab's own output.
      *
-     * This is the test that pins WHICH statement the prompt is built from, which
-     * nothing covered while it was state. The hazard a ref invites is exactly the
-     * one asserted against here: a ref is not reactive, so "just read the draft"
-     * looks like the equivalent simplification — and it silently sends the model a
-     * statement the plan on screen does not describe. Verified by mutation: point
+     * This test pins WHICH statement the prompt is built from. The hazard asserted
+     * against is "just read the draft", which looks like the equivalent
+     * simplification — and silently sends the model a statement the plan on screen
+     * does not describe. Verified by mutation: point
      * the prompt at `draft.trim()` and this fails, while every other test here
      * still passes.
      */
@@ -755,5 +754,56 @@ describe("sqlEditorPanel", () => {
         expect(ask.textContent).not.toContain("moved-on");
         // The plan ROWS travel with it — they are what the operator is asking about.
         expect(ask.textContent).toContain("SCAN TABLE messages");
+    });
+
+    it("pairs a plan with the statement of its own tab after switching tabs", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    const { sql } = args as { sql: string };
+
+                    return { columns: ["detail"], rowCount: 1, rows: [{ detail: `PLAN FOR ${sql}` }], truncated: false };
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <SqlEditorPanel />
+                    <AskProbe />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        typeInEditor("SELECT alpha FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+        await screen.findByTestId("sql-explain-plan");
+
+        const alphaTab = (within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement).dataset.testid ?? "";
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        typeInEditor("SELECT beta FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+        await screen.findByTestId("sql-explain-plan");
+
+        // Back on the first tab, whose plan was never re-run: the statement must be
+        // that tab's, not the one most recently explained in the panel.
+        fireEvent.click(screen.getByTestId(alphaTab));
+        fireEvent.click(await screen.findByTestId("sql-explain-plan"));
+
+        const ask = await screen.findByTestId("sql-seeded-ask");
+
+        expect(ask.textContent).toContain("SELECT alpha FROM messages");
+        expect(ask.textContent).not.toContain("beta");
+        expect(ask.textContent).toContain("PLAN FOR");
     });
 });

@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { explainQueryPlan } from "../../../../../shared/sql-readonly";
 import { classifyOne, splitStatements } from "../../../../../shared/sql-split-statements";
@@ -116,17 +116,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      */
     const t = useT();
     const assistantShell = useAssistant();
-    /*
-     * The statement behind the plan currently shown, or `undefined` before any
-     * Explain run.
-     *
-     * A ref, not state: nothing renders it. It is written when an Explain run
-     * starts and read only inside `explainPlan` — an event handler the results pane
-     * invokes on a click, never a render-time derivation — so the read always
-     * happens after the write and a re-render would buy nothing. State made every
-     * Explain run repaint the whole console for a value no pixel depends on.
-     */
-    const explained = useRef<string | undefined>(undefined);
 
     const { probe, schema } = useSqlSchema(shardKey);
 
@@ -264,14 +253,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      * still run, so a script says what happened to every part of itself.
      */
     const run = async (mode: ResultTab): Promise<void> => {
-        // The statement an Explain run is ABOUT, captured when it runs. `draft`
-        // moves on the moment the operator types, and the plan on screen keeps
-        // describing what actually ran — so "Read this plan" must send this, not
-        // whatever is in the editor now.
-        if (mode === "explain") {
-            explained.current = draft.trim();
-        }
-
         if (draft.trim() === "") {
             return;
         }
@@ -282,7 +263,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // keeps `running` (and the result it guards) scoped to the tab that
         // actually ran the query, not whichever tab happens to be active when the
         // response lands.
-        patchActiveOutput({ running: true });
+        // The statement an Explain run is ABOUT, captured when it runs and kept on
+        // this tab's output beside its plan. `draft` moves on the moment the
+        // operator types, and the plan on screen keeps describing what actually
+        // ran — so "Read this plan" must send this, not whatever is in the editor.
+        patchActiveOutput({ running: true, ...(mode === "explain" ? { explained: draft.trim() } : {}) });
 
         // EXPLAIN wraps the whole draft, so the wrapper must be gated as ONE
         // statement — `classifyOne`, never `splitStatements`. Splitting it turned
@@ -475,9 +460,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      * this carries no end-user rows regardless of the deployment's opt-in level.
      */
     const explainPlan = (): void => {
-        // Read at CLICK time, which is the point of the ref: the statement written
-        // when the run started, never the draft the operator has typed since.
-        const statement = explained.current;
+        // The statement captured when THIS tab's Explain run started, never the
+        // draft the operator has typed since.
+        const statement = output.explained;
 
         if (result === null || result.rows.length === 0 || statement === undefined) {
             return;

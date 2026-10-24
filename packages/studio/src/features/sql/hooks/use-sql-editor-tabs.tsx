@@ -30,6 +30,13 @@ interface TabOutput {
     /** Model-inferred chart for THIS tab's result, or undefined for the manual one. */
     readonly chart?: AssistantChartConfig;
     readonly error: null | string;
+
+    /**
+     * The statement behind THIS tab's Explain plan, captured when the run started.
+     * Per-tab, like the plan it describes: a panel-wide slot paired one tab's
+     * statement with another tab's plan rows after a tab switch.
+     */
+    readonly explained?: string;
     /** THIS tab's last FAILED statement, frozen at failure time — see `run`. */
     readonly failed?: { error: string; sql: string };
     readonly pane: ResultTab;
