@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, resolveRange } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isEpochColumn, NUMBER_RANGE, resolveRange } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -111,9 +111,12 @@ const uniquifyString = (value: string, index: number, constraints: Constraints):
     return `${value.slice(0, room)}${suffix}`;
 };
 
-/** A deal over a finite list of values, drawn without replacement in a fixed shuffled order. */
+/**
+ * A deal over a finite list of values, drawn without replacement in a fixed shuffled order. A repeated
+ * member (`v.union(v.literal("x"), v.literal("x"))`) is one value, so it must not count toward the capacity.
+ */
 const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: string): UniqueDeal => {
-    const order = shuffleDomain(domain, table, column);
+    const order = shuffleDomain([...new Set(domain)], table, column);
 
     return { capacity: order.length, valueAt: (index) => order[index % order.length] };
 };
@@ -125,9 +128,21 @@ const domainDeal = (domain: ReadonlyArray<unknown>, table: string, column: strin
  */
 const rangeDeal = (min: number, max: number): UniqueDeal => {
     if (Number.isInteger(min) && Number.isInteger(max)) {
-        const capacity = max - min + 1;
+        // Past ±2^53 `min + index` stops being injective, so only the safe span of the range is dealt.
+        const low = Math.max(min, -Number.MAX_SAFE_INTEGER);
+        const high = Math.min(max, Number.MAX_SAFE_INTEGER);
 
-        return { capacity, valueAt: (index) => min + (index % capacity) };
+        if (low > high) {
+            return { capacity: 1, valueAt: () => min };
+        }
+
+        const capacity = high - low + 1;
+
+        return { capacity, valueAt: (index) => low + (index % capacity) };
+    }
+
+    if (min === max) {
+        return { capacity: 1, valueAt: () => min };
     }
 
     return { capacity: FLOAT_SLOTS, valueAt: (index) => min + ((index % FLOAT_SLOTS) * (max - min)) / FLOAT_SLOTS };
@@ -174,6 +189,21 @@ const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt:
 const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: number }, column: string): UniqueDeal => {
     if (constraints.maximum === undefined && constraints.minimum === undefined) {
         return countingDeal;
+    }
+
+    // Only an exclusive lower bound (`.positive()`): still an open range, so count up from the
+    // first whole number above it rather than shrinking the column to the default window.
+    if (constraints.maximum === undefined && constraints.minimumFromExclusive === true) {
+        // Below -2^53 `floor + 1` rounds back onto the bound, which the column forbids; the lowest
+        // safe integer is strictly above such a bound and is where `first + index` is injective.
+        const first = Math.max(Math.floor(constraints.exclusiveMinimum ?? 0) + 1, -Number.MAX_SAFE_INTEGER);
+
+        // Past 2^53 `first + index` repeats; `minimum` is the one value `constraintsOf` proved is above the bound.
+        if (first > Number.MAX_SAFE_INTEGER) {
+            return { capacity: 1, valueAt: () => constraints.minimum };
+        }
+
+        return { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => first + index };
     }
 
     const { max, min } = resolveRange(constraints, defaults, column);
@@ -226,16 +256,25 @@ const stringCapacity = ({ format, maxLength }: Constraints): number => {
  * A column whose declared shape the tag would break is refused here instead of
  * being seeded with a value its own validator rejects on insert.
  */
-const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
-    if (constraints.pattern !== undefined) {
-        refuse(table, column, "the column is pattern-constrained, and an index-tagged value would no longer match it");
+/** Why an index tag would break this string column's declared shape, or `undefined` when tagging is safe. */
+const untaggableReason = ({ format, pattern }: Constraints): string | undefined => {
+    if (pattern !== undefined) {
+        return "the column is pattern-constrained, and an index-tagged value would no longer match it";
     }
 
     // `format: "email"` survives — the tag goes in the address's local part, and
     // a generator that produced no address at all gets one built around the tag.
     // Any other format (uri, uuid, date-time, …) would be invalidated by it.
-    if (constraints.format !== undefined && constraints.format !== "email") {
-        refuse(table, column, `the column declares format "${constraints.format}", which an index-tagged value would no longer satisfy`);
+    return format === undefined || format === "email"
+        ? undefined
+        : `the column declares format "${format}", which an index-tagged value would no longer satisfy`;
+};
+
+const stringDeal = (constraints: Constraints, table: string, column: string): UniqueDeal => {
+    const why = untaggableReason(constraints);
+
+    if (why !== undefined) {
+        refuse(table, column, why);
     }
 
     return {
@@ -324,7 +363,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         case "number": {
             // A time-named column with no declared bounds is epoch-ms, not a
             // quantity — the same rule the generator applies.
-            if (constraints.maximum === undefined && constraints.minimum === undefined && isTimestampField(field.name)) {
+            if (isEpochColumn(constraints, field.name)) {
                 return temporalDeal(now);
             }
 
@@ -356,5 +395,58 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
     }
 };
 
-export { planUniqueDeal, planUniqueFkDeal };
-export type { UniqueDeal };
+/** A non-foreign-key member a composite unique index can deal to make its rows distinct. */
+interface CompositeMemberDeal {
+    deal: UniqueDeal;
+    /** The dealt value replaces the generated one (an index tag, a counter, a time step) rather than picking from the column's own domain. */
+    rewrites: boolean;
+}
+
+/**
+ * How a non-foreign-key member of a composite unique index could carry the
+ * index's distinctness, or `undefined` when it cannot: a hash-derived value
+ * (array, object, record, storage, an open union) whose distinct-value count is
+ * unknown — `v.array(…).max(0)` is always `[]` — a string an index tag would
+ * break, or a column with at most one value.
+ */
+const planCompositeMemberDeal = (field: FieldSpec, options: UniqueDealOptions): CompositeMemberDeal | undefined => {
+    const constraints = constraintsOf(field.validator);
+    const tagged = (field.kind === "string" || field.kind === "any") && !(Array.isArray(constraints.enum) && constraints.enum.length > 0);
+
+    if (tagged && untaggableReason(constraints) !== undefined) {
+        return undefined;
+    }
+
+    const deal = planUniqueDeal(field, options);
+
+    if (deal === anonymousDeal || deal.capacity <= 1) {
+        return undefined;
+    }
+
+    return { deal, rewrites: tagged || !Number.isFinite(deal.capacity) };
+};
+
+/**
+ * Whether a non-foreign-key member keeps a per-row value the generator derives from the cell hash,
+ * which is distinct per row in practice but has no count the planner can prove: an `id`, storage id,
+ * array, object, record or open union, or a string whose format (a `.url()`) an index tag would
+ * break. A composite index holding one is left to the generator once its counted members run out,
+ * rather than refused. A column with at most one value, such as an array capped at zero items, is
+ * not one.
+ */
+const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean => {
+    const constraints = constraintsOf(field.validator);
+
+    if (field.kind === "string" || field.kind === "any") {
+        return (
+            !(Array.isArray(constraints.enum) && constraints.enum.length > 0) &&
+            constraints.pattern === undefined &&
+            untaggableReason(constraints) !== undefined
+        );
+    }
+
+    return planUniqueDeal(field, options) === anonymousDeal && !(field.kind === "array" && (constraints.maxItems ?? 1) <= 0);
+};
+
+export { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
+export type { CompositeMemberDeal, UniqueDeal };

@@ -1394,7 +1394,9 @@ lunora seed --reset                  # wipe local .wrangler/state, then seed
 ```
 
 Seeding respects foreign keys: naming one table with `--table` also seeds the
-tables it references. `--batch-size` (default 500) sets rows per HTTP request.
+tables it references. A required foreign key with no row to point at fails the
+run with the column named; `--allow-orphans` gives it a dangling id instead.
+`--batch-size` (default 500) sets rows per HTTP request.
 Targeting a non-local worker needs `--prod` plus an explicit `--url`, and prompts
 unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
 visible to other local processes through the process table. See

@@ -128,7 +128,7 @@ lunora seed --reset                      # wipe local .wrangler/state first (loc
 lunora seed --dry-run                    # print NDJSON, write nothing
 ```
 
-Also: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt). `--reset` is local-only and cannot be combined with `--prod` or a remote `--url`.
+Also: `--allow-orphans` (let a required foreign key with no parent row take a dangling id instead of failing), `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt). `--reset` is local-only and cannot be combined with `--prod` or a remote `--url`.
 
 ## Limitations
 

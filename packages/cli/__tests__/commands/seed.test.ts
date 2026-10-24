@@ -111,6 +111,39 @@ describe("lunora seed", () => {
         expect([...tables]).toEqual(["users"]);
     });
 
+    it("deals a table-level unique index read from the schema, so a through table repeats no pair", async () => {
+        expect.assertions(3);
+
+        mkdirSync(join(workDir, "lunora"), { recursive: true });
+        writeFileSync(
+            join(workDir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
+
+export default defineSchema({
+    authors: defineTable({ name: v.string() }),
+    books: defineTable({ title: v.string() }),
+    authorBooks: defineTable({ authorId: v.id("authors"), bookId: v.id("books") }).index("by_pair", ["authorId", "bookId"], { unique: true }),
+});
+`,
+            "utf8",
+        );
+        vi.spyOn(process.stdout, "write").mockReturnValue(true);
+
+        const result = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), table: "authorBooks" });
+        const links = result.ndjson
+            .split("\n")
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string })
+            .filter((row) => row.table === "authorBooks");
+
+        expect(links).toHaveLength(4);
+        expect(new Set(links.map((row) => `${row.doc.authorId as string}|${row.doc.bookId as string}`)).size).toBe(4);
+        // The deal walks the first member's digit fastest, so four rows take four different authors.
+        // Random draws would rarely do that, so this fails if the index never reaches the planner.
+        expect(new Set(links.map((row) => row.doc.authorId)).size).toBe(4);
+    });
+
     it("rejects an unknown --table", async () => {
         expect.assertions(1);
 

@@ -66,6 +66,11 @@ const plan = seedPlan(schema, {
             type: "Record<string, number>",
             description: "Per-table absolute index base, so successive batches of the same table never collide ids.",
         },
+        allowOrphans: {
+            type: "boolean",
+            default: "false",
+            description: "Let a required foreign key with no row to point at take a dangling id instead of refusing.",
+        },
         seed: { type: "number", default: "0", description: "Deterministic mapping selector — same seed yields identical rows." },
         now: {
             type: "number",
@@ -163,13 +168,15 @@ lunora seed --dry-run                    # print the NDJSON, insert nothing
 lunora seed --reset                      # wipe local .wrangler/state first (local dev only)
 ```
 
-Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt).
+Other flags: `--allow-orphans` (let a required foreign key with no parent row take a dangling id instead of failing), `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt).
 
 <Callout type="warn">`--reset` clears local `.wrangler/state` only; it cannot be combined with `--prod` or a remote `--url`.</Callout>
 
 ## Limitations
 
-- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A `.unique()` foreign key (`v.id("users").unique()`, the way to spell a 1:1) is dealt from its parent pool without replacement, so the pool's size is its domain. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`, a parent table with fewer rows than the child) is refused at plan time, with the column named, before anything is inserted.
+- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A `.unique()` foreign key (`v.id("users").unique()`, the way to spell a 1:1) is dealt from its parent pool without replacement, so the pool's size is its domain; across calls that holds only while the parent pool is unchanged. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`, a parent table with fewer rows than the child) is refused at plan time, with the column named, before anything is inserted.
+- **Table-level unique indexes are dealt too.** A single-column `unique` index counts as `.unique()` on that column. A multi-column one is dealt from the members whose number of distinct values is known: foreign keys first, then closed domains (enum, boolean, literal union, bounded number), then, only when those cannot cover the row count, members whose value can carry an index (a plain string takes a tag, an unbounded number a counter). The rest keep their generated values, so a through table over two foreign keys of N and M parents seeds up to N × M distinct pairs and refuses more, with the index named, while a `.url()` column beside a foreign key is left as generated. A member with no known count (an array, object, record, storage id, open union or `.url()` string) never counts towards the index, but it keeps its per-row generated value, so an index holding one is not refused for being short of counted combinations. Two limits: the pairs are distinct within one call, but successive `createSeedClient` calls can repeat a pair once a parent table has grown between them, or once their running total first needs a tagged or counted member; and an index with a member that is overridden, server-filled, a self-reference, or shared with another composite index is left to the generator.
+- **A foreign key never dangles silently.** A required foreign key with no row to point at (an empty parent, or the first row of a required self-reference in an empty table) is refused with the column named. An optional one is left out and a nullable one is `null`. Pass `allowOrphans: true` (`--allow-orphans`) to accept a placeholder id instead. A foreign-key cycle across tables is resolved by assigning each cycle parent's ids before its rows are generated, so every cell points at a real row whichever table is declared first.
 - **A column the generator cannot satisfy is refused, not guessed at.** `v.from(externalSchema)`, a `.pattern()` column, and any `format` with no generator behind it (only `email` and `uri` have one) fail at plan time with the column named, rather than seeding a value the column's own validator rejects on insert. Supply those through `overrides`, or skip the table with `only`.
 - Seeding is deterministic by design. Re-running with the same `seed` regenerates identical `_id`s, which the import path skips as conflicts. Use a different `seed` for fresh rows, or `--reset` to wipe local state first.
 

@@ -3,10 +3,10 @@ import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";
-import type { FieldSpec } from "./introspect";
+import type { FieldSpec, TableSpec, UniqueIndexSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
-import { planUniqueDeal, planUniqueFkDeal } from "./unique-value";
+import { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -48,6 +48,12 @@ type SeedOverrides = Record<string, Record<string, unknown>>;
 type SeedCounts = Record<string, number>;
 
 interface SeedOptions {
+    /**
+     * Let a REQUIRED foreign key with no parent to point at take a fresh, dangling
+     * uuid instead of refusing. Off by default: a dangling id fails every join and
+     * `ctx.db.get` on the row, so it should be a deliberate choice.
+     */
+    allowOrphans?: boolean;
     /** Rows per table; falls back to {@link SeedOptions.defaultCount} when a table is absent. */
     counts?: SeedCounts;
     /** Count used for any selected table not present in `counts` (default `10`). */
@@ -102,31 +108,73 @@ interface TablePlan {
 const resolveOverride = (override: unknown, context: OverrideContext): unknown =>
     typeof override === "function" ? (override as (context: OverrideContext) => unknown)(context) : override;
 
-/** Resolve the value a foreign-key column takes when no seeded parent exists. */
-const fkFallback = (field: FieldSpec, input: unknown): unknown => {
+/**
+ * Resolve the value a foreign-key column takes when no parent exists to point at.
+ *
+ * A required column has no honest value then, so it is refused with the column
+ * named — unless the caller opted into orphans with `allowOrphans`, which takes a
+ * fresh uuid.
+ */
+const fkFallback = (field: FieldSpec, table: string, input: unknown, allowOrphans: boolean): unknown => {
     if (field.optional) {
         return undefined;
     }
 
-    // eslint-disable-next-line unicorn/no-null -- null is the SQL value a nullable FK takes when no parent exists
-    return field.nullable ? null : copycat.uuid(input);
+    if (field.nullable) {
+        // eslint-disable-next-line unicorn/no-null -- null is the SQL value a nullable FK takes when no parent exists
+        return null;
+    }
+
+    if (allowOrphans) {
+        return copycat.uuid(input);
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `cannot seed "${table}": required foreign key "${field.name}" points at "${field.fkTable as string}", which has no rows to reference. Seed "${field.fkTable as string}" too, make "${field.name}" optional or nullable, supply "${field.name}" yourself, or pass \`allowOrphans: true\` (\`--allow-orphans\` on the CLI) to accept dangling ids.`,
+    );
 };
 
-/** The foreign-key pool a column may resolve against: freshly-seeded ids plus pre-existing ones. */
-const fkPool = (
+/**
+ * The foreign-key pool a column may resolve against — freshly-seeded ids plus
+ * pre-existing ones — as a function of the row's position in this call.
+ *
+ * Built ONCE per (table, column) before the row loop. A non-self FK's parent has
+ * all its ids by then — generated, or on a cycle edge assigned ahead of its rows
+ * (see `seedPlan`) — so its pool is one fixed array. A self-reference
+ * draws only from rows generated earlier in this table (`localIndex` is the
+ * position within this call, independent of any offset): its array grows by one
+ * seeded id per row, inserted ahead of the pre-existing ids, so the order — and
+ * therefore every `copycat.oneOf` draw — matches `[...earlierRows, ...existing]`.
+ */
+const fkPoolFor = (
     field: FieldSpec,
     table: string,
-    localIndex: number,
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
-): ReadonlyArray<string> => {
+): ((localIndex: number) => ReadonlyArray<string>) => {
     const fkTable = field.fkTable as string;
-    // Self-reference: draw only from rows generated earlier in this run's table
-    // (`localIndex` is the position within this call, independent of any offset).
-    const seeded = fkTable === table ? (idsByTable.get(table) ?? []).slice(0, localIndex) : (idsByTable.get(fkTable) ?? []);
     const existing = existingIds[fkTable] ?? [];
 
-    return existing.length === 0 ? seeded : [...seeded, ...existing];
+    if (fkTable !== table) {
+        // Deduplicated, first seen first: a pool's size is the number of distinct parents a unique deal can spend, and a
+        // same-seed rerun regenerates ids that `existingIds` already lists.
+        const pool = [...new Set([...(idsByTable.get(fkTable) ?? []), ...existing])];
+
+        return () => pool;
+    }
+
+    const own = idsByTable.get(table) ?? [];
+    const pool = [...existing];
+    let included = 0;
+
+    return (localIndex) => {
+        for (; included < localIndex; included += 1) {
+            pool.splice(included, 0, own[included] as string);
+        }
+
+        return pool;
+    };
 };
 
 /**
@@ -157,9 +205,18 @@ const selfReferenceParent = (
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
 ): string | undefined => {
-    const candidates = [...(existingIds[table] ?? []), ...(idsByTable.get(table) ?? []).slice(0, localIndex)];
+    const existing = existingIds[table] ?? [];
+    const own = idsByTable.get(table) ?? [];
 
-    return candidates[localIndex] ?? candidates.at(-1);
+    // The candidate list `[...existing, ...own.slice(0, localIndex)]` read by position, without building it.
+    if (localIndex < existing.length) {
+        return existing[localIndex];
+    }
+
+    const ownPosition = localIndex - existing.length;
+
+    // With rows already stored the position is always inside this batch's earlier rows; with none it runs off the end.
+    return ownPosition < localIndex ? own[ownPosition] : (own[localIndex - 1] ?? existing.at(-1));
 };
 
 /**
@@ -173,6 +230,8 @@ const cellInput = (seed: number, table: string, index: number, column: string): 
 
 /** Everything one cell's generation depends on beyond the column itself. */
 interface RowContext {
+    /** Whether a required foreign key may take a dangling id when its pool is empty. */
+    allowOrphans: boolean;
     /** Ids that already exist in the target store, keyed by table. */
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>;
     /** Ids generated so far this run, keyed by table. */
@@ -185,6 +244,8 @@ interface RowContext {
     localIndex: number;
     /** Wall-clock reference for time-valued columns. */
     now: number;
+    /** Each foreign-key column's pool, built once per table (see {@link fkPoolFor}). */
+    pools: ReadonlyMap<string, (localIndex: number) => ReadonlyArray<string>>;
     table: string;
     /** How each `.unique()` column deals its values, keyed by column name (see {@link planUniqueDeals}). */
     uniqueDeals: ReadonlyMap<string, UniqueDeal>;
@@ -192,22 +253,20 @@ interface RowContext {
 
 /** Generate a single column value, resolving foreign keys against seeded and pre-existing parents. */
 const generateField = (field: FieldSpec, context: RowContext): unknown => {
-    const { existingIds, idsByTable, index, input, localIndex, now, table, uniqueDeals } = context;
+    const { existingIds, idsByTable, index, input, localIndex, now, pools, table, uniqueDeals } = context;
 
     if (field.fkTable !== undefined) {
-        const pool = fkPool(field, table, localIndex, idsByTable, existingIds);
+        const pool = (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(localIndex);
 
         if (pool.length === 0) {
-            // No parent to point at. Omit when the column tolerates it; otherwise
-            // fall back to a placeholder id so the row stays insertable.
-            return fkFallback(field, input);
-        }
-
-        if (!field.unique) {
-            return copycat.oneOf(input, pool);
+            return fkFallback(field, table, input, context.allowOrphans);
         }
 
         const fkDeal = uniqueDeals.get(field.name);
+
+        if (!field.unique && fkDeal === undefined) {
+            return copycat.oneOf(input, pool);
+        }
 
         // A self-reference's pool is not known at plan time, so it carries no
         // deal (see `planUniqueDeals`) and `selfReferenceParent` picks the one
@@ -221,7 +280,7 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
         return undefined;
     }
 
-    const deal = field.unique ? uniqueDeals.get(field.name) : undefined;
+    const deal = uniqueDeals.get(field.name);
 
     if (deal !== undefined) {
         // Derived from the ABSOLUTE index, and `planUniqueDeals` has already
@@ -268,6 +327,160 @@ const assertSelfReferenceDealable = (
     );
 };
 
+/** A composite-index member chosen to carry part of the index's distinctness. */
+interface Carrier {
+    deal: UniqueDeal;
+    field: FieldSpec;
+}
+
+/**
+ * Give each carrier of a composite index its own digit of the row's index.
+ *
+ * The raw digits are the mixed-radix split of the index (the first carrier
+ * varies fastest), and each carrier then shifts its raw digit by the sum of the
+ * earlier carriers' raw digits, modulo its capacity. The shift depends only on
+ * earlier digits, so the split stays invertible and indexes below the product
+ * still give distinct tuples, but every carrier changes from one row to the next:
+ * with plain mixed radix the later carriers held one value for a whole cycle of
+ * the earlier ones, which put every link of a through table on one parent.
+ */
+const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals: Map<string, UniqueDeal>): void => {
+    const strides: number[] = [];
+    let stride = 1;
+
+    for (const { deal } of carriers) {
+        strides.push(stride);
+        stride *= deal.capacity;
+    }
+
+    const rawDigit = (valueIndex: number, position: number): number =>
+        Math.floor(valueIndex / (strides[position] as number)) % (carriers[position] as Carrier).deal.capacity;
+
+    for (const [position, { deal, field }] of carriers.entries()) {
+        deals.set(field.name, {
+            capacity,
+            valueAt: (valueIndex, generate) => {
+                let shift = 0;
+
+                for (let earlier = 0; earlier < position; earlier += 1) {
+                    shift += rawDigit(valueIndex, earlier);
+                }
+
+                return deal.valueAt((rawDigit(valueIndex, position) + shift) % deal.capacity, generate);
+            },
+        });
+    }
+};
+
+/**
+ * Deal one multi-column `unique` index so each row takes a distinct combination
+ * of its members.
+ *
+ * Distinctness has to come from members whose number of distinct values is
+ * known, so only those can carry it: foreign keys (their parent pool), then
+ * closed domains (enum, boolean, literal union, bounded number, bytes), then
+ * members whose dealt value rewrites the generated one (an index-tagged string,
+ * an unbounded counter or timestamp). Foreign keys and closed domains always
+ * carry; a rewriting member carries only while their product falls short of the
+ * batch. The rest are generated as usual, so a `.url()` column or a plain string
+ * is neither refused nor retagged when the foreign keys already cover the rows. Two foreign keys of N and M parents seed
+ * N x M rows and no more — the through-table case. A batch past what the
+ * carriers can cover is refused, with the index named, unless a member keeps a hash-derived value
+ * (see {@link hasHashedValue}), which the generator already makes distinct per row.
+ *
+ * Skipped, leaving the columns to the generator, when a member is already unique on
+ * its own (the index is then satisfied), a self-reference (its pool is not known
+ * yet), a foreign key with no parents, a server-filled column, or is overridden.
+ * A column an earlier composite index already dealt keeps that deal, and any later index containing
+ * it is skipped as a whole, so the column never takes two digits.
+ */
+const planCompositeDeal = (
+    index: UniqueIndexSpec,
+    fields: ReadonlyMap<string, FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    now: number,
+    tableOverrides: Record<string, unknown>,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    deals: Map<string, UniqueDeal>,
+): void => {
+    // A column named twice holds one value, so it carries one digit, not two.
+    const names = [...new Set(index.fields)];
+    const members = names.flatMap((name) => fields.get(name) ?? []);
+    const undealable = (field: FieldSpec): boolean =>
+        field.unique ||
+        field.fkTable === table ||
+        deals.has(field.name) ||
+        Object.hasOwn(tableOverrides, field.name) ||
+        (field.hasServerDefault && field.fkTable === undefined) ||
+        (field.fkTable !== undefined && poolOf(field).length === 0);
+
+    if (members.length !== names.length || members.some((field) => undealable(field))) {
+        return;
+    }
+
+    // Foreign keys first, then closed domains, then the members a deal would rewrite; the sort is stable,
+    // so declaration order breaks ties.
+    const candidates = members
+        .map((field) => {
+            if (field.fkTable !== undefined) {
+                return { carrier: { deal: planUniqueFkDeal(poolOf(field), table, field.name), field }, rank: 0 };
+            }
+
+            const member = planCompositeMemberDeal(field, { now, table });
+
+            return member === undefined ? undefined : { carrier: { deal: member.deal, field }, rank: member.rewrites ? 2 : 1 };
+        })
+        .filter((candidate) => candidate !== undefined)
+        .toSorted((left, right) => left.rank - right.rank);
+    const required = offset + count;
+    const carriers: Carrier[] = [];
+    let capacity = 1;
+
+    // Foreign keys and closed domains always carry: their dealt value is one the generator could have
+    // produced, and dealing them whatever the batch size keeps a pair a function of the row index, so a
+    // later call never repeats one. A rewriting member carries only when those fall short.
+    for (const { carrier, rank } of candidates) {
+        if (rank === 2 && capacity >= required) {
+            break;
+        }
+
+        carriers.push(carrier);
+        capacity *= carrier.deal.capacity;
+    }
+
+    // A hash-derived member (a `.url()`, a storage id, an array) is distinct per row but uncountable, so
+    // it can cover what the counted members cannot; only an index made of counted members is refused.
+    if (required > capacity && !members.some((field) => field.fkTable === undefined && hasHashedValue(field, { now, table }))) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `cannot seed ${String(required)} rows into "${table}": unique index "${index.name}" over (${index.fields.join(", ")}) has only ${String(capacity)} distinct combinations`,
+        );
+    }
+
+    assignDigits(carriers, capacity, deals);
+};
+
+/** Deal every multi-column `unique` index of one table; see {@link planCompositeDeal}. */
+const planCompositeDeals = (
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>,
+    fields: ReadonlyArray<FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    now: number,
+    tableOverrides: Record<string, unknown>,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    deals: Map<string, UniqueDeal>,
+): void => {
+    const byName = new Map(fields.map((field) => [field.name, field]));
+
+    for (const index of uniqueIndexes) {
+        planCompositeDeal(index, byName, table, count, offset, now, tableOverrides, poolOf, deals);
+    }
+};
+
 /**
  * Decide how every `.unique()` column of one table deals its values, and fail
  * fast when a column cannot produce as many distinct values as the batch asks
@@ -295,6 +508,7 @@ const assertSelfReferenceDealable = (
  */
 const planUniqueDeals = (
     fields: ReadonlyArray<FieldSpec>,
+    uniqueIndexes: ReadonlyArray<UniqueIndexSpec>,
     table: string,
     count: number,
     offset: number,
@@ -338,7 +552,26 @@ const planUniqueDeals = (
         deals.set(field.name, deal);
     }
 
+    planCompositeDeals(uniqueIndexes, fields, table, count, offset, now, tableOverrides, poolOf, deals);
+
     return deals;
+};
+
+/** Refuse a seed `only` list naming a table the schema does not define. */
+const assertKnownTables = (specs: ReadonlyArray<TableSpec>, only: ReadonlyArray<string> | undefined): void => {
+    if (only === undefined) {
+        return;
+    }
+
+    const known = new Set(specs.map((spec) => spec.name));
+
+    for (const name of only) {
+        if (!known.has(name)) {
+            const available = specs.map((spec) => spec.name).join(", ");
+
+            throw new LunoraError("BAD_REQUEST", `unknown table "${name}" in seed \`only\` — schema defines: ${available || "(no tables)"}`);
+        }
+    }
 };
 
 /**
@@ -347,7 +580,17 @@ const planUniqueDeals = (
  * parents come before it.
  */
 const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<TablePlan> => {
-    const { counts = {}, defaultCount = 10, existingIds = {}, indexOffset = {}, now = Date.now(), only, overrides = {}, seed = 0 } = options;
+    const {
+        allowOrphans = false,
+        counts = {},
+        defaultCount = 10,
+        existingIds = {},
+        indexOffset = {},
+        now = Date.now(),
+        only,
+        overrides = {},
+        seed = 0,
+    } = options;
 
     setHashKey(seed);
 
@@ -356,17 +599,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // Surface an explicit error for a typo'd table rather than silently seeding
     // nothing. The CLI guards `--table` upstream, but the testing adapter and any
     // direct `seedPlan` caller would otherwise get a confusing empty plan.
-    if (only !== undefined) {
-        const known = new Set(specs.map((spec) => spec.name));
-
-        for (const name of only) {
-            if (!known.has(name)) {
-                const available = specs.map((spec) => spec.name).join(", ");
-
-                throw new LunoraError("BAD_REQUEST", `unknown table "${name}" in seed \`only\` — schema defines: ${available || "(no tables)"}`);
-            }
-        }
-    }
+    assertKnownTables(specs, only);
 
     const requested = new Set(only ?? specs.map((spec) => spec.name));
     // Parents fully covered by `existingIds` (and not requested outright) are not
@@ -387,6 +620,47 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // A live view of generated rows handed to override functions as `store`.
     const storeRows: Record<string, Record<string, unknown>[]> = {};
     const plan: TablePlan[] = [];
+    const primaryKey = (table: string, index: number, row: Record<string, unknown>, store: OverrideContext["store"] = storeRows): string => {
+        const tableOverrides = overrides[table] ?? {};
+
+        if (Object.hasOwn(tableOverrides, "_id")) {
+            const overridden = resolveOverride(tableOverrides._id, { field: "_id", index, row, store, table });
+
+            if (overridden !== undefined) {
+                return overridden as string;
+            }
+        }
+
+        return copycat.uuid(cellInput(seed, table, index, "_id"));
+    };
+    // An ordinary parent is generated before its children (`orderTables`). A cycle
+    // parent is scheduled after `spec`, so its ids are assigned now, ahead of its
+    // rows: every foreign key then resolves in one pass, and an override reading
+    // `row` or `store` sees the id the row keeps. Such a parent's own `_id`
+    // override runs at this point, before its rows exist, so it sees the ids
+    // assigned so far as that table's rows (an override that numbers by
+    // `store[table].length` stays distinct) and nothing else of the table.
+    const assignCycleParentIds = (spec: TableSpec): void => {
+        for (const field of spec.fields) {
+            const parent = field.fkTable;
+
+            if (parent !== undefined && parent !== spec.name && selected.has(parent) && specByName.has(parent) && !idsByTable.has(parent)) {
+                const parentOffset = indexOffset[parent] ?? 0;
+                const assignedSoFar: Record<string, unknown>[] = [];
+                const store = { ...storeRows, [parent]: assignedSoFar };
+                const ids: string[] = [];
+
+                for (let localIndex = 0; localIndex < (counts[parent] ?? defaultCount); localIndex += 1) {
+                    const id = primaryKey(parent, parentOffset + localIndex, {}, store);
+
+                    ids.push(id);
+                    assignedSoFar.push({ _id: id });
+                }
+
+                idsByTable.set(parent, ids);
+            }
+        }
+    };
 
     for (const table of order) {
         const spec = specByName.get(table);
@@ -400,17 +674,24 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         // Absolute index base — lets a client seed the same table across calls
         // without colliding ids (each id/value hashes from the absolute index).
         const offset = indexOffset[table] ?? 0;
-        // A parent table is fully generated before its children (`orderTables`),
-        // so a non-self FK's pool is already final here — `localIndex` only
-        // matters for the self-reference `planUniqueDeals` skips.
-        const uniqueDeals = planUniqueDeals(spec.fields, table, count, offset, now, tableOverrides, (field) =>
-            fkPool(field, table, 0, idsByTable, existingIds),
-        );
 
-        const ids: string[] = [];
+        assignCycleParentIds(spec);
+
+        // Set when an earlier table on a cycle already assigned this table's ids.
+        const assigned = idsByTable.get(table);
+        const ids = assigned ?? [];
+
         idsByTable.set(table, ids);
         const rows: Record<string, unknown>[] = [];
         storeRows[table] = rows;
+
+        // `localIndex` only matters for a self-reference.
+        const pools = new Map(
+            spec.fields.filter((field) => field.fkTable !== undefined).map((field) => [field.name, fkPoolFor(field, table, idsByTable, existingIds)]),
+        );
+        const uniqueDeals = planUniqueDeals(spec.fields, spec.uniqueIndexes, table, count, offset, now, tableOverrides, (field) =>
+            (pools.get(field.name) as (localIndex: number) => ReadonlyArray<string>)(0),
+        );
 
         for (let localIndex = 0; localIndex < count; localIndex += 1) {
             const index = offset + localIndex;
@@ -437,18 +718,26 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             };
 
             // Explicit primary key, so children can reference it.
-            apply("_id", () => copycat.uuid(cellInput(seed, table, index, "_id")));
-            ids.push(row._id as string);
+            if (assigned === undefined) {
+                row._id = primaryKey(table, index, row);
+                ids.push(row._id as string);
+            } else {
+                row._id = assigned[localIndex];
+            }
 
             for (const field of spec.fields) {
+                const input = cellInput(seed, table, index, field.name);
+
                 apply(field.name, () =>
                     generateField(field, {
+                        allowOrphans,
                         existingIds,
                         idsByTable,
                         index,
-                        input: cellInput(seed, table, index, field.name),
+                        input,
                         localIndex,
                         now,
+                        pools,
                         table,
                         uniqueDeals,
                     }),
