@@ -615,11 +615,11 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // A live view of generated rows handed to override functions as `store`.
     const storeRows: Record<string, Record<string, unknown>[]> = {};
     const plan: TablePlan[] = [];
-    const primaryKey = (table: string, index: number, row: Record<string, unknown>): string => {
+    const primaryKey = (table: string, index: number, row: Record<string, unknown>, store: OverrideContext["store"] = storeRows): string => {
         const tableOverrides = overrides[table] ?? {};
 
         if (Object.hasOwn(tableOverrides, "_id")) {
-            const overridden = resolveOverride(tableOverrides._id, { field: "_id", index, row, store: storeRows, table });
+            const overridden = resolveOverride(tableOverrides._id, { field: "_id", index, row, store, table });
 
             if (overridden !== undefined) {
                 return overridden as string;
@@ -632,18 +632,27 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // parent is scheduled after `spec`, so its ids are assigned now, ahead of its
     // rows: every foreign key then resolves in one pass, and an override reading
     // `row` or `store` sees the id the row keeps. Such a parent's own `_id`
-    // override runs at this point, before its rows exist.
+    // override runs at this point, before its rows exist, so it sees the ids
+    // assigned so far as that table's rows (an override that numbers by
+    // `store[table].length` stays distinct) and nothing else of the table.
     const assignCycleParentIds = (spec: TableSpec): void => {
         for (const field of spec.fields) {
             const parent = field.fkTable;
 
             if (parent !== undefined && parent !== spec.name && selected.has(parent) && specByName.has(parent) && !idsByTable.has(parent)) {
                 const parentOffset = indexOffset[parent] ?? 0;
+                const assignedSoFar: Record<string, unknown>[] = [];
+                const store = { ...storeRows, [parent]: assignedSoFar };
+                const ids: string[] = [];
 
-                idsByTable.set(
-                    parent,
-                    Array.from({ length: counts[parent] ?? defaultCount }, (_, localIndex) => primaryKey(parent, parentOffset + localIndex, {})),
-                );
+                for (let localIndex = 0; localIndex < (counts[parent] ?? defaultCount); localIndex += 1) {
+                    const id = primaryKey(parent, parentOffset + localIndex, {}, store);
+
+                    ids.push(id);
+                    assignedSoFar.push({ _id: id });
+                }
+
+                idsByTable.set(parent, ids);
             }
         }
     };

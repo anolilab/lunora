@@ -112,6 +112,26 @@ describe("seedPlan — dangling foreign keys", () => {
         });
     });
 
+    it("gives a cycle parent's _id override the ids assigned so far as its store", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            authors: defineTable({ latestBookId: v.id("books") }),
+            books: defineTable({ authorId: v.id("authors") }),
+        });
+        // Whichever table is scheduled second is the cycle parent, so both carry the override.
+        const sequential = ({ store, table }: { store: Record<string, ReadonlyArray<unknown>>; table: string }): string =>
+            `${table}-${String(store[table]?.length ?? 0)}`;
+        const plan = seedPlan(schema, { counts: { authors: 3, books: 4 }, overrides: { authors: { _id: sequential }, books: { _id: sequential } } });
+        const authorIds = rowsOf(plan, "authors").map((row) => row._id);
+        const bookIds = rowsOf(plan, "books").map((row) => row._id);
+
+        expect(authorIds).toStrictEqual(["authors-0", "authors-1", "authors-2"]);
+        expect(bookIds).toStrictEqual(["books-0", "books-1", "books-2", "books-3"]);
+        expect(rowsOf(plan, "books").every((row) => authorIds.includes(row.authorId as string))).toBe(true);
+        expect(rowsOf(plan, "authors").every((row) => bookIds.includes(row.latestBookId as string))).toBe(true);
+    });
+
     it("passes allowOrphans through the seed client", async () => {
         expect.hasAssertions();
 
