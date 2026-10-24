@@ -207,6 +207,7 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
     // A document that exists but cannot be parsed is reported once per modification time, so a
     // file that stays broken is not repeated on every `tools/list`.
     let reportedMtime: number | undefined;
+    let reportedStatFailure: string | undefined;
     const reloadFailed = (error: unknown): void => {
         writeError(`lunora mcp serve --functions: kept the last tool list — the rewritten document did not load: ${String(error)}\n`);
     };
@@ -221,9 +222,16 @@ const serveFunctions = async (options: McpServeOptions, connect: (options: Funct
 
         try {
             mtimeMs = statSync(specPath).mtimeMs;
+            reportedStatFailure = undefined;
         } catch (error: unknown) {
             if (!isMissing(error)) {
-                reloadFailed(error);
+                // A persistent error such as EACCES would otherwise repeat on every request.
+                const failure = (error as NodeJS.ErrnoException).code ?? String(error);
+
+                if (reportedStatFailure !== failure) {
+                    reportedStatFailure = failure;
+                    reloadFailed(error);
+                }
             } else if (loaded.spec !== NO_FUNCTIONS) {
                 loaded = { mtimeMs: -1, spec: NO_FUNCTIONS };
             }
