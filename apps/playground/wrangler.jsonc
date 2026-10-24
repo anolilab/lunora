@@ -15,7 +15,7 @@
         { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
         { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
     ],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Cloudflare Workflows are NOT Durable Objects — they are declared in
     // `exports` (keyed by class, no migration entry) and reached through
     // `ctx.exports`. The class must be exported by the worker entry (see
