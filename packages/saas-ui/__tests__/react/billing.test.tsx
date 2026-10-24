@@ -60,6 +60,14 @@ describe("billingPanel", () => {
     });
 });
 
+describe("billingPanel without a portal", () => {
+    it("renders no manage button when there is nothing to manage yet", () => {
+        render(<BillingPanel memberCount={1} plans={PLANS} subscription={undefined} />);
+
+        expect(screen.queryByText("Manage billing")).not.toBeInTheDocument();
+    });
+});
+
 describe("gated", () => {
     it("renders the feature when the plan includes it", () => {
         render(
