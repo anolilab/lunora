@@ -53,6 +53,22 @@ describe("presenceRoster", () => {
         expect(roster.total).toBe(11);
     });
 
+    it("takes the name from whichever tab has one, whatever order the rows arrive in", () => {
+        const nameless = member({ lastSeen: NOW, sessionId: "tab-1", userId: "u1" });
+        const named = member({ data: { name: "Ada" }, lastSeen: NOW - 5000, sessionId: "tab-2", userId: "u1" });
+
+        expect(presenceRoster([nameless, named], undefined).entries[0]!.name).toBe("Ada");
+        expect(presenceRoster([named, nameless], undefined).entries[0]!.name).toBe("Ada");
+    });
+
+    it("prefers the freshest tab's name when two tabs disagree", () => {
+        const stale = member({ data: { name: "Ada (old)" }, lastSeen: NOW - 5000, sessionId: "tab-1", userId: "u1" });
+        const fresh = member({ data: { name: "Ada" }, lastSeen: NOW, sessionId: "tab-2", userId: "u1" });
+
+        expect(presenceRoster([fresh, stale], undefined).entries[0]!.name).toBe("Ada");
+        expect(presenceRoster([stale, fresh], undefined).entries[0]!.name).toBe("Ada");
+    });
+
     it("falls back to the key when the awareness blob carries no usable name", () => {
         expect(presenceRoster([member({ data: { name: "   " }, sessionId: "t1", userId: "u1" })], undefined).entries[0]!.name).toBe("u1");
         expect(presenceRoster([member({ sessionId: "t1" })], undefined).entries[0]!.name).toBe("t1");
