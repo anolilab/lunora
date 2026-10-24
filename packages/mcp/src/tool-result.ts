@@ -193,4 +193,4 @@ const withErrorShape = (output: ToolOutputSchema): ToolOutputSchema => {
     };
 };
 
-export { errorFromThrown, errorResult, ok, okStructured, withErrorShape };
+export { errorFromThrown, errorResult, jsonResultReplacer, ok, okStructured, withErrorShape };

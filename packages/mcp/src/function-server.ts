@@ -9,7 +9,7 @@ import pkg from "../package.json";
 import { coerceArgs } from "./function-args";
 import type { FunctionKind, FunctionRoute, FunctionTools } from "./function-tools";
 import { functionToolsFromOpenRpc, isWrite } from "./function-tools";
-import { errorFromThrown, errorResult, ok, okStructured } from "./tool-result";
+import { errorFromThrown, errorResult, jsonResultReplacer, ok, okStructured } from "./tool-result";
 import type { ToolResult } from "./tool-types";
 import { readArgumentsBag } from "./tools";
 import { readConfirmation, screenWriteConfirmation } from "./write-confirmation";
@@ -54,6 +54,7 @@ interface FunctionMcpServerOptions {
      * while the document is unchanged: a different object rebuilds the tools.
      */
     openRpcSpec: unknown;
+
     /** The CALLER's bearer. Writes need one: the confirmation digest is keyed by it. */
     token?: string;
 
@@ -63,7 +64,14 @@ interface FunctionMcpServerOptions {
      * `undefined` means no deployment is running yet, and the call says so.
      */
     url: string | (() => string | undefined);
+
     version?: string;
+
+    /**
+     * The WebSocket class streams open with. Defaults to the global `WebSocket`, which a
+     * runtime without one (older Node) lacks, so such a host passes its own here.
+     */
+    WebSocket?: typeof WebSocket;
 }
 
 const reference = (path: string): FunctionReference => {
@@ -152,19 +160,24 @@ const runWrite = async (
 /**
  * What a stream call gets from its MCP request. `signal` is the caller's abort, which
  * cancels the stream. `progress` is present only when the request carried a
- * `progressToken`, and it is sent once per chunk with that chunk's index.
+ * `progressToken`, and it is sent once per chunk with that chunk's index and its JSON text.
  */
 interface StreamCallContext {
-    progress?: (chunkIndex: number) => Promise<void>;
+    progress?: (chunkIndex: number, chunkJson: string) => Promise<void>;
     signal?: AbortSignal;
 }
 
 /**
  * The most chunks one stream call collects. Chunks are held in memory until the stream
- * completes, so an endless stream has to be cut off by count. Only the count is capped:
- * a stream of very large chunks, or a slow one, is not.
+ * completes, so an endless stream has to be cut off by count, and by size (below).
  */
 const MAX_STREAM_CHUNKS = 10_000;
+
+/**
+ * The most JSON text one stream call collects, in characters. A few large chunks can hold as
+ * much memory as many small ones, so the count alone does not bound what a call retains.
+ */
+const MAX_STREAM_BYTES = 16 * 1024 * 1024;
 
 /**
  * The read half of a stream: open it, report each chunk as progress, and return every
@@ -198,6 +211,7 @@ const runStream = async (
     }
 
     const chunks: unknown[] = [];
+    let collectedLength = 0;
 
     try {
         for await (const chunk of iterable) {
@@ -211,8 +225,20 @@ const runStream = async (
                 );
             }
 
+            const chunkJson = JSON.stringify(chunk, jsonResultReplacer);
+            collectedLength += chunkJson.length;
+
+            if (collectedLength > MAX_STREAM_BYTES) {
+                iterable.cancel();
+
+                return errorResult(
+                    "PAYLOAD_TOO_LARGE",
+                    `the stream "${route.path}" yielded more than ${MAX_STREAM_BYTES.toString()} characters of JSON, so it was cancelled and no chunks are returned.`,
+                );
+            }
+
             chunks.push(chunk);
-            await progress?.(chunks.length - 1);
+            await progress?.(chunks.length - 1, chunkJson);
         }
     } finally {
         signal?.removeEventListener("abort", onAbort);
@@ -302,7 +328,7 @@ const clientFor = (options: FunctionMcpServerOptions): { clientOf: () => LunoraC
         if (current?.url !== url) {
             current?.client.close();
 
-            const client = new LunoraClient({ fetch: options.fetch, url });
+            const client = new LunoraClient({ fetch: options.fetch, url, WebSocket: options.WebSocket });
 
             if (options.token !== undefined) {
                 client.setAuthToken(options.token);
@@ -401,8 +427,11 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
             ...(progressToken === undefined
                 ? {}
                 : {
-                      progress: async (chunkIndex: number): Promise<void> => {
-                          await extra.sendNotification({ method: "notifications/progress", params: { progress: chunkIndex, progressToken } });
+                      progress: async (chunkIndex: number, chunkJson: string): Promise<void> => {
+                          await extra.sendNotification({
+                              method: "notifications/progress",
+                              params: { message: chunkJson, progress: chunkIndex, progressToken },
+                          });
                       },
                   }),
         };

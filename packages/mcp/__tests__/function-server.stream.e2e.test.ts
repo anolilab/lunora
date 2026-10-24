@@ -166,8 +166,8 @@ describe("a stream tool over a real SDK client", () => {
         await client.close();
     });
 
-    it("reports each chunk as progress, in order, and returns every chunk", async () => {
-        expect.assertions(4);
+    it("reports each chunk as progress, in order, with its JSON text, and returns every chunk", async () => {
+        expect.assertions(5);
 
         vi.stubGlobal("WebSocket", StreamSocket);
         streamFrames.script = (id) => [
@@ -183,6 +183,9 @@ describe("a stream tool over a real SDK client", () => {
         const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress });
 
         expect(onprogress.mock.calls.map(([progress]) => (progress as { progress: number }).progress)).toStrictEqual([0, 1, 2]);
+        expect(onprogress.mock.calls.map(([progress]) => (progress as { message: string }).message)).toStrictEqual(
+            CHUNKS.map((chunk) => JSON.stringify(chunk)),
+        );
         expect(result.isError ?? false).toBe(false);
         expect(chunksOf(result.content)).toStrictEqual(CHUNKS);
         expect(StreamSocket.sent.find((frame) => frame["type"] === "stream")).toMatchObject({
@@ -214,6 +217,53 @@ describe("a stream tool over a real SDK client", () => {
 
         expect(result.isError ?? false).toBe(false);
         expect(chunksOf(result.content)).toHaveLength(2000);
+
+        await client.close();
+    });
+
+    it("refuses a stream whose chunks add up to more than the byte budget, and cancels it", async () => {
+        expect.assertions(2);
+
+        // One chunk of 17 MiB of text: the count is 1, so only the size can refuse it.
+        const huge = { text: "x".repeat(17 * 1024 * 1024) };
+
+        vi.stubGlobal("WebSocket", StreamSocket);
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            { data: huge, id, type: "chunk" },
+            { id, type: "complete" },
+        ];
+
+        const client = await connected(serverFor());
+        const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
+
+        expect(result.structuredContent).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(result.isError).toBe(true);
+
+        await client.close();
+    });
+
+    it("opens a stream with the WebSocket it was given when the runtime has no global one", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("WebSocket", undefined);
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            { data: CHUNKS[0], id, type: "chunk" },
+            { id, type: "complete" },
+        ];
+
+        const server = createFunctionMcpServer({
+            fetch: vi.fn<typeof fetch>(),
+            openRpcSpec: SPEC,
+            url: "https://app.example",
+            WebSocket: StreamSocket as unknown as typeof WebSocket,
+        });
+        const client = await connected(server);
+        const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" });
+
+        expect(result.isError ?? false).toBe(false);
+        expect(chunksOf(result.content)).toStrictEqual([CHUNKS[0]]);
 
         await client.close();
     });
