@@ -436,4 +436,34 @@ describe("createFunctionMcpServer when the OpenRPC document is rewritten while i
 
         await client.close();
     });
+
+    it("keeps the last tools that built when a rewritten document is malformed, and reports it once", async () => {
+        expect.assertions(4);
+
+        let spec: unknown = SPEC;
+        const onReloadError = vi.fn<(error: unknown) => void>();
+        const deployed = deployment(() => {
+            return { body: { result: { id: "b1", total: 3 } }, status: 200 };
+        });
+        const client = await connected(
+            createFunctionMcpServer({ fetch: deployed.fetch, onReloadError, openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+
+        // `billing:get` and `billing/get` are different functions that map to one tool name, so the rewrite is refused.
+        const billingGet = method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT });
+        const billingSlash = method("billing/get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT });
+        spec = { methods: [billingGet, billingSlash], openrpc: "1.3.2" };
+
+        const listed = await client.listTools();
+        const called = await client.callTool({ arguments: { args: { id: "b1" } }, name: "billing_get" });
+        await client.listTools();
+
+        // Writes are off here, so the last good list is the one query.
+        expect(listed.tools.map((tool) => tool.name)).toStrictEqual(["billing_get"]);
+        expect(called.structuredContent).toStrictEqual({ id: "b1", total: 3 });
+        expect(onReloadError).toHaveBeenCalledTimes(1);
+        expect(onReloadError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+        await client.close();
+    });
 });

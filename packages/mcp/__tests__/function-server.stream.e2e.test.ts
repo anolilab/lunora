@@ -192,6 +192,32 @@ describe("a stream tool over a real SDK client", () => {
         await client.close();
     });
 
+    it("returns a fast stream longer than the client's default buffer, with progress on", async () => {
+        expect.assertions(2);
+
+        // Above the client's 1,024-chunk default buffer and below the tool's 10,000-chunk cap.
+        const many = Array.from({ length: 2000 }, (_, index) => {
+            return { n: index };
+        });
+
+        vi.stubGlobal("WebSocket", StreamSocket);
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            ...many.map((data) => {
+                return { data, id, type: "chunk" };
+            }),
+            { id, type: "complete" },
+        ];
+
+        const client = await connected(serverFor());
+        const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
+
+        expect(result.isError ?? false).toBe(false);
+        expect(chunksOf(result.content)).toHaveLength(2000);
+
+        await client.close();
+    });
+
     it("delivers a mid-stream error as an error result, after the progress it already sent", async () => {
         expect.assertions(3);
 

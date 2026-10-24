@@ -23,9 +23,10 @@ import { readConfirmation, screenWriteConfirmation } from "./write-confirmation"
  * every tool call exactly as they do to the app. Nothing here calls an
  * `/_lunora/admin/*` route, so this server needs no admin token.
  *
- * The tool list comes from the static `openRpcSpec` the app was generated with,
- * so `tools/list` makes no network call. That document exists only when the
- * project sets `apiSpec: "openrpc"` or `"both"`.
+ * The tool list comes from the `openRpcSpec` the app was generated with, so
+ * `tools/list` makes no network call. That document exists only when the project
+ * sets `apiSpec: "openrpc"` or `"both"`. It can be a resolver that re-reads the
+ * document, and the tools then follow a rewrite of it while the server runs.
  */
 
 const SERVER_NAME = "lunora";
@@ -39,6 +40,12 @@ interface FunctionMcpServerOptions {
     fetch?: typeof fetch;
     /** The MCP server name clients show. Defaults to `lunora`. */
     name?: string;
+
+    /**
+     * Told when a rewritten document cannot be read or built. The server keeps the tools it
+     * last built, so the error is reported here rather than failing the request.
+     */
+    onReloadError?: (error: unknown) => void;
 
     /**
      * The `openRpcSpec` export of `_generated/openrpc`, or a function returning it. A
@@ -170,7 +177,9 @@ const runStream = async (
     context: StreamCallContext,
 ): Promise<ToolResult> => {
     const streamRef: FunctionReference<"stream"> = { __lunoraRef: route.path };
-    const iterable = client.stream(streamRef, args, { shardKey });
+    // The client's default buffer is smaller than the cap, so a fast stream would fail as
+    // backpressure before the cap could report it. One past the cap lets the cap decide.
+    const iterable = client.stream(streamRef, args, { maxBuffer: MAX_STREAM_CHUNKS + 1, shardKey });
     const { signal, progress } = context;
     const onAbort = (): void => {
         iterable.cancel();
@@ -314,11 +323,26 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
         return { spec, tools: functionToolsFromOpenRpc(spec, { allowWrites }) };
     };
     let served = buildTools(resolveSpec());
+    // A bad rewrite is not an outage: the tools last built keep answering, and a document that
+    // failed to build is recorded so it is not rebuilt until it changes again.
     const toolsNow = (): FunctionTools => {
-        const spec = resolveSpec();
+        let spec: unknown;
+
+        try {
+            spec = resolveSpec();
+        } catch (error: unknown) {
+            options.onReloadError?.(error);
+
+            return served.tools;
+        }
 
         if (spec !== served.spec) {
-            served = buildTools(spec);
+            try {
+                served = buildTools(spec);
+            } catch (error: unknown) {
+                options.onReloadError?.(error);
+                served = { spec, tools: served.tools };
+            }
         }
 
         return served.tools;
