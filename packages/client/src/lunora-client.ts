@@ -10146,7 +10146,7 @@ class LunoraClient {
                     // The server never returned this slot. It may or may not have committed,
                     // so retry under the same `mutationId` (idempotent). Over a socket that
                     // stays open no reconnect will flush it, so schedule the retry here.
-                    const unanswered = unreadableSlotError();
+                    const unanswered = withResponseHeaders(unreadableSlotError(), responseHeaders);
 
                     if (this.spendsLastReplayAttempt(item, unanswered)) {
                         this.settleReplayTerminal(item, unanswered);

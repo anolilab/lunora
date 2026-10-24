@@ -81,4 +81,12 @@ describe("replaySlotVerdict decode outcomes", () => {
         expect(verdict.kind).toBe("undecodable");
         expect(verdict).toMatchObject({ commitCursor: 4, error: { code: "WIRE_DECODE_FAILED" } });
     });
+
+    it("carries the batch reply's headers on an undecodable slot, as it does on an errored one", () => {
+        expect.assertions(1);
+
+        const verdict = replaySlotVerdict({ commitCursor: 4, result: ["$lunora.wire$", "bigint", "not-a-number"] }, new Headers({ "x-edge": "cf" }));
+
+        expect(verdict).toHaveProperty("error.headers", { "x-edge": "cf" });
+    });
 });

@@ -246,8 +246,8 @@ export type ReplaySlotVerdict =
     | { kind: "unanswered" };
 
 /**
- * `responseHeaders` are the headers of the reply the slot came in, so an `errored`
- * verdict carries them as a single call's error would (see `withResponseHeaders`).
+ * `responseHeaders` are the headers of the reply the slot came in. Every verdict that
+ * is an error carries them, as a single call's error would (see `withResponseHeaders`).
  */
 export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHeaders: Headers): ReplaySlotVerdict => {
     if (inner === undefined) {
@@ -261,7 +261,7 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHe
     try {
         return { commitCursor: inner.commitCursor, kind: "committed", value: decodeWire(inner.result) };
     } catch (error: unknown) {
-        return { commitCursor: inner.commitCursor, error: undecodableResultError(error), kind: "undecodable" };
+        return { commitCursor: inner.commitCursor, error: withResponseHeaders(undecodableResultError(error), responseHeaders), kind: "undecodable" };
     }
 };
 
