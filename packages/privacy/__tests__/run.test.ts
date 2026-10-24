@@ -240,6 +240,64 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("fails a queued export when the subject's erasure completes first, and the export's run publishes nothing", async () => {
+        const { calls, port } = memoryData({});
+        const { files, privacy, runErasureWorkflow, runExportWorkflow, store } = setup({ data: port, erasure: NO_GRACE });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect(store.events).toContain(`${exported.id}:failed`);
+
+        await runExportWorkflow(exported.id);
+
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect(calls.filter((call) => call.startsWith("collect:"))).toStrictEqual([]);
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
+    it("stops a queued export's run when the erasure already completed, even though the export is still received", async () => {
+        const { port } = memoryData({});
+        const { privacy, store } = setup({ data: port, erasure: NO_GRACE });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        await privacy.runErasure(erasure.id);
+        // The state a queued export is in if the erasure's claim missed it: still received, under the tombstone key.
+        store.rows.set(exported.id, { ...exported, status: "received", subjectId: store.rows.get(erasure.id)?.subjectId ?? "" });
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+    });
+
+    it("fails an export that starts between the erasure's read of it and its claim", async () => {
+        const store = memoryRequests();
+        let started = false;
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const row = store.rows.get(id);
+
+                // The export's run claims `processing` just before the erasure's claim from `received` lands.
+                if (!started && row?.type === "export" && patch.status === "failed") {
+                    started = true;
+                    store.rows.set(id, { ...row, status: "processing" });
+                }
+
+                return store.claim(id, from, patch);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "completed" });
+        expect(started).toBe(true);
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+    });
+
     it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
         const store = memoryRequests();
         let erase: (() => Promise<unknown>) | undefined;

@@ -21,7 +21,7 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, subjectWasErased } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -224,9 +224,7 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
 
     // An erasure rewrote this export's subject to the tombstone key; a run now would collect under that key and
     // publish an archive without the subject's data. The completed erasure shares the key, so the log shows it.
-    const subjectRequests = await scope.ports.store.listForSubject(record.subjectId);
-
-    if (subjectRequests.some((request) => request.type === "erasure" && request.status === "completed")) {
+    if (await subjectWasErased(scope.ports.store, record.subjectId)) {
         throw new LunoraError("UNPROCESSABLE", "This export's subject was erased; it cannot be retried.");
     }
 
