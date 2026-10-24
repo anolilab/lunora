@@ -328,6 +328,12 @@ const createStore: <T extends object>(initial: T) => Store<T>;
 const currentPlan: (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined) => Plan | undefined;
 ```
 
+### `currentSubscription` (const)
+
+```ts
+const currentSubscription: <T extends SubscriptionLike>(subscriptions: ReadonlyArray<T> | undefined) => T | undefined;
+```
+
 ### `dayKey` (const)
 
 ```ts
