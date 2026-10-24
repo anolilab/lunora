@@ -12,7 +12,7 @@ import { DOC_ORIGINALS_KEY } from "./do-sql";
 import { renderSql, sqliteInList } from "./drizzle";
 import type { SortDirection } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
-import { decodeBigintSqlKey, sqlComparableProjection } from "./sql-projection";
+import { decodeBigintSqlKey } from "./sql-projection";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel
@@ -1361,9 +1361,10 @@ const arrayElementMatch = (value: unknown): { params: (number | string)[]; sql: 
  * A bigint, bytes, date, map or set is stored as a wire-tagged array
  * (`["$lunora.wire$","bigint","123"]`), which is also a JSON array to `json_each`:
  * `has "bigint"` would match the tag itself, and a bulk delete would remove that
- * row. The leading conjunct reads element 0 of the same path and rejects any array
- * the wire codec produced. A user array never starts with the tag in storage:
- * the codec wraps one that does as `["$lunora.wire$","arr",…]`.
+ * row. The leading CASE reads element 0 of the same path and rejects any array
+ * the wire codec produced. The one frame that IS a user array is the codec's
+ * escape for an array that starts with the tag, `["$lunora.wire$","arr",[…]]`:
+ * its elements sit at index 2, so that branch walks them instead.
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  * @throws LunoraError `BAD_REQUEST` on a physical column, a bigint field, or a non-scalar value
  */
@@ -1389,11 +1390,70 @@ const buildArrayContains = (
     const element = arrayElementMatch(clause.value);
 
     const arrayPath = documentJsonPath(clause.column, path);
+    const document = quoteIdentifier(DOC_COLUMN);
+    const membership = `SELECT 1 FROM json_each(${document}, ?) AS j WHERE typeof(j.key) = 'integer' AND ${element.sql}`;
 
     return {
-        params: [`${arrayPath}[0]`, arrayPath, ...element.params],
-        sql: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) IS NOT '${WIRE_TAG}' AND EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND ${element.sql})`,
+        params: [`${arrayPath}[0]`, arrayPath, ...element.params, `${arrayPath}[1]`, `${arrayPath}[2]`, ...element.params],
+        sql: `CASE WHEN json_extract(${document}, ?) IS NOT '${WIRE_TAG}' THEN EXISTS (${membership}) WHEN json_extract(${document}, ?) IS 'arr' THEN EXISTS (${membership}) ELSE 0 END`,
     };
+};
+
+/**
+ * The JSON text a nested leaf holding `value` is stored as, when that is a
+ * wire-tagged frame (bigint, bytes, date, map, set …). The document writer stores
+ * `JSON.stringify(encodeWire(…))`, so the same text compares equal to what
+ * `json_extract` returns for the leaf.
+ * @returns the frame text, or `undefined` when the value is stored as a plain JSON scalar, array or object
+ */
+const nestedWireFrameText = (value: unknown): string | undefined => {
+    if (value === null || value === undefined || typeof value === "string" || typeof value === "boolean") {
+        return undefined;
+    }
+
+    const encoded = encodeWire(value);
+
+    return Array.isArray(encoded) && encoded[0] === WIRE_TAG ? JSON.stringify(encoded) : undefined;
+};
+
+/**
+ * The comparison for a clause under a nested path whose value or operator needs more
+ * than the plain `expr op ?` form, or `undefined` when the plain form is right.
+ * @throws LunoraError `BAD_REQUEST` on a range comparison against a wire-framed value
+ */
+const buildNestedLeafClause = (clause: FilterClause, expression: string, pathParameters: unknown[]): { params: unknown[]; sql: string } | undefined => {
+    // Under a nested path a bigint, bytes, date, map or set is not projected: it is
+    // stored as the wire-tagged array, and `json_extract` hands that array back as
+    // JSON text. The scalar `filterBindValue` produces for a top-level field never
+    // equals it, so equality would miss the row and inequality would select it.
+    const frame = nestedWireFrameText(clause.value);
+
+    if (frame !== undefined) {
+        if (clause.operator !== "eq" && clause.operator !== "ne") {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `a bigint, bytes, date, map or set value nested under ${clause.column} can only be compared with = or <>, got ${clause.operator}`,
+            );
+        }
+
+        return { params: [...pathParameters, frame], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
+    }
+
+    // A stored leaf that is an array or object (a nested bigint or date among them)
+    // comes back from `json_extract` as JSON text, and SQLite ranks every TEXT above
+    // every number: `gt` would match all such rows and `lt` none. Range-compare scalar
+    // leaves only.
+    const { operator } = clause;
+
+    if (operator === "gt" || operator === "gte" || operator === "lt" || operator === "lte") {
+        return {
+            // A nested leaf has no declared kind, so the value binds unprojected.
+            params: [...pathParameters, ...pathParameters, filterBindValue(clause, undefined)],
+            sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) NOT IN ('array', 'object') AND ${expression} ${FILTER_SQL_OPERATOR[operator]} ?)`,
+        };
+    }
+
+    return undefined;
 };
 
 /**
@@ -1449,18 +1509,12 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
         return { params: pathParameters, sql: `${expression} IS ${clause.operator === "ne" ? "NOT " : ""}NULL` };
     }
 
-    // Under a nested path a bigint or bytes is not projected: it is stored as the
-    // wire-tagged array, and `json_extract` hands that array back as JSON text. The
-    // scalar projection `filterBindValue` produces for a top-level field never equals it.
-    if (path.length > 0 && sqlComparableProjection(clause.value) !== undefined) {
-        if (clause.operator !== "eq" && clause.operator !== "ne") {
-            throw new LunoraError(
-                "BAD_REQUEST",
-                `a bigint or bytes value nested under ${clause.column} can only be compared with = or <>, got ${clause.operator}`,
-            );
-        }
+    if (path.length > 0) {
+        const nested = buildNestedLeafClause(clause, expression, pathParameters);
 
-        return { params: [...pathParameters, JSON.stringify(encodeWire(clause.value))], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
+        if (nested !== undefined) {
+            return nested;
+        }
     }
 
     return { params: [...pathParameters, filterBindValue(clause, kind)], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };

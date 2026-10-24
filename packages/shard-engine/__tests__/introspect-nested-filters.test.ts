@@ -234,11 +234,11 @@ describe("readTablePage — nested paths and array membership", () => {
             const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
 
             expect(statement?.sql).toContain(
-                "json_extract(\"__doc__\", ?) IS NOT '$lunora.wire$' AND EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?)",
+                "CASE WHEN json_extract(\"__doc__\", ?) IS NOT '$lunora.wire$' THEN EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?) WHEN json_extract(\"__doc__\", ?) IS 'arr' THEN EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?) ELSE 0 END",
             );
             expect(statement?.sql).not.toContain("blue");
             expect(statement?.sql).not.toContain("$.tags");
-            expect(statement?.params).toEqual(["$.tags[0]", "$.tags", "blue"]);
+            expect(statement?.params).toEqual(["$.tags[0]", "$.tags", "blue", "$.tags[1]", "$.tags[2]", "blue"]);
         });
 
         it("binds the nested path into json_each rather than into a json_extract expression", () => {
@@ -251,7 +251,7 @@ describe("readTablePage — nested paths and array membership", () => {
             const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
 
             expect(statement?.sql).toContain('json_each("__doc__", ?)');
-            expect(statement?.params).toEqual(["$.meta.tags[0]", "$.meta.tags", "x"]);
+            expect(statement?.params).toEqual(["$.meta.tags[0]", "$.meta.tags", "x", "$.meta.tags[1]", "$.meta.tags[2]", "x"]);
         });
 
         it("refuses a physical column, naming the column", () => {
@@ -284,6 +284,9 @@ describe("readTablePage — nested paths and array membership", () => {
             const rows: [string, Record<string, unknown>][] = [
                 ["w1", { meta: { n: 123n, blob: new Uint8Array([1, 2, 3]), at: new Date(5), tags: ["bigint", "x"] } }],
                 ["w2", { meta: { n: 456n, blob: new Uint8Array([4, 5, 6]), tags: ["y"] } }],
+                // The first element is the codec's own tag, so the array is stored as the `arr` escape frame.
+                ["w3", { meta: { n: 7, tags: ["$lunora.wire$", "x"] }, topTags: ["$lunora.wire$", "z"] }],
+                ["w4", { meta: { at: new Date(9), group: new Set(["a"]), pairs: new Map([["k", 1]]) } }],
             ];
 
             database.raw(`CREATE TABLE "wired" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
@@ -327,9 +330,54 @@ describe("readTablePage — nested paths and array membership", () => {
             expect.assertions(4);
 
             expect(wiredIds([{ column: "meta", operator: "eq", path: ["n"], value: 123n }])).toStrictEqual(["w1"]);
-            expect(wiredIds([{ column: "meta", operator: "ne", path: ["n"], value: 123n }])).toStrictEqual(["w2"]);
+            expect(wiredIds([{ column: "meta", operator: "ne", path: ["n"], value: 123n }])).toStrictEqual(["w2", "w3"]);
             expect(wiredIds([{ column: "meta", operator: "eq", path: ["blob"], value: new Uint8Array([4, 5, 6]) }])).toStrictEqual(["w2"]);
             expect(wiredIds([{ column: "meta", operator: "eq", path: ["n"], value: 999n }])).toStrictEqual([]);
+        });
+
+        it("matches a user array that starts with the wire tag by its elements, at a nested path and at the top level", () => {
+            expect.assertions(4);
+
+            expect(wiredIds([{ column: "meta", operator: "has", path: ["tags"], value: "x" }])).toStrictEqual(["w1", "w3"]);
+            expect(wiredIds([{ column: "meta", operator: "has", path: ["tags"], value: "$lunora.wire$" }])).toStrictEqual(["w3"]);
+            expect(wiredIds([{ column: "topTags", operator: "has", value: "z" }])).toStrictEqual(["w3"]);
+            expect(wiredIds([{ column: "meta", operator: "has", path: ["tags"], value: "arr" }])).toStrictEqual([]);
+        });
+
+        it("matches a nested date, map and set by equality against the stored frame", () => {
+            expect.assertions(6);
+
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["at"], value: new Date(9) }])).toStrictEqual(["w4"]);
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["at"], value: new Date(5) }])).toStrictEqual(["w1"]);
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["group"], value: new Set(["a"]) }])).toStrictEqual(["w4"]);
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["pairs"], value: new Map([["k", 1]]) }])).toStrictEqual(["w4"]);
+            // `ne` must not select the row holding that very value.
+            expect(wiredIds([{ column: "meta", operator: "ne", path: ["at"], value: new Date(9) }])).toStrictEqual(["w1"]);
+            expect(
+                selectMatchingIds(database.sql, { filters: [{ column: "meta", operator: "ne", path: ["at"], value: new Date(5) }], table: "wired" }).ids,
+            ).toStrictEqual(["w4"]);
+        });
+
+        it("refuses a range comparison on a nested date", () => {
+            expect.assertions(1);
+
+            expect(
+                rejectionOf(() =>
+                    readTablePage(database.sql, { filters: [{ column: "meta", operator: "lt", path: ["at"], value: new Date(9) }], table: "wired" }),
+                )?.code,
+            ).toBe("BAD_REQUEST");
+        });
+
+        it("range-compares scalar leaves only, so a stored bigint or date is never ranked above a number", () => {
+            expect.assertions(4);
+
+            // w3 holds 7; w1/w2 hold a bigint and w1/w4 a date at the compared paths.
+            expect(wiredIds([{ column: "meta", operator: "gt", path: ["n"], value: 5 }])).toStrictEqual(["w3"]);
+            expect(wiredIds([{ column: "meta", operator: "lte", path: ["n"], value: 100 }])).toStrictEqual(["w3"]);
+            expect(wiredIds([{ column: "meta", operator: "gte", path: ["at"], value: 0 }])).toStrictEqual([]);
+            expect(selectMatchingIds(database.sql, { filters: [{ column: "meta", operator: "gt", path: ["n"], value: 5 }], table: "wired" }).ids).toStrictEqual(
+                ["w3"],
+            );
         });
 
         it("refuses a range comparison on a nested bigint, whose stored text has no numeric order", () => {
