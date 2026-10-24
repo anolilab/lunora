@@ -13,15 +13,21 @@ import { defineConfig } from "vite";
  * `lunora/server.ts` mounts the SSR handler under Lunora in one worker,
  * so that origin is this very dev server. Hardcoding a port means the app
  * breaks the moment it runs on another one (`vite --port 3000`, a second app on
- * the same machine, a preview deploy); reading Vite's *resolved* port covers all
+ * the same machine, a preview deploy); reading the configured port covers all
  * of those, and an explicit `VITE_LUNORA_URL` still wins.
  *
- * It runs on `serve` ONLY. `define` is a global text replacement, so without
- * `apply` a production build bakes `http://localhost:<port>` into the CLIENT
- * bundle too — and the client prefers it over `location.origin`, so every
- * deployed browser connects to its own machine. Set `VITE_LUNORA_URL` to point
- * a build at a standalone Worker; otherwise the browser uses its page origin,
- * which is correct for this single-worker topology.
+ * Two things keep the literal correct:
+ *  - It is defined for the `ssr` environment ONLY. `localhost` means "this
+ *    machine" to whoever reads it, so in the client bundle it would send a
+ *    browser on another machine (a phone, a tunnel, a remote dev box) to itself.
+ *    The client falls back to its page origin, right whatever host it reached.
+ *  - `strictPort` makes the configured port the bound one. Without it Vite
+ *    quietly moves to the next free port when this one is taken, and the SSR
+ *    render keeps calling the port it asked for — another app's, or nothing.
+ *
+ * It runs on `serve` ONLY, so a production build bakes in no dev origin. Set
+ * `VITE_LUNORA_URL` to point a build at a standalone Worker; otherwise the
+ * browser uses its page origin, which is correct for this single-worker topology.
  */
 const ssrOrigin = (): Plugin => ({
     apply: "serve",
@@ -30,11 +36,13 @@ const ssrOrigin = (): Plugin => ({
             return undefined;
         }
 
-        // `--port` is merged into the config before plugin `config` hooks run,
-        // so this is the port the server will actually bind.
+        // `--port` is merged into the config before plugin `config` hooks run.
         const port = userConfig.server?.port ?? 5173;
 
-        return { define: { "import.meta.env.VITE_LUNORA_URL": JSON.stringify(`http://localhost:${port}`) } };
+        return {
+            environments: { ssr: { define: { "import.meta.env.VITE_LUNORA_URL": JSON.stringify(`http://localhost:${port}`) } } },
+            server: { strictPort: true },
+        };
     },
     name: "lunora-ssr-origin",
 });

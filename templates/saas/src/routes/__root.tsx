@@ -23,11 +23,12 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 // Lunora endpoint. `VITE_LUNORA_URL` wins so you can point at a deployed
-// Worker; under `vite dev`, `vite.config.ts` defines it as the dev server's
-// resolved origin, because `lunora/server.ts` serves Lunora from this same
-// worker. A production build leaves it unset, so the browser uses its page
-// origin. The server-side literal is a last resort; `import.meta.env.SSR` is
-// what keeps it out of the client bundle.
+// Worker; under `vite dev`, `vite.config.ts` defines it for the server render
+// only (as the dev server's origin), because `lunora/server.ts` serves Lunora
+// from this same worker. The browser — in dev and in a production build alike —
+// uses its page origin, so a remote dev box or tunnel still reaches the app. The
+// server-side literal is a last resort; `import.meta.env.SSR` is what keeps it
+// out of the client bundle.
 const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (import.meta.env.SSR ? "http://localhost:5173" : globalThis.location.origin);
 
 function RootComponent() {
