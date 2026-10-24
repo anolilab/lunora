@@ -710,12 +710,20 @@ export default defineSchema({
 
 describe("proxyHttp timeout", () => {
     it("bounds time-to-headers only: a body that goes quiet past the timeout still arrives whole", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const upstream = createHttpServer((_request, response) => {
+        let finishSlowBody: () => void = () => {};
+        const upstream = createHttpServer((request, response) => {
+            // /hang never answers, so its 504 marks the moment a full timeout has elapsed.
+            if (request.url === "/hang") {
+                return;
+            }
+
             response.writeHead(200);
             response.write("first,");
-            setTimeout(() => response.end("second"), 300);
+            finishSlowBody = () => {
+                response.end("second");
+            };
         });
         const { port: upstreamPort, server: upstreamBinder } = await bindPort();
 
@@ -725,7 +733,7 @@ describe("proxyHttp timeout", () => {
         });
 
         const proxy = createHttpServer((request, response) => {
-            proxyHttp(request, response, new URL(`http://127.0.0.1:${String(upstreamPort)}`), 100);
+            proxyHttp(request, response, new URL(`http://127.0.0.1:${String(upstreamPort)}`), 50);
         });
 
         await new Promise<void>((resolve) => {
@@ -734,10 +742,45 @@ describe("proxyHttp timeout", () => {
 
         try {
             const address = proxy.address() as { port: number };
-            const { body } = await requestStudio(address.port, "/_lunora/x", `127.0.0.1:${String(address.port)}`);
+            let received = "";
+            let firstChunk: () => void = () => {};
+            const firstChunkArrived = new Promise<void>((resolve) => {
+                firstChunk = resolve;
+            });
+            const slowBody = new Promise<string>((resolve, reject) => {
+                const request = httpRequest({ headers: { host: "127.0.0.1" }, hostname: "127.0.0.1", path: "/slow", port: address.port }, (response) => {
+                    response.setEncoding("utf8");
+                    response.on("data", (chunk: string) => {
+                        received += chunk;
+                        firstChunk();
+                    });
+                    response.on("end", () => {
+                        resolve(received);
+                    });
+                    // A proxy that cuts the body short surfaces here, not on the request.
+                    response.on("error", reject);
+                });
 
-            expect(body).toBe("first,second");
+                request.on("error", reject);
+                request.end();
+            });
+
+            // Headers and the first chunk are through, so the slow request's timeout is past its disarm point.
+            await firstChunkArrived;
+
+            // A request armed after the slow one with the same timeout can only time out once the slow one's
+            // would have, so its 504 is the milestone that a whole timeout passed with the body quiet.
+            const hung = await requestStudio(address.port, "/hang", "127.0.0.1");
+
+            expect(hung.statusCode).toBe(504);
+
+            finishSlowBody();
+
+            await expect(slowBody).resolves.toBe("first,second");
         } finally {
+            // The /hang exchange can leave a socket open; `close()` alone would wait on it forever.
+            proxy.closeAllConnections();
+            upstream.closeAllConnections();
             await closeServer(proxy);
             await closeServer(upstream);
         }
