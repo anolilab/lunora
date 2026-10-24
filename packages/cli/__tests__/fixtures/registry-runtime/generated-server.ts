@@ -14,12 +14,18 @@
 interface Builder {
     action: (handler: unknown) => unknown;
     input: (schema: unknown) => Builder;
+    mutation: (handler: unknown) => unknown;
+    query: (handler: unknown) => unknown;
+    use: (middleware: unknown) => Builder;
 }
 
 const builder = (): Builder => {
     return {
         action: (handler) => handler,
         input: () => builder(),
+        mutation: (handler) => handler,
+        query: (handler) => handler,
+        use: () => builder(),
     };
 };
 
@@ -36,10 +42,13 @@ const validator = (): ValidatorStub => {
 
 const v = {
     array: (): ValidatorStub => validator(),
+    boolean: (): ValidatorStub => validator(),
+    id: (): ValidatorStub => validator(),
     number: (): ValidatorStub => validator(),
     optional: (): ValidatorStub => validator(),
     record: (): ValidatorStub => validator(),
     string: (): ValidatorStub => validator(),
+    union: (): ValidatorStub => validator(),
 };
 
 const action = builder();
