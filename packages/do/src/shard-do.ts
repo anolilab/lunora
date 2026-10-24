@@ -10819,7 +10819,8 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                return this.importAdminShard(args);
+                // Awaited so a rejected import reaches the catch below and answers with the structured error envelope.
+                return await this.importAdminShard(args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
