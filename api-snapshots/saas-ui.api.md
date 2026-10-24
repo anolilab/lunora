@@ -503,7 +503,7 @@ const BillingPanel: ({ memberCount, onManage, plans, subscription }: BillingPane
 ```ts
 interface BillingPanelProps {
     memberCount: number;
-    onManage: () => unknown;
+    onManage?: () => unknown;
     plans: ReadonlyArray<Plan>;
     subscription: SubscriptionLike | undefined;
 }
