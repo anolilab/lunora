@@ -227,9 +227,10 @@ const app = defineApp<Env>()
     .extend((env) => ({
         /**
          * A caller may enter their own tenant's shard, plus the root shard —
-         * which holds the unsharded tables (billing, rate-limit buckets and
-         * anything you add without `.shardBy`) and serves `saas.me`, so every
-         * signed-in user needs it.
+         * which holds the billing tables and serves `saas.me`, so every
+         * signed-in user needs it. (An unsharded table exists in every shard, so
+         * the rate-limit buckets are per organisation: a function running on a
+         * tenant's shard counts against that tenant's copy.)
          *
          * Anonymous callers get nothing. The scheduler and queue consumers are
          * exempt from this callback by the runtime (they authenticate first and

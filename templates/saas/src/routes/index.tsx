@@ -22,11 +22,11 @@ function MarketingPage() {
             <ul className="lu-saas-list">
                 <li className="lu-saas-row">
                     <span className="lu-saas-row__name">Free</span>
-                    <span>1 organization, 3 projects</span>
+                    <span>1 seat</span>
                 </li>
                 <li className="lu-saas-row">
                     <span className="lu-saas-row__name">Pro</span>
-                    <span>Unlimited projects, 10 seats</span>
+                    <span>10 seats</span>
                 </li>
             </ul>
             <p style={{ display: "flex", gap: "0.5rem" }}>

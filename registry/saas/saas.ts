@@ -30,8 +30,13 @@ import { SAAS_ACTIVITY_PAGE, SAAS_ACTIVITY_TABLE, SAAS_ORGANIZATIONS_TABLE, SAAS
  * The kit's own limit config, rather than the `limits` map in
  * `lunora/ratelimit/schema.ts`: that file is yours, and an item that reached
  * into it would break the moment you renamed a bucket. Both share the durable
- * `ratelimit_buckets` table the `ratelimit` item declares, so the state is one
- * store either way.
+ * `ratelimit_buckets` table the `ratelimit` item declares.
+ *
+ * That table is unsharded, so it exists in every shard and the project writes
+ * below run on the tenant's shard: the quota is per caller PER ORGANISATION, not
+ * per caller overall. Counting across organisations would mean a cross-shard hop,
+ * which cannot share the mutation's transaction — and the bucket's read-modify-write
+ * is only atomic because it does.
  */
 const saasLimits = {
     /** Project writes: 20 per caller per minute — generous for a human, useless for a script. */
@@ -382,8 +387,9 @@ export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_
 
     // Deleted organisations stay as tombstones (see `syncOrganization`) and are not tenants.
     //
-    // ponytail: the first page only — page through `cursor` once there are more
-    // tenants than one page holds.
+    // No `limit`, so `findMany` returns every match in one unpaged result. Pass a
+    // `limit` and thread the returned `continueCursor` through once the tenant
+    // count outgrows one response.
     const { page } = await organizations(ctx).findMany({ where: { status: { ne: "deleted" } } });
 
     return page;
@@ -404,7 +410,9 @@ export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_
  * A deleted organisation is kept as a tombstone, not removed: a member hook still
  * in flight when the deletion lands would otherwise re-insert the row as active.
  * The tombstone gives its slug back — `bySlug` is unique, and better-auth lets the
- * next organisation take it — and is final, so a late sync cannot revive it.
+ * next organisation take it — and is final, so a late sync cannot revive it. It is
+ * written even for an organisation never projected: the hooks run concurrently, so
+ * the deletion can land before the creation it follows.
  */
 export const syncOrganization = internalMutation
     .input({
@@ -424,8 +432,12 @@ export const syncOrganization = internalMutation
         }
 
         if (status === "deleted") {
+            const slug = `${DELETED_SLUG_PREFIX}${organizationId}`;
+
             if (existing) {
-                await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, { slug: `${DELETED_SLUG_PREFIX}${organizationId}`, status, updatedAt });
+                await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, { slug, status, updatedAt });
+            } else {
+                await ctx.db.insert("saas_organizations", { name, organizationId, plan: plan ?? "free", seats: seats ?? 0, slug, status, updatedAt });
             }
 
             return;
