@@ -46,6 +46,9 @@ interface MockSocket {
 
 const sockets: MockSocket[] = [];
 
+/** Set by a test that awaits the next socket; the mock calls it once that socket exists. */
+let onSocketCreated: (() => void) | undefined;
+
 /**
  * @param deferClose when true, `close()` marks the socket closed but withholds
  * the `close` event — what a real browser does, and the window in which a
@@ -81,6 +84,7 @@ const createMockWebSocket = (deferClose = false): typeof WebSocket => {
                 sent: this.sent,
             };
             sockets.push(this.record);
+            onSocketCreated?.();
         }
 
         public addEventListener(type: string, listener: (event?: unknown) => void): void {
@@ -606,12 +610,13 @@ describe("f5 — a frame already queued on a retired socket", () => {
 
         expect(seen.at(-1)).toBeUndefined();
 
-        socket?.flushClose();
-        await vi.waitFor(() => {
-            if (sockets.at(-1) === socket) {
-                throw new Error("no replacement socket yet");
-            }
+        const replaced = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
         });
+
+        socket?.flushClose();
+        await replaced;
+        onSocketCreated = undefined;
 
         const replacement = sockets.at(-1);
 
