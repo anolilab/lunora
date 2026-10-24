@@ -1029,14 +1029,16 @@ const StudioLayoutShell = (): ReactElement => {
                     assistant you cannot ask about the error. Suspense-wrapped like
                     every other lazy panel.
                     
-                    Mounted only when OPEN, and this is the single owner of that
+                    Mounted only when OPEN and the deployment can run it (an
+                    unavailable one would download the chunk to render nothing), and
+                    this is the single owner of that
                     condition — the panel no longer re-checks it. Mounting it always
                     put a second lazy boundary in the shell on every render, which is
                     a chunk nobody asked for and which pushed the already
                     timing-marginal schedule-panel test over its window. The reason it
                     was ever unconditional (keeping the availability latch alive
                     across a close) is gone: the PROVIDER owns availability now. */}
-                {assistant !== undefined && assistant.open && (
+                {assistant !== undefined && assistant.open && !assistant.unavailable && (
                     <Suspense fallback={null}>
                         <AssistantPanel assistant={assistant} />
                     </Suspense>

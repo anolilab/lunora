@@ -42,7 +42,12 @@ const DiffView = ({ lines }: { readonly lines: ReadonlyArray<DiffLine> }): React
             data-testid="sql-inline-diff"
         >
             {lines.map((line, index) => (
-                <li className={cn("flex gap-2", ROW_CLASS[line.kind])} data-kind={line.kind} key={`${index.toString()}-${line.text}`}>
+                <li
+                    className={cn("flex gap-2", ROW_CLASS[line.kind])}
+                    data-kind={line.kind}
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the rows of one immutable proposal, in order; identical lines repeat, so nothing else is unique
+                    key={`${index.toString()}-${line.text}`}
+                >
                     <span aria-hidden="true" className="shrink-0 select-none opacity-60">
                         {ROW_MARKER[line.kind]}
                     </span>

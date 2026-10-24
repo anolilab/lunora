@@ -83,9 +83,9 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                  * same role and the same text, so nothing else here is unique.
                  */}
                 {turns.map((turn, index) => (
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- append-only list; see above
                     <TurnRow
                         index={index}
+                        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- append-only list; see above
                         key={`${String(index)}:${turn.role}`}
                         level={ops.level}
                         onBranch={chat.branchHere}
