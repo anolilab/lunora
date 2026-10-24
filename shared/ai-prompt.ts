@@ -212,8 +212,22 @@ const responseText = (result: unknown): string | undefined =>
  * a model that ends a turn with an odd trailing frame should not lose the answer
  * it already streamed.
  */
-const readTokenStream = async (body: ReadableStream<Uint8Array>, onToken: (token: string) => void): Promise<string> => {
+const readTokenStream = async (body: ReadableStream<Uint8Array>, onToken: (token: string) => void, signal: AbortSignal): Promise<string> => {
     const reader = body.getReader();
+
+    // The caller's deadline wins a race against this read, which does not stop it:
+    // cancelling the reader is what makes the pending `read()` settle and the
+    // upstream model stream stop, instead of draining in the background.
+    signal.addEventListener(
+        "abort",
+        () => {
+            reader.cancel().catch(() => {
+                /* the body is being torn down anyway */
+            });
+        },
+        { once: true },
+    );
+
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
@@ -263,13 +277,18 @@ const readTokenStream = async (body: ReadableStream<Uint8Array>, onToken: (token
                 break;
             }
 
-            buffer += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+            // Normalise the whole buffer, not just the new chunk: a `\r\n` split across
+            // two reads would otherwise keep its `\r` and hide the `\n\n` boundary.
+            buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll("\r\n", "\n");
             drain();
         }
 
         // A body that ends without its final blank line still holds one frame.
-        buffer += `${decoder.decode()}\n\n`;
-        drain();
+        // After the deadline the turn has already failed, so no late token is emitted.
+        if (!signal.aborted) {
+            buffer += `${decoder.decode()}\n\n`;
+            drain();
+        }
     } finally {
         await reader.cancel().catch(() => {
             /* the body is being torn down anyway */
@@ -303,11 +322,13 @@ const runPrompt = async (
     onToken?: (token: string) => void,
 ): Promise<string | undefined> => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
+    const cutoff = new AbortController();
 
     // ONE timer for the call, raced against both the handshake and (when
     // streaming) the read: two timers would be two deadlines.
     const expired = new Promise<never>((_resolve, reject) => {
         deadline = setTimeout(() => {
+            cutoff.abort();
             reject(new Error("sql-assistant: inference timed out"));
         }, SQL_ASSISTANT_TIMEOUT_MS);
     });
@@ -326,7 +347,7 @@ const runPrompt = async (
         ]);
 
         if (onToken !== undefined && result instanceof ReadableStream) {
-            return await Promise.race([readTokenStream(result as ReadableStream<Uint8Array>, onToken), expired]);
+            return await Promise.race([readTokenStream(result as ReadableStream<Uint8Array>, onToken, cutoff.signal), expired]);
         }
 
         const whole = responseText(result);
