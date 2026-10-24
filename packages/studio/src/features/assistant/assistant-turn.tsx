@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import type { SessionTurn } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
-import type { AiOptInLevel } from "../../lib/admin";
+import type { AiOptInLevel, ChatPendingApproval } from "../../lib/admin";
 import { copyToClipboard } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 import ApprovalCard from "./assistant-approval-card";
@@ -33,7 +33,7 @@ const TurnRow = ({
     readonly level: AiOptInLevel | undefined;
     readonly onBranch: (index: number) => void;
     /** Present only on the LAST turn — an approval card further up the transcript is history, not a live decision. */
-    readonly onDecide: ((allow: boolean, ticket: string) => void) | undefined;
+    readonly onDecide: ((allow: boolean, approval: ChatPendingApproval) => void) | undefined;
     readonly onInsert: ((sql: string) => void) | undefined;
     readonly onTruncate: (index: number) => void;
     readonly turn: SessionTurn;

@@ -22,7 +22,7 @@ const ApprovalCard = ({
     onDecide,
 }: {
     readonly approval: ChatPendingApproval;
-    readonly onDecide: (allow: boolean, ticket: string) => void;
+    readonly onDecide: (allow: boolean, approval: ChatPendingApproval) => void;
 }): ReactElement => {
     const t = useT();
 
@@ -38,7 +38,7 @@ const ApprovalCard = ({
                 <Button
                     data-testid="assistant-approval-allow"
                     onClick={() => {
-                        onDecide(true, approval.ticket);
+                        onDecide(true, approval);
                     }}
                     size="xs"
                     type="button"
@@ -48,7 +48,7 @@ const ApprovalCard = ({
                 <Button
                     data-testid="assistant-approval-deny"
                     onClick={() => {
-                        onDecide(false, approval.ticket);
+                        onDecide(false, approval);
                     }}
                     size="xs"
                     type="button"

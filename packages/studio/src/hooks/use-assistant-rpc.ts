@@ -214,11 +214,11 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
              * the model is told to use only listed tables and given none.
              */
             /*
-             * `approval` is the operator's answer to a previous turn's card. It
-             * carries no statement of its own — only the server's own signed
-             * ticket, which the server verifies against whatever the model asks
-             * for next. So this hook cannot approve anything the server did not
-             * propose, however the call site is written.
+             * `approval` is the operator's answer to a previous turn's card: the
+             * statement the card showed, beside the server's own signed ticket for
+             * it. The server verifies the pair and resumes that proposal, so this
+             * hook cannot approve anything the server did not propose — a ticket
+             * attached to any other statement verifies against nothing.
              */
             /*
              * `streamRpc`, not `query`: the op answers `text/event-stream`.

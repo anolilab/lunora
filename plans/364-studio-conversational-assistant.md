@@ -419,11 +419,14 @@ say about the framework it was reading them in.
 
     **The forgery question, and why the ticket exists.** Everything the browser sends
     on this op is caller-supplied, including a boolean claiming the operator said
-    yes. So the approval carries no statement of its own — only a ticket, an
-    HMAC the server minted over the exact statement it proposed, verified against the
-    statement the model asks for on the follow-up turn. An approval the browser
-    invents unlocks nothing, and a real ticket replayed against a different statement
-    unlocks nothing either. The signing key is random per isolate, because the only
+    yes. So the approval is never trusted on its say-so: it carries the statement the
+    card showed beside a ticket, an HMAC the server minted over that exact statement,
+    and the server verifies the pair. A verified approval resumes the proposal the
+    operator saw (the first round of the follow-up is that statement as a tool
+    request, still run through validation, the level check and the read-only gate)
+    rather than re-asking the model and hoping it words the read identically. An
+    approval the browser invents unlocks nothing, and a real ticket attached to a
+    different statement unlocks nothing either. The signing key is random per isolate, because the only
     other secret this op has is the admin token and the browser holds that. The
     ceiling is stated where it lives (`shared/ai-chat.ts`): a recycled isolate
     invalidates outstanding tickets, and the failure is one-directional — an

@@ -207,16 +207,23 @@ export interface ChatPendingApproval {
  * The operator's answer to an approval card, as the browser sends it back.
  *
  * Caller-supplied like every other field on this op — the studio is a browser
- * holding an admin bearer, not a trusted peer — so it carries no statement of its
- * own. {@link ChatApproval.ticket} is a MAC the server minted over the exact
- * statement it proposed, and it is verified against the statement the model asks
- * for on the follow-up turn. A browser that invents an approval for a statement
- * the server never proposed produces a ticket that verifies against nothing, and
- * the turn stops for approval again instead of running it.
+ * holding an admin bearer, not a trusted peer. It echoes the statement the card
+ * showed ({@link ChatApproval.sql}) together with {@link ChatApproval.ticket}, a
+ * MAC the server minted over that exact statement, and the server verifies the
+ * pair before acting on either. So the echoed text is not trusted: one the server
+ * never proposed produces a ticket that verifies against nothing, and the turn
+ * proposes again instead of running it.
+ *
+ * The statement travels so the follow-up can RESUME the proposal the operator
+ * saw. Re-asking the model and hoping it words the same read identically meant a
+ * changed phrasing, or a different statement, defeated an approval that was
+ * perfectly valid.
  */
 export interface ChatApproval {
     /** `false` is a real answer, not an absence: the model is told it was declined. */
     readonly allow: boolean;
+    /** The statement the card showed, exactly as {@link ChatPendingApproval.sql} carried it. */
+    readonly sql: string;
     readonly ticket: string;
 }
 
@@ -267,11 +274,9 @@ const mintTicket = async (sql: string): Promise<string> => {
 /**
  * Whether `ticket` is this server's own approval for exactly `sql`.
  *
- * Verified against the statement the MODEL asked for on this turn, never against
- * one the client named — the client names no statement at all. Every failure arm
- * is `false`: a malformed ticket, an expired one, one minted by a since-recycled
- * isolate, and one forged for a different statement are all "not approved", which
- * is the fail-closed direction.
+ * Every failure arm is `false`: a malformed ticket, an expired one, one minted by
+ * a since-recycled isolate, and one forged for a different statement are all "not
+ * approved", which is the fail-closed direction.
  */
 const ticketApproves = async (ticket: string, sql: string): Promise<boolean> => {
     const [version, expiresAt, signature] = ticket.split(".");
@@ -294,16 +299,28 @@ const ticketApproves = async (ticket: string, sql: string): Promise<boolean> => 
     }
 };
 
-/** Narrow the caller-supplied approval, or drop it. A dropped one reads as "no answer yet". */
-const chatApproval = (value: unknown): ChatApproval | undefined => {
+/**
+ * Narrow the caller-supplied approval and verify it, or drop it. A dropped one
+ * reads as "no answer yet".
+ *
+ * The statement is capped exactly as {@link validateTool} caps the one the model
+ * asks for, so the text the ticket was minted over and the text it is checked
+ * against are the same string.
+ */
+const verifiedApproval = async (value: unknown): Promise<{ readonly allow: boolean; readonly sql: string } | undefined> => {
     if (typeof value !== "object" || value === null) {
         return undefined;
     }
 
-    const { allow, ticket } = value as { allow?: unknown; ticket?: unknown };
+    const { allow, sql, ticket } = value as { allow?: unknown; sql?: unknown; ticket?: unknown };
     const trimmed = capped(ticket, TICKET_CAP);
+    const statement = capped(sql, STATEMENT_CAP);
 
-    return typeof allow === "boolean" && trimmed !== "" ? { allow, ticket: trimmed } : undefined;
+    if (typeof allow !== "boolean" || trimmed === "" || statement === "" || !(await ticketApproves(trimmed, statement))) {
+        return undefined;
+    }
+
+    return { allow, sql: statement };
 };
 
 /** One validated request for a tool the worker forwards to an admin op. */
@@ -335,7 +352,7 @@ const MAX_TOOL_CALLS = 3;
 export interface ChatArgs {
     /**
      * The operator's answer to the approval card the previous turn returned, if
-     * they gave one. Caller-supplied and narrowed by {@link chatApproval}.
+     * they gave one. Caller-supplied, and narrowed and verified by {@link verifiedApproval}.
      */
     readonly approval?: unknown;
     /** Model id override, capped like every other caller-supplied field. */
@@ -854,7 +871,7 @@ const generateChat = async (
     const { truncated, turns } = budgetTranscript(rawArgs.transcript);
     const model = modelFor(rawArgs.model);
     const system = chatSystemPrompt(level);
-    const approval = chatApproval(rawArgs.approval);
+    const approved = await verifiedApproval(rawArgs.approval);
     const toolCalls: ChatToolReport[] = [];
 
     /** Record a tool outcome once, for both the running narration and the final result. */
@@ -875,8 +892,20 @@ const generateChat = async (
         const narrator = emit === undefined ? undefined : streamNarrator(emit);
 
         try {
-            // eslint-disable-next-line no-await-in-loop -- inherently sequential: each round's prompt contains the previous round's result
-            raw = await runPrompt(binding, model, system, user, narrator?.token);
+            if (round === 0 && approved !== undefined) {
+                /*
+                 * The operator's answer RESUMES the proposal it was given for, so the
+                 * first round is that statement as a tool request rather than a fresh
+                 * inference. Re-asking the model and requiring it to reproduce the SQL
+                 * byte for byte put an approval at the mercy of its rewording. The
+                 * synthesised request goes through the same validation, level check
+                 * and gate below as one the model wrote, so nothing is trusted twice.
+                 */
+                raw = `${TOOL_FENCE}\n${JSON.stringify({ name: "runSql", sql: approved.sql })}\n${CODE_FENCE}`;
+            } else {
+                // eslint-disable-next-line no-await-in-loop -- inherently sequential: each round's prompt contains the previous round's result
+                raw = await runPrompt(binding, model, system, user, narrator?.token);
+            }
         } catch {
             // `runPrompt` rejects on its deadline and on any binding failure. The
             // one-shot entry points get this from `attempt`; this loop has no
@@ -946,16 +975,15 @@ const generateChat = async (
          * already run, so a write is refused in-loop and never becomes a card
          * asking the operator to approve something the gate would refuse anyway.
          *
-         * The ticket is verified against `call.sql` — the statement the model is
-         * asking for on THIS turn — so an approval only ever unlocks the statement
-         * the server itself proposed and signed. A decision that does not verify is
-         * no decision: the turn proposes again rather than running anything.
+         * An approval was verified up front against the statement it names, and
+         * only unlocks that exact statement: one the model asks for that differs
+         * from it gets a card of its own. A decision that did not verify never
+         * reached here, so the turn proposes again rather than running anything.
          */
         if (call.sql !== undefined && TOOL_APPROVAL[call.name]) {
-            // eslint-disable-next-line no-await-in-loop -- one verify per proposed statement; the loop is already sequential
-            const answered = approval !== undefined && (await ticketApproves(approval.ticket, call.sql));
+            const answered = approved !== undefined && approved.sql === call.sql;
 
-            if (answered && !approval.allow) {
+            if (answered && !approved.allow) {
                 const refused = "the operator declined to run that statement";
 
                 report({ name: call.name, refused, sql: call.sql });

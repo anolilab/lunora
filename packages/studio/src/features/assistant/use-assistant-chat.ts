@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AssistantSession, AssistantValue, SessionTurn } from "../../components/assistant-provider";
 import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
-import type { ChatApproval, ChatStreamEvent, ChatTurn } from "../../lib/admin";
+import type { ChatApproval, ChatPendingApproval, ChatStreamEvent, ChatTurn } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 
 /** What the assistant panel reads and calls for the active conversation. */
 interface AssistantChat {
     readonly branchHere: (index: number) => void;
     /** Answer the approval card on the last turn. */
-    readonly decide: (allow: boolean, ticket: string) => void;
+    readonly decide: (allow: boolean, approval: ChatPendingApproval) => void;
     readonly draft: string;
     readonly live: { readonly sessionId: string; readonly text: string } | undefined;
     readonly pending: boolean;
@@ -212,7 +212,7 @@ const useAssistantChat = ({
      * This way one question keeps one answer, which is also exactly the state the
      * server saw the first time, plus the decision.
      */
-    const decide = (allow: boolean, ticket: string): void => {
+    const decide = (allow: boolean, pendingApproval: ChatPendingApproval): void => {
         if (session === undefined || pending || inFlight.current !== undefined) {
             return;
         }
@@ -224,7 +224,9 @@ const useAssistantChat = ({
             return;
         }
 
-        sendTurn(question.text, withoutAnswer.slice(0, -1), { allow, ticket });
+        // The statement goes back beside its ticket so the server resumes THIS
+        // proposal; it verifies the pair, so echoing it grants nothing by itself.
+        sendTurn(question.text, withoutAnswer.slice(0, -1), { allow, sql: pendingApproval.sql, ticket: pendingApproval.ticket });
     };
 
     /*

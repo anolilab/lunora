@@ -410,13 +410,13 @@ describe("assistantPanel", () => {
 
             /*
              * The follow-up re-sends the operator's OWN question with the decision
-             * attached — no synthetic "yes, go ahead" turn, and no statement of its
-             * own: the ticket is the server's, and the server verifies it against
-             * whatever the model asks for next.
+             * attached — no synthetic "yes, go ahead" turn. The ticket is the
+             * server's, and the statement beside it is the one the card showed: the
+             * server verifies the pair and resumes that proposal.
              */
-            const second = chats[1]?.[1] as { approval: { allow: boolean; ticket: string }; prompt: string; transcript: unknown[] };
+            const second = chats[1]?.[1] as { approval: { allow: boolean; sql: string; ticket: string }; prompt: string; transcript: unknown[] };
 
-            expect(second.approval).toStrictEqual({ allow: true, ticket: "v1.ticket.signature" });
+            expect(second.approval).toStrictEqual({ allow: true, sql: "SELECT * FROM messages", ticket: "v1.ticket.signature" });
             expect(second.prompt).toBe("what did people say?");
             expect(second.transcript).toStrictEqual([]);
         });
