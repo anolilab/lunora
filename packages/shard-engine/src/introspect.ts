@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire, WIRE_TAG } from "@lunora/wire";
 // Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
@@ -12,7 +12,7 @@ import { DOC_ORIGINALS_KEY } from "./do-sql";
 import { renderSql, sqliteInList } from "./drizzle";
 import type { SortDirection } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
-import { decodeBigintSqlKey } from "./sql-projection";
+import { decodeBigintSqlKey, sqlComparableProjection } from "./sql-projection";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel
@@ -1357,6 +1357,13 @@ const arrayElementMatch = (value: unknown): { params: (number | string)[]; sql: 
  * `typeof(j.key) = 'integer'` guard keeps only array elements, since an object's
  * members carry text keys and a scalar yields a NULL key. Without it `has` would
  * match an object's values, and on a scalar field it would act as `eq`.
+ *
+ * A bigint, bytes, date, map or set is stored as a wire-tagged array
+ * (`["$lunora.wire$","bigint","123"]`), which is also a JSON array to `json_each`:
+ * `has "bigint"` would match the tag itself, and a bulk delete would remove that
+ * row. The leading conjunct reads element 0 of the same path and rejects any array
+ * the wire codec produced. A user array never starts with the tag in storage:
+ * the codec wraps one that does as `["$lunora.wire$","arr",…]`.
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  * @throws LunoraError `BAD_REQUEST` on a physical column, a bigint field, or a non-scalar value
  */
@@ -1381,9 +1388,11 @@ const buildArrayContains = (
 
     const element = arrayElementMatch(clause.value);
 
+    const arrayPath = documentJsonPath(clause.column, path);
+
     return {
-        params: [documentJsonPath(clause.column, path), ...element.params],
-        sql: `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND ${element.sql})`,
+        params: [`${arrayPath}[0]`, arrayPath, ...element.params],
+        sql: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) IS NOT '${WIRE_TAG}' AND EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}, ?) AS j WHERE typeof(j.key) = 'integer' AND ${element.sql})`,
     };
 };
 
@@ -1438,6 +1447,20 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
 
     if (clause.value === null && (clause.operator === "eq" || clause.operator === "ne")) {
         return { params: pathParameters, sql: `${expression} IS ${clause.operator === "ne" ? "NOT " : ""}NULL` };
+    }
+
+    // Under a nested path a bigint or bytes is not projected: it is stored as the
+    // wire-tagged array, and `json_extract` hands that array back as JSON text. The
+    // scalar projection `filterBindValue` produces for a top-level field never equals it.
+    if (path.length > 0 && sqlComparableProjection(clause.value) !== undefined) {
+        if (clause.operator !== "eq" && clause.operator !== "ne") {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `a bigint or bytes value nested under ${clause.column} can only be compared with = or <>, got ${clause.operator}`,
+            );
+        }
+
+        return { params: [...pathParameters, JSON.stringify(encodeWire(clause.value))], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
     }
 
     return { params: [...pathParameters, filterBindValue(clause, kind)], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };

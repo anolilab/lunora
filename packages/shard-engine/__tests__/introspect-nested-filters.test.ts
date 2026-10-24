@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCursor, SqlExec } from "../src/ctx-db";
+import { encodeDocJson } from "../src/do-sql";
 import type { FilterClause } from "../src/introspect";
 import { readTablePage, selectMatchingIds } from "../src/introspect";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -233,11 +234,11 @@ describe("readTablePage — nested paths and array membership", () => {
             const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
 
             expect(statement?.sql).toContain(
-                "EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?)",
+                "json_extract(\"__doc__\", ?) IS NOT '$lunora.wire$' AND EXISTS (SELECT 1 FROM json_each(\"__doc__\", ?) AS j WHERE typeof(j.key) = 'integer' AND j.type = 'text' AND j.value = ?)",
             );
             expect(statement?.sql).not.toContain("blue");
             expect(statement?.sql).not.toContain("$.tags");
-            expect(statement?.params).toEqual(["$.tags", "blue"]);
+            expect(statement?.params).toEqual(["$.tags[0]", "$.tags", "blue"]);
         });
 
         it("binds the nested path into json_each rather than into a json_extract expression", () => {
@@ -250,7 +251,7 @@ describe("readTablePage — nested paths and array membership", () => {
             const statement = recorded.find((entry) => entry.sql.includes("COUNT"));
 
             expect(statement?.sql).toContain('json_each("__doc__", ?)');
-            expect(statement?.params).toEqual(["$.meta.tags", "x"]);
+            expect(statement?.params).toEqual(["$.meta.tags[0]", "$.meta.tags", "x"]);
         });
 
         it("refuses a physical column, naming the column", () => {
@@ -272,6 +273,74 @@ describe("readTablePage — nested paths and array membership", () => {
                     "BAD_REQUEST",
                 );
             }
+        });
+    });
+
+    // A bigint, bytes or date nested under an object is stored as a wire-tagged
+    // array, written here through the real encoder rather than hand-typed JSON.
+    describe("wire-typed values nested under a path", () => {
+        beforeEach(() => {
+            const insert = database.sql;
+            const rows: [string, Record<string, unknown>][] = [
+                ["w1", { meta: { n: 123n, blob: new Uint8Array([1, 2, 3]), at: new Date(5), tags: ["bigint", "x"] } }],
+                ["w2", { meta: { n: 456n, blob: new Uint8Array([4, 5, 6]), tags: ["y"] } }],
+            ];
+
+            database.raw(`CREATE TABLE "wired" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+
+            for (const [id, document] of rows) {
+                insert.exec(`INSERT INTO "wired" VALUES (?, ?, ?)`, id, 1, encodeDocJson(document));
+            }
+        });
+
+        const wiredIds = (filters: FilterClause[]): string[] =>
+            readTablePage(database.sql, { filters, table: "wired" }).rows.map((row) => (row as { id: string }).id);
+
+        it("does not let has match the tag frame of a nested bigint, bytes or date", () => {
+            expect.assertions(4);
+
+            for (const [path, value] of [
+                [["n"], "bigint"],
+                [["blob"], "bytes"],
+                [["at"], "date"],
+                [["n"], "$lunora.wire$"],
+            ] as const) {
+                expect(wiredIds([{ column: "meta", operator: "has", path: [...path], value }])).toStrictEqual([]);
+            }
+        });
+
+        it("keeps has working on a real array that holds the same word", () => {
+            expect.assertions(1);
+
+            expect(wiredIds([{ column: "meta", operator: "has", path: ["tags"], value: "bigint" }])).toStrictEqual(["w1"]);
+        });
+
+        it("does not select a nested bigint row for a bulk delete by has", () => {
+            expect.assertions(1);
+
+            expect(
+                selectMatchingIds(database.sql, { filters: [{ column: "meta", operator: "has", path: ["n"], value: "bigint" }], table: "wired" }).ids,
+            ).toStrictEqual([]);
+        });
+
+        it("matches a nested bigint and nested bytes by equality against the stored frame", () => {
+            expect.assertions(4);
+
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["n"], value: 123n }])).toStrictEqual(["w1"]);
+            expect(wiredIds([{ column: "meta", operator: "ne", path: ["n"], value: 123n }])).toStrictEqual(["w2"]);
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["blob"], value: new Uint8Array([4, 5, 6]) }])).toStrictEqual(["w2"]);
+            expect(wiredIds([{ column: "meta", operator: "eq", path: ["n"], value: 999n }])).toStrictEqual([]);
+        });
+
+        it("refuses a range comparison on a nested bigint, whose stored text has no numeric order", () => {
+            expect.assertions(2);
+
+            const error = rejectionOf(() =>
+                readTablePage(database.sql, { filters: [{ column: "meta", operator: "gt", path: ["n"], value: 1n }], table: "wired" }),
+            );
+
+            expect(error?.code).toBe("BAD_REQUEST");
+            expect(error?.message).toContain("meta");
         });
     });
 
