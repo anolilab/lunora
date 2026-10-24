@@ -5,6 +5,8 @@
  * `celld deploy` writes to.
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { win32 } from "node:path";
 
 /**
  * The celld version `CELLD_CAPABILITIES` (`packages/platform/src/capabilities/celld.ts`)
@@ -20,6 +22,9 @@ const TIMED_OUT = "ETIMEDOUT";
 
 /** A command `cmd.exe` would re-split or interpret. */
 const CMD_UNSAFE = /[\s&|<>^%"]/u;
+
+/** A command that names a location, which `cmd.exe` does not look up on `PATH`. */
+const PATH_SEPARATOR = /[/\\]/u;
 
 const VERSION = /(\d{1,6})\.(\d{1,6})\.(\d{1,6})/u;
 
@@ -59,13 +64,44 @@ interface CelldToolchainProbe {
 const launchOptions = (command: string, platform: NodeJS.Platform): { command: string; shell: boolean } =>
     platform === "win32" ? { command: CMD_UNSAFE.test(command) ? `"${command.replaceAll('"', "")}"` : command, shell: true } : { command, shell: false };
 
+/**
+ * Whether `cmd.exe` would find `command`: in the working directory and on `PATH` for a bare name,
+ * with each `PATHEXT` suffix. It is looked up here because a command `cmd.exe` cannot find exits
+ * with code 1 instead of raising `ENOENT`, which reads like a broken install.
+ */
+const windowsCommandExists = (command: string, env: Readonly<Record<string, string | undefined>>, exists: (path: string) => boolean): boolean => {
+    const suffixes = ["", ...(env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((suffix) => suffix !== "")];
+    const directories = PATH_SEPARATOR.test(command)
+        ? [""]
+        : [
+              "",
+              ...(env["PATH"] ?? env["Path"] ?? "")
+                  .split(";")
+                  .map((directory) => directory.replaceAll('"', ""))
+                  .filter((directory) => directory !== ""),
+          ];
+
+    return directories.some((directory) => suffixes.some((suffix) => exists(win32.join(directory, `${command}${suffix}`))));
+};
+
 /** Resolves a command's output, or `undefined` when the command does not exist. */
 const runCommand = async (
     command: string,
     args: ReadonlyArray<string>,
-    { platform = process.platform, timeoutMs = PROBE_TIMEOUT_MS }: { platform?: NodeJS.Platform; timeoutMs?: number } = {},
+    {
+        env = process.env,
+        exists = existsSync,
+        platform = process.platform,
+        timeoutMs = PROBE_TIMEOUT_MS,
+    }: { env?: Readonly<Record<string, string | undefined>>; exists?: (path: string) => boolean; platform?: NodeJS.Platform; timeoutMs?: number } = {},
 ): Promise<CelldCommandResult | undefined> =>
     new Promise((resolve) => {
+        if (platform === "win32" && !windowsCommandExists(command, env, exists)) {
+            resolve(undefined);
+
+            return;
+        }
+
         const launch = launchOptions(command, platform);
 
         execFile(launch.command, [...args], { killSignal: "SIGKILL", shell: launch.shell, timeout: timeoutMs, windowsHide: true }, (error, stdout) => {

@@ -152,6 +152,41 @@ describe(runCommand, () => {
     });
 });
 
+describe("runCommand on Windows", () => {
+    const env = { PATH: String.raw`C:\tools;"C:\Program Files\celld"`, PATHEXT: ".EXE;.CMD" };
+
+    // cmd.exe exits 1 for a command it cannot find, so only a lookup tells "not installed" from "broken".
+    it("reports a command cmd.exe cannot find as missing, without launching it", async () => {
+        expect.assertions(1);
+
+        await expect(runCommand("celld", ["--version"], { env, exists: () => false, platform: "win32" })).resolves.toBeUndefined();
+    });
+
+    it("finds a command on PATH through a PATHEXT suffix, quoted entries included", async () => {
+        expect.assertions(2);
+
+        const exists = vi.fn<(path: string) => boolean>((path) => path === String.raw`C:\Program Files\celld\celld.CMD`);
+
+        // Found, so it is launched through a shell that does not exist here, rather than reported missing.
+        await expect(runCommand("celld", ["--version"], { env, exists, platform: "win32" })).resolves.toBeDefined();
+        expect(exists).toHaveBeenCalledWith(String.raw`C:\tools\celld.EXE`);
+    });
+
+    it("checks a command given as a path where it points, not on PATH", async () => {
+        expect.assertions(1);
+
+        const exists = vi.fn<(path: string) => boolean>(() => false);
+
+        await runCommand(String.raw`C:\esb\esbuild`, ["--version"], { env, exists, platform: "win32" });
+
+        expect(exists.mock.calls.map(([path]) => path)).toStrictEqual([
+            String.raw`C:\esb\esbuild`,
+            String.raw`C:\esb\esbuild.EXE`,
+            String.raw`C:\esb\esbuild.CMD`,
+        ]);
+    });
+});
+
 describe(launchOptions, () => {
     it("runs a Windows command through a shell, quoting one that cmd.exe would re-split", () => {
         expect.assertions(3);
