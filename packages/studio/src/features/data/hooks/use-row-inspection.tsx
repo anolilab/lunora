@@ -23,8 +23,12 @@ interface RowInspection {
  * by an entirely different consumer. The two hooks' fields were used by perfectly
  * disjoint sets of code, which is the tell that they were two concerns in one
  * bucket.
+ *
+ * `scope` names the table and shard the overlays were opened over. A change closes
+ * both: the cell dialog's actions apply its column and value to whichever table is
+ * current, so one left open across a history navigation would act on the wrong table.
  */
-const useRowInspection = (): RowInspection => {
+const useRowInspection = (scope: string): RowInspection => {
     // The row whose full document the detail drawer is showing. Pure view state —
     // kept out of the data hook since it touches no fetch logic.
     const [inspecting, setInspecting] = useState<TableRow | null>(null);
@@ -41,6 +45,15 @@ const useRowInspection = (): RowInspection => {
     const closeExpandedCell = (): void => {
         setExpandedCell(null);
     };
+
+    // Reset during render rather than in an effect, so the stale overlay never paints.
+    const [openedOver, setOpenedOver] = useState(scope);
+
+    if (openedOver !== scope) {
+        setOpenedOver(scope);
+        setInspecting(null);
+        setExpandedCell(null);
+    }
 
     return { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell, onInspect: setInspecting };
 };

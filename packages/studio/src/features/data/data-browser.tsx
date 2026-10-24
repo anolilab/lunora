@@ -350,7 +350,7 @@ export const DataBrowser = ({
 
     // Which overlay is open. Separate from the render preferences above: these five
     // fields are read here and nowhere else, and `onInspect` is read only by the page.
-    const inspection = useRowInspection();
+    const inspection = useRowInspection(JSON.stringify([selectedTable, queryShardKey]));
 
     // The row awaiting a cascade-impact confirmation, or null when none is open.
     const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
