@@ -825,8 +825,8 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
         `onDelete on "${tableName}" made no progress: ${reference} rows still match after being processed`,
         // The probe already holds every holder's id; walking it first leaves only
         // holders inserted mid-cascade for the re-reads.
-        // The probe is the first page only while no earlier plan has changed its holder table: after that its ids may be gone,
-        // so the walk re-reads from the start.
+        // Only the first plan applied can trust its probe. Any earlier plan may have removed some of these ids — a nested
+        // cascade reaches holder tables other than its own — and a set-null on a gone row throws NOT_FOUND.
         probeIsCurrent ? probe : undefined,
     );
 };
@@ -862,12 +862,9 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
         }
     }
 
-    const changedHolderTables = new Set<string>();
-
-    for (const plan of plans) {
+    for (const [index, plan] of plans.entries()) {
         // eslint-disable-next-line no-await-in-loop -- applied in declared order so cascades fire before the parent delete
-        await applyPlan(options, plan, !changedHolderTables.has(plan.holderTable));
-        changedHolderTables.add(plan.holderTable);
+        await applyPlan(options, plan, index === 0);
     }
 };
 

@@ -706,6 +706,47 @@ describe("ctx-db relations", () => {
             await expect(writer.get("u1")).resolves.not.toBeNull();
             await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(10_001);
         });
+
+        it("sets null on the holders still present after an earlier relation's cascade removed some", async () => {
+            expect.assertions(3);
+
+            // `posts` is declared first, so its cascade runs first and takes `c1` with `p1`; the
+            // `comments.authorId` set-null that follows must not patch `c1`, which is gone by then.
+            const writer = makeWriter({
+                tables: {
+                    posts: {
+                        indexes: [{ fields: ["authorId"], name: "by_author" }],
+                        relationMap: { author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" } },
+                        shape: { authorId: { kind: "string" } },
+                    },
+                    comments: {
+                        indexes: [
+                            { fields: ["authorId"], name: "by_author" },
+                            { fields: ["postId"], name: "by_post" },
+                        ],
+                        relationMap: {
+                            author: { field: "authorId", kind: "one", onDelete: "set null", references: "_id", table: "users" },
+                            post: { field: "postId", kind: "one", onDelete: "cascade", references: "_id", table: "posts" },
+                        },
+                        shape: { authorId: { kind: "string", optional: true }, postId: { kind: "string" } },
+                    },
+                    users: { indexes: [], shape: { name: { kind: "string" } } },
+                },
+            } as SchemaLike);
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+            await writer.insert("posts", { _id: "p1", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("posts", { _id: "p2", authorId: "u2" }, { allowExplicitId: true });
+            await writer.insert("comments", { _id: "c1", authorId: "u1", postId: "p1" }, { allowExplicitId: true });
+            await writer.insert("comments", { _id: "c2", authorId: "u1", postId: "p2" }, { allowExplicitId: true });
+
+            await writer.delete("u1");
+
+            await expect(writer.get("c1")).resolves.toBeNull();
+            await expect(writer.get("c2")).resolves.toMatchObject({ authorId: null, postId: "p2" });
+            await expect(writer.get("u1")).resolves.toBeNull();
+        });
     });
 
     describe("cross-backend relation load (DO parent → D1 child)", () => {
