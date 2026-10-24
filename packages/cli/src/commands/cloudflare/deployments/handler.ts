@@ -8,14 +8,20 @@ import { defaultSpawner } from "../../../util/spawn";
 type DeploymentsSubcommand = "inspect" | "list" | "promote" | "rollback";
 
 interface DeploymentsCommandOptions {
+    /** `promote --percent` below 100: confirms both versions can share one Durable Object database. */
+    confirmSharedState?: boolean;
     cwd?: string;
     /** Cloudflare environment name (`--env`). */
     env?: string;
     /** Output format: `pretty` (default) or `json`. Only `list` has a JSON rendering. */
     format?: OutputFormat;
+    /** `promote --percent` below 100: the live version that keeps the remaining traffic. */
+    from?: string;
     logger: Logger;
     /** Reason recorded with rollback / promote. */
     message?: string;
+    /** `promote`: whole-number share of traffic for the version, 1–100 (default 100). */
+    percent?: number;
     spawner?: Spawner;
     subcommand: DeploymentsSubcommand;
     /** Worker version id — required for `inspect`/`promote`, optional for `rollback`. */
@@ -60,11 +66,85 @@ const buildListArgs = (options: DeploymentsCommandOptions): string[] => {
     return args;
 };
 
+/** The wrangler argv for one subcommand, or the refusal that stops it from running. */
+interface ArgsResult {
+    args?: string[];
+    error?: string;
+}
+
+/**
+ * `versions deploy <id>@N% <live>@(100-N)%`: the promoted version takes N% of
+ * traffic and the named live version keeps the rest. Both versions run against
+ * one Durable Object database during the split, and wrangler does not say whether
+ * their schemas or migrations match, so the split waits for an explicit
+ * `--confirm-shared-state`.
+ */
+const buildSplitArgs = (options: DeploymentsCommandOptions, versionId: string, percent: number): ArgsResult => {
+    if (options.from === undefined) {
+        return {
+            error: `deployments promote --percent below 100 needs --from <live-version-id>, the version that keeps the other ${String(100 - percent)}% of traffic. List them with \`lunora cloudflare deployments list\`.`,
+        };
+    }
+
+    if (options.from === versionId) {
+        return { error: "deployments promote --from must name a different version than the one being promoted." };
+    }
+
+    if (options.confirmSharedState !== true) {
+        return {
+            error: "A partial promote runs two versions against one Durable Object database. Wrangler does not report whether their schemas or migrations match, so re-run with --confirm-shared-state once you have checked both. Durable Object class migrations must go out at 100%.",
+        };
+    }
+
+    return {
+        args: withEnv(["versions", "deploy", `${versionId}@${String(percent)}%`, `${options.from}@${String(100 - percent)}%`, "--yes"], options.env),
+    };
+};
+
+/** `promote`: the whole-version move at 100%, or a split of traffic between two versions. */
+const buildPromoteArgs = (options: DeploymentsCommandOptions, versionId: string): ArgsResult => {
+    const percent = options.percent ?? 100;
+
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+        return { error: `deployments promote --percent must be a whole number from 1 to 100, got ${String(percent)}.` };
+    }
+
+    if (!options.yes) {
+        return { error: `deployments promote shifts ${String(percent)}% of live traffic. Re-run with --yes to confirm.` };
+    }
+
+    if (percent < 100) {
+        return buildSplitArgs(options, versionId, percent);
+    }
+
+    if (options.from !== undefined) {
+        return { error: "deployments promote --from applies only to a partial promote (--percent below 100)." };
+    }
+
+    // `versions deploy <id>@100%` makes one version fully live; `-y` accepts the prompts.
+    return { args: withEnv(["versions", "deploy", `${versionId}@100%`, "--yes"], options.env) };
+};
+
+/** `--percent`, `--from` and `--confirm-shared-state` only mean something to `promote`. */
+const splitFlagOutsidePromote = (options: DeploymentsCommandOptions): string | undefined => {
+    if (options.subcommand === "promote" || (options.percent === undefined && options.from === undefined && options.confirmSharedState !== true)) {
+        return undefined;
+    }
+
+    return `deployments ${options.subcommand}: --percent, --from and --confirm-shared-state apply to deployments promote only.`;
+};
+
 /**
  * Build the wrangler argv for a subcommand, or an error message when a required
  * argument / confirmation is missing.
  */
-const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error?: string } => {
+const buildArgs = (options: DeploymentsCommandOptions): ArgsResult => {
+    const misplaced = splitFlagOutsidePromote(options);
+
+    if (misplaced !== undefined) {
+        return { error: misplaced };
+    }
+
     switch (options.subcommand) {
         case "inspect": {
             if (options.versionId === undefined) {
@@ -81,16 +161,13 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
                 return { error: "deployments promote requires a version id. Usage: lunora cloudflare deployments promote <version-id> --yes" };
             }
 
-            if (!options.yes) {
-                return { error: "deployments promote shifts 100% of live traffic. Re-run with --yes to confirm." };
+            const { args, error } = buildPromoteArgs(options, options.versionId);
+
+            if (args === undefined || options.message === undefined) {
+                return { args, error };
             }
 
-            // `versions deploy <id>@100%` makes one version fully live; `-y` accepts the prompts.
-            const args = withEnv(["versions", "deploy", `${options.versionId}@100%`, "--yes"], options.env);
-
-            if (options.message !== undefined) {
-                args.push("--message", options.message);
-            }
+            args.push("--message", options.message);
 
             return { args };
         }

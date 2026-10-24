@@ -156,11 +156,14 @@ const runDeployments = async ({ cwd, format, logger, options, rest }: ToolRun): 
     }
 
     const result = await runDeploymentsCommand({
+        confirmSharedState: options.confirmSharedState === true,
         cwd,
         env: options.env,
         format,
+        from: options.from,
         logger,
         message: options.message,
+        percent: options.percent === undefined ? undefined : Number(options.percent),
         subcommand: sub,
         versionId,
         yes: options.yes === true,

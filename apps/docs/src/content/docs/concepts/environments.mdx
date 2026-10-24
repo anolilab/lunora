@@ -108,6 +108,8 @@ lunora cloudflare deployments list                       # the 10 most recent
 lunora cloudflare deployments inspect <version-id>       # what a version contains
 lunora cloudflare deployments rollback --yes             # back to the previous version
 lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
+lunora cloudflare deployments promote <version-id> --percent 10 --from <live-version-id> --confirm-shared-state --yes
+# a partial rollout: 10% to the version, 90% stays on the live one
 ```
 
 `rollback` and `promote` change live traffic, so both require `--yes`.

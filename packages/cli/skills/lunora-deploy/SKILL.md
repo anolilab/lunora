@@ -189,6 +189,8 @@ lunora cloudflare deployments rollback --yes              # previous version
 lunora cloudflare deployments promote <version-id> --yes  # send 100% of traffic to a version
 ```
 
+A partial rollout (`--percent N --from <live-version-id> --confirm-shared-state`) runs two versions against one Durable Object database. Confirm their schemas and Durable Object migrations match before using it; a Durable Object class migration must go out at 100%.
+
 Rolling back code does not roll back data migrations or D1 DDL.
 
 ## Common pitfalls
