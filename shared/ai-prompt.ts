@@ -168,9 +168,25 @@ const NEUTRALISED = "[redacted marker]";
 const capped = (value: unknown, cap: number): string =>
     typeof value === "string" ? value.trim().replaceAll(UNTRUSTED_BEGIN, NEUTRALISED).replaceAll(UNTRUSTED_END, NEUTRALISED).slice(0, cap) : "";
 
+/** Longest table or column name the grounding block will print. */
+const MAX_GROUNDED_NAME = 120;
+
+/**
+ * One table or column name, made safe to print in the grounding block.
+ *
+ * That block sits BEFORE the untrusted delimiter, so a name the caller chose is
+ * the one piece of caller text the system prompt does not tell the model to
+ * distrust. It goes through {@link capped} for the fence markers, and has its
+ * whitespace collapsed so a newline cannot start a line of its own that reads as
+ * an instruction rather than as a name.
+ */
+const groundedName = (name: string): string => capped(name.replaceAll(/\s+/g, " "), MAX_GROUNDED_NAME);
+
 /** Render the schema facts the prompt is grounded in. */
 const groundingBlock = (schema: ReadonlyArray<SchemaFact>): string => {
-    const lines = schema.slice(0, MAX_GROUNDED_TABLES).map((fact) => `${fact.table}(${fact.columns.slice(0, MAX_GROUNDED_COLUMNS).join(", ")})`);
+    const lines = schema
+        .slice(0, MAX_GROUNDED_TABLES)
+        .map((fact) => `${groundedName(fact.table)}(${fact.columns.slice(0, MAX_GROUNDED_COLUMNS).map(groundedName).join(", ")})`);
 
     return lines.length === 0 ? "No schema information is available." : `Tables and columns in this database:\n${lines.join("\n")}`;
 };
