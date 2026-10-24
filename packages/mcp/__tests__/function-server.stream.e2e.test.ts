@@ -221,6 +221,26 @@ describe("a stream tool over a real SDK client", () => {
         await client.close();
     });
 
+    it("keeps an undefined chunk as null in the result, and keeps collecting after it", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("WebSocket", StreamSocket);
+        streamFrames.script = (id) => [
+            { id, type: "ack" },
+            { id, type: "chunk" },
+            { data: CHUNKS[0], id, type: "chunk" },
+            { id, type: "complete" },
+        ];
+
+        const client = await connected(serverFor());
+        const result = await client.callTool({ arguments: { args: { room: "r1" } }, name: "feed_tail" }, undefined, { onprogress: () => undefined });
+
+        expect(result.isError ?? false).toBe(false);
+        expect(chunksOf(result.content)).toStrictEqual([null, CHUNKS[0]]);
+
+        await client.close();
+    });
+
     it("refuses a stream whose chunks add up to more than the byte budget, and cancels it", async () => {
         expect.assertions(2);
 

@@ -66,6 +66,14 @@ describe("functionToolsFromOpenRpc", () => {
         expect(tool?.inputSchema.required).toEqual([]);
     });
 
+    it("keeps a declared v.any() output as an output, rather than mistaking its empty schema for none", () => {
+        expect.assertions(1);
+
+        const [tool] = functionToolsFromOpenRpc(spec(method("notes:any", "query", { result: {} })), { allowWrites: false }).definitions;
+
+        expect(tool?.outputSchema).toBeDefined();
+    });
+
     it("leaves args optional when the function declares no arguments", () => {
         expect.assertions(1);
 

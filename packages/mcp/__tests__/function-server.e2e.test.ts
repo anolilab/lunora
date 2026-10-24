@@ -2,6 +2,7 @@ import { LunoraClient } from "@lunora/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createFunctionMcpServer } from "../src/function-server";
@@ -511,6 +512,33 @@ describe("createFunctionMcpServer when the MCP call is cancelled", () => {
         await expect(aborted).resolves.toBe(true);
 
         await pending.catch(() => undefined);
+
+        await client.close();
+    });
+});
+
+describe("createFunctionMcpServer announcing a changed document", () => {
+    it("tells the connected client its tool list changed when a rewritten document is installed", async () => {
+        expect.assertions(1);
+
+        let spec: unknown = SPEC;
+        const client = await connected(
+            createFunctionMcpServer({ fetch: vi.fn<typeof fetch>(), openRpcSpec: () => spec, token: CALLER_TOKEN, url: "https://app.example" }),
+        );
+        const announced = new Promise<void>((resolve) => {
+            client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+                resolve();
+            });
+        });
+
+        spec = {
+            methods: [method("billing:get", "query", { args: { id: { type: "string" } }, argsRequired: true, result: BILLING_OUTPUT })],
+            openrpc: "1.3.2",
+        };
+
+        await client.listTools();
+
+        await expect(announced).resolves.toBeUndefined();
 
         await client.close();
     });

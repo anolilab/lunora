@@ -223,7 +223,8 @@ const runStream = async (
                 );
             }
 
-            const chunkJson = JSON.stringify(chunk, jsonResultReplacer);
+            // `JSON.stringify` has no text for `undefined`, so it is sent as `null`, as `ok` sends an undefined result.
+            const chunkJson = chunk === undefined ? "null" : JSON.stringify(chunk, jsonResultReplacer);
             collectedLength += chunkJson.length;
 
             if (collectedLength > MAX_STREAM_BYTES) {
@@ -357,6 +358,13 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
         return { spec, tools: functionToolsFromOpenRpc(spec, { allowWrites }) };
     };
     let served = buildTools(resolveSpec());
+    const { clientOf, release } = clientFor(options);
+    // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
+    const server = new Server(
+        { name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version },
+        { capabilities: { tools: { listChanged: true } } },
+    );
+
     // A bad rewrite is not an outage: the tools last built keep answering, and a document that
     // failed to build is recorded so it is not rebuilt until it changes again.
     const toolsNow = (): FunctionTools => {
@@ -373,6 +381,8 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
         if (spec !== served.spec) {
             try {
                 served = buildTools(spec);
+                // The client's tool list is stale now, and it is told so rather than left to notice it.
+                server.sendToolListChanged().catch(() => undefined);
             } catch (error: unknown) {
                 options.onReloadError?.(error);
                 served = { spec, tools: served.tools };
@@ -381,13 +391,6 @@ const createFunctionMcpServer = (options: FunctionMcpServerOptions): Server => {
 
         return served.tools;
     };
-    const { clientOf, release } = clientFor(options);
-    // eslint-disable-next-line sonarjs/deprecation -- see the `Server` import above.
-    const server = new Server(
-        { name: options.name ?? SERVER_NAME, version: options.version ?? pkg.version },
-        { capabilities: { tools: { listChanged: true } } },
-    );
-
     // `serveStateless` closes the server after every request, and the SDK has no hook on
     // close that a caller does not already own (`onclose` is set by the CLI). So the
     // cached client is released by wrapping `close`.

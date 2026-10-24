@@ -130,14 +130,15 @@ const sensitiveArgumentNames = (argsSchema: Schema): ReadonlyArray<string> => {
 
 /**
  * The output shape declared with `.output()`. Without it codegen emits a
- * description-only placeholder (no `type`, no keywords), which must not become
- * an `outputSchema`: a schema claiming "any JSON" would be checked against
- * results it does not describe.
+ * description-only placeholder, which must not become an `outputSchema`: a schema
+ * claiming "any JSON" would be checked against results it does not describe. A
+ * declared `v.any()` is an empty schema with no description, so it is a real output.
  */
 const outputShapeOf = (result: unknown): FunctionShape["output"] => {
     const schema = isSchema(result) && isSchema(result["schema"]) ? result["schema"] : undefined;
+    const isPlaceholder = schema !== undefined && Object.hasOwn(schema, "description") && Object.keys(schema).every((keyword) => keyword === "description");
 
-    if (schema === undefined || Object.keys(schema).every((keyword) => keyword === "description")) {
+    if (schema === undefined || isPlaceholder) {
         return { mode: "none" };
     }
 
