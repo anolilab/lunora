@@ -160,6 +160,20 @@ describe("emitOpenRpc", () => {
         expect(schema["description"]).toContain("no `.output()` declared");
     });
 
+    it("gives a stream the placeholder result, since its chunks do not form one result", () => {
+        expect.assertions(2);
+
+        const document = JSON.parse(
+            emitOpenRpc({
+                functions: [makeFunction({ kind: "stream", output: { kind: "object", shape: { count: { kind: "number" } } } })],
+            }),
+        ) as OpenRpcDocument;
+        const { schema } = document.methods[0]!.result;
+
+        expect(schema["type"]).toBeUndefined();
+        expect(schema["description"]).toContain("no `.output()` declared");
+    });
+
     it("sorts methods by name and ends with a trailing newline", () => {
         expect.assertions(2);
 

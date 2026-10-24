@@ -82,7 +82,9 @@ const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown>
             // permissive placeholder. Downstream generators (`lunora sdk
             // generate`) key off exactly this: a described-but-untyped schema
             // becomes an untyped return rather than an empty model.
-            schema: definition.output ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
+            // A stream yields chunks over its WebSocket, so no single result is declared for it, whatever
+            // an `.output()` validator (which a stream cannot take) would have said.
+            schema: definition.output && definition.kind !== "stream" ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,
