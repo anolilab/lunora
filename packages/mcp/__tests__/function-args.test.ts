@@ -32,6 +32,23 @@ describe("coerceArgs", () => {
         expect(() => coerceArgs(schemaOf({ amount: INT64 }), { amount: "0x1f" })).toThrow('"args.amount" must be a decimal integer string');
     });
 
+    it("rejects an int64 string the wire codec cannot carry, as a bad request rather than an internal error", () => {
+        expect.assertions(2);
+
+        const oversized = "1".repeat(1025);
+
+        expect(() => coerceArgs(schemaOf({ amount: INT64 }), { amount: oversized })).toThrow(LunoraError);
+        expect(() => coerceArgs(schemaOf({ amount: INT64 }), { amount: oversized })).toThrow('"args.amount" must be a decimal integer string');
+    });
+
+    it("still accepts an int64 string at the wire codec's digit limit", () => {
+        expect.assertions(1);
+
+        const largest = coerceArgs(schemaOf({ amount: INT64 }), { amount: "1".repeat(1024) }) as { amount: bigint };
+
+        expect(largest.amount).toBe(BigInt("1".repeat(1024)));
+    });
+
     it("turns a base64 string into an ArrayBuffer", () => {
         expect.assertions(2);
 

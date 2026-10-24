@@ -10,6 +10,13 @@ const isSchema = (value: unknown): value is Schema => typeof value === "object" 
 const INT64_DECIMAL = /^-?\d+$/;
 
 /**
+ * The longest decimal `bigint` the wire codec accepts, sign included. Mirrors
+ * `MAX_BIGINT_DIGITS` in `@lunora/wire`'s `wire-codec.ts`: past it the value would
+ * fail at serialization with an INTERNAL error instead of naming the bad argument.
+ */
+const MAX_BIGINT_DIGITS = 1024;
+
+/**
  * The typed value for one JSON string, when its schema names a carrier that needs
  * decoding. Anything else is returned as sent.
  */
@@ -17,8 +24,8 @@ const decodeString = (schema: Schema, value: string, path: string): unknown => {
     const { contentEncoding, format } = schema;
 
     if (format === "int64") {
-        if (!INT64_DECIMAL.test(value)) {
-            throw new LunoraError("BAD_REQUEST", `"${path}" must be a decimal integer string`);
+        if (!INT64_DECIMAL.test(value) || value.length > MAX_BIGINT_DIGITS) {
+            throw new LunoraError("BAD_REQUEST", `"${path}" must be a decimal integer string of at most ${String(MAX_BIGINT_DIGITS)} digits`);
         }
 
         return BigInt(value);
