@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.350](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.349...@lunora/codegen@1.0.0-alpha.350) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.254
+* **@lunora/agent:** upgraded to 1.0.0-alpha.244
+* **@lunora/container:** upgraded to 1.0.0-alpha.90
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/queue:** upgraded to 1.0.0-alpha.125
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.148
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.93
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+* **@lunora/payment:** upgraded to 1.0.0-alpha.237
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
 ## @lunora/codegen [1.0.0-alpha.349](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.348...@lunora/codegen@1.0.0-alpha.349) (2026-10-23)
 
 

@@ -848,6 +848,50 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("settles every write in a whole-batch rejection with the batch reply's headers", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        // A terminal verdict on the whole flush (a 400, not a retryable 429), so each write settles rather than re-queues.
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({ error: { code: "BAD_REQUEST", message: "nope" } }, { headers: { "x-edge": "cf" }, status: 400 });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.allSettled([client.mutation(fnRef("posts:create"), { title: "a" }), client.mutation(fnRef("posts:create"), { title: "b" })]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const settled = await pending;
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+        expect(settled).toMatchObject([{ reason: { headers: { "x-edge": "cf" } } }, { reason: { headers: { "x-edge": "cf" } } }]);
+
+        client.close();
+    });
+
     it("11. chunks an over-cap outbox flush into multiple batch requests (no write dropped)", async () => {
         expect.assertions(4);
 
