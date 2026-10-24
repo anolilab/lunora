@@ -178,6 +178,21 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(new Set(indexed.map((row) => row.userId)).size).toBe(4);
     });
 
+    it("seeds past the counted members when a hash-derived member keeps the rows apart", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            files: defineTable({ file: v.storage(), kind: v.union(v.literal("a"), v.literal("b")) }).index("by_file_kind", ["file", "kind"], { unique: true }),
+            links: defineTable({ left: v.string().url(), right: v.string().url() }).index("by_left_right", ["left", "right"], { unique: true }),
+            sites: defineTable({ isPrimary: v.boolean(), website: v.string().url() }).index("by_site_primary", ["website", "isPrimary"], { unique: true }),
+        });
+        const plan = seedPlan(schema, { counts: { files: 5, links: 5, sites: 5 } });
+
+        expect(new Set(rowsOf(plan, "sites").map((row) => `${String(row.website)}|${String(row.isPrimary)}`)).size).toBe(5);
+        expect(new Set(rowsOf(plan, "links").map((row) => `${String(row.left)}|${String(row.right)}`)).size).toBe(5);
+        expect(new Set(rowsOf(plan, "files").map((row) => `${String(row.file)}|${String(row.kind)}`)).size).toBe(5);
+    });
+
     it("makes a single-column unique index behave like .unique()", () => {
         expect.hasAssertions();
 

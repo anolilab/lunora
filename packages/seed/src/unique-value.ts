@@ -421,5 +421,27 @@ const planCompositeMemberDeal = (field: FieldSpec, options: UniqueDealOptions): 
     return { deal, rewrites: tagged || !Number.isFinite(deal.capacity) };
 };
 
-export { planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
+/**
+ * Whether a non-foreign-key member keeps a per-row value the generator derives from the cell hash,
+ * which is distinct per row in practice but has no count the planner can prove: an `id`, storage id,
+ * array, object, record or open union, or a string whose format (a `.url()`) an index tag would
+ * break. A composite index holding one is left to the generator once its counted members run out,
+ * rather than refused. A column with at most one value, such as an array capped at zero items, is
+ * not one.
+ */
+const hasHashedValue = (field: FieldSpec, options: UniqueDealOptions): boolean => {
+    const constraints = constraintsOf(field.validator);
+
+    if (field.kind === "string" || field.kind === "any") {
+        return (
+            !(Array.isArray(constraints.enum) && constraints.enum.length > 0) &&
+            constraints.pattern === undefined &&
+            untaggableReason(constraints) !== undefined
+        );
+    }
+
+    return planUniqueDeal(field, options) === anonymousDeal && !(field.kind === "array" && (constraints.maxItems ?? 1) <= 0);
+};
+
+export { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal };
 export type { CompositeMemberDeal, UniqueDeal };

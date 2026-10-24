@@ -6,7 +6,7 @@ import { generateValue } from "./generate-value";
 import type { FieldSpec, TableSpec, UniqueIndexSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
-import { planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
+import { hasHashedValue, planCompositeMemberDeal, planUniqueDeal, planUniqueFkDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -385,7 +385,8 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
  * batch. The rest are generated as usual, so a `.url()` column or a plain string
  * is neither refused nor retagged when the foreign keys already cover the rows. Two foreign keys of N and M parents seed
  * N x M rows and no more — the through-table case. A batch past what the
- * carriers can cover is refused, with the index named.
+ * carriers can cover is refused, with the index named, unless a member keeps a hash-derived value
+ * (see {@link hasHashedValue}), which the generator already makes distinct per row.
  *
  * Skipped, leaving the columns to the generator, when a member is already unique on
  * its own (the index is then satisfied), a self-reference (its pool is not known
@@ -449,7 +450,9 @@ const planCompositeDeal = (
         capacity *= carrier.deal.capacity;
     }
 
-    if (required > capacity) {
+    // A hash-derived member (a `.url()`, a storage id, an array) is distinct per row but uncountable, so
+    // it can cover what the counted members cannot; only an index made of counted members is refused.
+    if (required > capacity && !members.some((field) => field.fkTable === undefined && hasHashedValue(field, { now, table }))) {
         throw new LunoraError(
             "BAD_REQUEST",
             `cannot seed ${String(required)} rows into "${table}": unique index "${index.name}" over (${index.fields.join(", ")}) has only ${String(capacity)} distinct combinations`,
