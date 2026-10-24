@@ -235,3 +235,73 @@ describe("step results survive a JSON round trip", () => {
         expect(store.rows.get(opened.id)?.status).toBe("ready");
     });
 });
+
+describe("an audit event whose write response is lost", () => {
+    /** A store whose first `addEvent` of each request and kind commits and then throws, as a dropped response does. */
+    const droppingResponses = (store: ReturnType<typeof memoryRequests>, armed: { on: boolean }) => {
+        const dropped = new Set<string>();
+
+        return {
+            ...store,
+            addEvent: async (requestId: string, at: Date, kind: string, detail?: string) => {
+                await store.addEvent(requestId, at, kind, detail);
+
+                if (armed.on && !dropped.has(`${requestId}:${kind}`)) {
+                    dropped.add(`${requestId}:${kind}`);
+
+                    throw new Error("connection reset");
+                }
+            },
+        };
+    };
+
+    it("is written once when the export workflow retries the step", async () => {
+        const armed = { on: false };
+        const store = memoryRequests();
+        const { privacy, runExportWorkflow } = setup({ store: droppingResponses(store, armed) });
+        const opened = await privacy.requestExport();
+
+        armed.on = true;
+        await runExportWorkflow(opened.id, durableStep().step);
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+        expect(store.events).toStrictEqual([`${opened.id}:received`, `${opened.id}:processing`, `${opened.id}:ready`]);
+    });
+
+    it("is written once when the failing step is retried", async () => {
+        const armed = { on: false };
+        const store = memoryRequests();
+        const { privacy, runExportWorkflow } = setup({ data: failingCollect(), store: droppingResponses(store, armed) });
+        const opened = await privacy.requestExport();
+
+        armed.on = true;
+        await runExportWorkflow(opened.id, durableStep().step);
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect(store.events).toStrictEqual([`${opened.id}:received`, `${opened.id}:processing`, `${opened.id}:failed`]);
+    });
+
+    it("is written once for the erasure and for each export it expires or fails", async () => {
+        const armed = { on: false };
+        const store = memoryRequests();
+        const { privacy, runErasureWorkflow, runExportWorkflow } = setup({ erasure: { graceDays: 0 }, store: droppingResponses(store, armed) });
+        const ready = await privacy.requestExport();
+
+        await runExportWorkflow(ready.id, durableStep().step);
+
+        const erasure = await privacy.requestErasure();
+
+        // A second, unfinished export of the subject: the erasure fails it in its complete step.
+        store.rows.set("queued", { ...ready, id: "queued", status: "received" });
+        store.events.length = 0;
+        armed.on = true;
+        await runErasureWorkflow(erasure.id, durableStep().step);
+
+        expect([...store.rows.values()].map((row) => `${row.id}:${row.status}`).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            [`${ready.id}:expired`, `${erasure.id}:completed`, "queued:failed"].toSorted((a, b) => a.localeCompare(b)),
+        );
+        expect(store.events.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            [`${erasure.id}:processing`, `${erasure.id}:completed`, `${ready.id}:expired`, "queued:failed"].toSorted((a, b) => a.localeCompare(b)),
+        );
+    });
+});
