@@ -263,6 +263,70 @@ describe("generateFilter", () => {
         expect(result.degraded).toBe(true);
     });
 
+    it("passes a nested path through unchanged", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"address","operator":"eq","path":["geo","city"],"value":"Berlin"}]');
+        const result = await generateFilter(ai, { prompt: "berlin" }, ["id", "address"]);
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" }]);
+    });
+
+    it("drops a clause whose path is not a list of non-empty field names, rather than testing the parent column", async () => {
+        expect.assertions(1);
+
+        const ai = binding(
+            '[{"column":"address","operator":"eq","path":"city","value":"Berlin"},{"column":"address","operator":"eq","path":["", "city"],"value":"Berlin"},{"column":"status","operator":"eq","value":"open"}]',
+        );
+        const result = await generateFilter(ai, { prompt: "x" }, ["id", "address", "status"]);
+
+        expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
+    });
+
+    it("passes a has clause with a scalar value through", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"has","path":["tags"],"value":"x"},{"column":"status","operator":"has","value":3}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded ? undefined : result.clauses).toHaveLength(2);
+    });
+
+    it("degrades the whole suggestion when a has clause has no scalar value, rather than widening the rest", async () => {
+        expect.assertions(2);
+
+        const ai = binding(
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":null}]',
+            '[{"column":"status","operator":"eq","value":"open"},{"column":"status","operator":"has","path":["tags"],"value":{"a":1}}]',
+        );
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+        expect(ai.run).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    });
+
+    it.each([
+        ['{"column":"status","operator":"gt","value":null}'],
+        ['{"column":"status","operator":"contains","value":""}'],
+        ['{"column":"status","operator":"has","value":"  "}'],
+    ])("degrades the whole suggestion when %s would be discarded as blank", async (clause) => {
+        expect.assertions(1);
+
+        const ai = binding(`[{"column":"status","operator":"eq","value":"open"},${clause}]`);
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(true);
+    });
+
+    it("leaves eq and ne alone, since the browser keeps a blank row for them", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"ne","value":null}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS);
+
+        expect(result.degraded).toBe(false);
+    });
+
     it("keeps the valid clauses when only some are bad", async () => {
         expect.assertions(1);
 

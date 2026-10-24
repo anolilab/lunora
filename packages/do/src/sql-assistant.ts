@@ -126,6 +126,8 @@ type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding"
 interface AssistantFilterClause {
     column: string;
     operator: string;
+    /** Field names nested under `column`, passed to the shared compiler unchanged. */
+    path?: string[];
     value: unknown;
 }
 
@@ -169,7 +171,7 @@ type GenerateFilterResult = GenerateFilterOk | GenerateSqlDegraded;
 type GenerateChartResult = GenerateChartOk | GenerateSqlDegraded;
 
 /** Operators the data browser's filter builder accepts. A response naming anything else is rejected. */
-const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
 
 /** Chart kinds the editor can render. */
 const CHART_KINDS = new Set(["area", "bar", "line"]);
@@ -219,6 +221,32 @@ const extractJson = (raw: string): unknown => {
 };
 
 /**
+ * The nested `path` a model proposed for a clause. Absent or an empty list means
+ * the column itself; a non-empty list of non-empty strings is a nested path. Any
+ * other value is `undefined` (refused): the caller drops the whole clause rather
+ * than keep it and test the parent column, which is not what the model asked for.
+ * @returns the path to attach (`{}` for none), or `undefined` when the path is malformed
+ */
+const assistantPath = (raw: unknown): { path?: string[] } | undefined => {
+    if (raw === undefined) {
+        return {};
+    }
+
+    if (!Array.isArray(raw) || !raw.every((segment): segment is string => typeof segment === "string" && segment !== "")) {
+        return undefined;
+    }
+
+    return raw.length === 0 ? {} : { path: raw };
+};
+
+/**
+ * Whether the data browser keeps a suggested clause's value. A filter row is a text input: a
+ * non-scalar value renders blank, and every operator but `eq`/`ne` discards a blank row.
+ */
+const isKeptFilterValue = (value: unknown): boolean =>
+    (typeof value === "string" && value.trim() !== "") || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+
+/**
  * Validate a model-proposed filter set against the table's REAL columns.
  *
  * Structured output, not raw SQL — so the data browser's existing filter
@@ -238,10 +266,18 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>): Assis
             continue;
         }
 
-        const { column, operator, value } = entry as { column?: unknown; operator?: unknown; value?: unknown };
+        const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };
+        const nested = assistantPath(path);
 
-        if (typeof column === "string" && known.has(column) && typeof operator === "string" && FILTER_OPERATORS.has(operator)) {
-            clauses.push({ column, operator, value });
+        if (typeof column === "string" && known.has(column) && typeof operator === "string" && FILTER_OPERATORS.has(operator) && nested !== undefined) {
+            // The browser discards a row whose value renders blank. Dropping only that clause
+            // would widen the rest of the set, which bulk actions then run against; refuse the
+            // whole suggestion instead.
+            if (operator !== "eq" && operator !== "ne" && !isKeptFilterValue(value)) {
+                return undefined;
+            }
+
+            clauses.push({ column, operator, ...nested, value });
         }
     }
 
@@ -431,7 +467,7 @@ const attempt = async <T>(
 const structuredSystemPrompt = (task: "chart" | "filter"): string => {
     const shape =
         task === "filter"
-            ? 'a JSON array of {"column","operator","value"} objects, operator one of eq, ne, lt, lte, gt, gte, contains'
+            ? 'a JSON array of {"column","operator","value"} objects, operator one of eq, ne, lt, lte, gt, gte, contains, or has (the array column contains value); for a field nested inside a column, add "path": the field names beneath that column, outermost first (column "address" with path ["city"] for address.city)'
             : 'a JSON object {"kind","x","y"} where kind is one of bar, line, area, x is one column name and y is an array of column names';
 
     return (

@@ -1316,10 +1316,16 @@ export interface GlobalTablePage {
 /**
  * One equality constraint a facet-value click adds to the global browser's view
  * (`column = value`). `value` is the raw stored scalar the facet returned, sent
- * as-is and bound server-side, so it never injects SQL.
+ * as-is and bound server-side, so it never injects SQL. The server accepts only
+ * `eq` on a top-level column and rejects `operator` or `path` values it cannot
+ * compile, so the browser never silently gets an equality it did not ask for.
  */
 export interface GlobalFilterClause {
     column: string;
+    /** Must be absent or `"eq"`; the server rejects any other operator. */
+    operator?: string;
+    /** Must be absent or empty; the server rejects a nested path. */
+    path?: string[];
     value: unknown;
 }
 

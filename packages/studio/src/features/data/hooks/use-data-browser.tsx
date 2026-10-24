@@ -59,6 +59,8 @@ const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter
     clauses.map((clause) => {
         return {
             column: clause.column,
+            path: (clause.path ?? []).join("."),
+            ...(clause.path === undefined || clause.path.length === 0 ? {} : { pathSegments: clause.path }),
             ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
             operator: clause.operator,
             value: clause.value === undefined ? "" : facetValueText(clause.value),
@@ -75,7 +77,7 @@ const fromOrderBy = (orderBy: DataView["orderBy"]): SortingState => (orderBy ===
  * blob) — serializing a tuple instead means two equal clauses always produce
  * the same string, regardless of where they came from.
  */
-const filterClauseTuple = (clause: FilterClause): [string, string, unknown] => [clause.column, clause.operator, clause.value];
+const filterClauseTuple = (clause: FilterClause): [string, string, unknown, string[]] => [clause.column, clause.operator, clause.value, clause.path ?? []];
 
 /**
  * Serialize the fields a data-browser view is keyed on (shard / search /
@@ -1399,4 +1401,4 @@ const useDataBrowser = ({
  */
 export type { DataBrowserModel };
 export type { FacetState } from "./use-facets";
-export { useDataBrowser };
+export { serializeView, useDataBrowser };

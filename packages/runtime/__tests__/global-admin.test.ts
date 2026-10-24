@@ -172,6 +172,29 @@ describe("createWorker — global introspection endpoints", () => {
         expect(intro.readTablePage).toHaveBeenCalledWith({ filters: [{ column: "name", value: null }], table: "organizations" });
     });
 
+    it("table forwards an operator and a nested path to the reader, which is the one that refuses them", async () => {
+        expect.assertions(2);
+
+        const intro = introspector();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
+        const filters = encodeURIComponent(JSON.stringify([{ column: "name", operator: "has", path: ["city"], value: "x" }]));
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/global/table?table=organizations&filters=${filters}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(intro.readTablePage).toHaveBeenCalledWith({
+            filters: [{ column: "name", operator: "has", path: ["city"], value: "x" }],
+            table: "organizations",
+        });
+    });
+
     it("table wire-decodes tagged filter values so a bytes drill-down survives the query param", async () => {
         expect.assertions(2);
 

@@ -309,7 +309,11 @@ export const DataBrowser = ({
                         const raw: unknown = clause.value;
                         const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
 
-                        return { column: clause.column, operator: clause.operator, value };
+                        // The validated clause may address a field nested under the column;
+                        // without its path the row would test the parent column instead.
+                        const nested = clause.path === undefined || clause.path.length === 0 ? {} : { path: clause.path.join("."), pathSegments: clause.path };
+
+                        return { column: clause.column, operator: clause.operator, ...nested, value };
                     }),
                 );
             }

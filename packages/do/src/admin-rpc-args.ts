@@ -46,7 +46,7 @@ const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
 /** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
-const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
 
 /** Cloudflare Queues accepts 1–100 messages per `sendBatch` call (a 0 or >100 batch is a `BatchCountOutOfBounds` error). */
 const MAX_QUEUE_SEND_BATCH = 100;
@@ -486,6 +486,28 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
 };
 
 /**
+ * The nested `path` of a filter clause: an absent key or an empty list means the
+ * field itself; `null` or any non-list is refused.
+ * @returns the field names under the column, or `undefined` when the clause is not nested
+ * @throws LunoraError `BAD_REQUEST` when `raw` is present but is not a list of strings
+ */
+const parseClausePath = (column: string, raw: unknown): string[] | undefined => {
+    // Only an absent key means "no path". An explicit `null` is a request for a
+    // nested field the caller failed to name, and dropping it would test the
+    // parent column instead — under "delete matching", that deletes rows the
+    // caller never asked for.
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((segment): segment is string => typeof segment === "string")) {
+        throw new LunoraError("BAD_REQUEST", `the path for ${column} must be a list of field names`);
+    }
+
+    return raw.length === 0 ? undefined : raw;
+};
+
+/**
  * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
  * dropping any malformed entry (non-object, missing/blank column, unknown
  * operator) and any clause that constrains nothing ({@link isVacuousFilterClause}
@@ -493,7 +515,12 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
  * Returns `undefined` when nothing valid remains so `readTablePage` takes its
  * no-predicate fast path — and so `deleteRows`' predicate guard sees an empty
  * `contains` for what it is.
+ *
+ * A malformed `path` throws instead of being skipped: dropping the path would
+ * keep the clause and test the parent field, and under "delete matching" that
+ * widens the delete.
  * @returns the validated filter clauses, or `undefined` when no valid clauses remain
+ * @throws LunoraError `BAD_REQUEST` when a clause carries a `path` that is not a list of field names
  */
 const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
     if (!Array.isArray(raw)) {
@@ -514,7 +541,8 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
             continue;
         }
 
-        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"] };
+        const path = parseClausePath(column, record["path"]);
+        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"], ...(path === undefined ? {} : { path }) };
 
         if (!isVacuousFilterClause(clause)) {
             clauses.push(clause);

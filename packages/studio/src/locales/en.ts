@@ -1564,6 +1564,10 @@ const MESSAGE_IDS = [
     "Clear table ({total})",
     "Clear table",
     "Shard: root",
+    "has",
+    "Nested field path",
+    "nested path, e.g. geo.city",
+    'value ("10" in quotes matches text)',
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows.",
 ] as const;
