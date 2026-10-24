@@ -41,8 +41,14 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
  * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
  * dev-only conveniences (logging links) never leak there.
  */
-const isDevEnvironment = (env: Record<string, unknown>): boolean =>
-    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
+const isDevEnvironment = (env: Record<string, unknown>): boolean => {
+    // Every var that is set must say "development", and at least one must be set:
+    // a single non-dev value (`NODE_ENV=production`) vetoes it, so a deploy with
+    // mixed values never takes a dev-only path.
+    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value): value is string => typeof value === "string" && value !== "");
+
+    return values.length > 0 && values.every((value) => DEV_ENVIRONMENT_PATTERN.test(value));
+};
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
