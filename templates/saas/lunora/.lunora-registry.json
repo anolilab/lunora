@@ -13,7 +13,7 @@
         "saas": {
             "files": {
                 "lunora/identity.ts": "dfaa6f604aa2cacfd21a12e4433b85873bd0e03aa4e64d557d08380ee61027e7",
-                "lunora/saas/index.ts": "6b73394d8127dfabce7bcd22ad0fb4d429086d79b095d7dde3e0f3cafbd80fde"
+                "lunora/saas/index.ts": "ec2530f8bc686a0ec73c1fbfc1a98a6e55b2c9380e44efc8b7d4fb3f0d887939"
             }
         },
         "saas-ui-react": {

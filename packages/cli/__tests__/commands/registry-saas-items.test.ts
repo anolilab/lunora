@@ -213,6 +213,54 @@ describe("saas kit functions", () => {
     };
 
     describe("createProject", () => {
+        it("slugs a name written in a non-Latin script instead of rejecting it", async () => {
+            expect.assertions(3);
+
+            const { rows, saas, writer } = await setup();
+
+            await saas.createProject({ args: { name: "Мой проект" }, ctx: writer });
+            await saas.createProject({ args: { name: "か" }, ctx: writer });
+            await saas.createProject({ args: { name: "が" }, ctx: writer });
+
+            expect(rows("saas_projects").map((row) => row["slug"])).toStrictEqual(["мой-проект", "か", "が"]);
+
+            await expect(saas.createProject({ args: { name: "МОЙ ПРОЕКТ" }, ctx: writer })).rejects.toMatchObject({ code: "CONFLICT" });
+            await expect(saas.createProject({ args: { name: "   " }, ctx: writer })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
+
+        it("gives a name with no letter or digit a slug of its own", async () => {
+            expect.assertions(3);
+
+            const { rows, saas, writer } = await setup();
+
+            await saas.createProject({ args: { name: "🚀" }, ctx: writer });
+            await saas.createProject({ args: { name: "!!!" }, ctx: writer });
+
+            const slugs = rows("saas_projects").map((row) => String(row["slug"]));
+
+            expect(slugs.every((slug) => /^project-[0-9a-z]{7}$/u.test(slug))).toBe(true);
+            expect(new Set(slugs).size).toBe(2);
+
+            await expect(saas.createProject({ args: { name: "🚀" }, ctx: writer })).rejects.toMatchObject({ code: "CONFLICT" });
+        });
+
+        it("keeps two long names that share their first 60 characters apart", async () => {
+            expect.assertions(3);
+
+            const { rows, saas, writer } = await setup();
+            const prefix = "a".repeat(70);
+
+            await saas.createProject({ args: { name: `${prefix} one` }, ctx: writer });
+            await saas.createProject({ args: { name: `${prefix} two` }, ctx: writer });
+
+            const slugs = rows("saas_projects").map((row) => String(row["slug"]));
+
+            expect(new Set(slugs).size).toBe(2);
+            expect(slugs.every((slug) => slug.length <= 60)).toBe(true);
+
+            await expect(saas.createProject({ args: { name: `${prefix} one` }, ctx: writer })).rejects.toMatchObject({ code: "CONFLICT" });
+        });
+
         it("frees the name of an archived project instead of reporting it as taken", async () => {
             expect.assertions(3);
 

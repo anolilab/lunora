@@ -220,13 +220,56 @@ const ARCHIVED_SLUG_MARK = "~archived~";
 /** Replaces the slug of a deleted organisation's projection row, freeing the slug. `~` never occurs in a better-auth slug. */
 const DELETED_SLUG_PREFIX = "~deleted~";
 
-/** URL-safe slug for a project name, deduped per tenant by the unique index. */
-const toSlug = (name: string): string =>
-    name
-        .toLowerCase()
-        .replaceAll(/[^a-z0-9]+/gu, "-")
-        .replaceAll(/(?:^-|-$)/gu, "")
-        .slice(0, 60);
+const SLUG_MAX_LENGTH = 60;
+
+/** 32-bit FNV-1a, base 36, fixed width — a short stable tag, not a security boundary. */
+const slugTag = (text: string): string => {
+    let hash = 0x81_1c_9d_c5;
+
+    for (let index = 0; index < text.length; index += 1) {
+        hash = Math.imul(hash ^ (text.codePointAt(index) ?? 0), 0x01_00_01_93);
+    }
+
+    return (hash >>> 0).toString(36).padStart(7, "0");
+};
+
+/**
+ * Slug for a project name, deduped per tenant by the unique index. Letters and
+ * digits of ANY script survive (NFKC, not NFKD: decomposing would drop the
+ * dakuten that tells か from が and merge distinct names). Two cases would
+ * otherwise hand the unique index a slug that does not describe the name, so
+ * both get a tag derived from the name itself — the same name always yields the
+ * same slug, which keeps a real duplicate a CONFLICT:
+ *   - a name with no letter or digit at all ("🚀") becomes `project-<tag>`;
+ *   - a name longer than the cap keeps its head and gains `-<tag>` of the whole
+ *     slug, so two names sharing their first 60 characters stay apart.
+ * Returns "" only for a blank name.
+ */
+const toSlug = (name: string): string => {
+    const folded = name.normalize("NFKC").toLowerCase().trim();
+    const words = folded.replaceAll(/[^\p{L}\p{M}\p{N}]+/gu, "-").replaceAll(/(?:^-|-$)/gu, "");
+
+    if (folded === "") {
+        return "";
+    }
+
+    if (words === "") {
+        return `project-${slugTag(folded)}`;
+    }
+
+    const characters = [...words];
+
+    if (characters.length <= SLUG_MAX_LENGTH) {
+        return words;
+    }
+
+    const tag = slugTag(words);
+
+    return `${characters
+        .slice(0, SLUG_MAX_LENGTH - tag.length - 1)
+        .join("")
+        .replace(/-+$/u, "")}-${tag}`;
+};
 
 /**
  * Who the caller is, for the client to route with — run it on the ROOT shard
@@ -288,7 +331,7 @@ export const createProject = mutation
         const slug = toSlug(name);
 
         if (!slug) {
-            throw new LunoraError("VALIDATION_ERROR", "name must contain at least one letter or digit");
+            throw new LunoraError("VALIDATION_ERROR", "name is required");
         }
 
         // The unique index would reject the duplicate anyway; checking first turns a
