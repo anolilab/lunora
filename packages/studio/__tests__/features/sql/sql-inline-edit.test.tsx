@@ -150,6 +150,34 @@ describe("sql inline edit", () => {
         expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
     });
 
+    it("refuses to splice a proposal over a draft that changed without a keystroke", async () => {
+        expect.assertions(3);
+
+        render(
+            <LunoraProvider client={aiMock(REWRITE).asClient}>
+                <SqlEditorPanel />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(editor(), { target: { value: "select * from messages" } });
+        await askFor("order by created_at");
+        await screen.findByTestId("sql-inline-diff");
+
+        // Format rewrites the draft through `setDraft`, not the textarea's change
+        // handler, so nothing dismisses the armed rewrite. Accepting would then
+        // splice the proposal over offsets that now point at different text.
+        fireEvent.click(screen.getByTestId("sql-format"));
+
+        const formatted = editor().value;
+
+        expect(formatted).not.toBe("select * from messages");
+
+        fireEvent.click(screen.getByTestId("sql-inline-edit-accept"));
+
+        expect(editor().value).toBe(formatted);
+        expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
+    });
+
     it("closes on Escape without touching the draft", async () => {
         expect.assertions(2);
 

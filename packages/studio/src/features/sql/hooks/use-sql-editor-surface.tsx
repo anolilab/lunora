@@ -31,19 +31,22 @@ const isInlineEditChord = (event: React.KeyboardEvent): boolean =>
  * The span the inline AI rewrite is targeting: the operator's selection, or the
  * whole draft when the caret was collapsed.
  *
- * Offsets rather than the text itself, because the panel must splice the
- * accepted rewrite back into the draft it came out of — and because holding the
- * text would be a second copy of the draft to keep in step.
+ * Offsets so the accepted rewrite can be spliced back, and the targeted `text`
+ * so Accept can tell the span still holds what was asked about. Typing dismisses
+ * an armed rewrite, but Format, loading a saved query and the assistant's Insert
+ * change the draft without a keystroke — offsets alone would splice the proposal
+ * across whatever now sits there.
  */
 interface InlineEditTarget {
     readonly end: number;
     readonly start: number;
+    readonly text: string;
 }
 
 /** Everything {@link useSqlEditorSurface} hands back — what the editor pane renders and wires. */
 interface SqlEditorSurface {
     /** The completion popover's state, or `null` when closed. */
-    /** Splice an accepted AI rewrite over `inlineEdit`'s span and close the panel. */
+    /** Splice an accepted AI rewrite over `inlineEdit`'s span and close the panel — or just close it when that span no longer holds the text it targeted. */
     readonly acceptInlineEdit: (sql: string) => void;
     readonly autocompleteState: SqlAutocomplete["state"];
     /** Dismiss the popover — also called when the panel switches tabs. */
@@ -212,7 +215,9 @@ const useSqlEditorSurface = ({
 
             const { selectionEnd, selectionStart, value } = event.currentTarget;
 
-            setInlineEdit(selectionStart === selectionEnd ? { end: value.length, start: 0 } : { end: selectionEnd, start: selectionStart });
+            const [start, end] = selectionStart === selectionEnd ? [0, value.length] : [selectionStart, selectionEnd];
+
+            setInlineEdit({ end, start, text: value.slice(start, end) });
         }
     };
 
@@ -273,7 +278,16 @@ const useSqlEditorSurface = ({
             return;
         }
 
-        const { end, start } = inlineEdit;
+        const { end, start, text } = inlineEdit;
+
+        // The draft moved under the armed span (see `InlineEditTarget`). The
+        // proposal was written for text that is no longer there, so drop it
+        // rather than splice it over unrelated SQL.
+        if (node.value.slice(start, end) !== text) {
+            setInlineEdit(null);
+
+            return;
+        }
 
         setDraft(node.value.slice(0, start) + sql + node.value.slice(end));
         setInlineEdit(null);
