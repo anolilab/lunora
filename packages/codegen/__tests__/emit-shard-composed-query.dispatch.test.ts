@@ -60,14 +60,16 @@ const register = (path: string, kind: "action" | "mutation" | "query" | "stream"
     (LUNORA_FUNCTIONS as unknown as Record<string, unknown>)[path] = { args: {}, handler, kind };
 };
 
+/** The shard's protected stream entry point, as the harness reaches it. */
+interface StreamHost {
+    executeStream: (path: string, args: Record<string, unknown>) => { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } | null;
+}
+
 /**
- * `executeStream` is the shard's protected entry point for a stream frame. The
- * harness reaches it directly, since a WebSocket upgrade is not needed to test
- * what the stream's ctx may do.
+ * `executeStream` is protected: a WebSocket upgrade is not needed to test what a
+ * stream's ctx may do, so the harness calls it directly.
  */
-const streamOf = (
-    shard: object,
-): { executeStream: (path: string, args: Record<string, unknown>) => { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } | null } => shard as never;
+const streamOf = (shard: object): StreamHost => shard as StreamHost;
 
 /** Every chunk a stream yields, or the error it throws, on a fresh shard. */
 const collect = async (path: string): Promise<unknown[]> => {
