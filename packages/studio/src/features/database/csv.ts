@@ -329,7 +329,8 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
         const trimmed = text.trim();
         const millis = parseIsoDate(trimmed) ?? (EPOCH_MILLIS_TEXT.test(trimmed) ? Number(trimmed) : undefined);
 
-        return millis === undefined ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
+        // `Date` holds ±8.64e15 ms; a finite number beyond that is stored but cannot be shown as a date in the row editor.
+        return millis === undefined || !Number.isFinite(new Date(millis).getTime()) ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
     }
 
     return { kind: "ok", value: text };

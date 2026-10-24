@@ -245,6 +245,21 @@ describe("coerceCsvDocuments", () => {
         expect(coerced("stamp", " -12345678901234 ")).toBe(-12_345_678_901_234);
     });
 
+    it("rejects epoch milliseconds beyond the range a Date can hold, and keeps the range edge", () => {
+        expect.assertions(3);
+
+        expect(coerced("stamp", "8640000000000000")).toBe(8_640_000_000_000_000);
+
+        for (const text of ["8640000000000001", "-8640000000000001"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,stamp\nm1,${text}\n`), kinds))).toMatchObject({
+                column: "stamp",
+                expected: "date",
+                kind: "cell-type",
+                value: text,
+            });
+        }
+    });
+
     it("rejects a date cell that is neither ISO-8601 nor epoch milliseconds, including a date that does not exist", () => {
         expect.assertions(4);
 
