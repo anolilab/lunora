@@ -2716,6 +2716,24 @@ class LunoraClient {
         return this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
     }
 
+    /**
+     * Whether a live query on `shardKey` can expect its value to be pushed: by a
+     * socket that is open or still on its first connect attempt, or by the
+     * polling fallback. `false` once a connect attempt has failed to reach `open`
+     * since the socket last did and polling is not delivering instead, where a
+     * read that must resolve should go over HTTP rather than wait on a push. A
+     * shard with no connection yet expects one: subscribing opens it.
+     */
+    public expectsPush(options: { shardKey?: string } = {}): boolean {
+        const conn = this.getConnection(options.shardKey);
+
+        if (conn === undefined || conn.wsState === "open") {
+            return true;
+        }
+
+        return conn.polling.isPolling() || !conn.polling.hasFailedOpen();
+    }
+
     // --- Client Query (local state) ----------------------------------------
 
     /**

@@ -92,6 +92,9 @@ interface LiveValueOptions<T> {
     /** The HTTP query, run when nothing can push or the push does not come. */
     fetch: () => Promise<T>;
 
+    /** The shard the subscription lives on, whose socket decides whether a push can come. */
+    shardKey?: string;
+
     /**
      * Whether to wait for the subscription's first push before fetching. `false`
      * where no subscription will attach in time, as for a suspended component,
@@ -102,20 +105,18 @@ interface LiveValueOptions<T> {
 
 /**
  * How long a `queryFn` waits for the subscription's first push before it fetches
- * over HTTP instead. Bounds the wait when nothing will ever push: a socket that
- * never opens with the polling fallback disabled.
- *
- * ponytail: one fixed bound; a client signal for "this shard cannot push" would
- * let a blocked socket fall back sooner.
+ * over HTTP instead. Bounds the wait when the client cannot tell that nothing
+ * will push, such as a socket that accepts the upgrade and then stays silent.
  */
 const PUSH_WAIT_TIMEOUT_MS = 10_000;
 
 /**
  * Wait for `live`'s next settle: `true` on a defined push, `false` when the
- * subscription errored first or nothing pushed within {@link PUSH_WAIT_TIMEOUT_MS}.
- * Rejects when `signal` aborts, including one aborted before the call.
+ * subscription errored first, nothing pushed within {@link PUSH_WAIT_TIMEOUT_MS},
+ * or `watch` calls its `giveUp` (a push can no longer come). Rejects when
+ * `signal` aborts, including one aborted before the call.
  */
-const nextPush = async (live: LiveValue, signal: AbortSignal): Promise<boolean> =>
+const nextPush = async (live: LiveValue, signal: AbortSignal, watch: (giveUp: () => void) => Unsubscribe): Promise<boolean> =>
     new Promise<boolean>((resolve, reject) => {
         if (signal.aborted) {
             reject(signal.reason as Error);
@@ -124,24 +125,37 @@ const nextPush = async (live: LiveValue, signal: AbortSignal): Promise<boolean> 
         }
 
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const onAbort = (): void => {
+        let unwatch: Unsubscribe | undefined;
+        const finish = (): void => {
             clearTimeout(timer);
+            unwatch?.();
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the waiter and the abort listener each remove the other
             live.waiters.delete(waiter);
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the waiter and the abort listener each remove the other
+            signal.removeEventListener("abort", onAbort);
+        };
+        const onAbort = (): void => {
+            finish();
             reject(signal.reason as Error);
         };
         const waiter = (pushed: boolean): void => {
-            clearTimeout(timer);
-            signal.removeEventListener("abort", onAbort);
+            finish();
             resolve(pushed);
         };
 
         timer = setTimeout(() => {
-            live.waiters.delete(waiter);
             waiter(false);
         }, PUSH_WAIT_TIMEOUT_MS);
         live.waiters.add(waiter);
         signal.addEventListener("abort", onAbort, { once: true });
+        unwatch = watch(() => {
+            waiter(false);
+        });
+
+        // `watch` may give up synchronously, before its unsubscribe existed to release.
+        if (!live.waiters.has(waiter)) {
+            unwatch();
+        }
     });
 
 /**
@@ -212,7 +226,7 @@ class LunoraSubscriptionRegistry {
      * it hanging on a push that may never come, so a remount waits afresh.
      */
     public async liveValue<T>(queryClient: QueryClient, queryKey: QueryKey, signal: AbortSignal, options: LiveValueOptions<T>): Promise<T> {
-        const { fetch, waitForPush = true } = options;
+        const { fetch, shardKey, waitForPush = true } = options;
 
         if (!("window" in globalThis) || this.client.getWebSocketImpl() === undefined) {
             return fetch();
@@ -233,11 +247,19 @@ class LunoraSubscriptionRegistry {
         // ponytail: a cross-tab follower cannot tell whether the leader holds this
         // query, so it pays one HTTP snapshot per mount, as does a lone tab still
         // inside its first `leaderTimeout`; a relayed push still wins below.
-        if (waitForPush && live.state.status !== "errored" && !this.client.isCrossTabFollower()) {
+        // A socket that has already failed to open will not push either: on a blocked
+        // network, waiting would hold every newly mounted key empty for the full bound.
+        if (waitForPush && live.state.status !== "errored" && !this.client.isCrossTabFollower() && this.client.expectsPush({ shardKey })) {
             let pushed: boolean;
 
             try {
-                pushed = await nextPush(live, signal);
+                pushed = await nextPush(live, signal, (giveUp) =>
+                    this.client.onConnectionStatus(() => {
+                        if (!this.client.expectsPush({ shardKey })) {
+                            giveUp();
+                        }
+                    }),
+                );
             } finally {
                 // A wait for a key nothing subscribes to (it unmounted, or never
                 // attached) would otherwise leave its state behind for good.

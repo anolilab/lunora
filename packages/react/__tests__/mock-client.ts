@@ -170,6 +170,7 @@ const createMockClient = (
         // The identity store declares itself on attach; this mock has no gates
         // to arm, so it only has to exist.
         expectIdentityResolution: () => undefined,
+        expectsPush: () => true,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         getWebSocketImpl: () => (live ? WebSocket : undefined),

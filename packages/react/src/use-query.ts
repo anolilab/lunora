@@ -98,6 +98,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         queryFn: async ({ signal }) =>
             getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, {
                 fetch: async () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+                shardKey,
             }),
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns

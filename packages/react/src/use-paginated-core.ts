@@ -263,7 +263,7 @@ const usePaginatedCore = function <T>(
                     // hook the owner of the entry's whole lifecycle, so the release
                     // closure below removes it on detach rather than leaking it.
                     gcTime: Number.POSITIVE_INFINITY,
-                    queryFn: async ({ signal }) => registry.liveValue(queryClient, entry.key, signal, { fetch: fetchSnapshot }),
+                    queryFn: async ({ signal }) => registry.liveValue(queryClient, entry.key, signal, { fetch: fetchSnapshot, shardKey: desired.shardKey }),
                     queryKey: entry.key,
                     staleTime: 0,
                 });
