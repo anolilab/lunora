@@ -7,13 +7,14 @@ import type { ToolDefinition, ToolInputSchema, ToolOutputSchema } from "./tool-t
 import { WRITE_CONFIRMATION_PROPERTIES } from "./write-confirmation";
 
 /**
- * One MCP tool per query, mutation and action in the developer's app, built
- * from the OpenRPC document codegen emits (`openRpcSpec`). The document is a
- * static input, so listing tools needs no network call and no admin token.
+ * One MCP tool per query, mutation, action and stream in the developer's app, built
+ * from the OpenRPC document codegen emits (`openRpcSpec`). Building the tools needs
+ * no network call and no admin token. The server may build them again from a newer
+ * document when codegen rewrites it (see `createFunctionMcpServer`).
  *
  * Only the functions the RPC surface exposes reach here: codegen drops `internal`
- * functions from the document. A `stream` is listed, and it becomes a read-only tool
- * whose dispatch collects the chunks it yields.
+ * functions from the document. A `stream` becomes a read-only tool whose dispatch
+ * collects the chunks it yields.
  */
 
 type FunctionKind = "action" | "mutation" | "query" | "stream";
@@ -46,7 +47,6 @@ interface FunctionTools {
 
 /** One function as the OpenRPC document describes it, before it becomes a tool. */
 interface FunctionShape {
-    argsRequired: boolean;
     argsSchema: Schema;
     /** The author's doc comment, from `x-lunora-description`. Absent when the export has none. */
     description?: string;
@@ -152,15 +152,12 @@ const outputShapeOf = (result: unknown): FunctionShape["output"] => {
 };
 
 /** The function's `args` parameter. An absent one means the function declares no arguments. */
-const argsOf = (method: Schema): { argsRequired: boolean; argsSchema: Schema } => {
+const argsOf = (method: Schema): { argsSchema: Schema } => {
     const { params } = method;
     const argsParameter: unknown = Array.isArray(params) ? params.find((parameter: unknown) => isSchema(parameter) && parameter["name"] === "args") : undefined;
     const schema: unknown = isSchema(argsParameter) ? argsParameter["schema"] : undefined;
 
-    return {
-        argsRequired: isSchema(argsParameter) && argsParameter["required"] === true,
-        argsSchema: isSchema(schema) ? schema : { properties: {}, type: "object" },
-    };
+    return { argsSchema: isSchema(schema) ? schema : { properties: {}, type: "object" } };
 };
 
 /**
@@ -223,6 +220,17 @@ const claimName = (path: string, claimed: Map<string, string>): string => {
     return name;
 };
 
+/**
+ * Whether the `args` bag must be sent. The document marks it required whenever the
+ * function declares any argument, but dispatch accepts an omitted bag as `{}`, so the
+ * bag is required only when the argument object itself names a required field.
+ */
+const argsBagRequired = (shape: FunctionShape): boolean => {
+    const { required }: { required?: unknown } = shape.argsSchema;
+
+    return Array.isArray(required) && required.length > 0;
+};
+
 const inputSchemaOf = (shape: FunctionShape, write: boolean): ToolInputSchema => {
     return {
         properties: {
@@ -230,7 +238,7 @@ const inputSchemaOf = (shape: FunctionShape, write: boolean): ToolInputSchema =>
             shardKey: SHARD_KEY_PROPERTY,
             ...(write ? WRITE_CONFIRMATION_PROPERTIES : {}),
         },
-        required: shape.argsRequired ? ["args"] : [],
+        required: argsBagRequired(shape) ? ["args"] : [],
         type: "object",
     };
 };

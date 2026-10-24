@@ -55,6 +55,17 @@ describe("functionToolsFromOpenRpc", () => {
         expect(send?.inputSchema.required).not.toContain("shardKey");
     });
 
+    it("leaves the args bag optional when every declared argument is optional", () => {
+        expect.assertions(2);
+
+        const [tool] = functionToolsFromOpenRpc(spec(method("messages:list", "query", { args: { limit: { type: "integer" } }, requiredArgs: [] })), {
+            allowWrites: false,
+        }).definitions;
+
+        expect(tool?.inputSchema.properties).toHaveProperty("args");
+        expect(tool?.inputSchema.required).toEqual([]);
+    });
+
     it("leaves args optional when the function declares no arguments", () => {
         expect.assertions(1);
 
