@@ -80,4 +80,81 @@ describe("applyOnDelete holder reads", () => {
         ).rejects.toThrow("still references it");
         expect(limits).toStrictEqual([1]);
     });
+
+    describe("a refused parent delete", () => {
+        const schemaWith = (second: "cascade" | "restrict") => {
+            return {
+                // The eligible relation's table is declared first, so a cascade that is not refused up front would run it.
+                tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: { author: { field: "authorId", kind: "one" as const, onDelete: "cascade" as const, references: "_id", table: "users" } },
+                        shape: {},
+                    },
+                    comments: {
+                        indexes: [],
+                        relationMap: { post: { field: "postId", kind: "one" as const, onDelete: second, references: "_id", table: "users" } },
+                        shape: {},
+                    },
+                    users: { indexes: [], shape: {} },
+                },
+            };
+        };
+
+        const holdersOf = (count: number) => new Set(Array.from({ length: count }, (_, index) => `h${String(index)}`));
+
+        const reader = (pools: Record<string, Set<string>>) => {
+            return {
+                findHolders: async (table: string, _field: string, _value: unknown, page: { limit: number }) =>
+                    [...(pools[table] ?? [])].slice(0, page.limit).map((id) => {
+                        return { _id: id };
+                    }),
+                onCascade: async (table: string, id: string) => {
+                    pools[table]?.delete(id);
+                },
+            };
+        };
+
+        it("refuses before cascading an earlier relation when a later one is over the ceiling", async () => {
+            expect.assertions(2);
+
+            const pools = { comments: holdersOf(10_001), messages: holdersOf(3) };
+
+            await expect(
+                applyOnDelete({
+                    deletedId: "u1",
+                    deletedReference: () => undefined,
+                    ...reader(pools),
+                    onRestrict: (message) => {
+                        throw new Error(message);
+                    },
+                    onSetNull: async () => {},
+                    schema: schemaWith("cascade"),
+                    tableName: "users",
+                }),
+            ).rejects.toMatchObject({ code: "CASCADE_LIMIT" });
+            expect(pools.messages.size).toBe(3);
+        });
+
+        it("refuses before cascading an earlier relation when a later one is restricted", async () => {
+            expect.assertions(2);
+
+            const pools = { comments: holdersOf(1), messages: holdersOf(3) };
+
+            await expect(
+                applyOnDelete({
+                    deletedId: "u1",
+                    deletedReference: () => undefined,
+                    ...reader(pools),
+                    onRestrict: (message) => {
+                        throw new Error(message);
+                    },
+                    onSetNull: async () => {},
+                    schema: schemaWith("restrict"),
+                    tableName: "users",
+                }),
+            ).rejects.toThrow("still references it");
+            expect(pools.messages.size).toBe(3);
+        });
+    });
 });

@@ -752,7 +752,7 @@ const walkHolderPages = async (
  *
  * **Bounded.** Holders are counted first with an ids-only read of
  * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
- * `CASCADE_LIMIT` before any holder of this relation is touched. The probed ids
+ * `CASCADE_LIMIT` before any holder of any relation of the parent is touched. The probed ids
  * are processed first, then re-read {@link DEFAULT_BATCH_LIMIT} at a time from
  * the start (catching holders inserted mid-cascade) until a page comes back short — a processed holder no longer matches (deleted,
  * soft-deleted, or its FK nulled). The ceiling is per relation per level: a
@@ -763,21 +763,34 @@ const walkHolderPages = async (
  * writer, or across backends, the levels already run stay, so the cascade is
  * left partial.
  */
-const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable: string, relation: KeyedRelationDefinitionLike): Promise<void> => {
-    const { deletedId, deletedReference, findHolders, onCascade, onRestrict, onSetNull, tableName } = options;
+/** A relation whose holders were counted and passed the checks, waiting to be applied. */
+interface RelationPlan {
+    holderTable: string;
+    probe: Record<string, unknown>[];
+    referencedValue: unknown;
+    relation: KeyedRelationDefinitionLike;
+}
+
+const overLimitError = (tableName: string, holderTable: string, relation: KeyedRelationDefinitionLike): LunoraError => {
+    const reference = `"${holderTable}.${relation.field}"`;
+
+    return new LunoraError(
+        "CASCADE_LIMIT",
+        `cannot delete "${tableName}" row: more than ${String(CASCADE_MAX_ROWS)} ${reference} rows reference it (onDelete: ${String(relation.onDelete)}) — delete or re-point them in batches first`,
+        { status: 400 },
+    );
+};
+
+// Counts one relation's holders and refuses what cannot cascade. Nothing is written here.
+const probeRelation = async (options: ApplyOnDeleteOptions, holderTable: string, relation: KeyedRelationDefinitionLike): Promise<RelationPlan | undefined> => {
+    const { deletedId, deletedReference, findHolders, onRestrict, tableName } = options;
     const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
 
     if (referencedValue === null || referencedValue === undefined) {
-        return;
+        return undefined;
     }
 
     const reference = `"${holderTable}.${relation.field}"`;
-    const overLimit = (): LunoraError =>
-        new LunoraError(
-            "CASCADE_LIMIT",
-            `cannot delete "${tableName}" row: more than ${String(CASCADE_MAX_ROWS)} ${reference} rows reference it (onDelete: ${String(relation.onDelete)}) — delete or re-point them in batches first`,
-            { status: 400 },
-        );
 
     // `restrict` only needs to know whether any holder exists, so it never pays for the full ceiling probe.
     const probe = await findHolders(holderTable, relation.field, referencedValue, {
@@ -786,7 +799,7 @@ const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable:
     });
 
     if (probe.length === 0) {
-        return;
+        return undefined;
     }
 
     if (relation.onDelete === "restrict") {
@@ -794,17 +807,27 @@ const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable:
     }
 
     if (probe.length > CASCADE_MAX_ROWS) {
-        throw overLimit();
+        throw overLimitError(tableName, holderTable, relation);
     }
+
+    return { holderTable, probe, referencedValue, relation };
+};
+
+// The probe is the first page only while no earlier plan has changed its holder table: after that its ids may be gone,
+// so the walk re-reads from the start.
+const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, probeIsCurrent: boolean): Promise<void> => {
+    const { findHolders, onCascade, onSetNull, tableName } = options;
+    const { holderTable, probe, referencedValue, relation } = plan;
+    const reference = `"${holderTable}.${relation.field}"`;
 
     await walkHolderPages(
         () => findHolders(holderTable, relation.field, referencedValue, { limit: DEFAULT_BATCH_LIMIT }),
         (holderId) => (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field)),
-        overLimit,
+        () => overLimitError(tableName, holderTable, relation),
         `onDelete on "${tableName}" made no progress: ${reference} rows still match after being processed`,
         // The probe already holds every holder's id; walking it first leaves only
         // holders inserted mid-cascade for the re-reads.
-        probe,
+        probeIsCurrent ? probe : undefined,
     );
 };
 
@@ -814,6 +837,9 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
     if (!schema.tables[tableName]) {
         throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
+
+    // Every relation is checked before the first holder changes, so a refusal from any of them leaves the rows as they were.
+    const plans: RelationPlan[] = [];
 
     for (const [holderTable, holderDefinition] of Object.entries(schema.tables)) {
         const relations = holderDefinition.relationMap;
@@ -827,9 +853,21 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
                 continue;
             }
 
-            // eslint-disable-next-line no-await-in-loop -- relations applied sequentially so a `restrict` abort/cascade fires in declared order before the parent delete
-            await applyRelationOnDelete(options, holderTable, relation);
+            // eslint-disable-next-line no-await-in-loop -- probes run in declared order, so the first refusal a caller sees is the declared-first one
+            const plan = await probeRelation(options, holderTable, relation);
+
+            if (plan) {
+                plans.push(plan);
+            }
         }
+    }
+
+    const changedHolderTables = new Set<string>();
+
+    for (const plan of plans) {
+        // eslint-disable-next-line no-await-in-loop -- applied in declared order so cascades fire before the parent delete
+        await applyPlan(options, plan, !changedHolderTables.has(plan.holderTable));
+        changedHolderTables.add(plan.holderTable);
     }
 };
 
