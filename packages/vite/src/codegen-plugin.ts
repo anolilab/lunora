@@ -609,8 +609,45 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             /**
-             * One debounced regeneration: refresh the cached Project, run codegen,
-             * run the project's `postcodegen`, then tell the client.
+             * Refresh the cached Project and run codegen from it. Answers whether
+             * it emitted.
+             */
+            const runWatchCodegen = (): boolean => {
+                // Reuse the cached Project across runs: build it on first use,
+                // otherwise sync it with the on-disk file set so discovery sees
+                // the same files a fresh Project would — without re-parsing the
+                // whole TS program.
+                if (cachedProject === undefined) {
+                    cachedProject = createCodegenProject(absoluteSchemaDirectory);
+                } else {
+                    refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
+                }
+
+                // `blockingMessage` (an ERROR-level advisory/platform
+                // diagnostic) is intentionally ignored here: dev stays
+                // log-only (already logged inside runCodegenSafely) —
+                // only `vite build`, in buildStart above, escalates it.
+                const { outputDirectory } = runCodegenSafely(options, serverLogger, overlay, cachedProject);
+
+                if (outputDirectory === undefined) {
+                    // Codegen was skipped or threw — drop the (possibly partially
+                    // mutated) cache so the next run rebuilds from scratch rather
+                    // than risk emitting wrong code off a corrupted Project.
+                    cachedProject = undefined;
+
+                    return false;
+                }
+
+                absoluteGeneratedDirectory = outputDirectory;
+
+                return true;
+            };
+
+            /**
+             * One debounced regeneration: run codegen, run the project's
+             * `postcodegen`, then tell the client. `codegen: false` is the event of
+             * a studio handler's own write, which already ran codegen from it, so
+             * only the steps after codegen run.
              *
              * A named function rather than the timer callback's body so the timer
              * stays synchronous (`setTimeout` cannot await) and so the nesting here
@@ -618,39 +655,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
              * is its outermost statement — because a timer callback has nobody to
              * hand a rejection to.
              */
-            const regenerate = async (changedFile: string, onHookSettled: (consumedSources: string) => void): Promise<void> => {
+            const regenerate = async (changedFile: string, onHookSettled: (consumedSources: string) => void, codegen: boolean): Promise<void> => {
                 try {
                     // The server may have closed during the debounce window.
                     if (closed) {
                         return;
                     }
 
-                    // Reuse the cached Project across runs: build it on first use,
-                    // otherwise sync it with the on-disk file set so discovery sees
-                    // the same files a fresh Project would — without re-parsing the
-                    // whole TS program.
-                    if (cachedProject === undefined) {
-                        cachedProject = createCodegenProject(absoluteSchemaDirectory);
-                    } else {
-                        refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
-                    }
-
-                    // `blockingMessage` (an ERROR-level advisory/platform
-                    // diagnostic) is intentionally ignored here: dev stays
-                    // log-only (already logged inside runCodegenSafely) —
-                    // only `vite build`, in buildStart above, escalates it.
-                    const { outputDirectory } = runCodegenSafely(options, serverLogger, overlay, cachedProject);
-
-                    if (outputDirectory === undefined) {
-                        // Codegen was skipped or threw — drop the (possibly partially
-                        // mutated) cache so the next run rebuilds from scratch rather
-                        // than risk emitting wrong code off a corrupted Project.
-                        cachedProject = undefined;
-
+                    if (codegen && !runWatchCodegen()) {
                         return;
                     }
-
-                    absoluteGeneratedDirectory = outputDirectory;
 
                     // Snapshot the sources codegen just consumed, so the settle
                     // recheck below can tell whether they moved under it while the
@@ -658,7 +672,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // `runCodegen` only writes `_generated/`, so the sources are
                     // identical either way, and both this call and the recheck's
                     // then read the SAME `absoluteGeneratedDirectory` (the emit
-                    // reassigns it one line above) and so exclude the same tree.
+                    // reassigns it in `runWatchCodegen`) and so exclude the same tree.
                     const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory);
 
                     // The project's post-generation step, before the client is told
@@ -719,13 +733,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // the pre-hook snapshot did.
                 fingerprint: () => fingerprintSchemaSources(absoluteSchemaDirectory),
                 logger: serverLogger,
-                regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void): void => {
+                regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void, codegen: boolean): void => {
                     // Fire-and-forget: `regenerate` reports every failure itself (its
                     // `catch` is its outermost statement) and there is nothing in a
                     // timer callback to await it from. Async at all because the
                     // project's `postcodegen` inside is a subprocess.
                     // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; a rejection here could only come from the catch handler itself
-                    regenerate(changedFile, onHookSettled);
+                    regenerate(changedFile, onHookSettled, codegen);
                 },
             });
 
@@ -821,19 +835,24 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                // A studio handler wrote this file and regenerated from it already; a second run would repeat it.
-                if (consumeStudioWrite(normalized)) {
-                    return;
-                }
-
                 // …and skip anything the project's `postcodegen` wrote, so a hook
                 // that rewrites a schema-directory file doesn't read as a
                 // developer's save: while it runs, and for a settle window after
-                // it exits. See HOOK_SETTLE_MS.
+                // it exits. See HOOK_SETTLE_MS. A studio write landing here is
+                // dropped as well, so two hooks never run at once; the settle
+                // recheck sees the sources it changed and regenerates.
                 if (hookRunning || Date.now() - hookSettledAt < HOOK_SETTLE_MS) {
                     // Drop a debounce an earlier event already scheduled too —
                     // otherwise the hook's first write still lands a queued rerun.
                     scheduler.cancelPending();
+
+                    return;
+                }
+
+                // A studio handler wrote this file and ran codegen from it already,
+                // so only the steps after codegen are left to run.
+                if (consumeStudioWrite(normalized)) {
+                    scheduler.onStudioWrite(normalized);
 
                     return;
                 }

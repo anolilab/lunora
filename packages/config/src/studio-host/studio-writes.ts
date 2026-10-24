@@ -1,7 +1,9 @@
 /**
- * Writes a studio handler has made, so the source watcher can skip the event
- * for its own write. The handler regenerates right after it writes, so the
- * watcher's regeneration would only repeat that work.
+ * Writes a studio handler has made and regenerated from, so the source watcher
+ * can skip codegen for the event of its own write: running it again would only
+ * repeat that work. The watcher still runs the rest of its regeneration (the
+ * project's `postcodegen`, the reload), which the handler does not. A write is
+ * recorded only once its codegen emitted, so a failed run is left to the watcher.
  *
  * A skip is granted only while the file still holds exactly the text the handler
  * wrote, and each write is granted once: an edit made after it, or a second
