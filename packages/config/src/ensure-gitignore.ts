@@ -23,8 +23,9 @@ const ensureGitignoreEntries = (directory: string, patterns: ReadonlyArray<strin
     const lines = existing.split(GITIGNORE_LINE).map((line) => line.trim());
     // A positive pattern only counts once it sits below every negation that is
     // not one of `patterns`' own: a later `!…` can re-include what it ignores.
-    // ponytail: any foreign negation counts, matching or not, so an unrelated one
-    // costs a one-time re-append; glob-match the negation if that ever matters.
+    // Any foreign negation counts, whether or not its glob reaches `patterns`: telling
+    // that apart needs gitignore glob matching, so an unrelated one only costs the
+    // patterns a one-time re-append below it, after which they sit last and are stable.
     const lastForeignNegation = lines.findLastIndex((line) => line.startsWith("!") && !patterns.includes(line));
     const missing = patterns.filter((pattern) => {
         const at = lines.lastIndexOf(pattern);
