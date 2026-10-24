@@ -4,14 +4,14 @@ import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
 import { BACKFILL_BATCH_SIZE } from "../src/sql-exec";
 import { sqliteEncode } from "../src/value-codec";
-import { createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
+import { createSqliteBatchHarness, createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -794,8 +794,9 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             await rebuilder.insert("notes", { archived: false, priority: 99, slug: "f" });
 
             // One batch call for the aggregate tally backfill, one for the rank
-            // tuple backfill — never a run()-per-row loop.
-            expect(batchCalls).toBe(2);
+            // tuple backfill — never a run()-per-row loop — and one for the
+            // insert's own aggregate + rank companion writes.
+            expect(batchCalls).toBe(3);
 
             const groups = await rebuilder.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
 
@@ -806,6 +807,39 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             expect(page.page).toHaveLength(6);
         } finally {
             database.close();
+        }
+    });
+
+    it("sends a patch's aggregate, rank and CDC companion writes as exactly one batch", async () => {
+        expect.assertions(5);
+
+        const harness = createSqliteBatchHarness();
+
+        try {
+            const writer = createSqlCtxDb({ cdc: true, clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: backfillSchema });
+            // The first write also runs both companion backfills, which batch on their own.
+            const id = await writer.insert("notes", { archived: false, priority: 1, slug: "a" });
+            const batch = vi.spyOn(harness.exec, "batch");
+
+            await writer.patch(id, { archived: true, priority: 2 });
+
+            expect(batch).toHaveBeenCalledTimes(1);
+            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
+            expect(batch.mock.calls[0]?.[0]).toHaveLength(7);
+
+            const groups = await writer.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
+
+            expect(groups.map((entry) => [entry.key, entry.value])).toStrictEqual([[{ archived: true }, 1]]);
+
+            const page = await writer.rankPage("notes", "byPriority", { take: 10 });
+
+            expect(page.page.map((row) => row["slug"])).toStrictEqual(["a"]);
+
+            const { changes } = await readSqlCdcChanges(harness.exec, {}, makeSqliteDialect());
+
+            expect(changes.map((change) => change.op)).toStrictEqual(["insert", "update"]);
+        } finally {
+            harness.close();
         }
     });
 
@@ -1917,6 +1951,31 @@ describe("createSqlCtxDb — min/max companion over a bigint column", () => {
         await expect(writer.aggregate("payments", { op: "max", field: "amount", where: { tenant: "a" } })).resolves.toBe(900);
 
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "b" } })).resolves.toBe(5);
+    });
+
+    it("sends a delete's min/max companion writes in the same batch as the other aggregates", async () => {
+        expect.assertions(2);
+
+        const batchHarness = createSqliteBatchHarness();
+
+        try {
+            const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: batchHarness.exec, schema: bigintExtremeSchema });
+            const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+
+            await writer.insert("payments", { amount: 42n, tenant: "a" });
+
+            const batch = vi.spyOn(batchHarness.exec, "batch");
+            const run = vi.spyOn(batchHarness.exec, "run");
+
+            await writer.delete(lowest);
+
+            // The min/max recompute, group update and prune all commit with the batch, so a
+            // failed batch cannot leave the extreme companion behind the other aggregates.
+            expect(batch).toHaveBeenCalledTimes(1);
+            expect(run).not.toHaveBeenCalled();
+        } finally {
+            batchHarness.close();
+        }
     });
 });
 

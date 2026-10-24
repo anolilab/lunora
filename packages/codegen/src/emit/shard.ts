@@ -1185,6 +1185,7 @@ ${ADMIN_WRITE_METHODS}
             }
 
             this.blockedUniqueIndexes = runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false, deferBlockedUniqueIndexes: true${snapshotArgument} });
+            this.companionMemo.clear();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
         }

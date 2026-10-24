@@ -69,10 +69,23 @@ const DEFAULT_RETRY = {
  */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
+/**
+ * How long a claimed job stays invisible to other processes sharing the
+ * database file. A claimer that dies mid-dispatch leaves its row claimed; once
+ * the lease lapses the next construction (or a waiting process's re-arm)
+ * delivers it again, which is the at-least-once contract.
+ */
+const CLAIM_LEASE_MS = 60_000;
+// Renewed well inside the lease, so a handler that runs past it keeps the row.
+const CLAIM_RENEW_MS = CLAIM_LEASE_MS / 3;
+// A claim that throws (SQLITE_BUSY while another process holds the write lock) is retried after this.
+const CLAIM_RETRY_MS = 1000;
+
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
     args: Buffer;
     attempts: number;
+    claimed_at: number | null;
     function_path: string;
     id: string;
     retry: Buffer | null;
@@ -162,6 +175,26 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             state TEXT NOT NULL DEFAULT 'pending'
         )`,
     );
+
+    // Databases created before the claim lease existed lack the column.
+    const hasClaimColumn = (): boolean =>
+        database
+            .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
+            .all()
+            .some((column) => column.name === "claimed_at");
+
+    if (!hasClaimColumn()) {
+        try {
+            database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+        } catch (error) {
+            // Another process sharing the file added it between our check and
+            // our ALTER; anything else is a real failure.
+            if (!hasClaimColumn()) {
+                throw error;
+            }
+        }
+    }
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_crons (
             key TEXT PRIMARY KEY,
@@ -176,10 +209,27 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
-    const deleteJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ?");
     const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const updateAttempt = database.prepare<[number, number, string]>("UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ? WHERE id = ?");
-    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ? WHERE id = ?");
+    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ?");
+    // Settlement and renewal are conditional on still holding the claim: a handler
+    // that outlived its lease must not delete or re-arm a row another host took.
+    const deleteClaimedJob = database.prepare<[string, number]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND claimed_at = ?");
+    const renewClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ? AND state = 'pending'",
+    );
+    const updateClaimedAttempt = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
+    const parkClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
+    // One statement, so two processes on one file cannot both take the row: the
+    // loser's WHERE no longer matches and it gets zero rows back. `scheduled_for`
+    // is checked too: another process's retry may have pushed the row past the
+    // time this host's timer was armed for.
+    const claimJob = database.prepare<[number, string, number, number], JobRow>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND state = 'pending' AND scheduled_for <= ? AND (claimed_at IS NULL OR claimed_at < ?) RETURNING *",
+    );
     const requeueJob = database.prepare<[number, string]>(
         "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, scheduled_for = ? WHERE id = ? AND state = 'dead'",
     );
@@ -275,6 +325,20 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     };
 
     /**
+     * Re-arm a job this host failed to claim. It is gone, not pending, not yet
+     * due, or held by another process. Held: wait out its lease so a claimer that
+     * died does not strand the row. Not yet due (another process rescheduled a
+     * retry): wait for its new time.
+     */
+    const followUnclaimedJob = (id: string): void => {
+        const held = selectJob.get(id);
+
+        if (!closed && held?.state === "pending") {
+            armJob(id, held.claimed_at === null ? held.scheduled_for : held.claimed_at + CLAIM_LEASE_MS);
+        }
+    };
+
+    /**
      * Deliver one job, then settle its row: removed on success, re-armed with
      * backoff while attempts remain, parked in `dead` once they are exhausted.
      *
@@ -291,20 +355,54 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return;
         }
 
-        const row = selectJob.get(id);
+        const now = Date.now();
+        let row: JobRow | undefined;
 
-        if (row?.state !== "pending") {
+        try {
+            row = claimJob.get(now, id, now, now - CLAIM_LEASE_MS);
+
+            if (row === undefined) {
+                followUnclaimedJob(id);
+
+                return;
+            }
+        } catch {
+            // The timer is already spent and the row is still pending, so without a re-arm nothing
+            // would run it again until the next construction.
+            if (!closed && isOpen()) {
+                armJob(id, Date.now() + CLAIM_RETRY_MS);
+            }
+
             return;
         }
 
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
+        // The lease stamp this host holds; every renewal and settlement is conditional on it.
+        let claimStamp = now;
+        const renewLease = setInterval(() => {
+            if (!isOpen()) {
+                return;
+            }
+
+            const renewedAt = Date.now();
+
+            try {
+                if (renewClaimedJob.run(renewedAt, id, claimStamp).changes === 1) {
+                    claimStamp = renewedAt;
+                }
+            } catch {
+                // A thrown renewal is a missed tick, not a lost claim: the next tick retries before the lease expires.
+            }
+        }, CLAIM_RENEW_MS);
+
+        renewLease.unref();
 
         try {
             await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
 
             if (isOpen()) {
-                deleteJob.run(id);
+                deleteClaimedJob.run(id, claimStamp);
             }
         } catch {
             // Delivery failed. The catch is bare because *why* it failed is the
@@ -319,15 +417,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
 
             if (attempts >= maxAttempts) {
-                parkJob.run(attempts, id);
+                parkClaimedJob.run(attempts, id, claimStamp);
 
                 return;
             }
 
             const nextAt = Date.now() + backoffFor(attempts, retry);
 
-            updateAttempt.run(attempts, nextAt, id);
-            armJob(id, nextAt);
+            if (updateClaimedAttempt.run(attempts, nextAt, id, claimStamp).changes === 1) {
+                armJob(id, nextAt);
+            }
+        } finally {
+            clearInterval(renewLease);
         }
     };
 

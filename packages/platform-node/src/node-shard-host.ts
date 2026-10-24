@@ -208,6 +208,20 @@ const createAlarms = (
         }
     };
 
+    const persistIfEmpty = (timestamp: number): boolean =>
+        database.prepare("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO NOTHING").run(timestamp).changes > 0;
+
+    /**
+     * Claim the alarm that just fired by deleting its row, and report whether
+     * this call is the one that did. The delete is conditional on the timestamp
+     * and atomic in SQLite, so when two processes share one database file and
+     * both re-armed the same row, exactly one sees `changes === 1` and delivers.
+     */
+    const selectAlarm = (): { scheduled_for: number } | undefined =>
+        database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
+
+    const consume = (firedAt: number): boolean => database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt).changes > 0;
+
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
@@ -260,8 +274,23 @@ const createAlarms = (
             // (or that itself schedules the next alarm, which is the normal
             // pattern) must not race a stale row: the timestamp this timer just
             // consumed is spent either way, and leaving it behind would re-fire
-            // it on the next construction over this database.
-            persist(undefined);
+            // it on the next construction over this database. Conditional on
+            // the timestamp: a transaction may have persisted a newer alarm
+            // while this timer was still armed, and that row is not ours.
+            if (!consume(ms)) {
+                // Another process over this file claimed the row first (or a
+                // newer alarm replaced it); delivering again would fire it twice.
+                // A replacing alarm is armed by its own commit, but a timer that
+                // was armed for it may have been dropped, so re-arm from the row.
+                const durable = selectAlarm();
+
+                if (durable !== undefined) {
+                    alarmAt = durable.scheduled_for;
+                    arm(durable.scheduled_for);
+                }
+
+                return;
+            }
 
             (async (): Promise<void> => {
                 await onAlarm?.();
@@ -290,9 +319,25 @@ const createAlarms = (
 
                 const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
 
-                alarmAt = retryAt;
-                persist(retryAt);
-                arm(retryAt);
+                // Only into an empty slot: another process over this file may have
+                // scheduled a newer alarm since this one was consumed, and its timer
+                // delivers only while the row still holds its timestamp. That alarm
+                // owns the next wakeup, so follow it instead of overwriting it.
+                if (persistIfEmpty(retryAt)) {
+                    alarmAt = retryAt;
+                    arm(retryAt);
+
+                    return;
+                }
+
+                attempts = 0;
+
+                const durable = selectAlarm();
+
+                if (durable !== undefined) {
+                    alarmAt = durable.scheduled_for;
+                    arm(durable.scheduled_for);
+                }
             });
         }, delay);
     };
@@ -371,12 +416,25 @@ const createAlarms = (
     };
 
     /**
-     * Discard an alarm mutation whose transaction rolled back. The durable row
-     * rolled back with it and the in-memory state was never touched, so
-     * dropping the pending value is the whole undo.
+     * Discard an alarm mutation whose transaction rolled back, then re-sync the
+     * timer with the durable row the rollback restored. A timer that fired while
+     * the transaction was open saw its uncommitted view: an alarm the transaction
+     * had deleted looked gone, so the timer cleared itself, and only the restored
+     * row says it is still due. Called after the `ROLLBACK`.
      */
     const rollback = (): void => {
         pending = undefined;
+
+        if (!database.open) {
+            return;
+        }
+
+        const durable = selectAlarm();
+
+        if (durable !== undefined && (alarmTimeout === undefined || alarmAt !== durable.scheduled_for)) {
+            alarmAt = durable.scheduled_for;
+            arm(durable.scheduled_for);
+        }
     };
 
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
@@ -627,7 +685,6 @@ const createNodeShardHost = (
             return result;
         } catch (error) {
             transactionOpen = false;
-            rollbackAlarms();
 
             try {
                 database.exec("ROLLBACK");
@@ -638,6 +695,9 @@ const createNodeShardHost = (
                 // needs the real failure, not the cleanup's. `@lunora/testing`'s
                 // harness copy of this guards it; the two host copies did not.
             }
+
+            // After the ROLLBACK, so it re-syncs the timer with the restored row.
+            rollbackAlarms();
 
             throw error;
         }

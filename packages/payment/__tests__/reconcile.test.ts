@@ -253,6 +253,133 @@ describe("reconcile", () => {
         expect(events.at(-1)?.type).toBe("reconcile.completed");
     });
 
+    it("bounds the provider reads in flight during a sweep", async () => {
+        expect.assertions(2);
+
+        // Each provider read parks until eight are in flight at once, so the peak is the pool's bound, reached, not a timing accident.
+        const POOL = 8;
+        let entered = 0;
+        let inFlight = 0;
+        let peak = 0;
+        let openGate: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            openGate = resolve;
+        });
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async (id: string) => {
+                inFlight += 1;
+                entered += 1;
+                peak = Math.max(peak, inFlight);
+
+                if (entered === POOL) {
+                    openGate();
+                }
+
+                await gate;
+                inFlight -= 1;
+
+                return { ...subscription("active"), id };
+            },
+        };
+        const ids = Array.from({ length: 20 }, (_, index) => `sub_${String(index)}`);
+
+        const result = await reconcile({ adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
+
+        expect(peak).toBe(POOL);
+        expect(result.updatedSubscriptions).toBe(20);
+    });
+
+    it("skips the write when a webhook landed on the row mid-sweep", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const stale = { ...subscription("past_due"), lastEventAt: 100 };
+        const calls: string[] = [];
+
+        await store.upsertSubscription(stale);
+
+        // The webhook lands while the adapter call is in flight: the read before it sees the
+        // stale row, the read after it sees the newer one.
+        vi.spyOn(store, "getSubscription")
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return stale;
+            })
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                // Same timestamps: only the row's content shows the webhook landed.
+                return { ...subscription("canceled"), lastEventAt: 100 };
+            });
+
+        const upsert = vi.spyOn(store, "upsertSubscription");
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                calls.push("adapter");
+
+                return subscription("active");
+            },
+        } as PaymentAdapter;
+
+        const result = await reconcile({ adapter, store, subscriptionIds: ["sub_1"] });
+
+        expect(calls).toEqual(["read", "adapter", "read"]);
+        expect(upsert).not.toHaveBeenCalled();
+        expect(result.updatedSubscriptions).toBe(0);
+    });
+
+    it("skips the payment write when a webhook landed on the row mid-sweep", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const stale = {
+            amount: money(1000, "USD"),
+            capturedAmount: money(0, "USD"),
+            createdAt: 1,
+            id: "pay_1",
+            provider: "stripe",
+            referenceId: "user_1",
+            refundedAmount: money(0, "USD"),
+            state: "initiated",
+            updatedAt: 1,
+        } as const;
+        const calls: string[] = [];
+
+        await store.upsertPaymentSession(stale);
+
+        vi.spyOn(store, "getPaymentSession")
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return stale;
+            })
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return { ...stale, state: "failed", updatedAt: 2 };
+            });
+
+        const upsert = vi.spyOn(store, "upsertPaymentSession");
+        const base = truthAdapter();
+        const adapter = {
+            ...base,
+            getPaymentStatus: async (sessionId: string) => {
+                calls.push("adapter");
+
+                return base.getPaymentStatus(sessionId);
+            },
+        };
+
+        const result = await reconcile({ adapter, paymentSessionIds: ["pay_1"], store });
+
+        expect(calls).toEqual(["read", "adapter", "read"]);
+        expect(upsert).not.toHaveBeenCalled();
+        expect(result.updatedPayments).toBe(0);
+    });
+
     it("re-forwards a usage event whose upstream report failed, and marks it reported", async () => {
         expect.assertions(4);
 

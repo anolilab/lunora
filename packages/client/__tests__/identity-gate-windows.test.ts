@@ -46,6 +46,9 @@ interface MockSocket {
 
 const sockets: MockSocket[] = [];
 
+/** Set by a test that awaits the next socket; the mock calls it once that socket exists. */
+let onSocketCreated: (() => void) | undefined;
+
 /**
  * @param deferClose when true, `close()` marks the socket closed but withholds
  * the `close` event — what a real browser does, and the window in which a
@@ -81,6 +84,7 @@ const createMockWebSocket = (deferClose = false): typeof WebSocket => {
                 sent: this.sent,
             };
             sockets.push(this.record);
+            onSocketCreated?.();
         }
 
         public addEventListener(type: string, listener: (event?: unknown) => void): void {
@@ -565,21 +569,22 @@ describe("f5 — a frame already queued on a retired socket", () => {
         client.close();
     });
 
-    it("keeps delivering on the live socket a plain sign-in deliberately leaves open", () => {
-        expect.assertions(2);
+    it("reconnects cold when a bearer lands on an anonymous socket", async () => {
+        expect.assertions(4);
 
         sockets.length = 0;
 
-        // Signing in from signed-out has no previous identity to retire, and
-        // bouncing there would cost a reconnect on the most common auth
-        // transition there is — so the socket stays, pinned to the `null` it
-        // was upgraded under while the live fingerprint moves on. Refusing its
-        // frames on THAT mismatch silently freezes every query on a socket
-        // nothing will ever replace.
+        // The socket upgraded signed-out. A transport that carries the bearer on
+        // the upgrade (React Native's `Authorization` header) only presents it on
+        // a new socket, so a sign-in from signed-out reconnects — and cold: a
+        // resume from the anonymous cursor would splice a diff onto rows the
+        // signed-in user was never shown.
         const client = new LunoraClient({
+            authTokenOnUpgrade: true,
             fetch: cookieSessionFetch(null),
             heartbeatIntervalMs: 0,
             persistence: false,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "http://app.test",
             WebSocket: createMockWebSocket(true),
         });
@@ -594,13 +599,95 @@ describe("f5 — a frame already queued on a retired socket", () => {
 
         const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
+        socket?.receive({ cursor: 1, data: [{ _id: "t1", text: "public row" }], id: subscribeId, type: "data" });
+
+        client.setAuthToken("tok-a", "user-a");
+
+        expect(socket?.closed).toBe(true);
+
+        // A frame the anonymous socket had already put on the wire is dropped.
+        socket?.receive({ cursor: 2, data: [{ _id: "t2", text: "late anonymous row" }], id: subscribeId, type: "data" });
+
+        expect(seen.at(-1)).toBeUndefined();
+
+        const replaced = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
+        });
+
+        socket?.flushClose();
+        await replaced;
+        onSocketCreated = undefined;
+
+        const replacement = sockets.at(-1);
+
+        replacement?.open();
+
+        const resubscribe = replacement?.sent.find((message) => message.type === "subscribe");
+
+        expect(replacement).not.toBe(socket);
+        // Cold: no resume point from the anonymous socket.
+        expect(resubscribe).not.toHaveProperty("sinceSeq");
+
+        client.close();
+    });
+
+    it("leaves a socket whose transport cannot carry the bearer alone on sign-in", () => {
+        expect.assertions(2);
+
+        sockets.length = 0;
+
+        // A browser socket never presents `setAuthToken`'s bearer, so reconnecting
+        // it would only blank and re-seed views for the same server identity.
+        const client = new LunoraClient({
+            fetch: cookieSessionFetch(null),
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(true),
+        });
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => seen.push(value));
+
+        const socket = sockets.at(-1);
+
+        socket?.open();
+
+        const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
+
+        socket?.receive({ cursor: 1, data: [{ _id: "t1", text: "public row" }], id: subscribeId, type: "data" });
         client.setAuthToken("tok-a", "user-a");
 
         expect(socket?.closed).toBe(false);
+        expect(seen.at(-1)).toStrictEqual([{ _id: "t1", text: "public row" }]);
 
-        socket?.receive({ cursor: 1, data: [{ _id: "t1", text: "their own row" }], id: subscribeId, type: "data" });
+        client.close();
+    });
 
-        expect(seen.at(-1)).toStrictEqual([{ _id: "t1", text: "their own row" }]);
+    it("leaves the socket open when a cookie session names itself", () => {
+        expect.assertions(1);
+
+        sockets.length = 0;
+
+        const client = new LunoraClient({
+            fetch: cookieSessionFetch(null),
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(true),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+
+        const socket = sockets.at(-1);
+
+        socket?.open();
+
+        // No token: the cookie that authenticated the upgrade is the same one
+        // the subject was resolved from, so there is nothing to reconnect for.
+        client.setAuthToken(null, "user-a");
+
+        expect(socket?.closed).toBe(false);
 
         client.close();
     });

@@ -70,6 +70,7 @@
     "devDependencies": {
         "@better-auth/expo": "catalog:auth",
         "@tanstack/react-query": "catalog:frontend",
+        "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",

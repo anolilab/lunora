@@ -285,6 +285,19 @@ export interface FanOutBudget {
  */
 export const FAN_OUT_BUDGET = Symbol.for("lunora.relations.fanOutBudget");
 
+/**
+ * Default cap on the row count a single batch write
+ * (`insertMany`/`deleteMany`/`patchMany`) accepts. Keeps a batch well under the
+ * Durable Object request/CPU-burst limits and turns an accidental oversized
+ * payload into a clear up-front error instead of a degraded mutation. Override
+ * per-call via `options.limit`; callers with larger sets should chunk. Also the
+ * page size an `onDelete` cascade walks its holder rows in (`relations.ts`).
+ *
+ * Mirrored as `DEFAULT_BATCH_LIMIT` in `@lunora/server`'s RLS middleware (which
+ * can't import this package at runtime) — keep the two values in sync.
+ */
+export const DEFAULT_BATCH_LIMIT = 500;
+
 export interface ResolveWithOptions {
     fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;

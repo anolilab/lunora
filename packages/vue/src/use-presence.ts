@@ -71,6 +71,10 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
+    }
+
     // One session id per composable call unless the caller pins one.
     const sessionId = options.sessionId ?? randomSessionId();
 

@@ -49,7 +49,7 @@ import type {
     ThroughRelationDefinitionLike,
     ValidatorLike,
 } from "./schema-types";
-import { FAN_OUT_BUDGET } from "./schema-types";
+import { DEFAULT_BATCH_LIMIT, FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -628,6 +628,15 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
 };
 
 /**
+ * The most holder rows one `onDelete` relation may cascade or null out for a
+ * single deleted parent. Every holder is a full per-row write (triggers,
+ * companions, CDC), so an unbounded cascade is what runs a delete into the
+ * transaction's read/write ceilings halfway through; refusing up front with
+ * `CASCADE_LIMIT` is the clear failure instead.
+ */
+const CASCADE_MAX_ROWS = 10_000;
+
+/**
  * Apply declared `onDelete` actions to rows that hold an FK to the row being
  * deleted, **before** the physical delete runs (so `restrict` can abort and
  * per-row broadcast/onWrite still fire for cascaded deletes).
@@ -646,7 +655,12 @@ interface ApplyOnDeleteOptions {
      * `holderTable` so the caller can route to the right backend
      * (DO SQLite vs D1) per-table.
      */
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    findHolders: (
+        holderTable: string,
+        field: string,
+        value: unknown,
+        page: { limit: number; select?: ReadonlyArray<string> },
+    ) => Promise<Record<string, unknown>[]>;
 
     /**
      * Delete a holder row. `holderTable` is the row's table so the caller can
@@ -666,6 +680,60 @@ interface ApplyOnDeleteOptions {
 }
 
 /**
+ * Re-read holder pages until one comes back short, applying `apply` to every
+ * holder not yet processed. Each processed holder drops out of the next read,
+ * so re-reading from the start is the cursor. `firstPage`, when given, stands
+ * in for the first read: holders the caller already read are not read (and
+ * charged to the transaction meter) a second time.
+ */
+const walkHolderPages = async (
+    readPage: () => Promise<Record<string, unknown>[]>,
+    apply: (holderId: string) => Promise<void>,
+    overLimit: () => LunoraError,
+    noProgressMessage: string,
+    firstPage?: Record<string, unknown>[],
+): Promise<void> => {
+    const processed = new Set<string>();
+    let pending = firstPage;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- each page is read after the previous one was processed
+        const page = pending ?? (await readPage());
+        let progressed = false;
+
+        pending = undefined;
+
+        for (const holder of page) {
+            const holderId = holder["_id"];
+
+            if (typeof holderId !== "string" || processed.has(holderId)) {
+                continue;
+            }
+
+            processed.add(holderId);
+            progressed = true;
+
+            // Rows can appear after the count probe (a trigger inserting holders); the walk stays bounded regardless.
+            if (processed.size > CASCADE_MAX_ROWS) {
+                throw overLimit();
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- holders are cascaded/nulled one at a time so a thrown restrict/cascade aborts deterministically
+            await apply(holderId);
+        }
+
+        if (page.length < DEFAULT_BATCH_LIMIT) {
+            return;
+        }
+
+        // A full page of holders that were already processed still match: re-reading would loop forever.
+        if (!progressed) {
+            throw new LunoraError("INTERNAL", noProgressMessage);
+        }
+    }
+};
+
+/**
  * Apply the `onDelete` action for a single holder relation pointing at the
  * deleted parent. Resolves the referenced value, finds holder rows and either
  * aborts (`restrict`), cascades the delete, or nulls the FK.
@@ -681,6 +749,19 @@ interface ApplyOnDeleteOptions {
  * succeeds and the local DELETE then fails, the parent row stays but its
  * global holders are gone. Callers that care should add their own
  * compensation (a periodic reconciliation job, or a Cloudflare Queue retry).
+ *
+ * **Bounded.** Holders are counted first with an ids-only read of
+ * `CASCADE_MAX_ROWS + 1` rows: more than {@link CASCADE_MAX_ROWS} refuses with
+ * `CASCADE_LIMIT` before any holder of this relation is touched. The probed ids
+ * are processed first, then re-read {@link DEFAULT_BATCH_LIMIT} at a time from
+ * the start (catching holders inserted mid-cascade) until a page comes back short — a processed holder no longer matches (deleted,
+ * soft-deleted, or its FK nulled). The ceiling is per relation per level: a
+ * nested cascade is only counted when its own parent is deleted, so a
+ * grandchild relation over the ceiling throws after the levels above it have
+ * already run. A DO-local cascade inside a mutation rolls back with it; in an
+ * action context (no enclosing transaction), on a `.global()` (D1/Hyperdrive)
+ * writer, or across backends, the levels already run stay, so the cascade is
+ * left partial.
  */
 const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable: string, relation: KeyedRelationDefinitionLike): Promise<void> => {
     const { deletedId, deletedReference, findHolders, onCascade, onRestrict, onSetNull, tableName } = options;
@@ -690,26 +771,41 @@ const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable:
         return;
     }
 
-    const holders = await findHolders(holderTable, relation.field, referencedValue);
+    const reference = `"${holderTable}.${relation.field}"`;
+    const overLimit = (): LunoraError =>
+        new LunoraError(
+            "CASCADE_LIMIT",
+            `cannot delete "${tableName}" row: more than ${String(CASCADE_MAX_ROWS)} ${reference} rows reference it (onDelete: ${String(relation.onDelete)}) — delete or re-point them in batches first`,
+            { status: 400 },
+        );
 
-    if (holders.length === 0) {
+    // `restrict` only needs to know whether any holder exists, so it never pays for the full ceiling probe.
+    const probe = await findHolders(holderTable, relation.field, referencedValue, {
+        limit: relation.onDelete === "restrict" ? 1 : CASCADE_MAX_ROWS + 1,
+        select: ["_id"],
+    });
+
+    if (probe.length === 0) {
         return;
     }
 
     if (relation.onDelete === "restrict") {
-        onRestrict(`cannot delete "${tableName}" row: "${holderTable}.${relation.field}" still references it`);
+        onRestrict(`cannot delete "${tableName}" row: ${reference} still references it`);
     }
 
-    for (const holder of holders) {
-        const holderId = holder["_id"];
-
-        if (typeof holderId !== "string") {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- holders are cascaded/nulled one at a time so a thrown restrict/cascade aborts deterministically
-        await (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field));
+    if (probe.length > CASCADE_MAX_ROWS) {
+        throw overLimit();
     }
+
+    await walkHolderPages(
+        () => findHolders(holderTable, relation.field, referencedValue, { limit: DEFAULT_BATCH_LIMIT }),
+        (holderId) => (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field)),
+        overLimit,
+        `onDelete on "${tableName}" made no progress: ${reference} rows still match after being processed`,
+        // The probe already holds every holder's id; walking it first leaves only
+        // holders inserted mid-cascade for the re-reads.
+        probe,
+    );
 };
 
 const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {

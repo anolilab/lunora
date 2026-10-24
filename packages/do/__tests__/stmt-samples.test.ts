@@ -242,7 +242,7 @@ describe("statement sample buffer (OBS-04)", () => {
                     return realExec(query, ...params);
                 };
 
-                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
                 shard.attachSpan = false;
                 // Two raw statement texts (two samples) that normalise to the same row.
@@ -286,7 +286,7 @@ describe("statement sample buffer (OBS-04)", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             shard.attachSpan = false;
             shard.repeatsOfFirst = 250;
@@ -312,7 +312,7 @@ describe("statement sample buffer (OBS-04)", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             // Comfortably past the 200-distinct-statement cap (see
             // `MAX_STMT_SAMPLES_PER_DISPATCH` in `shard-do.ts`) — each iteration is
@@ -372,7 +372,7 @@ describe("statement sample buffer (OBS-04)", () => {
                 },
             };
 
-            const shard = new StmtSampleShard(counted, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new StmtSampleShard(counted, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             shard.attachSpan = false;
             shard.repeatsOfFirst = 1;
@@ -394,7 +394,7 @@ describe("statement sample buffer (OBS-04)", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             shard.distinctQueries = 5;
 
@@ -432,7 +432,7 @@ describe("instrumented sql handle identity", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             shard.attachSpan = false;
             // At least one execution, so instrumentation is genuinely active

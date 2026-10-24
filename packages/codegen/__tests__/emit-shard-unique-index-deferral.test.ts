@@ -81,6 +81,7 @@ const compileShard = () => {
         build: (runShardMigrations: () => string[], onDataMigration: () => void = () => {}) => {
             class Base {
                 public readonly sql = {};
+                public readonly companionMemo = new Set<string>();
 
                 public adminWriter(): object {
                     return this.sql;
@@ -222,6 +223,7 @@ const compileInitShard = () => {
     return (runShardMigrations: () => string[], onHook: () => void) => {
         class Base {
             public readonly sql = {};
+            public readonly companionMemo = new Set<string>();
 
             private once?: Promise<void>;
 

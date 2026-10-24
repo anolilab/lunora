@@ -130,11 +130,14 @@ const writeCompanionSignature = (sql: SqlExec, companion: string, signature: str
 /**
  * Drop every marker, so each companion rebuilds on its next touch. Creates the
  * table first: the `rebuildCompanions` admin op may reach a shard whose base
- * class never migrated a schema.
+ * class never migrated a schema. A host that passes a shard-scoped
+ * `companionMemo` to ctx-db passes it here too: the memo would otherwise keep
+ * reporting the companions as verified and skip the rebuild.
  */
-const clearCompanionSignatures = (sql: SqlExec): void => {
+const clearCompanionSignatures = (sql: SqlExec, companionMemo?: Set<string>): void => {
     createStateTable(sql);
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(COMPANION_STATE_TABLE)}`);
+    companionMemo?.clear();
 };
 
 export { aggregateSignature, clearCompanionSignatures, migrateCompanionState, rankSignature, readCompanionSignature, writeCompanionSignature };

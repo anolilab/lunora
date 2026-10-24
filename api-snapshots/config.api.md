@@ -3270,6 +3270,12 @@ const assetContentType: (fileName: string) => string;
 const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: IncomingMessage, response: ServerResponse, next: () => void) => void);
 ```
 
+### `devVariablesStamp` (const)
+
+```ts
+const devVariablesStamp: (root: string) => string;
+```
+
 ### `handlePolicyScaffoldRequest` (const)
 
 ```ts

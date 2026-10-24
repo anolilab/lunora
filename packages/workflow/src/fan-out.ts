@@ -301,24 +301,24 @@ const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
 const createOrAttach = async (
     binding: ReturnType<WorkflowBindingResolver>,
     options: { id: string; params?: Record<string, unknown> },
-): Promise<{ attached: boolean; instance: WorkflowInstanceLike }> => {
+): Promise<WorkflowInstanceLike> => {
     try {
-        return { attached: false, instance: await binding.create(options) };
+        return await binding.create(options);
     } catch (error: unknown) {
         if (!isDuplicateInstanceError(error)) {
             throw error;
         }
 
-        return { attached: true, instance: await binding.get(options.id) };
+        return binding.get(options.id);
     }
 };
 
 /**
- * The branch outcome an already-attached child has ALREADY produced, or
- * `undefined` while it is still running.
+ * The branch outcome a spawned child has ALREADY produced, or `undefined`
+ * while it is still running.
  *
- * Read only on the attach path, so it costs one `status()` call exactly when a
- * spawn found the child already there and never on a first spawn. It is what
+ * Read on every spawn (one `status()` call): a first spawn on a host that runs
+ * the child synchronously inside `create()` is already terminal. It is also what
  * makes `instance.restart()` on a fanned-out parent recoverable: a restart wipes
  * the parent's step cache *and* its event map, so the re-run spawn steps
  * re-attach to children that have already sent — and had consumed — their
@@ -502,9 +502,9 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         }
 
         // 1. Spawn all branches concurrently. `step.do` memoizes by name, so the
-        //    create runs exactly once across replays/restarts. A step that had to
-        //    ATTACH reports the child's outcome when it has already finished, so
-        //    the join below can skip an event that will never be delivered twice.
+        //    create runs exactly once across replays/restarts. A step whose child
+        //    has already finished (attached, or run inline by `create()`) reports
+        //    its outcome, so the join below skips an event that will not arrive.
         const spawned = await Promise.all(
             planned.map((plan) =>
                 deps.step.do(`${SPAWN_STEP_PREFIX}${plan.childId}`, async (): Promise<BranchOutcome | undefined> => {
@@ -516,15 +516,16 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
                         parentId: deps.instanceId,
                     };
 
-                    const { attached, instance } = await createOrAttach(binding, {
+                    const instance = await createOrAttach(binding, {
                         id: plan.childId,
                         params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker },
                     });
 
-                    if (!attached) {
-                        return undefined;
-                    }
-
+                    // Read on BOTH paths: a host that runs a fresh child to
+                    // completion inside `create()` (the Node host does) has it
+                    // terminal before the parent waits, and its completion event
+                    // could never be delivered to a run that was not yet waiting.
+                    //
                     // Bounded for the same reason the event path is: this value is
                     // the SPAWN STEP's return, which the host persists (miniflare's
                     // engine answers a step output over 1 MiB with `Step … output
@@ -571,7 +572,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
                     throw new BranchJoinFailure(plan, serializeError(joinError), "join failed");
                 }
             } else {
-                // The spawn step attached to a child that had already finished — its
+                // The spawn step found a child that had already finished — its
                 // terminal status IS the outcome, and no event is coming.
                 outcome = finished;
             }

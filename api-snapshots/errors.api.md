@@ -690,6 +690,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Batch limit exceeded";
     };
+    readonly CASCADE_LIMIT: {
+        readonly status: 400;
+        readonly title: "Cascade limit exceeded";
+    };
     readonly CROSS_SHARD_RANK_UNSUPPORTED: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";

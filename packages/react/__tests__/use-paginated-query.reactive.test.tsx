@@ -41,6 +41,10 @@ interface PageResult {
  * range whenever the dataset mutates, pushing fresh per-range results. That is
  * what lets us assert that a mid-list insert/delete grows/shrinks one page
  * without duplicating or skipping rows across boundaries.
+ *
+ * Like the server, a fresh subscription is seeded with its range's snapshot as
+ * its first frame, and the client has a socket — so pages resolve from that
+ * seed and `query` (HTTP) is never called.
  */
 const createReactiveBackend = (initial: string[]) => {
     let items = [...initial].toSorted((a, b) => a.localeCompare(b));
@@ -82,6 +86,12 @@ const createReactiveBackend = (initial: string[]) => {
             const sub: LiveSub = { callback, opts: (args as { paginationOpts: PaginationOpts }).paginationOpts };
 
             subs.add(sub);
+            // The seed frame arrives off the subscribe call, as it does over the wire.
+            queueMicrotask(() => {
+                if (subs.has(sub)) {
+                    callback(evaluate(sub.opts));
+                }
+            });
 
             return () => {
                 subs.delete(sub);
@@ -110,6 +120,8 @@ const createReactiveBackend = (initial: string[]) => {
         action: vi.fn<() => Promise<unknown>>(),
         close: vi.fn<() => void>(),
         getAuthToken: vi.fn<() => string | null>(() => null),
+        getWebSocketImpl: () => WebSocket,
+        isCrossTabFollower: () => false,
         mutation: vi.fn<() => Promise<unknown>>(),
         onAuthTokenChange: vi.fn<() => Unsubscribe>(() => () => undefined),
         onIdentityChange: vi.fn<() => Unsubscribe>(() => () => undefined),
@@ -201,6 +213,8 @@ describe("usePaginatedQuery — reactive ranges", () => {
         const flat = (screen.getByTestId("results").textContent ?? "").split(",");
 
         expect(new Set(flat).size).toBe(flat.length);
+        // Every page resolved from its subscription's seed frame.
+        expect(backend.query).not.toHaveBeenCalled();
     });
 
     it("deleting a boundary-adjacent row leaves no gap and spares the neighbor", async () => {
