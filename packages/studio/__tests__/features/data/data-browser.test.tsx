@@ -3655,11 +3655,8 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
         fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "tagged x" } });
         fireEvent.click(screen.getByTestId("db-ai-filter"));
 
-        await waitFor(() => {
-            if (readFilters(mock).length === 0) {
-                throw new Error("filtered read not issued yet");
-            }
-        });
+        // The suggestion lands as a filter row in the same commit that issues the filtered read.
+        await screen.findByTestId("db-filter-row");
 
         expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }]);
     });
