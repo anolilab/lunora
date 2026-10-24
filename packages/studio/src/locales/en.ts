@@ -285,6 +285,7 @@ const MESSAGE_IDS = [
     "line {line}: text follows a closing quote.",
     "line {line}: a quoted field is never closed.",
     "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+    "line {line}: column “{column}” holds “{value}”, a time with no zone. Add Z for UTC or an offset such as +02:00.",
     "line {line}: column “{column}” must be a number, got “{value}”.",
     "line {line}: column “{column}” must be true or false, got “{value}”.",
     "line {line}: column “{column}” must be an integer, got “{value}”.",

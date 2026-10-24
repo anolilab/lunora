@@ -25,6 +25,7 @@ const TYPED_COLUMNS: ColumnMeta[] = [
     { name: "count", optional: false, type: "number" },
     { name: "active", optional: false, type: "boolean" },
     { name: "amount", optional: false, type: "bigint" },
+    { name: "day", optional: false, type: "date" },
 ];
 
 /**
@@ -621,6 +622,23 @@ describe("exportImportPanel", () => {
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
         expect(error.textContent).toBe(
             "Invalid CSV: line 2: column “count” holds “9007199254740993”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+        );
+    });
+
+    it("writes nothing for a date-time with no zone, and says to add Z or an offset", async () => {
+        expect.assertions(2);
+
+        const mock = createClient(undefined, TYPED_COLUMNS);
+
+        render(renderPanel(mock));
+
+        await importCsv("id,day\nm1,2026-03-01T09:00:00\n", "messages");
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+        expect(error.textContent).toBe(
+            "Invalid CSV: line 2: column “day” holds “2026-03-01T09:00:00”, a time with no zone. Add Z for UTC or an offset such as +02:00.",
         );
     });
 

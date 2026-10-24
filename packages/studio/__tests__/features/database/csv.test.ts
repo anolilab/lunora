@@ -278,11 +278,27 @@ describe("coerceCsvDocuments", () => {
         expect(coerced("day", "2026-10-23T08:00:00+02:00")).toBe(Date.UTC(2026, 9, 23, 6));
     });
 
-    it("reads an ISO date-time with no offset as UTC, whatever zone the reader runs in", () => {
+    it("refuses an ISO date-time with no offset by name, since any zone it were read in could store another instant than the writer meant", () => {
+        expect.assertions(3);
+
+        for (const text of ["2026-10-23T08:00:00", "2026-10-23T08:30", "2026-10-23T08:00:00.5"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,day\nm1,${text}\n`), kinds))).toStrictEqual({
+                column: "day",
+                expected: "date",
+                kind: "cell-type",
+                record: 2,
+                value: text,
+                zoneless: true,
+            });
+        }
+    });
+
+    it("does not call a malformed date-time zoneless", () => {
         expect.assertions(2);
 
-        expect(coerced("day", "2026-10-23T08:00:00")).toBe(Date.UTC(2026, 9, 23, 8));
-        expect(coerced("day", "2026-10-23T08:30")).toBe(Date.UTC(2026, 9, 23, 8, 30));
+        for (const text of ["2026-02-30T08:00", "2026-10-23T25:00"]) {
+            expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments(`id,day\nm1,${text}\n`), kinds))).not.toHaveProperty("zoneless");
+        }
     });
 
     it("reads whole-number epoch milliseconds into a date or timestamp column, with surrounding spaces", () => {

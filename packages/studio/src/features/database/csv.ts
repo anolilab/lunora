@@ -9,7 +9,7 @@ type CsvProblem =
     | { kind: "duplicate-header"; name: string }
     | { column: number; kind: "empty-header" }
     | { expected: number; found: number; kind: "ragged"; record: number }
-    | { column: string; expected: CellType; inexact?: true; kind: "cell-type"; record: number; value: string }
+    | { column: string; expected: CellType; inexact?: true; kind: "cell-type"; record: number; value: string; zoneless?: true }
     | { kind: "text-after-quote"; record: number }
     | { kind: "unterminated-quote"; record: number };
 
@@ -209,7 +209,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
 };
 
 /** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
-type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; inexact?: true; kind: "rejected" };
+type CoercedCell = { kind: "ok"; value: CsvValue } | { expected: CellType; inexact?: true; kind: "rejected"; zoneless?: true };
 
 /** Digits with an optional minus sign: the text a `bigint` column can hold. */
 const INTEGER_TEXT = /^-?\d+$/u;
@@ -231,7 +231,8 @@ const EPOCH_MILLIS_TEXT = /^-?\d{11,}$/u;
 const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 /**
- * `hh:mm`, optionally `:ss` with a fraction, then an optional `Z` or `±hh:mm` offset. A time with no offset is read as UTC; see `parseIsoDate`.
+ * `hh:mm`, optionally `:ss` with a fraction, then an optional `Z` or `±hh:mm` offset. A time with no offset is matched so that it can be
+ * refused by name; see `parseIsoDate`.
  */
 const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/u;
 
@@ -316,11 +317,13 @@ const isRealClock = (hour: string, minute: string, second: string, offset: strin
     (offset === "Z" || (Number(offset.slice(1, 3)) <= 23 && Number(offset.slice(4, 6)) <= 59));
 
 /**
- * The epoch milliseconds of an ISO-8601 date or date-time, or `undefined` when the text is not one. A date with no time is midnight UTC,
- * and a date-time with no offset is UTC too, which is what a `date` column stores. The text is split on its `T` and each half is matched on its own,
- * so `Date.parse` only ever reads text whose fields have been checked.
+ * The epoch milliseconds of an ISO-8601 date or date-time, `zoneless` for a well-formed date-time that names no offset, or `undefined`
+ * when the text is not one. A date with no time is midnight UTC. A time with no offset is neither: it is a wall-clock time in a zone the
+ * file does not name, and the studio's own date pickers read the same text in the browser's zone, so any single guess would store some
+ * other instant than the one the writer meant. It is refused, and the writer adds `Z` or an offset. The text is split on its `T` and each
+ * half is matched on its own, so `Date.parse` only ever reads text whose fields have been checked.
  */
-const parseIsoDate = (text: string): number | undefined => {
+const parseIsoDate = (text: string): { millis: number } | { zoneless: true } | undefined => {
     const [dayText = "", clockText, ...rest] = text.split("T");
     const day = ISO_DAY_TEXT.exec(dayText);
     const clock = clockText === undefined ? undefined : ISO_CLOCK_TEXT.exec(clockText);
@@ -341,11 +344,13 @@ const parseIsoDate = (text: string): number | undefined => {
         return undefined;
     }
 
-    // A time with no offset would be read in the machine's own zone, so it is marked UTC before Date.parse sees it. Date-only text is
-    // already midnight UTC and is passed through unchanged.
-    const millis = Date.parse(clock !== undefined && offset === undefined ? `${text}Z` : text);
+    if (clock !== undefined && offset === undefined) {
+        return { zoneless: true };
+    }
 
-    return Number.isFinite(millis) ? millis : undefined;
+    const millis = Date.parse(text);
+
+    return Number.isFinite(millis) ? { millis } : undefined;
 };
 
 /** A number cell: refused when it is not a decimal, and refused as `inexact` when the double would not hold every digit. */
@@ -359,9 +364,28 @@ const coerceNumber = (text: string): CoercedCell => {
     return "number" in parsed ? { kind: "ok", value: parsed.number } : { expected: "number", inexact: true, kind: "rejected" };
 };
 
+/** A date or timestamp cell: an ISO-8601 date or zoned date-time, or whole-number epoch milliseconds. */
+const coerceDate = (text: string): CoercedCell => {
+    const trimmed = text.trim();
+    const iso = parseIsoDate(trimmed);
+
+    if (iso !== undefined && "zoneless" in iso) {
+        return { expected: "date", kind: "rejected", zoneless: true };
+    }
+
+    let millis = iso?.millis;
+
+    if (iso === undefined && EPOCH_MILLIS_TEXT.test(trimmed)) {
+        millis = Number(trimmed);
+    }
+
+    // `Date` holds ±8.64e15 ms; a finite number beyond that is stored but cannot be shown as a date in the row editor.
+    return millis === undefined || !Number.isFinite(new Date(millis).getTime()) ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
+};
+
 /**
  * Read one cell's text as its column kind. A number takes a decimal, and a timestamp or date takes whole-number epoch milliseconds or an
- * ISO-8601 date. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
+ * ISO-8601 date or date-time with an offset. Every kind but text is trimmed of surrounding whitespace first. Booleans take `true` or `false` in any case. Bigints take
  * the integer text and keep it exact. Any other kind stays text, and the server validator decides what it accepts.
  */
 const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
@@ -386,11 +410,7 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
     }
 
     if (kind === "date" || kind === "timestamp") {
-        const trimmed = text.trim();
-        const millis = parseIsoDate(trimmed) ?? (EPOCH_MILLIS_TEXT.test(trimmed) ? Number(trimmed) : undefined);
-
-        // `Date` holds ±8.64e15 ms; a finite number beyond that is stored but cannot be shown as a date in the row editor.
-        return millis === undefined || !Number.isFinite(new Date(millis).getTime()) ? { expected: "date", kind: "rejected" } : { kind: "ok", value: millis };
+        return coerceDate(text);
     }
 
     return { kind: "ok", value: text };
@@ -417,6 +437,7 @@ const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string,
                     kind: "cell-type",
                     record,
                     value: text,
+                    ...(cell.zoneless === true && { zoneless: true as const }),
                 });
             }
 

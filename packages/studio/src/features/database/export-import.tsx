@@ -287,6 +287,14 @@ const describeCsvProblem = (problem: CsvProblem, t: Translate): string => {
             });
         }
 
+        if (problem.zoneless === true) {
+            return t("line {line}: column “{column}” holds “{value}”, a time with no zone. Add Z for UTC or an offset such as +02:00.", {
+                column: problem.column,
+                line: problem.record,
+                value: problem.value,
+            });
+        }
+
         if (problem.expected === "date") {
             return t("line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds, got “{value}”.", {
                 column: problem.column,
