@@ -710,6 +710,64 @@ describe("createWorker — aiChat admin RPC", () => {
         // so every tool read came back empty against a real sharded app.
         expect(names).toContain("channel:demo");
     });
+
+    it("routes a tool call to the shard named on the envelope when the args name none", async () => {
+        expect.hasAssertions();
+
+        const names: string[] = [];
+        const shard: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => Response.json({ result: {} }, { status: 200 }) };
+            },
+            idFromName: (name) => {
+                names.push(name);
+
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "Done."]),
+            shardDO: shard,
+        });
+
+        // `LunoraClient.streamRpc({ shardKey })` puts the key on the envelope, not in the args.
+        const request = new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: { prompt: "what tables?" }, functionPath: AI_CHAT_OP, shardKey: "channel:envelope" }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+            method: "POST",
+        });
+
+        await decoded(await worker.fetch(request, {}, fakeContext));
+
+        expect(names).toContain("channel:envelope");
+    });
+
+    it("offers no tools to an Access-only admin the shard cannot authenticate", async () => {
+        expect.assertions(3);
+
+        const forwarded: string[] = [];
+        // No static admin token anywhere: the Access grant clears the worker's gate,
+        // but there is no bearer to mint, so the shard would answer every tool 403.
+        const worker = createWorker({
+            adminGate: (request) => request.headers.get("cf-access-jwt-assertion") === "good",
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "No tools."]),
+            shardDO: recordingShard(forwarded),
+        });
+
+        const request = new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: { prompt: "what tables?" }, functionPath: AI_CHAT_OP }),
+            headers: { "cf-access-jwt-assertion": "good" },
+            method: "POST",
+        });
+
+        const body = await decoded(await worker.fetch(request, {}, fakeContext));
+
+        expect(forwarded).toStrictEqual([]);
+        expect(body).toMatchObject({ degraded: false, reply: "No tools." });
+        expect(JSON.stringify(body["toolCalls"])).toContain("no tools are available in this deployment");
+    });
 });
 
 describe("createWorker — aiChat data-sharing level", () => {
@@ -993,6 +1051,18 @@ describe("createWorker — aiAvailable admin RPC", () => {
         // the operator WHY every assistant surface vanished.
         expect(body["available"]).toBe(false);
         expect(body["level"]).toBe("disabled");
+    });
+
+    it("finds the AI binding and level on env for a worker wired by hand", async () => {
+        expect.assertions(2);
+
+        // No `aiChatBinding` / `aiOptInLevel` option: the shape of a hand-written
+        // `createWorker`, which the shard's one-shot assistant ops still serve off `env.AI`.
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: recordingShard([]) });
+        const body = await decoded(await worker.fetch(probe(), { AI: slowBinding(0), LUNORA_AI_OPT_IN: "schema_and_log" }, fakeContext));
+
+        expect(body["available"]).toBe(true);
+        expect(body["level"]).toBe("schema_and_log");
     });
 
     it("reports unavailable when no AI binding is wired, and never reaches a shard", async () => {

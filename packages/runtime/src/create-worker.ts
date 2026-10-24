@@ -823,8 +823,9 @@ interface WorkerOptions {
      * The Workers `AI` binding backing the studio's chat assistant (the
      * `__lunora_admin__:aiChat` admin RPC). Served HERE at the worker rather than
      * on a shard because the DO's admin dispatch is single-threaded and a
-     * conversation would hold it open — see `ai-chat-rpc.ts`. Pass `env.AI`. Omit
-     * it and a turn degrades with reason `no-ai-binding`, which hides the panel;
+     * conversation would hold it open — see `ai-chat-rpc.ts`. Pass `env.AI`; left
+     * unset it falls back to the request's `env.AI`. With neither, a turn degrades
+     * with reason `no-ai-binding`, which hides the panel;
      * a caller without a valid admin bearer always gets `ADMIN_FORBIDDEN` first
      * (default-closed).
      *
@@ -839,7 +840,8 @@ interface WorkerOptions {
      * `"schema"` (the default) lets it read table and column NAMES; `"schema_and_log"`
      * adds recent log lines; `"schema_and_log_and_data"` adds reading rows with
      * `runSql`; `"disabled"` turns the assistant off entirely. Codegen passes
-     * `env.LUNORA_AI_OPT_IN`, so this is a wrangler var rather than a code change.
+     * `env.LUNORA_AI_OPT_IN` (and so does the worker, when this is left unset), so
+     * this is a wrangler var rather than a code change.
      *
      * Deliberately server-side: a level the browser could pick would not be a gate,
      * so nothing about it is read off the request. `DEFAULT_AI_OPT_IN_LEVEL` in
@@ -2297,6 +2299,9 @@ const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
     return spec as FanOutSpec;
 };
 
+/** One binding or var off a request's env, which is `unknown` until a handler narrows it. */
+const envVariable = (env: unknown, name: string): unknown => (env as Record<string, unknown> | undefined)?.[name];
+
 /**
  * Dev request-loop diagnostic. With `LUNORA_DEBUG_RPC` set on the worker env
  * (e.g. in `.dev.vars`), emit one line per RPC so a client-side request loop
@@ -3570,8 +3575,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- defined further down this closure and only ever read per request; the same exception this file already takes for `resolvedSecurity`
             return { forward: forwardRpcToShard, headers: context.headers };
         },
-        getBinding: () => options.aiChatBinding,
-        optInLevel: () => asOptInLevel(options.aiOptInLevel),
+        // Fall back to the request's env so a hand-wired worker (`createLunoraHandler`,
+        // a hand-written `createWorker`) matches the shard's one-shot ops, which read
+        // `env.AI` and `env.LUNORA_AI_OPT_IN` directly. Codegen sets the options
+        // from the same two vars, so it behaves identically.
+        getBinding: (env) => options.aiChatBinding ?? (envVariable(env, "AI") as AiRunBinding | undefined),
+        optInLevel: (env) => asOptInLevel(options.aiOptInLevel ?? envVariable(env, "LUNORA_AI_OPT_IN")),
     };
 
     const aiChat = buildAiChat(aiRpcDeps);
@@ -3692,7 +3701,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (envelope.functionPath === AI_CHAT_OP) {
-            return aiChat(request, envelope.args ?? {}, env);
+            const args = envelope.args ?? {};
+
+            // `LunoraClient.streamRpc` documents `shardKey` as an option and puts it
+            // on the envelope; the tools read it from the args. The args win, so the
+            // Studio (which sends both) is unchanged.
+            return aiChat(request, args["shardKey"] === undefined && envelope.shardKey !== undefined ? { ...args, shardKey: envelope.shardKey } : args, env);
         }
 
         if (envelope.functionPath === AI_AVAILABLE_OP) {

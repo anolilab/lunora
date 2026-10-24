@@ -76,8 +76,12 @@ interface AiChatRpcDeps {
      */
     forwardToShard?: (request: Request, env: unknown) => Promise<{ forward: ForwardToShard; headers: Record<string, string> }>;
 
-    /** The app's Workers `AI` binding, or undefined when none is wired. */
-    getBinding: () => AiRunBinding | undefined;
+    /**
+     * The app's Workers `AI` binding, or undefined when none is wired. Takes the
+     * request's `env` so a worker wired by hand, which never sets
+     * `aiChatBinding`, still finds the `AI` binding the shard's one-shot ops read.
+     */
+    getBinding: (env: unknown) => AiRunBinding | undefined;
 
     /**
      * How much of the deployment this app lets the assistant read.
@@ -86,7 +90,7 @@ interface AiChatRpcDeps {
      * a level the browser chose, which is not a gate. The studio is told what the
      * level is (through a refusal it can render) and can never raise it.
      */
-    optInLevel: () => AiOptInLevel;
+    optInLevel: (env: unknown) => AiOptInLevel;
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
@@ -261,7 +265,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
     const handle = async (request: Request, args: Record<string, unknown>, env: unknown): Promise<Response> => {
         deps.assertAdmin(request);
 
-        const binding = deps.getBinding();
+        const binding = deps.getBinding(env);
         const rawSchema = args["schema"];
         const chatArgs: ChatArgs = {
             /*
@@ -299,8 +303,19 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
         const runner =
             binding === undefined || deps.forwardToShard === undefined
                 ? undefined
-                : await (async (): Promise<ChatToolRunner> => {
+                : await (async (): Promise<ChatToolRunner | undefined> => {
                       const { forward, headers } = await (deps.forwardToShard as NonNullable<AiChatRpcDeps["forwardToShard"]>)(request, env);
+
+                      /*
+                       * The shard trusts only a static admin bearer. An Access-only
+                       * admin with no token configured has nothing to forward, so
+                       * every tool read would come back 403 and be fed to the model
+                       * as an error. Offering no tools says so once, up front, as
+                       * the engine's "no tools are available" refusal.
+                       */
+                      if (headers["authorization"] === undefined) {
+                          return undefined;
+                      }
 
                       /*
                        * The shard the console has OPEN, named by the caller — which
@@ -318,7 +333,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                       return chatToolRunner(forward, shardKey, headers, request, schema);
                   })();
 
-        const level = deps.optInLevel();
+        const level = deps.optInLevel(env);
         const encoder = new TextEncoder();
 
         const body = new ReadableStream<Uint8Array>({
@@ -401,11 +416,11 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
  * the level and can never send one.
  */
 const buildAiAvailable = (deps: Pick<AiChatRpcDeps, "assertAdmin" | "getBinding" | "optInLevel">): AiChatRpcHandler => {
-    const handle = (request: Request): Promise<Response> => {
+    const handle = (request: Request, _args: Record<string, unknown>, env: unknown): Promise<Response> => {
         deps.assertAdmin(request);
 
-        const level = deps.optInLevel();
-        const result: AiAvailableResult = { available: level !== "disabled" && deps.getBinding() !== undefined, level };
+        const level = deps.optInLevel(env);
+        const result: AiAvailableResult = { available: level !== "disabled" && deps.getBinding(env) !== undefined, level };
 
         return Promise.resolve(Response.json({ result: encodeWire(result) }, { headers: { "content-type": "application/json" }, status: 200 }));
     };
