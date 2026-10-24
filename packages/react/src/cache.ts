@@ -230,7 +230,15 @@ class LunoraSubscriptionRegistry {
             }
         }
 
-        const snapshot = await fetch();
+        let snapshot: T;
+
+        try {
+            snapshot = await fetch();
+        } finally {
+            // A render that suspended on this fetch may never commit, so no subscription attaches to
+            // take the state over; dynamic keys would pile up here.
+            this.forgetIdleLive(key);
+        }
 
         // A push that landed during the fetch wins, `null` included: `??` would read a pushed null as missing.
         if (live.pushed) {

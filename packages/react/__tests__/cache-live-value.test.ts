@@ -64,4 +64,46 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
 
         await expect(result).resolves.toBeNull();
     });
+
+    it("forgets the live state of a key nothing subscribes to once the HTTP fallback settles", async () => {
+        expect.assertions(1);
+
+        const registry = new LunoraSubscriptionRegistry(silentClient);
+
+        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, async () => "snapshot", false);
+
+        expect(registry["live"].size).toBe(0);
+    });
+
+    it("forgets the live state of a key nothing subscribes to when the HTTP fallback rejects", async () => {
+        expect.assertions(2);
+
+        const registry = new LunoraSubscriptionRegistry(silentClient);
+
+        await expect(
+            registry.liveValue(
+                new QueryClient(),
+                KEY,
+                new AbortController().signal,
+                async () => {
+                    throw new Error("offline");
+                },
+                false,
+            ),
+        ).rejects.toThrow("offline");
+
+        expect(registry["live"].size).toBe(0);
+    });
+
+    it("keeps the live state of a key a subscription still feeds", async () => {
+        expect.assertions(1);
+
+        const registry = new LunoraSubscriptionRegistry(silentClient);
+
+        registry["entries"].set(keyHash(KEY), {} as never);
+
+        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, async () => "snapshot", false);
+
+        expect(registry["live"].has(keyHash(KEY))).toBe(true);
+    });
 });
