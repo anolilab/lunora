@@ -7,7 +7,8 @@ import { saas } from "./saas/schema";
 // lunora:add:ratelimit:start
 import { ratelimit } from "./ratelimit/schema";
 // lunora:add:ratelimit:end
-import { defineSchema, defineTable, v } from "lunorash/server";
+import { paymentExtension } from "@lunora/payment";
+import { defineSchema } from "lunorash/server";
 
 /**
  * Your tables go in the `defineSchema({ … })` call; the kit's arrive through the
@@ -16,11 +17,15 @@ import { defineSchema, defineTable, v } from "lunorash/server";
  * The default export is load-bearing — codegen's generated `app.ts` and
  * `shard.ts` import this module's default.
  */
-export default defineSchema({
+export default defineSchema({})
     /*
-     * The payment store's tables, declared INLINE and UNPREFIXED because that is
-     * what works: codegen parses this file as an AST, so a spread is silently
-     * skipped, and a `.extend()` merge would prefix names the store reads bare.
+     * The payment store's tables, as the package's own schema extension: the store
+     * reads and writes them as `payment_customers`, `payment_sessions`,
+     * `payment_subscriptions`, … — names, columns and indexes that live in
+     * `@lunora/payment`, so an upgrade brings a new column with no edit here.
+     * Copying them inline instead drifts from what the store writes, and a
+     * column type that disagrees (money is stored as numbers) fails every
+     * payment write.
      *
      * They are root-scoped rather than `.shardBy("referenceId")`, and that is a
      * deliberate asymmetry with the rest of this app. A provider webhook arrives
@@ -30,75 +35,7 @@ export default defineSchema({
      * which is what keeps a subscription tenant-scoped logically even though it
      * is not tenant-sharded physically.
      */
-    customers: defineTable({
-        createdAt: v.number(),
-        email: v.optional(v.string()),
-        provider: v.string(),
-        providerCustomerId: v.string(),
-        referenceId: v.string(),
-    })
-        .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    // Append-only webhook log: inbound idempotency + audit + debugging.
-    events: defineTable({
-        processedAt: v.number(),
-        provider: v.string(),
-        providerEventId: v.string(),
-        type: v.string(),
-    }).index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
-
-    paymentSessions: defineTable({
-        amountMinor: v.bigint(),
-        capturedMinor: v.bigint(),
-        createdAt: v.number(),
-        currency: v.string(),
-        provider: v.string(),
-        providerSessionId: v.string(),
-        referenceId: v.string(),
-        refundedMinor: v.bigint(),
-        state: v.string(),
-        updatedAt: v.number(),
-    })
-        .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    subscriptions: defineTable({
-        cancelAtPeriodEnd: v.boolean(),
-        createdAt: v.number(),
-        currentPeriodEnd: v.optional(v.number()),
-        currentPeriodStart: v.optional(v.number()),
-        priceId: v.string(),
-        // Every price a multi-item subscription bills; the store writes it, and
-        // `lunora/payment/schema.ts` declares it.
-        priceIds: v.optional(v.array(v.string())),
-        provider: v.string(),
-        providerSubscriptionId: v.string(),
-        quantity: v.number(),
-        referenceId: v.string(),
-        state: v.string(),
-        updatedAt: v.number(),
-    })
-        .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    // Append-only metered-usage ledger: `track` writes, `check` sums over the
-    // current period. The unique `by_idempotency` index is what makes recording
-    // exactly-once under concurrent/retried writes.
-    usageEvents: defineTable({
-        createdAt: v.number(),
-        featureId: v.string(),
-        idempotencyKey: v.string(),
-        /** `"add"` (default when absent) or `"set"` — an absolute marker the period fold resets to. */
-        mode: v.optional(v.string()),
-        provider: v.string(),
-        quantity: v.number(),
-        referenceId: v.string(),
-        reportedToProvider: v.boolean(),
-    })
-        .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
-        .index("by_reference_feature", ["referenceId", "featureId"]),
-})
+    .extend(paymentExtension)
     // lunora:add:ratelimit:start
     .extend(ratelimit.extension)
     // lunora:add:ratelimit:end
