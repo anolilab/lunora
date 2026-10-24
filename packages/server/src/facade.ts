@@ -216,6 +216,11 @@ export interface UpsertManyArgs {
  * mutate — a row in an unrelated table (IDOR). Writers that ignore the second
  * argument keep their previous global behaviour; the scoping is opt-in via this
  * forwarded name.
+ *
+ * Cost: on a `.global()` table, `ctx.db.<table>.get(id)` probes only `tableName`.
+ * The unscoped `ctx.db.get(id)` cannot name its table, so it probes every global
+ * table for the id in parallel on each call. Use the table accessor for by-id
+ * reads of `.global()` rows.
  */
 export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): FacadeEntry => {
     // Insert + skipDuplicates: on a UNIQUE breach the insert resolves to `null`

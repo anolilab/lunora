@@ -117,6 +117,18 @@ public final class Client {
      */
     public static final String CODE_WIRE_DECODE_FAILED = "WIRE_DECODE_FAILED";
 
+    /** The error code the server sends when the session credential has expired. */
+    private static final String CODE_TOKEN_EXPIRED = "TOKEN_EXPIRED";
+
+    /** Close code: the session has expired. */
+    private static final int CLOSE_TOKEN_EXPIRED = 4001;
+
+    /** Close code: the server refused the credential, or no {@code connect} arrived in time. */
+    private static final int CLOSE_REFUSED = 4003;
+
+    /** The 4003 reason for a socket that never sent {@code connect}: it refused no credential. */
+    private static final String CONNECT_DEADLINE = "connect deadline";
+
     /**
      * A success whose {@code result} would not decode. It keeps the commit cursor the reply echoed,
      * because the write DID commit and its optimistic overlay confirms against that cursor.
@@ -148,9 +160,38 @@ public final class Client {
 
     /**
      * The session credential, sent as {@code connect.token} on every socket open. A provider so the
-     * value is read fresh on each reconnect; it never enters the socket URL.
+     * value is read fresh on each reconnect; it never enters the socket URL. Written under {@link
+     * #lock} together with {@link #credentialGeneration}.
      */
     private volatile Supplier<String> wsTokenProvider;
+
+    /**
+     * Bumped on every {@link #wsToken} call. A refused credential is reported once per generation,
+     * so a new credential re-arms the report. Guarded by {@link #lock}.
+     */
+    private int credentialGeneration;
+
+    /** The generation the open socket was attached under. Guarded by {@link #lock}. */
+    private int socketGeneration;
+
+    /**
+     * The generation a 4003 refusal was last reported for; -1 before the first. Guarded by {@link
+     * #lock}.
+     */
+    private int refusedGeneration = -1;
+
+    /** The {@link #onTokenExpired} listeners. Guarded by {@link #lock}. */
+    private final List<Registration<Runnable>> tokenExpiredListeners = new ArrayList<>();
+
+    /**
+     * Topics whose join write failed, so the next listener on them sends the join again. Guarded by
+     * {@link #lock}.
+     */
+    private final Set<String> unjoinedTopics = new LinkedHashSet<>();
+
+    /** The {@link #whisperSubscribe} listeners, per topic. Guarded by {@link #lock}. */
+    private final Map<String, List<Registration<Consumer<Object>>>> whisperListeners =
+            new LinkedHashMap<>();
 
     /** The ephemeral admin ticket, sent as {@code ?token=} on the socket URL by {@link #wsUrl}. */
     private volatile Supplier<String> wsTicketProvider;
@@ -369,7 +410,10 @@ public final class Client {
      * connect.token}. Pass {@code null} to stop sending one.
      */
     public void wsToken(Supplier<String> provider) {
-        this.wsTokenProvider = provider;
+        synchronized (lock) {
+            this.wsTokenProvider = provider;
+            this.credentialGeneration++;
+        }
     }
 
     /**
@@ -475,48 +519,273 @@ public final class Client {
      *
      * <p>It sends the {@code connect} frame first, carrying the session credential from {@link
      * #wsToken(Supplier)} resolved now, so every open and every reconnect presents it before any
-     * subscription. The app must not send {@code connect} itself.
+     * subscription. The app must not send {@code connect} itself. Pass {@code null} for {@code
+     * context} when there is none; a non-null {@code context} rides the {@code connect} frame,
+     * where the server records it for the {@code onConnect} lifecycle hooks, so it applies to every
+     * open and reconnect, not only the first.
      *
      * <p>It also latches "has connected at least once", which is what the write queue gates on: a
      * write made before the FIRST connect fails fast by default, so a misconfigured endpoint
      * surfaces on the first write instead of silently filling a queue that will never flush.
      */
-    public void attachSocket(FrameSender sender) {
-        attachSocket(sender, null);
-    }
-
-    /**
-     * {@link #attachSocket(FrameSender)} with a connection {@code context} on the {@code connect}
-     * frame. The server records it for the {@code onConnect} lifecycle hooks, so it applies to
-     * every open and reconnect, not only the first.
-     */
     public void attachSocket(FrameSender sender, Map<String, Object> context) {
-        // Writes queue while the connect frame goes out, so none can reach the socket this one
-        // replaces.
+        Supplier<String> provider;
         long generation;
+        int credential;
 
+        // Writes queue while the connect frame goes out, so none can reach the socket this one
+        // replaces. The credential is read with the attach generation: a rotation racing this
+        // attach must not tag the socket with a generation newer than the credential it presents.
         synchronized (lock) {
             this.sender = null;
             generation = ++this.attachGeneration;
+            provider = wsTokenProvider;
+            credential = credentialGeneration;
         }
 
-        sender.send(buildConnectFrame(clientId, context, resolve(wsTokenProvider)));
+        sender.send(buildConnectFrame(clientId, context, resolve(provider)));
 
         // A detach or a newer attach during the send supersedes this one: installing this sender
-        // would undo it.
+        // would undo it, so it is not installed and its whisper joins are not sent. The joins are
+        // written under the lock, so a last-listener leave cannot unsubscribe between this snapshot
+        // and its join. Whisper joins follow connect and precede the resubscribe, as any frame on
+        // the socket does. A join that throws leaves the client offline, and the error propagates.
         synchronized (lock) {
-            if (generation == this.attachGeneration) {
-                this.sender = sender;
-                this.wasEverConnected = true;
+            if (generation != this.attachGeneration) {
+                return;
+            }
+
+            this.sender = sender;
+            this.socketGeneration = credential;
+            this.wasEverConnected = true;
+
+            try {
+                for (String topic : new ArrayList<>(whisperListeners.keySet())) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach:
+                    // the
+                    // remaining joins are not written to a socket that is no longer attached.
+                    if (generation != this.attachGeneration) {
+                        return;
+                    }
+
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                }
+
+                unjoinedTopics.clear();
+            } catch (RuntimeException failure) {
+                if (this.sender == sender) {
+                    this.sender = null;
+                }
+
+                throw failure;
             }
         }
     }
 
-    /** Forgets the sender, so subsequent writes queue rather than fail. */
-    public void detachSocket() {
+    /**
+     * Forgets the sender, so subsequent writes queue rather than fail, and classifies the close.
+     *
+     * <p>A 4001 always reports token expiry. A 4003 reports it once per credential generation, and
+     * only from a socket opened under the current one: a socket opened under an earlier generation
+     * refused a credential no longer in force. The {@code connect deadline} close refuses no
+     * credential. Any other close, or none ({@code null}), reports nothing. Either way the client
+     * is offline until the next attach.
+     */
+    public void detachSocket(Integer closeCode, String reason) {
+        boolean expired = false;
+
         synchronized (lock) {
             this.sender = null;
             this.attachGeneration++;
+
+            if (closeCode != null && closeCode == CLOSE_TOKEN_EXPIRED) {
+                expired = true;
+            } else if (closeCode != null
+                    && closeCode == CLOSE_REFUSED
+                    && !CONNECT_DEADLINE.equals(reason)
+                    && socketGeneration == credentialGeneration
+                    && socketGeneration != refusedGeneration) {
+                refusedGeneration = socketGeneration;
+                expired = true;
+            }
+        }
+
+        if (expired) {
+            notifyTokenExpired();
+        }
+    }
+
+    /**
+     * Observes token expiry: a 4001 close, a {@code TOKEN_EXPIRED} frame, or a refused session
+     * credential (once per credential). Returns an unregister handle.
+     *
+     * <p>A listener that throws is contained, so it cannot break a detach or the frame reader.
+     */
+    public Runnable onTokenExpired(Runnable listener) {
+        Registration<Runnable> registration = new Registration<>(listener);
+
+        synchronized (lock) {
+            tokenExpiredListeners.add(registration);
+        }
+
+        return () -> {
+            synchronized (lock) {
+                tokenExpiredListeners.remove(registration);
+            }
+        };
+    }
+
+    /** Runs every {@link #onTokenExpired} listener; call with {@link #lock} released. */
+    private void notifyTokenExpired() {
+        List<Registration<Runnable>> snapshot;
+
+        synchronized (lock) {
+            snapshot = new ArrayList<>(tokenExpiredListeners);
+        }
+
+        for (Registration<Runnable> registration : snapshot) {
+            try {
+                registration.listener.run();
+            } catch (RuntimeException ignored) {
+                // The app's listener must not end the socket reader or fail a detach.
+            }
+        }
+    }
+
+    /**
+     * Joins the whisper {@code topic} and hands each delivered value to {@code listener}, decoded.
+     * Returns an unregister handle; removing a topic's last listener leaves the topic.
+     *
+     * <p>The first listener on a topic sends {@code whisper_subscribe} if a socket is attached, and
+     * every attach rejoins each topic after {@code connect}. Nothing is queued while detached, and
+     * no acknowledgement is awaited: a room topic is never acked.
+     */
+    public Runnable whisperSubscribe(String topic, Consumer<Object> listener) {
+        Registration<Consumer<Object>> registration = new Registration<>(listener);
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave
+        // cannot overtake it. A join that fails is retried by the next listener on the topic.
+        synchronized (lock) {
+            List<Registration<Consumer<Object>>> listeners =
+                    whisperListeners.computeIfAbsent(topic, key -> new ArrayList<>());
+            boolean join = listeners.isEmpty() || unjoinedTopics.contains(topic);
+
+            listeners.add(registration);
+
+            if (join && sender != null) {
+                try {
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                    unjoinedTopics.remove(topic);
+                } catch (RuntimeException failure) {
+                    unjoinedTopics.add(topic);
+                    throw failure;
+                }
+            }
+        }
+
+        return () -> leaveWhisper(topic, registration);
+    }
+
+    /** Removes one registration; the last one on a topic also sends {@code whisper_unsubscribe}. */
+    private void leaveWhisper(String topic, Registration<Consumer<Object>> registration) {
+        // The unsubscribe goes out under the lock, in the order the listener state changes. It is
+        // sent
+        // before the state is removed, so a write that throws leaves the listener registered and
+        // the
+        // leave can be retried: the membership is not stranded on the server.
+        synchronized (lock) {
+            List<Registration<Consumer<Object>>> listeners = whisperListeners.get(topic);
+
+            if (listeners == null || !listeners.contains(registration)) {
+                return;
+            }
+
+            if (listeners.size() > 1) {
+                listeners.remove(registration);
+
+                return;
+            }
+
+            if (sender != null) {
+                sender.send(buildWhisperUnsubscribeFrame(topic));
+            }
+
+            whisperListeners.remove(topic);
+            unjoinedTopics.remove(topic);
+        }
+    }
+
+    /**
+     * Sends {@code data} to the other members of {@code topic}. Returns false, sending nothing,
+     * when no socket is attached: a whisper is transient and is not queued. The data is encoded
+     * first, so an unencodable value throws whether or not a socket is attached.
+     */
+    public boolean whisper(String topic, Object data) {
+        Map<String, Object> frame = buildWhisperFrame(topic, data);
+        FrameSender socket;
+
+        synchronized (lock) {
+            socket = sender;
+        }
+
+        if (socket == null) {
+            return false;
+        }
+
+        socket.send(frame);
+
+        return true;
+    }
+
+    /** A joined room. {@link #close} leaves it; {@link #send} is {@link #whisper} on its topic. */
+    public static final class Room implements AutoCloseable {
+        private final Client client;
+        private final String topic;
+        private final Runnable leave;
+        private volatile boolean closed;
+
+        private Room(Client client, String topic, Runnable leave) {
+            this.client = client;
+            this.topic = topic;
+            this.leave = leave;
+        }
+
+        /**
+         * Sends {@code message} to the room; false when no socket is attached, or the room is
+         * closed.
+         */
+        public boolean send(Object message) {
+            return !closed && client.whisper(topic, message);
+        }
+
+        /** Leaves the room. Idempotent. */
+        @Override
+        public void close() {
+            closed = true;
+            leave.run();
+        }
+    }
+
+    /**
+     * Joins the room {@code name} (the whisper topic {@code room:<name>}). It is never
+     * acknowledged, so there is nothing to wait for before {@link Room#send}.
+     */
+    public Room connectRoom(String name, Consumer<Object> listener) {
+        String topic = "room:" + name;
+
+        return new Room(this, topic, whisperSubscribe(topic, listener));
+    }
+
+    /**
+     * A listener registration. A holder rather than the listener itself: the same lambda registered
+     * twice is two entries, and each handle removes only its own. Identity equality, so a record
+     * (whose equality is by value) would not do.
+     */
+    private static final class Registration<T> {
+        final T listener;
+
+        Registration(T listener) {
+            this.listener = listener;
         }
     }
 
@@ -868,6 +1137,37 @@ public final class Client {
 
     private static String resolve(Supplier<String> provider) {
         return provider == null ? null : provider.get();
+    }
+
+    /** The {@code whisper_subscribe} frame: joins {@code topic} on this socket. */
+    public static Map<String, Object> buildWhisperSubscribeFrame(String topic) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("topic", topic);
+        frame.put("type", "whisper_subscribe");
+
+        return frame;
+    }
+
+    /** The {@code whisper_unsubscribe} frame: leaves {@code topic}. */
+    public static Map<String, Object> buildWhisperUnsubscribeFrame(String topic) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("topic", topic);
+        frame.put("type", "whisper_unsubscribe");
+
+        return frame;
+    }
+
+    /** The {@code whisper} frame: {@code data} wire-encoded, sent to the topic's other members. */
+    public static Map<String, Object> buildWhisperFrame(String topic, Object data) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("data", Wire.encode(data));
+        frame.put("topic", topic);
+        frame.put("type", "whisper");
+
+        return frame;
     }
 
     public static Map<String, Object> buildSubscribeFrame(
@@ -1327,6 +1627,15 @@ public final class Client {
                 SubscriptionError error =
                         new SubscriptionError(
                                 envelope.get("code") instanceof String code ? code : null, message);
+
+                // Token expiry is the session's, not the subscription's: report it, and do not
+                // route the frame, whether or not it names one.
+                if (CODE_TOKEN_EXPIRED.equals(error.code())) {
+                    notifyTokenExpired();
+
+                    return kind;
+                }
+
                 List<Consumer<SubscriptionError>> handlers = new ArrayList<>();
 
                 synchronized (lock) {
@@ -1392,6 +1701,35 @@ public final class Client {
                                             ? base
                                             : null,
                                     frame.get("epoch") instanceof String epoch ? epoch : null));
+                }
+            }
+            case "whisper" -> {
+                // A whisper names its topic, so one without a non-empty string topic reaches no
+                // listener, and one whose data will not decode is dropped rather than raised.
+                if (!(frame.get("topic") instanceof String topic) || topic.isEmpty()) {
+                    return kind;
+                }
+
+                Object value;
+
+                try {
+                    value = Wire.decode(frame.get("data"));
+                } catch (RuntimeException undecodable) {
+                    return kind;
+                }
+
+                List<Registration<Consumer<Object>>> listeners;
+
+                synchronized (lock) {
+                    listeners = List.copyOf(whisperListeners.getOrDefault(topic, List.of()));
+                }
+
+                for (Registration<Consumer<Object>> registration : listeners) {
+                    try {
+                        registration.listener.accept(value);
+                    } catch (RuntimeException ignored) {
+                        // An app listener must not end the socket reader.
+                    }
                 }
             }
             case "pokePart" -> bufferPokePart(frame);

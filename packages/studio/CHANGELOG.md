@@ -1,3 +1,31 @@
+## @lunora/studio [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.336...@lunora/studio@1.0.0-alpha.337) (2026-10-23)
+
+### Features
+
+* **studio:** show enum values in the schema graph ([#1319](https://github.com/anolilab/lunora/issues/1319)) ([ad062ac](https://github.com/anolilab/lunora/commit/ad062ac318896082b79e2a6af5b79be2ddb1481c))
+* **studio:** show SQL run time in the results header ([#1317](https://github.com/anolilab/lunora/issues/1317)) ([27f3e8e](https://github.com/anolilab/lunora/commit/27f3e8ea19e6ec528835f7a0af708794815796d2))
+
+## @lunora/studio [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.335...@lunora/studio@1.0.0-alpha.336) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.253
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/react:** upgraded to 1.0.0-alpha.258
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/studio [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.334...@lunora/studio@1.0.0-alpha.335) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.252
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/react:** upgraded to 1.0.0-alpha.257
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
 ## @lunora/studio [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.333...@lunora/studio@1.0.0-alpha.334) (2026-10-22)
 
 

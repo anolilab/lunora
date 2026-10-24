@@ -3,7 +3,7 @@ import { buildDeclarationBlocks, buildFieldLines, buildMethodBlocks, buildShardF
 import type { EmitAppOptions, ResolvedAppOptions } from "./emit/app-helpers";
 import { buildGlobalHelpers, buildSchedulerHelper, buildStorageHelpers } from "./emit/app-helpers";
 import buildImportLines from "./emit/app-imports";
-import { buildBaseWorkerOptions, buildWorkerOptionLines } from "./emit/app-worker-options";
+import { buildBaseWorkerOptions, buildFrameworkHostLine, buildWorkerOptionLines } from "./emit/app-worker-options";
 
 /** The per-`env` identity memo store an assembled worker owns; emitted only with `.auth()`. */
 const identityMemoStoreType = (hasAuth: boolean): string =>
@@ -152,7 +152,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     // otherwise it's a standalone `createWorker`.
     const buildWorkerLine = options.hasFramework
         ? `        const buildWorker = (env: Env): LunoraWorker =>
-            host ? withFrameworkWorker(host, (hostEnv) => this.buildWorkerOptions(hostEnv as Env, ${getAuthArgument})) : createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`
+            host ? withFrameworkWorker(${buildFrameworkHostLine(options)}, (hostEnv) => this.buildWorkerOptions(hostEnv as Env, ${getAuthArgument})) : createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`
         : `        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
 

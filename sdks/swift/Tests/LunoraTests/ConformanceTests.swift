@@ -130,6 +130,12 @@ final class ConformanceTests: XCTestCase {
             case "offline_online_only_sends_when_connected": try caseOfflineOnlineOnlySendsWhenConnected()
             case "offline_online_only_transport_failure_refused": try caseOfflineOnlineOnlyTransportFailureRefused()
             case "offline_online_only_leaves_normal_writes_queued": try caseOfflineOnlineOnlyLeavesNormalWritesQueued()
+            case "connect_frame_first_and_carries_session_token": try testConnectFrameFirstAndCarriesSessionToken()
+            case "ws_url_carries_only_the_admin_ticket": try testWSURLCarriesOnlyTheAdminTicket()
+            case "attach_socket_carries_connection_context": try testAttachSocketCarriesConnectionContext()
+            case "close_codes_drive_token_expiry": try testCloseCodesDriveTokenExpiry()
+            case "whisper_frames_join_send_and_deliver": try testWhisperFramesJoinSendAndDeliver()
+            case "whisper_topics_rejoin_after_reconnect": try testWhisperTopicsRejoinAfterReconnect()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -530,6 +536,8 @@ final class ConformanceTests: XCTestCase {
             var resent: [[String: Any]] = []
 
             client.attachSocket { resent.append($0) }
+            // The connect frame that opens the socket is not a resend.
+            resent.removeAll()
             client.resendSubscriptions()
 
             let query = try XCTUnwrap(resent.first?["query"] as? [String: Any])
@@ -735,6 +743,8 @@ final class ConformanceTests: XCTestCase {
         var resent: [[String: Any]] = []
 
         client.attachSocket { resent.append($0) }
+        // The connect frame that opens the socket is not a resend.
+        resent.removeAll()
         client.resendSubscriptions()
 
         XCTAssertEqual(resent.map { $0["type"] as? String }, ["subscribe", "shape_subscribe"])
@@ -1228,7 +1238,10 @@ final class ConformanceTests: XCTestCase {
         // Attached only now, so the count below sees resend frames alone.
         let resent = ResentCounter()
 
-        client.attachSocket { _ in resent.increment() }
+        // Only the resent subscribe frames count: the connect frame that opens the socket is not one.
+        client.attachSocket { frame in
+            if frame["type"] as? String == "subscribe" { resent.increment() }
+        }
         client.resendSubscriptions()
 
         XCTAssertEqual(resent.value, threads * perThread, "every concurrent subscribe survived with a distinct id")
