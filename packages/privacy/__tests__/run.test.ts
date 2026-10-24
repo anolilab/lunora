@@ -258,6 +258,31 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("leaves another erasure request of the subject open when an erasure completes", async () => {
+        const { port } = memoryData({});
+        const { privacy, store } = setup({ data: port, erasure: NO_GRACE });
+        const first = await privacy.requestErasure();
+        // The service refuses a second open erasure, so the store holds one a duplicate or an older run left behind.
+        const stranded = [
+            { ...first, id: "stranded-received", status: "received" as const },
+            { ...first, id: "stranded-grace", status: "grace" as const },
+            { ...first, id: "stranded-processing", status: "processing" as const },
+        ];
+
+        for (const row of stranded) {
+            store.rows.set(row.id, row);
+        }
+
+        await privacy.runErasure(first.id);
+
+        expect(store.rows.get(first.id)?.status).toBe("completed");
+
+        for (const row of stranded) {
+            expect(store.rows.get(row.id)?.status).toBe(row.status);
+            expect(store.events).not.toContain(`${row.id}:failed`);
+        }
+    });
+
     it("stops a queued export's run when the erasure already completed, even though the export is still received", async () => {
         const { port } = memoryData({});
         const { privacy, store } = setup({ data: port, erasure: NO_GRACE });

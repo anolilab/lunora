@@ -508,7 +508,10 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
     // id, so a retried erasure lists it again and finishes the cleanup, which is safe to repeat.
     await Promise.all(
         others.map(async (request) => {
-            await failOpenRequest(ports, request, "UNPROCESSABLE: the subject was erased before the export finished");
+            // Only an export is failed: another erasure of the subject is a request this one does not own.
+            if (request.type === "export") {
+                await failOpenRequest(ports, request, "UNPROCESSABLE: the subject was erased before the export finished");
+            }
 
             const current = (await ports.store.get(request.id)) ?? request;
 
