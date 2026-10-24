@@ -45,18 +45,15 @@ const useSuspenseQuery = <F extends FunctionReference>(function_: F, args: ArgsO
             // `initialData` above could not see the durable cache if it was still loading at first render.
             const hydrated = client.peekHydratedQueryByKey(function_.__lunoraRef, argsKey, shardKey) as ReturnOf<F> | undefined;
 
-            // `false`: never wait for a push. This component's subscription attaches
+            // `waitForPush: false`: never wait for a push. This component's subscription attaches
             // in an effect, and a suspended component never commits one, so on a cold
             // mount nothing would push. A push that lands during the fetch still wins.
             return (
                 hydrated ??
-                getSubscriptionRegistry(client).liveValue(
-                    queryClient,
-                    queryKey,
-                    signal,
-                    () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
-                    false,
-                )
+                getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, {
+                    fetch: async () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+                    waitForPush: false,
+                })
             );
         },
         queryKey,

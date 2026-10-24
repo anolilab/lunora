@@ -5,11 +5,14 @@ import { keyHash } from "./query-key";
 
 /**
  * Per-key bookkeeping: a single WS subscription is shared across every hook
- * that observes the same `queryKey`. The `refCount` field tracks the consumers
- * so we close the underlying subscription on the last `detach()`.
+ * that observes the same `queryKey`, and closed on the last `detach()`.
  */
 interface RegistryEntry {
-    /** Every QueryClient attached to this key, counted by attach. A push lands in each of them. */
+    /**
+     * Every QueryClient attached to this key, counted by attach. A push lands in
+     * each of them, and a client leaves the map when its count reaches zero, so
+     * an empty map is the last detach.
+     */
     clients: Map<QueryClient, number>;
 
     /**
@@ -19,7 +22,6 @@ interface RegistryEntry {
      * the subscription opened still hears about it.
      */
     errorCallbacks: Set<SubscriptionErrorCallback>;
-    refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
@@ -53,23 +55,26 @@ const blankQuery = (query: Query | undefined): void => {
 };
 
 /**
- * A key's live state: whether the subscription has pushed a value, plus the
- * `queryFn`s waiting for the first one. Created on demand from either side:
- * `useQuery` can attach (and even receive its first push) before its
- * `queryFn` runs while the hydration gate holds the fetch, and the paginated
- * core runs its `queryFn` before it attaches.
+ * What the subscription has delivered since it opened or last blanked.
+ *
+ * `pushed` carries the last defined push, which lets a client whose own cache
+ * lost the entry be re-seeded without waiting for a push that may never come.
+ * `errored` means it errored before its first defined value: a `queryFn` that
+ * runs after that error (the hydration gate held it) has no settle left to wait
+ * for, so it goes straight to HTTP.
+ */
+type LiveState = { readonly status: "errored" | "idle" } | { readonly status: "pushed"; readonly value: unknown };
+
+const IDLE: LiveState = { status: "idle" };
+
+/**
+ * A key's live state plus the `queryFn`s waiting for its first value. Created
+ * on demand from either side: `useQuery` can attach (and even receive its first
+ * push) before its `queryFn` runs while the hydration gate holds the fetch, and
+ * the paginated core runs its `queryFn` before it attaches.
  */
 interface LiveValue {
-    /**
-     * Whether the subscription errored before its first defined value. A
-     * `queryFn` that runs after that error (the hydration gate held it) has no
-     * settle left to wait for, so it reads this and goes straight to HTTP.
-     */
-    errored: boolean;
-    /** Whether a defined value has been pushed since the subscription opened or last blanked. */
-    pushed: boolean;
-    /** The last defined push. Lets a client whose own cache lost the entry be re-seeded without waiting for a push that may never come. */
-    value: unknown;
+    state: LiveState;
     /** Settled with `true` on the first defined push, `false` when the subscription errors before one. */
     readonly waiters: Set<(pushed: boolean) => void>;
 }
@@ -82,6 +87,18 @@ const settle = (live: LiveValue, pushed: boolean): void => {
 
     live.waiters.clear();
 };
+
+interface LiveValueOptions<T> {
+    /** The HTTP query, run when nothing can push or the push does not come. */
+    fetch: () => Promise<T>;
+
+    /**
+     * Whether to wait for the subscription's first push before fetching. `false`
+     * where no subscription will attach in time, as for a suspended component,
+     * which never commits the effect that attaches one.
+     */
+    waitForPush?: boolean;
+}
 
 /**
  * How long a `queryFn` waits for the subscription's first push before it fetches
@@ -194,7 +211,9 @@ class LunoraSubscriptionRegistry {
      * (and revert) the fetch when the last observer unmounts rather than leave
      * it hanging on a push that may never come, so a remount waits afresh.
      */
-    public async liveValue<T>(queryClient: QueryClient, queryKey: QueryKey, signal: AbortSignal, fetch: () => Promise<T>, waitForPush = true): Promise<T> {
+    public async liveValue<T>(queryClient: QueryClient, queryKey: QueryKey, signal: AbortSignal, options: LiveValueOptions<T>): Promise<T> {
+        const { fetch, waitForPush = true } = options;
+
         if (!("window" in globalThis) || this.client.getWebSocketImpl() === undefined) {
             return fetch();
         }
@@ -202,10 +221,10 @@ class LunoraSubscriptionRegistry {
         const key = keyHash(queryKey);
         const live = this.liveFor(key);
         // Read back, not handed through the waiter: a frame processed before this
-        // continuation runs is newer still. And `pushed` alone is not enough — an
+        // continuation runs is newer still. And a push alone is not enough — an
         // identity change blanks the entry directly (`clearQueries`) ahead of the
         // client's own blank push, so a blank entry waits for the next push.
-        const current = live.pushed ? (queryClient.getQueryData<T>(queryKey) ?? (live.value as T | undefined)) : undefined;
+        const current = live.state.status === "pushed" ? (queryClient.getQueryData<T>(queryKey) ?? (live.state.value as T | undefined)) : undefined;
 
         if (current !== undefined) {
             return current;
@@ -214,7 +233,7 @@ class LunoraSubscriptionRegistry {
         // ponytail: a cross-tab follower cannot tell whether the leader holds this
         // query, so it pays one HTTP snapshot per mount, as does a lone tab still
         // inside its first `leaderTimeout`; a relayed push still wins below.
-        if (waitForPush && !live.errored && !this.client.isCrossTabFollower()) {
+        if (waitForPush && live.state.status !== "errored" && !this.client.isCrossTabFollower()) {
             let pushed: boolean;
 
             try {
@@ -226,7 +245,7 @@ class LunoraSubscriptionRegistry {
             }
 
             if (pushed) {
-                return this.liveValue(queryClient, queryKey, signal, fetch, waitForPush);
+                return this.liveValue(queryClient, queryKey, signal, options);
             }
         }
 
@@ -241,7 +260,7 @@ class LunoraSubscriptionRegistry {
         }
 
         // A push that landed during the fetch wins, `null` included: `??` would read a pushed null as missing.
-        if (live.pushed) {
+        if (live.state.status === "pushed") {
             const pushedDuringFetch = queryClient.getQueryData<T>(queryKey);
 
             if (pushedDuringFetch !== undefined) {
@@ -350,7 +369,7 @@ class LunoraSubscriptionRegistry {
 
         if (!entry) {
             // Seeded before subscribing so a synchronous replay reaches this client; the count below is taken once, after.
-            entry = { clients: new Map([[queryClient, 0]]), errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
+            entry = { clients: new Map([[queryClient, 0]]), errorCallbacks: new Set(), unsubscribe: undefined };
             this.entries.set(key, entry);
 
             const opened = entry;
@@ -365,9 +384,7 @@ class LunoraSubscriptionRegistry {
                         if (value === undefined) {
                             // A blank is not a value: a refetch after a user switch must
                             // wait for the new identity's first push, not read this one.
-                            live.pushed = false;
-                            live.value = undefined;
-                            live.errored = false;
+                            live.state = IDLE;
 
                             for (const client of opened.clients.keys()) {
                                 blankQuery(client.getQueryCache().find({ exact: true, queryKey }));
@@ -380,17 +397,15 @@ class LunoraSubscriptionRegistry {
                             client.setQueryData(queryKey, value);
                         }
 
-                        live.value = value;
-                        live.pushed = true;
-                        live.errored = false;
+                        live.state = { status: "pushed", value };
                         settle(live, true);
                     },
                     {
                         onError: (error) => {
                             const live = this.liveFor(key);
 
-                            if (!live.pushed) {
-                                live.errored = true;
+                            if (live.state.status !== "pushed") {
+                                live.state = { status: "errored" };
                                 settle(live, false);
                             }
 
@@ -411,15 +426,14 @@ class LunoraSubscriptionRegistry {
             }
         }
 
-        entry.refCount += 1;
         entry.clients.set(queryClient, (entry.clients.get(queryClient) ?? 0) + 1);
 
         // A client joining an entry that already holds a value gets it now: the push
         // that produced it went only to the clients attached at the time.
         const joinedLive = this.live.get(key);
 
-        if (joinedLive?.pushed) {
-            queryClient.setQueryData(queryKey, joinedLive.value);
+        if (joinedLive?.state.status === "pushed") {
+            queryClient.setQueryData(queryKey, joinedLive.state.value);
         }
 
         const { onError } = options;
@@ -450,8 +464,6 @@ class LunoraSubscriptionRegistry {
                 return;
             }
 
-            current.refCount -= 1;
-
             const attachments = (current.clients.get(queryClient) ?? 1) - 1;
 
             if (attachments > 0) {
@@ -464,7 +476,7 @@ class LunoraSubscriptionRegistry {
                 current.errorCallbacks.delete(onError);
             }
 
-            if (current.refCount <= 0) {
+            if (current.clients.size === 0) {
                 current.unsubscribe?.();
                 this.entries.delete(key);
                 this.dropLive(key);
@@ -476,7 +488,7 @@ class LunoraSubscriptionRegistry {
         let live = this.live.get(key);
 
         if (!live) {
-            live = { errored: false, pushed: false, value: undefined, waiters: new Set() };
+            live = { state: IDLE, waiters: new Set() };
             this.live.set(key, live);
         }
 
@@ -505,8 +517,7 @@ class LunoraSubscriptionRegistry {
         if (live.waiters.size === 0) {
             this.live.delete(key);
         } else {
-            live.errored = false;
-            live.pushed = false;
+            live.state = IDLE;
         }
     }
 }

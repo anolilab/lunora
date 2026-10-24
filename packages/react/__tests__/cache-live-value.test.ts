@@ -25,7 +25,7 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
         vi.useFakeTimers();
 
         const registry = new LunoraSubscriptionRegistry(silentClient);
-        const result = registry.liveValue(new QueryClient(), KEY, new AbortController().signal, async () => "snapshot");
+        const result = registry.liveValue(new QueryClient(), KEY, new AbortController().signal, { fetch: async () => "snapshot" });
 
         await vi.advanceTimersByTimeAsync(10_000);
 
@@ -40,7 +40,7 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
 
         controller.abort(new Error("unmounted"));
 
-        await expect(registry.liveValue(new QueryClient(), KEY, controller.signal, async () => "snapshot")).rejects.toThrow("unmounted");
+        await expect(registry.liveValue(new QueryClient(), KEY, controller.signal, { fetch: async () => "snapshot" })).rejects.toThrow("unmounted");
     });
 
     it("returns a null pushed while the HTTP fallback was in flight, not the snapshot", async () => {
@@ -48,19 +48,16 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
 
         const registry = new LunoraSubscriptionRegistry(silentClient);
         const queryClient = new QueryClient();
-        const result = registry.liveValue(
-            queryClient,
-            KEY,
-            new AbortController().signal,
-            async () => {
+        const result = registry.liveValue(queryClient, KEY, new AbortController().signal, {
+            fetch: async () => {
                 // A push lands while the fallback runs: the subscription now holds `null`.
-                registry["liveFor"](keyHash(KEY)).pushed = true;
+                registry["liveFor"](keyHash(KEY)).state = { status: "pushed", value: null };
                 queryClient.setQueryData(KEY, null);
 
                 return "snapshot";
             },
-            false,
-        );
+            waitForPush: false,
+        });
 
         await expect(result).resolves.toBeNull();
     });
@@ -70,7 +67,7 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
 
         const registry = new LunoraSubscriptionRegistry(silentClient);
 
-        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, async () => "snapshot", false);
+        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, { fetch: async () => "snapshot", waitForPush: false });
 
         expect(registry["live"].size).toBe(0);
     });
@@ -81,15 +78,12 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
         const registry = new LunoraSubscriptionRegistry(silentClient);
 
         await expect(
-            registry.liveValue(
-                new QueryClient(),
-                KEY,
-                new AbortController().signal,
-                async () => {
+            registry.liveValue(new QueryClient(), KEY, new AbortController().signal, {
+                fetch: async () => {
                     throw new Error("offline");
                 },
-                false,
-            ),
+                waitForPush: false,
+            }),
         ).rejects.toThrow("offline");
 
         expect(registry["live"].size).toBe(0);
@@ -102,7 +96,7 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
 
         registry["entries"].set(keyHash(KEY), {} as never);
 
-        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, async () => "snapshot", false);
+        await registry.liveValue(new QueryClient(), KEY, new AbortController().signal, { fetch: async () => "snapshot", waitForPush: false });
 
         expect(registry["live"].has(keyHash(KEY))).toBe(true);
     });

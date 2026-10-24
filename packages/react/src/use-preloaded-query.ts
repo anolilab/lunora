@@ -91,7 +91,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
         // client swap): the live subscription's first push supplies it, and
         // HTTP only when there is no socket.
         queryFn: async ({ signal }) =>
-            registry.liveValue(queryClient, queryKey, signal, async () => client.query(functionRef, args, { shardKey }) as Promise<T>),
+            registry.liveValue(queryClient, queryKey, signal, { fetch: async () => client.query(functionRef, args, { shardKey }) as Promise<T> }),
         queryKey,
         staleTime: Number.POSITIVE_INFINITY,
     });

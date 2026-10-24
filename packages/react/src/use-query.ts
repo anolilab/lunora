@@ -96,9 +96,9 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         // effect below attaches (its first frame is a full snapshot), and the
         // HTTP query runs only when there is no socket to push it.
         queryFn: async ({ signal }) =>
-            getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, async () =>
-                client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
-            ),
+            getSubscriptionRegistry(client).liveValue(queryClient, queryKey, signal, {
+                fetch: async () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+            }),
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns
         // freshness, so the value never goes stale on a timer.
