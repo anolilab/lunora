@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import { PLANS } from "../../lunora/plans";
+import { currentSubscription } from "../../lunora/saas-ui/core";
 import { BillingPanel, PricingTable } from "../../lunora/saas-ui/react";
 
 import "../../lunora/saas-ui/styles.css";
@@ -68,7 +69,8 @@ function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps)
     const { call: portal } = useAction(api.payment.portal);
     const [error, setError] = useState<string>();
 
-    const subscription = subscriptions?.[0];
+    // An organisation that cancelled and re-subscribed has both rows stored.
+    const subscription = currentSubscription(subscriptions);
     // Only hides the controls — `checkout` and `portal` enforce the role
     // server-side either way.
     const canManageBilling = orgRole?.split(",").some((role) => BILLING_ADMIN_ROLES.has(role.trim())) ?? false;
