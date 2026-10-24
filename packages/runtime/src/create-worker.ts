@@ -35,7 +35,7 @@ import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../..
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AiChatRpcDeps } from "./ai-chat-rpc";
-import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat } from "./ai-chat-rpc";
+import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat, buildAiOneShotGate } from "./ai-chat-rpc";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -829,8 +829,9 @@ interface WorkerOptions {
      * a caller without a valid admin bearer always gets `ADMIN_FORBIDDEN` first
      * (default-closed).
      *
-     * The three one-shot assistant RPCs are unaffected — they stay on the shard,
-     * reading the same binding through `ctx.ai`.
+     * The one-shot assistant RPCs stay on the shard, reading the binding and
+     * level from `env` there; only `aiOptInLevel: "disabled"` is applied to them
+     * at the worker, so turning the assistant off in code turns them off too.
      */
     aiChatBinding?: AiRunBinding;
 
@@ -3593,6 +3594,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * chat gate enforces.
      */
     const aiAvailable = buildAiAvailable(aiRpcDeps);
+    const aiOneShotGate = buildAiOneShotGate(aiRpcDeps);
 
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
@@ -3711,6 +3713,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (envelope.functionPath === AI_AVAILABLE_OP) {
             return aiAvailable(request, envelope.args ?? {}, env);
+        }
+
+        const disabledOneShot = aiOneShotGate(request, envelope.functionPath, env);
+
+        if (disabledOneShot !== undefined) {
+            return disabledOneShot;
         }
 
         return authJurisdictionMove(request, envelope.functionPath, envelope.args ?? {});

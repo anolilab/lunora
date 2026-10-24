@@ -58,6 +58,21 @@ const AI_CHAT_OP = "__lunora_admin__:aiChat";
  */
 const AI_AVAILABLE_OP = "__lunora_admin__:aiAvailable";
 
+/**
+ * The one-shot model ops that stay on the shard. The shard reads only
+ * `env.LUNORA_AI_OPT_IN` for its level, while the worker also honours
+ * `WorkerOptions.aiOptInLevel`, so {@link buildAiOneShotGate} applies the worker's
+ * `disabled` in front of them.
+ */
+const AI_ONE_SHOT_OPS: ReadonlySet<string> = new Set([
+    "__lunora_admin__:aiChartConfig",
+    "__lunora_admin__:aiCronExpression",
+    "__lunora_admin__:aiGenerateSql",
+    "__lunora_admin__:aiNameQuery",
+    "__lunora_admin__:aiTableFilter",
+    "__lunora_admin__:explainIssue",
+]);
+
 /** Closure-scoped worker helpers the handler borrows. */
 interface AiChatRpcDeps {
     /** Throw 403 (`ADMIN_FORBIDDEN`) unless the request carries a valid admin bearer. */
@@ -428,5 +443,29 @@ const buildAiAvailable = (deps: Pick<AiChatRpcDeps, "assertAdmin" | "getBinding"
     return handle;
 };
 
-export { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat };
+/**
+ * Build the guard that keeps a code-level `aiOptInLevel: "disabled"` from being
+ * bypassed by the shard-served one-shot ops.
+ *
+ * Returns the shard's own `no-ai-binding` degrade (so every caller already handles
+ * it) for a disabled worker, and `undefined` for any other op or level, which
+ * proceed to the shard unchanged. Admin-gated before it answers, so it discloses
+ * nothing to an unauthenticated caller.
+ */
+const buildAiOneShotGate =
+    (deps: Pick<AiChatRpcDeps, "assertAdmin" | "optInLevel">): ((request: Request, functionPath: string, env: unknown) => Response | undefined) =>
+    (request, functionPath, env) => {
+        if (!AI_ONE_SHOT_OPS.has(functionPath) || deps.optInLevel(env) !== "disabled") {
+            return undefined;
+        }
+
+        deps.assertAdmin(request);
+
+        return Response.json(
+            { result: encodeWire({ degraded: true, reason: "no-ai-binding" }) },
+            { headers: { "content-type": "application/json" }, status: 200 },
+        );
+    };
+
+export { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat, buildAiOneShotGate };
 export type { AiAvailableResult, AiChatRpcDeps, AiChatRpcHandler };

@@ -1053,6 +1053,50 @@ describe("createWorker — aiAvailable admin RPC", () => {
         expect(body["level"]).toBe("disabled");
     });
 
+    it("keeps the shard-served one-shot ops off when the worker is disabled in code", async () => {
+        expect.assertions(3);
+
+        const forwarded: string[] = [];
+        // The shard reads only `env.LUNORA_AI_OPT_IN`, so without the worker's gate a
+        // code-level `disabled` would leave Draft SQL calling the model.
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: slowBinding(0), aiOptInLevel: "disabled", shardDO: recordingShard(forwarded) });
+        const oneShot = (functionPath: string, admin = true): Request =>
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: { prompt: "all rows" }, functionPath }),
+                headers: admin ? { authorization: `Bearer ${ADMIN_TOKEN}` } : {},
+                method: "POST",
+            });
+
+        const ops = ["aiChartConfig", "aiCronExpression", "aiGenerateSql", "aiNameQuery", "aiTableFilter", "explainIssue"];
+        const bodies = await Promise.all(ops.map(async (op) => decoded(await worker.fetch(oneShot(`__lunora_admin__:${op}`), {}, fakeContext))));
+
+        expect(bodies.every((body) => body["degraded"] === true && body["reason"] === "no-ai-binding")).toBe(true);
+        expect(forwarded).toStrictEqual([]);
+
+        const refused = await worker.fetch(oneShot("__lunora_admin__:aiGenerateSql", false), {}, fakeContext);
+
+        expect(refused.status).toBe(403);
+    });
+
+    it("lets the one-shot ops through to the shard when the worker is not disabled", async () => {
+        expect.assertions(1);
+
+        const forwarded: string[] = [];
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: slowBinding(0), shardDO: recordingShard(forwarded) });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: { prompt: "all rows" }, functionPath: "__lunora_admin__:aiGenerateSql" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(forwarded).toStrictEqual(["__lunora_admin__:aiGenerateSql"]);
+    });
+
     it("finds the AI binding and level on env for a worker wired by hand", async () => {
         expect.assertions(2);
 
