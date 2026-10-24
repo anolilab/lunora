@@ -185,7 +185,7 @@ const createMockClient = (
         // reading `undefined` and the hydrated branch permanently untaken.
         isReady: true,
         peekActiveQuerySnapshot: () => {
-            return { present: false, value: undefined };
+            return { answered: false, present: false, value: undefined };
         },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,

@@ -2872,7 +2872,9 @@ class LunoraClient {
      * whether one exists at all rather than just its value. `present` is `false`
      * when no subscription is open for the given `(functionPath, args, shardKey)`;
      * `value` is the subscription's `lastValue`, which includes any optimistic
-     * overlay.
+     * overlay. `answered` is `false` while an open subscription holds no answer
+     * (never answered, or blanked by a cold reconnect), when `value` is absence
+     * rather than evidence.
      *
      * The two are separate because a caller like the snapshot precondition has to
      * tell "no subscription is active, so this read knows nothing" apart from
@@ -2884,11 +2886,20 @@ class LunoraClient {
      * and is independent of active subscriptions), this reflects the current
      * in-memory state of an already-opened subscription.
      */
-    public peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): { present: boolean; value: unknown } {
+    public peekActiveQuerySnapshot(
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey?: string,
+    ): { answered: boolean; present: boolean; value: unknown } {
         const key = SubscriptionRegistry.key(functionPath, args, shardKey);
         const state = this.subscriptions.get(key);
 
-        return { present: state !== undefined, value: state?.lastValue };
+        return {
+            // False for a subscription holding no answer: never answered, or blanked by a cold reconnect. Its `value` is then absence, not evidence.
+            answered: state !== undefined && (state.lastValue !== undefined || state.acked || state.valueReceived),
+            present: state !== undefined,
+            value: state?.lastValue,
+        };
     }
 
     // --- RPC ---------------------------------------------------------------
