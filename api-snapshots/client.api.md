@@ -85,7 +85,7 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ```ts
 type BatchSlot = {
-    error: LunoraClientError;
+    error: LunoraClientError | LunoraError;
     ok: false;
 } | {
     ok: true;

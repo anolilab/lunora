@@ -6706,7 +6706,7 @@ class LunoraClient {
         try {
             return decodeWire(body.result);
         } catch (error) {
-            throw undecodableResultError(error);
+            throw withResponseHeaders(undecodableResultError(error), response.headers);
         }
     }
 

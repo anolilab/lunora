@@ -97,6 +97,16 @@ describe("rpc error response headers", () => {
         expect(JSON.stringify(error)).not.toContain(SESSION_COOKIE);
     });
 
+    it("carries the reply's headers on a successful reply whose result does not decode", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            Response.json({ result: ["$lunora.wire$", "bigint", "not-a-number"] }, { headers: { "x-edge": "cf" }, status: 200 }),
+        );
+
+        await expect(client(fetchMock).query(fnRef("docs:read"), {})).rejects.toMatchObject({ code: "WIRE_DECODE_FAILED", headers: { "x-edge": "cf" } });
+    });
+
     it("carries the reply's headers on a whole-batch rejection from client.batch", async () => {
         expect.assertions(1);
 

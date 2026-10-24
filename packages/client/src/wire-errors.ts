@@ -290,16 +290,43 @@ type LunoraClientError = Error & {
     why?: string;
 };
 
+/** Errors {@link undecodableResultError} minted — recognised by identity, never by a code a peer could also send. */
+const undecodableResults = new WeakSet<Error>();
+
+/**
+ * The error a SUCCESSFUL reply is reported as when its `result` does not
+ * decode. The write it answers has committed — the server said so — so a
+ * replay must settle it rather than classify it: left codeless it read as a
+ * transport failure and replayed forever (the same reply every time), and
+ * thrown out of a batch demux it abandoned every later slot for the session.
+ */
+const undecodableResultError = (cause: unknown): LunoraError => {
+    const error = new LunoraError(
+        "WIRE_DECODE_FAILED",
+        `LunoraClient: the call succeeded but its result could not be decoded (a mutation has still committed) — ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause },
+    );
+
+    undecodableResults.add(error);
+
+    return error;
+};
+
+/** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
+const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
+
 export {
     buildStreamError,
     buildSubscriptionError,
     errorEnvelopeOf,
+    isUndecodableResult,
     reconstructError,
     reconstructErrorWithRetryAfter,
     responseHeadersRecord,
     retryAfterData,
     retryAfterHeaderMs,
     slotError,
+    undecodableResultError,
     unreadableSlotError,
     whyProperty,
     withResponseHeaders,

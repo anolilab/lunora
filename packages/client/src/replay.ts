@@ -14,7 +14,7 @@ import { decodeWire } from "@lunora/wire";
 import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
 import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
-import { retryAfterHeaderMs, slotError, withResponseHeaders } from "./wire-errors";
+import { retryAfterHeaderMs, slotError, undecodableResultError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -193,31 +193,6 @@ const MAX_BATCH_BODY_BYTES = 1_048_576 - 65_536;
  */
 const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefined" ? text.length : new TextEncoder().encode(text).length);
 
-/** Errors {@link undecodableResultError} minted — recognised by identity, never by a code a peer could also send. */
-const undecodableResults = new WeakSet<Error>();
-
-/**
- * The error a SUCCESSFUL reply is reported as when its `result` does not
- * decode. The write it answers has committed — the server said so — so a
- * replay must settle it rather than classify it: left codeless it read as a
- * transport failure and replayed forever (the same reply every time), and
- * thrown out of a batch demux it abandoned every later slot for the session.
- */
-const undecodableResultError = (cause: unknown): LunoraError => {
-    const error = new LunoraError(
-        "WIRE_DECODE_FAILED",
-        `LunoraClient: the call succeeded but its result could not be decoded (a mutation has still committed) — ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause },
-    );
-
-    undecodableResults.add(error);
-
-    return error;
-};
-
-/** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
-const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
-
 /** A batch's answered slots keyed by slot index. A body that is not a readable envelope is left out, because the server never answered that slot (§4.3). */
 export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Map<number, RpcEnvelopeBody> => {
     const bySlot = new Map<number, RpcEnvelopeBody>();
@@ -268,14 +243,20 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHe
 export {
     defaultReplayRetryDelayMs,
     isTransientReplayFailure,
-    isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
     REPLAY_BASE_DELAY_MS,
     REPLAY_MAX_DELAY_MS,
     replayRetryDelayMs,
-    undecodableResultError,
     unparseableResponseError,
     utf8ByteLength,
 };
 
-export { errorEnvelopeOf, retryAfterData, retryAfterHeaderMs, type RpcEnvelopeBody, unreadableSlotError } from "./wire-errors";
+export {
+    errorEnvelopeOf,
+    isUndecodableResult,
+    retryAfterData,
+    retryAfterHeaderMs,
+    type RpcEnvelopeBody,
+    undecodableResultError,
+    unreadableSlotError,
+} from "./wire-errors";

@@ -30,6 +30,22 @@ describe("isSlotEnvelope", () => {
 });
 
 describe("demuxBatchResults", () => {
+    it("fails only the slot whose committed result does not decode, and keeps the batch headers on it", () => {
+        expect.assertions(2);
+
+        const slots = demuxBatchResults(
+            [
+                { body: { result: ["$lunora.wire$", "bigint", "not-a-number"] }, id: 0 },
+                { body: { result: "b" }, id: 1 },
+            ],
+            2,
+            new Headers({ "x-edge": "cf" }),
+        );
+
+        expect(slots[0]).toMatchObject({ error: { code: "WIRE_DECODE_FAILED" }, ok: false });
+        expect(slots[0]).toHaveProperty("error.headers", { "x-edge": "cf" });
+    });
+
     it("orders slots by id regardless of arrival order", () => {
         expect.assertions(1);
 
