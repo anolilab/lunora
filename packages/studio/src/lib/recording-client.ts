@@ -130,7 +130,14 @@ const withOperationRecording = (client: LunoraClient): LunoraClient =>
                 }
 
                 const args = (typeof parameters[1] === "object" && parameters[1] !== null ? parameters[1] : {}) as Record<string, unknown>;
-                const seq = operationLog.start(path, args, shardKeyOf(parameters[2]));
+                /*
+                 * `streamRpc` is worker-served, so its shard rides in the ARGS (the
+                 * tools it runs read that shard) and its options carry only the
+                 * frame callback and abort signal. Without the fallback every
+                 * recorded assistant turn lands on the root shard.
+                 */
+                const shardKey = shardKeyOf(parameters[2]) || (property === "streamRpc" ? shardKeyOf(args) : "");
+                const seq = operationLog.start(path, args, shardKey);
 
                 try {
                     const result = await dispatch.apply(target, parameters);
