@@ -1649,8 +1649,8 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
 
             const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
-            // OpenRPC lists streams for MCP, so an RPC call reaches `handleRpc` with one. Run there, its
-            // async iterator reaches the wire encoder as a single result and the call fails as a 500.
+            // OpenRPC lists streams for MCP, but generated RPC dispatch rejects a stream call before it
+            // invokes the handler, so a stream is never run as a single RPC result.
             expect(result.generated.shard).toContain('if (registered.kind === "stream") {');
             // A stream's typed ctx is the query ctx, so its `run*` must refuse a write as a query's does.
             expect(result.generated.shard).toContain('if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {');
