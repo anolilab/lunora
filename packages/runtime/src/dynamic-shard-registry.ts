@@ -13,7 +13,7 @@
  * 2. Construct the client once per worker request:
  *
  * ```ts
- * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY });
+ * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY, secret: env.SHARD_REGISTRY_DO_SECRET });
  * const coordinator = createQueryCoordinator({ registry });
  * ```
  *
