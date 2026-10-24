@@ -142,6 +142,58 @@ describe("createFormController", () => {
         expect(form.getState().values.name).toBe("Website");
         expect(form.getState().status).toBe("idle");
     });
+
+    describe("a reset while a submit is in flight", () => {
+        const deferred = () => {
+            let settle!: () => void;
+            let fail!: (error: Error) => void;
+            const promise = new Promise<void>((resolve, reject) => {
+                settle = resolve;
+                fail = reject;
+            });
+
+            return { fail, promise, settle };
+        };
+
+        it("does not wipe input typed after the reset, nor run onSuccess for the discarded form", async () => {
+            expect.assertions(4);
+
+            const pending = deferred();
+            const onSuccess = vi.fn();
+            const form = createFormController({ fields: { name: { initial: "" } }, onSubmit: () => pending.promise, onSuccess, resetOnSuccess: true });
+
+            form.setValue("name", "Old");
+
+            const submitting = form.submit();
+
+            form.reset();
+            form.setValue("name", "New");
+            pending.settle();
+
+            await expect(submitting).resolves.toBe(false);
+            expect(form.getState().values.name).toBe("New");
+            expect(form.getState().status).toBe("idle");
+            expect(onSuccess).not.toHaveBeenCalled();
+        });
+
+        it("does not paint the old request's error onto the fresh form", async () => {
+            expect.assertions(3);
+
+            const pending = deferred();
+            const form = createFormController({ fields: { name: { initial: "" } }, onSubmit: () => pending.promise });
+
+            form.setValue("name", "Old");
+
+            const submitting = form.submit();
+
+            form.reset();
+            pending.fail(Object.assign(new Error("raw"), { code: "CONFLICT" }));
+
+            await expect(submitting).resolves.toBe(false);
+            expect(form.getState().formError).toBeUndefined();
+            expect(form.getState().status).toBe("idle");
+        });
+    });
 });
 
 describe("project form", () => {

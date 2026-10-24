@@ -38,8 +38,8 @@ interface FormController<TFields extends string> {
     setValue: (field: TFields, value: string) => void;
 
     /**
-     * Validate, then run `submit`. Resolves `true` only when the handler ran and
-     * did not throw.
+     * Validate, then run `submit`. Resolves `true` only when the handler ran, did
+     * not throw, and the form was not reset while it ran.
      *
      * Callers that act on success — a navigation, a dialog close — must use this
      * boolean and never re-read `state.formError`: it is cleared at the start of
@@ -88,7 +88,13 @@ const createFormController = <TFields extends string>(options: FormOptions<TFiel
         return errors;
     };
 
+    // Bumped by every reset. A submit still awaiting its handler compares it on
+    // return: a reset in between means the form it was submitting is gone, so its
+    // outcome must not touch the fresh one.
+    let generation = 0;
+
     const reset = (): void => {
+        generation += 1;
         store.set({ errors: {}, status: "idle", values: { ...initial } });
     };
 
@@ -128,11 +134,22 @@ const createFormController = <TFields extends string>(options: FormOptions<TFiel
 
             store.update({ errors: {}, formError: undefined, status: "busy" });
 
+            const submitted = generation;
+
             try {
                 await options.onSubmit(state.values);
             } catch (error) {
-                store.update({ formError: mapError(error), status: "error" });
+                if (submitted === generation) {
+                    store.update({ formError: mapError(error), status: "error" });
+                }
 
+                return false;
+            }
+
+            // The handler ran, but the form was reset under it: the work is done
+            // server-side, yet `onSuccess` and the reset belong to a form that no
+            // longer exists, and running them would wipe what was typed since.
+            if (submitted !== generation) {
                 return false;
             }
 
