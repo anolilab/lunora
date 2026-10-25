@@ -271,6 +271,8 @@ class LunoraSubscriptionRegistry {
             }
         }
 
+        // Every push replaces `live.state`, so a different object afterwards means one landed during the fetch.
+        const stateBeforeFetch = live.state;
         let snapshot: T;
 
         try {
@@ -282,12 +284,16 @@ class LunoraSubscriptionRegistry {
         }
 
         // A push that landed during the fetch wins, `null` included: `??` would read a pushed null as missing.
-        if (live.state.status === "pushed") {
-            const pushedDuringFetch = queryClient.getQueryData<T>(queryKey);
+        // It reaches `queryClient`'s cache only when `queryClient` is attached; a suspended fetch is not yet,
+        // so the push fed to the clients that are is read from `live`.
+        if (live.state !== stateBeforeFetch && live.state.status === "pushed") {
+            const cached = queryClient.getQueryData<T>(queryKey);
 
-            if (pushedDuringFetch !== undefined) {
-                return pushedDuringFetch;
+            if (cached !== undefined) {
+                return cached;
             }
+
+            return live.state.value as T;
         }
 
         return snapshot;

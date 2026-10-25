@@ -66,6 +66,39 @@ describe("lunoraSubscriptionRegistry.liveValue", () => {
         await expect(result).resolves.toBeNull();
     });
 
+    it.each([["rows"], [null]])("returns %j pushed to another query client during a suspended fetch, not the snapshot", async (pushedValue) => {
+        expect.assertions(2);
+
+        let push: ((value: unknown) => void) | undefined;
+        const registry = new LunoraSubscriptionRegistry({
+            expectsPush: () => true,
+            getWebSocketImpl: () => WebSocket,
+            isCrossTabFollower: () => false,
+            subscribe: (_function: unknown, _args: unknown, onValue: (value: unknown) => void) => {
+                push = onValue;
+
+                return () => undefined;
+            },
+        } as unknown as LunoraClient);
+        const attached = new QueryClient();
+        const suspended = new QueryClient();
+        const detach = registry.attach(attached, KEY, { __lunoraRef: "posts:list" }, {}, undefined);
+
+        const result = await registry.liveValue(suspended, KEY, new AbortController().signal, {
+            fetch: async () => {
+                push?.(pushedValue);
+
+                return "snapshot";
+            },
+            waitForPush: false,
+        });
+
+        expect(suspended.getQueryData(KEY)).toBeUndefined();
+        expect(result).toBe(pushedValue);
+
+        detach();
+    });
+
     it("forgets the live state of a key nothing subscribes to once the HTTP fallback settles", async () => {
         expect.assertions(1);
 
