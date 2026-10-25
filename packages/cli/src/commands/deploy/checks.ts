@@ -295,13 +295,11 @@ const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployComma
         return undefined;
     }
 
+    const blocked = `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ("${placeholder.database_id ?? ""}")`;
     const message =
         target === "celld"
-            ? `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ("${placeholder.database_id ?? ""}"), ` +
-              `which celld would use as the database's identity. Set database_id to the database celld should use, then ${command} again.`
-            : `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ` +
-              `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
-              `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
+            ? `${blocked}, which celld would use as the database's identity. Set database_id to the database celld should use, then ${command} again.`
+            : `${blocked}. Run \`wrangler d1 create <name>\` to create the database, then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
 
     logger.error(message);
 

@@ -566,11 +566,54 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         // binds to, and every request it sends is signed with the secret.
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/app.ts", "export const app = createApp().shardRegistry((env) => env.SHARD_REGISTRY);\n");
+        write("lunora/app.ts", "export const app = defineApp().shardRegistry((env) => env.SHARD_REGISTRY);\n");
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
 
         write("lunora/app.ts", "export const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("reports the relay secret for a registry client imported under an alias or called as a namespace member", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/registry.ts",
+            'import { createDynamicShardRegistry as makeRegistry } from "@lunora/runtime";\nexport const registry = makeRegistry({ env, namespace: env.SHARD_REGISTRY });\n',
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+
+        write(
+            "lunora/registry.ts",
+            'import * as runtime from "@lunora/runtime";\nexport const registry = runtime.createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n',
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("does not report the relay secret for a shardRegistry method on an object that is not the app builder", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/cache.ts", "const cache = { shardRegistry: () => undefined };\nexport const hit = cache.shardRegistry();\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("reads a .ts file as TypeScript, so a generic arrow before a registry call does not hide the call", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/registry.ts",
+            "export const identity = <T>(value: T): T => value;\nexport const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n",
+        );
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
     });

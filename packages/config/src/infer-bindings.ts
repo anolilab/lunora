@@ -21,6 +21,7 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { extname } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -88,21 +89,76 @@ const SHARD_REGISTRY_CLIENT_PATTERN = /\bcreateDynamicShardRegistry\b|\.shardReg
 /** Parses single files for {@link callsShardRegistryClient}; its files are dropped after each parse. */
 const registryProbe = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
 
+const REGISTRY_CLIENT_FACTORY = "createDynamicShardRegistry";
+const APP_BUILDER_FACTORY = "defineApp";
+const BUILDER_REGISTRY_METHOD = "shardRegistry";
+
+/** The identifier a call or property chain starts from: `defineApp` in `defineApp<Env>().shard(x).shardRegistry(y)`. */
+const chainRoot = (expression: Node): string | undefined => {
+    let current = expression;
+
+    while (Node.isCallExpression(current) || Node.isPropertyAccessExpression(current)) {
+        current = current.getExpression();
+    }
+
+    return Node.isIdentifier(current) ? current.getText() : undefined;
+};
+
 /**
- * Whether source calls the registry client: `createDynamicShardRegistry(...)`, or the
- * builder's `.shardRegistry(...)`. Only a parsed call counts, so a comment or a string
- * that names either one does not.
+ * Whether a file calls the registry client: `createDynamicShardRegistry(...)` under any
+ * import alias or as a namespace member, or the builder's `.shardRegistry(...)` on a chain
+ * that starts at `defineApp` (or a variable initialised from one). Only a parsed call counts,
+ * so a comment or a string that names either one does not. The file's own extension picks
+ * the parser, so a `.ts` generic arrow is not read as JSX.
  */
-const callsShardRegistryClient = (code: string): boolean => {
-    const probe = registryProbe.createSourceFile("registry-probe.tsx", code, { overwrite: true });
+const callsShardRegistryClient = (code: string, file: string): boolean => {
+    const probe = registryProbe.createSourceFile(`registry-probe${extname(file)}`, code, { overwrite: true });
 
     try {
+        const clients = new Set<string>([REGISTRY_CLIENT_FACTORY]);
+        const builders = new Set<string>([APP_BUILDER_FACTORY]);
+
+        for (const declaration of probe.getImportDeclarations()) {
+            for (const named of declaration.getNamedImports()) {
+                const local = named.getAliasNode()?.getText() ?? named.getName();
+
+                if (named.getName() === REGISTRY_CLIENT_FACTORY) {
+                    clients.add(local);
+                }
+
+                if (named.getName() === APP_BUILDER_FACTORY) {
+                    builders.add(local);
+                }
+            }
+        }
+
+        for (const variable of probe.getVariableDeclarations()) {
+            const initializer = variable.getInitializer();
+            const root = initializer === undefined ? undefined : chainRoot(initializer);
+
+            if (root !== undefined && builders.has(root)) {
+                builders.add(variable.getName());
+            }
+        }
+
         return probe.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => {
             const callee = call.getExpression();
 
-            return Node.isIdentifier(callee)
-                ? callee.getText() === "createDynamicShardRegistry"
-                : Node.isPropertyAccessExpression(callee) && callee.getName() === "shardRegistry";
+            if (Node.isIdentifier(callee)) {
+                return clients.has(callee.getText());
+            }
+
+            if (!Node.isPropertyAccessExpression(callee)) {
+                return false;
+            }
+
+            if (callee.getName() === REGISTRY_CLIENT_FACTORY) {
+                return true;
+            }
+
+            const root = chainRoot(callee.getExpression());
+
+            return callee.getName() === BUILDER_REGISTRY_METHOD && root !== undefined && builders.has(root);
         });
     } finally {
         probe.forget();
@@ -512,7 +568,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
-            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code) && callsShardRegistryClient(code);
+            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code) && callsShardRegistryClient(code, file);
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
