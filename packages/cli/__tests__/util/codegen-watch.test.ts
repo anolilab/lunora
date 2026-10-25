@@ -29,7 +29,7 @@ vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
 vi.mock(import("node:fs"), async (importOriginal) => {
     const actual = await importOriginal();
 
-    return { ...actual, watch: vi.fn(actual.watch) as unknown as typeof actual.watch };
+    return { ...actual, watch: vi.fn<typeof actual.watch>(actual.watch) as unknown as typeof actual.watch };
 });
 
 const silentLogger = (): { errors: string[]; logger: Logger; warns: string[] } => {
