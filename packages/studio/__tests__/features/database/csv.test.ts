@@ -154,6 +154,14 @@ describe("parseCsvDocuments", () => {
         expect(problemOf(() => parseCsvDocuments("a,b\n1,2,3\n"))).toStrictEqual({ expected: 2, found: 3, kind: "ragged", record: 2 });
     });
 
+    it("numbers a row after a blank line by its place in the file, so the number names the row a user sees", () => {
+        expect.assertions(2);
+
+        // The blank line is left out of the documents, but it is still a line of the file.
+        expect(parseCsvDocuments("id,n\n\nm1,1\n")).toStrictEqual([{ doc: { id: "m1", n: "1" }, record: 3 }]);
+        expect(problemOf(() => parseCsvDocuments("a,b\n\n1,2,3\n"))).toStrictEqual({ expected: 2, found: 3, kind: "ragged", record: 3 });
+    });
+
     it("rejects a duplicate header and names it", () => {
         expect.assertions(1);
 

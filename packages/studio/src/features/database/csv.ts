@@ -4,7 +4,13 @@
  */
 type CsvCell = string | undefined;
 
-/** A structural problem in a CSV file. `record` counts the header as record 1 and skips blank lines, so it names the row a user sees. */
+/** A non-blank record, with its number in the file: the header is record 1, and a blank record still takes a number. */
+interface CsvRecord {
+    cells: CsvCell[];
+    number: number;
+}
+
+/** A structural problem in a CSV file. `record` is the record's number in the file, so it names the row a user sees. */
 type CsvProblem =
     | { kind: "duplicate-header"; name: string }
     | { column: number; kind: "empty-header" }
@@ -122,35 +128,40 @@ const readField = (text: string, start: number, record: number): Field => {
  * RFC 4180 records, CRLF or LF. A quoted field may hold commas, doubled quotes and newlines. A leading byte-order mark is dropped, since
  * spreadsheet exports write one.
  *
- * A record whose every field is an unquoted empty field is blank and is not a record, whatever its column count: a line of commas, or a
+ * A record whose every field is an unquoted empty field is blank and is left out of the result, whatever its column count: a line of commas, or a
  * one-column empty line. A quoted `""` is a value, so it is kept.
  *
  * A quote inside an unquoted field is kept as text rather than rejected: spreadsheets write that for values like `5" disk`, and the
  * server validator is the place that judges the value.
  */
-const parseCsv = (input: string): CsvCell[][] => {
+const parseCsvRecords = (input: string): CsvRecord[] => {
     const text = input.startsWith("﻿") ? input.slice(1) : input;
-    const records: CsvCell[][] = [];
+    const records: CsvRecord[] = [];
     let cells: CsvCell[] = [];
     let index = 0;
+    // Counts every record, blank ones included, so a number always names the same place in the file.
+    let number = 1;
     let field: Field;
 
     do {
-        field = readField(text, index, records.length + 1);
+        field = readField(text, index, number);
         cells.push(field.cell);
         index = field.next;
 
         if (field.end !== "comma") {
             if (cells.some((cell) => cell !== undefined)) {
-                records.push(cells);
+                records.push({ cells, number });
             }
 
             cells = [];
+            number += 1;
         }
     } while (field.end !== "end");
 
     return records;
 };
+
+const parseCsv = (input: string): CsvCell[][] => parseCsvRecords(input).map((record) => record.cells);
 
 /**
  * Set an own data property. A plain assignment to `__proto__` sets the prototype instead, so a column named that way would be dropped
@@ -168,11 +179,11 @@ const setField = (target: Record<string, unknown>, key: string, value: unknown):
  * A header-only file yields no documents.
  */
 const parseCsvDocuments = (text: string): CsvDocument[] => {
-    const [header = [], ...records] = parseCsv(text);
+    const [header = { cells: [], number: 1 }, ...records] = parseCsvRecords(text);
     const columns: string[] = [];
     const seen = new Set<string>();
 
-    header.forEach((cell, index) => {
+    header.cells.forEach((cell, index) => {
         const name = (cell ?? "").trim();
 
         if (name === "") {
@@ -187,9 +198,7 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
         columns.push(name);
     });
 
-    return records.map((cells, index) => {
-        const record = index + 2;
-
+    return records.map(({ cells, number: record }) => {
         if (cells.length !== columns.length) {
             throw new CsvFormatError({ expected: columns.length, found: cells.length, kind: "ragged", record });
         }
