@@ -81,7 +81,9 @@ const compileShard = () => {
         build: (runShardMigrations: () => string[], onDataMigration: () => void = () => {}) => {
             class Base {
                 public readonly sql = {};
-                public readonly companionMemo = new Set<string>();
+
+                // eslint-disable-next-line class-methods-use-this -- stub of the base seam the emitted migration calls
+                public invalidateCompanionMemo(): void {}
 
                 public adminWriter(): object {
                     return this.sql;
@@ -223,9 +225,11 @@ const compileInitShard = () => {
     return (runShardMigrations: () => string[], onHook: () => void) => {
         class Base {
             public readonly sql = {};
-            public readonly companionMemo = new Set<string>();
 
             private once?: Promise<void>;
+
+            // eslint-disable-next-line class-methods-use-this -- stub of the base seam the emitted migration calls
+            public invalidateCompanionMemo(): void {}
 
             public async ensureShardInit(): Promise<void> {
                 this.once ??= (async (): Promise<void> => {

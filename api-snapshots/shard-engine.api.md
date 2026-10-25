@@ -451,6 +451,15 @@ interface ColumnMetaLike {
 }
 ```
 
+### `CompanionMemo` (class)
+
+```ts
+class CompanionMemo {
+    readonly verified: Set<string>;
+    invalidate(): void;
+}
+```
+
 ### `CompanionSync` (interface)
 
 ```ts
@@ -543,7 +552,7 @@ interface CtxDbOptions {
     cache?: ReactiveCache;
     cdc?: boolean;
     clock?: Clock;
-    companionMemo?: Set<string>;
+    companionMemo?: CompanionMemo;
     enforceRls?: boolean;
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
@@ -3932,7 +3941,7 @@ const clearCapturedMail: (sql: SqlExec) => {
 ### `clearCompanionSignatures` (const)
 
 ```ts
-const clearCompanionSignatures: (sql: SqlExec, companionMemo?: Set<string>) => void;
+const clearCompanionSignatures: (sql: SqlExec) => void;
 ```
 
 ### `clearMemoryTables` (const)

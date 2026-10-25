@@ -60,6 +60,7 @@ import { backfillSearchIndexesForTable, searchIndexCoversTable } from "./ctx-db-
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange, readCdcDocAtOrBefore } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
+import type { CompanionMemo } from "./ctx-db-companion-state";
 import { createCompanionSync } from "./ctx-db-companions";
 import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
@@ -319,11 +320,11 @@ interface CtxDbOptions {
     /**
      * Shard-scoped memo of aggregate / rank companions already verified against
      * their durable marker. `createShardCtxDb` runs per dispatch, so without a
-     * long-lived set every dispatch re-checks each companion on first touch; a
-     * host (the generated ShardDO) passes one set for the DO's lifetime and clears
-     * it when migrations run. Omitted, each writer keeps its own.
+     * long-lived memo every dispatch re-checks each companion on first touch; a
+     * host (the generated ShardDO) passes one for the DO's lifetime and owns its
+     * invalidation. Omitted, each writer keeps its own.
      */
-    companionMemo?: Set<string>;
+    companionMemo?: CompanionMemo;
 
     /**
      * Opt into the secure-by-default write-path guard. When `true` AND the
@@ -2769,7 +2770,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         recordCdc,
         schema,
         sql,
-        verified: options.companionMemo,
+        verified: options.companionMemo?.verified,
     });
 
     /**

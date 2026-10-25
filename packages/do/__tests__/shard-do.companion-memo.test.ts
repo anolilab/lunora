@@ -15,13 +15,13 @@ class MemoShard extends ShardDO {
     }
 
     public memo(): Set<string> {
-        return this.companionMemo;
+        return this.ctxDbTuning().companionMemo.verified;
     }
 
     public async failingTransaction(): Promise<void> {
         await this.runInTransaction(() => {
             // A companion verified inside the transaction, then rolled back with it.
-            this.companionMemo.add("messages:byChannel");
+            this.memo().add("messages:byChannel");
 
             throw new Error("handler failed");
         });

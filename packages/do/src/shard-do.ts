@@ -163,6 +163,7 @@ import {
     clearCapturedMail,
     clearCompanionSignatures,
     clearQueueMessages,
+    CompanionMemo,
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
@@ -2240,12 +2241,6 @@ abstract class ShardDO {
     protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
-     * Companions the per-dispatch ctx-db has verified, shared across dispatches
-     * through {@link ShardDO.ctxDbTuning}. Cleared whenever migrations run.
-     */
-    protected readonly companionMemo: Set<string> = new Set<string>();
-
-    /**
      * Function paths a dispatch has been observed reading `ctx.ip` through, and
      * whose reactive-cache entries are therefore keyed by the caller's address
      * as well as by identity — see the discriminator {@link ShardDO.runCachedQuery}
@@ -2290,6 +2285,9 @@ abstract class ShardDO {
      * subclass can reach it; nothing in this class calls it.
      */
     protected readonly secretValues: SecretValueHost;
+
+    /** Companions the per-dispatch ctx-db has verified, shared across dispatches through {@link ShardDO.ctxDbTuning}. */
+    private readonly companionMemo = new CompanionMemo();
 
     private readonly deliveryAuthorization: DeliveryAuthorization | undefined;
     private readonly deliveryFence = new DeliveryFence(() => this.shardHost.sql);
@@ -4381,7 +4379,7 @@ abstract class ShardDO {
             // The rollback undid any companion marker this transaction verified; a memo
             // that still held it would skip the re-check on the next write. Here rather
             // than in the RPC catch, so every caller (reactors included) is covered.
-            this.companionMemo.clear();
+            this.invalidateCompanionMemo();
 
             throw error;
         }
@@ -7291,7 +7289,7 @@ abstract class ShardDO {
      */
     protected ctxDbTuning(): {
         cache?: ReactiveCache;
-        companionMemo: Set<string>;
+        companionMemo: CompanionMemo;
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     } {
@@ -7300,6 +7298,17 @@ abstract class ShardDO {
             companionMemo: this.companionMemo,
             ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
         };
+    }
+
+    /**
+     * Forget every companion the ctx-db memo holds as verified, so the next write
+     * re-checks each against its durable marker. Called wherever a marker or a
+     * companion can change behind the memo: a migration (the generated
+     * `ensureMigrated`), a rolled-back transaction, and the `rebuildCompanions`
+     * admin op.
+     */
+    protected invalidateCompanionMemo(): void {
+        this.companionMemo.invalidate();
     }
 
     /**
@@ -11678,7 +11687,8 @@ abstract class ShardDO {
      * marker that still matches on roll-forward. Admin-gated by the caller.
      */
     private handleRebuildCompanions(): Response {
-        clearCompanionSignatures(this.shardHost.sql, this.companionMemo);
+        clearCompanionSignatures(this.shardHost.sql);
+        this.invalidateCompanionMemo();
         this.recordAudit("rebuildCompanions");
 
         return adminResponse({ ok: true });

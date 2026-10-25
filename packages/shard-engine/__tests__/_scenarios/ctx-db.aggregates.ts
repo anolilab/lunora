@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../../src/ctx-db";
-import { clearCompanionSignatures } from "../../src/ctx-db-companion-state";
+import { clearCompanionSignatures, CompanionMemo } from "../../src/ctx-db-companion-state";
 import type { AggregateIndexDefinitionLike } from "../../src/schema-types";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
@@ -1040,7 +1040,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
 
         describe("companionMemo", () => {
             /** Count the marker lookups a writer built over `memo` pays on its first write. */
-            const markerLookups = async (schema: SchemaLike, memo?: Set<string>): Promise<number> => {
+            const markerLookups = async (schema: SchemaLike, memo?: CompanionMemo): Promise<number> => {
                 const statements: string[] = [];
                 const spied: SqlHarness["sql"] = {
                     ...harness.sql,
@@ -1061,7 +1061,7 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                 expect.assertions(3);
 
                 const schema = makeSchema(byProject);
-                const memo = new Set<string>();
+                const memo = new CompanionMemo();
 
                 runShardMigrations(harness.sql, schema);
 
@@ -1071,17 +1071,17 @@ const runAggregateScenarios = (factory: () => SqlHarness): void => {
                 await expect(markerLookups(schema)).resolves.toBe(1);
             });
 
-            it("is cleared by clearCompanionSignatures, so the next write re-verifies", async () => {
+            it("forgets every verified companion on invalidate, so the next write re-verifies", async () => {
                 expect.assertions(2);
 
                 const schema = makeSchema(byProject);
-                const memo = new Set<string>();
+                const memo = new CompanionMemo();
 
                 runShardMigrations(harness.sql, schema);
 
                 await expect(markerLookups(schema, memo)).resolves.toBe(1);
 
-                clearCompanionSignatures(harness.sql, memo);
+                memo.invalidate();
 
                 await expect(markerLookups(schema, memo)).resolves.toBe(1);
             });
