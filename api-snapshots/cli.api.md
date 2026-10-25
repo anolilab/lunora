@@ -228,6 +228,7 @@ interface DevCommandOptions {
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 ```
 

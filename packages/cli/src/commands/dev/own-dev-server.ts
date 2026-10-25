@@ -102,8 +102,8 @@ const planOwnDevServer = (inputs: {
         options.logger.warn(`--inspector-port is a wrangler dev flag; ${driver.name} dev has no inspector to pin`);
     }
 
-    // Not committed: the celld dev session writes the projection itself, once its
-    // toolchain probe has passed, so a missing celld or esbuild leaves the project untouched.
+    // Not committed: the projection is written only after the toolchain probe passes (by the celld
+    // dev session, or by the attached run under `--no-worker`), so a missing celld or esbuild leaves the project untouched.
     const { command, projection } = planToolchainInvocation(driver, cwd, "dev", (configPath) =>
         toolchain.dev({ configPath, extraArgs: ["--port", String(workerPort)] }),
     );

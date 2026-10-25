@@ -110,6 +110,26 @@ const watchSourceChanges = (directory: string, onChange: () => void, onError: (e
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+const probeForDev = async (): Promise<CelldToolchainProbe> => probeCelldToolchain({ env: process.env, purpose: "dev" });
+
+/**
+ * Write the app's dev projection without starting anything, for a `--no-worker`
+ * run whose external runner executes `celld dev` on it. The toolchain is probed
+ * first, so a missing tool leaves the project untouched, as a session does.
+ * @returns the warnings that do not stop it; throws, with nothing written, when a tool is missing.
+ */
+const writeCelldDevProjection = async (options: { probe?: () => Promise<CelldToolchainProbe>; projectRoot: string }): Promise<string[]> => {
+    const toolchain = await (options.probe ?? probeForDev)();
+
+    if (toolchain.errors.length > 0) {
+        throw new Error(toolchain.errors.join("; "));
+    }
+
+    planCelldConfig(options.projectRoot, "dev").write();
+
+    return toolchain.warnings;
+};
+
 /**
  * Start the session: register every service, run the app, then watch the
  * service folders. Resolves once the app accepts connections; rejects, with
@@ -121,7 +141,7 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
     const notice = (line: string, stream: CelldLineOrigin["stream"] = "stdout"): void => {
         log(line, { stream, tag: "celld" });
     };
-    const toolchain = await (options.probe ?? (() => probeCelldToolchain({ env: process.env, purpose: "dev" })))();
+    const toolchain = await (options.probe ?? probeForDev)();
 
     for (const warning of toolchain.warnings) {
         notice(warning, "stderr");
@@ -295,4 +315,4 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
 };
 
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin };
-export { startCelldDevSession };
+export { startCelldDevSession, writeCelldDevProjection };

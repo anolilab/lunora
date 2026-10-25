@@ -77,6 +77,8 @@ const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
+/** A registry client: `createDynamicShardRegistry(...)`, or the `.shardRegistry(...)` builder option that wires one. Each request to the registry is signed, so either one needs `LUNORA_RELAY_SECRET`, whichever worker owns the registry. */
+const SHARD_REGISTRY_CLIENT_PATTERN = /\bcreateDynamicShardRegistry\s*\(|\.shardRegistry\s*\(/u;
 
 // Provisioning behaviour per capability (see plans 027/028/031/032/035/036):
 //   kv          → kv_namespaces             → written without an id (wrangler creates the namespace on deploy)
@@ -356,7 +358,7 @@ interface InferredBindings {
     usesRequestSecretTool: boolean;
     /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
-    /** The app binds `ShardRegistryDO` (`SHARD_REGISTRY`) or codegen wrote its module → the `LUNORA_RELAY_SECRET` that registry requires (no package import to report it). */
+    /** The app binds `ShardRegistryDO` (`SHARD_REGISTRY`), wrote its module, or wires a registry client (`createDynamicShardRegistry`, `.shardRegistry(`) → the `LUNORA_RELAY_SECRET` that registry requires (no package import to report it). */
     usesShardRegistry: boolean;
     /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
@@ -377,7 +379,7 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesShardRegistry" | "usesWorkerLoader">;
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -462,6 +464,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     const targets = createTargetScope();
     let usesEnvAi = false;
     let usesEnvDatabase = false;
+    let usesShardRegistryClient = false;
 
     for (const relativeDirectory of scanDirectories) {
         const absolute = join(projectRoot, relativeDirectory);
@@ -480,6 +483,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
+            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code);
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
@@ -514,6 +518,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         ...flags,
         needsD1: usesEnvDatabase,
         usesRequestSecretTool: lunora.requestSecretTool,
+        usesShardRegistry: usesShardRegistryClient,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
@@ -736,6 +741,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
         // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
         usesShardRegistry:
+            capabilities.usesShardRegistry ||
             durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
             existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts")),
         workflows,

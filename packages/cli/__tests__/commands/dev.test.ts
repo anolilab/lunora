@@ -987,6 +987,65 @@ describe("lunora dev", () => {
             expect(stopped).toBe(0);
         });
 
+        // `--no-worker` runs no session, but the external runner executes `celld dev` on the projection, so it has to be written first.
+        it("writes the celld projection before an attached --no-worker run names it", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const written: string[] = [];
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    throw new Error("an attached run starts no session");
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+                worker: false,
+                writeCelldProjection: async (options) => {
+                    written.push(options.projectRoot);
+
+                    return [];
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.SUCCESS);
+            expect(written).toStrictEqual([workdir]);
+        });
+
+        it("stops an attached --no-worker run when the celld projection cannot be written", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => {
+                    throw new Error("an attached run must not park after a failed projection write");
+                },
+                worker: false,
+                writeCelldProjection: async () => {
+                    throw new Error("celld is not on PATH");
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+        });
+
         it("starts no embedded Hyperdrive Postgres for a celld-target session, which has no Hyperdrive binding", async () => {
             expect.assertions(1);
 

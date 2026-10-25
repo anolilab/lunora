@@ -19,7 +19,8 @@ export { default as canonicalPath } from "./canonical-path";
 export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/celld-toolchain";
 export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
-export { startCelldDevSession } from "./celld/dev-session";
+export { startCelldDevSession, writeCelldDevProjection } from "./celld/dev-session";
+export { D1_PLACEHOLDER_ID } from "./cloudflare/reconcile-bindings";
 export {
     BUILD_ROOT_ENV,
     BUILD_TARGET_ENV,

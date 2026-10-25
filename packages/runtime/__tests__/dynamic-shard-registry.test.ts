@@ -332,6 +332,124 @@ describe("createDynamicShardRegistry", () => {
         expect(DEFAULT_REGISTRY_CACHE_TTL_MS).toBe(30_000);
     });
 
+    it("shares one /list request across concurrent misses on an empty cache", async () => {
+        expect.assertions(2);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
+        const namespace = createFakeNamespace(fakeDO);
+        const registry = createDynamicShardRegistry({ env, namespace });
+
+        const results = await Promise.all(Array.from({ length: 20 }, async () => registry.listShardKeys("messages")));
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(1);
+        expect(results.map((keys) => [...keys].toSorted((a, b) => a.localeCompare(b)))).toStrictEqual(Array.from({ length: 20 }, () => ["a", "b"]));
+    });
+
+    it("clears the in-flight request on failure, so the next call retries", async () => {
+        expect.assertions(3);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        const flaky = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname === "/list") {
+                    listAttempts += 1;
+
+                    if (listAttempts === 1) {
+                        return new Response("boom", { status: 500 });
+                    }
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ env, namespace: createFakeNamespace(flaky) });
+
+        const first = registry.listShardKeys("messages");
+        const second = registry.listShardKeys("messages");
+
+        await expect(first).rejects.toThrow("shard registry /list returned 500");
+        await expect(second).rejects.toThrow("shard registry /list returned 500");
+
+        expect([...(await registry.listShardKeys("messages"))]).toStrictEqual(["a"]);
+    });
+
+    it("does not join a list that started before a register on the same worker", async () => {
+        expect.assertions(4);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+        });
+        let markFirstRead!: () => void;
+        const firstRead = new Promise<void>((resolve) => {
+            markFirstRead = resolve;
+        });
+        let releaseSecondArrived!: () => void;
+        const secondArrived = new Promise<void>((resolve) => {
+            releaseSecondArrived = resolve;
+        });
+        const gated = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname !== "/list") {
+                    return fakeDO.fetch(request);
+                }
+
+                listAttempts += 1;
+
+                if (listAttempts === 2) {
+                    releaseSecondArrived();
+                }
+
+                // The first list reads the table before the register, then its reply is held.
+                if (listAttempts === 1) {
+                    const response = await fakeDO.fetch(request);
+
+                    markFirstRead();
+                    await firstHeld;
+
+                    return response;
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ env, namespace: createFakeNamespace(gated) });
+
+        const beforeRegister = registry.listShardKeys("messages");
+
+        // The register must land after the first list has read the table, which signing makes a separate step.
+        await firstRead;
+        await registry.register("messages", "b");
+
+        const afterRegister = registry.listShardKeys("messages");
+
+        // Waits for the fresh list to reach the DO, not for a clock: a call that joined the held list never sends one.
+        await secondArrived;
+
+        expect(listAttempts).toBe(2);
+        expect([...(await afterRegister)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+
+        releaseFirst();
+
+        expect([...(await beforeRegister)]).toStrictEqual(["a"]);
+        // The held list finished after the fresh one; its stale reply must not replace the fresh cache entry.
+        expect([...(await registry.listShardKeys("messages"))].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+    });
+
+    it("does not share a request when caching is off, so every call reaches the DO", async () => {
+        expect.assertions(1);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        const registry = createDynamicShardRegistry({ env, cacheTtlMs: 0, namespace: createFakeNamespace(fakeDO) });
+
+        await Promise.all([registry.listShardKeys("messages"), registry.listShardKeys("messages")]);
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
+    });
+
     describe("authentication", () => {
         it("signs every route with the relay secret from env", async () => {
             expect.assertions(2);
@@ -363,6 +481,19 @@ describe("createDynamicShardRegistry", () => {
             await expect(registry.listShardKeys("messages")).rejects.toThrow("LUNORA_RELAY_SECRET");
             await expect(registry.snapshot()).rejects.toThrow("LUNORA_RELAY_SECRET");
             expect(fakeDO.calls).toHaveLength(0);
+        });
+
+        it("reports the missing secret as a configuration error, not an internal one, so the message reaches the caller", async () => {
+            expect.assertions(2);
+
+            const registry = createDynamicShardRegistry({ env: {}, namespace: createFakeNamespace(createFakeRegistryDO()) });
+            const failure = await registry.register("messages", "a").then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+            expect(failure).toMatchObject({ code: "RELAY_MISCONFIGURED" });
+            expect(failure).toMatchObject({ message: expect.stringContaining("LUNORA_RELAY_SECRET") });
         });
 
         it("surfaces a registry that refuses the signature as an error", async () => {

@@ -559,6 +559,22 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
     });
 
+    it("reports the relay secret for a worker that only calls the registry through a binding to another worker", async () => {
+        expect.assertions(2);
+
+        // A client exports no registry class and generates no module; it selects the registry the worker
+        // binds to, and every request it sends is signed with the secret.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/app.ts", "export const app = createApp().shardRegistry((env) => env.SHARD_REGISTRY);\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+
+        write("lunora/app.ts", "export const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
     it("reconciles a fresh merged app into a config the validator accepts", async () => {
         expect.assertions(3);
 

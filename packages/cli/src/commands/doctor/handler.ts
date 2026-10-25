@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
+    D1_PLACEHOLDER_ID,
     DEV_VARS_FILE,
     discoverSchemaInfo,
     inferLunoraBindings,
@@ -402,17 +403,18 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
 
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
 const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
-    // celld's projection replaces the placeholder with a name-derived id, so it never reaches a deploy there.
-    if (parsed === undefined || (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld") {
+    if (parsed === undefined) {
         return;
     }
 
+    // celld's projection replaces only the exact placeholder with a name-derived id; any other placeholder still reaches it.
+    const celld = (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld";
     const databases = ((parsed as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> }).d1_databases ?? []).filter(Boolean);
 
     for (const database of databases) {
         const databaseId = typeof database.database_id === "string" ? database.database_id : "";
 
-        if (isD1PlaceholderId(databaseId)) {
+        if (isD1PlaceholderId(databaseId) && !(celld && databaseId === D1_PLACEHOLDER_ID)) {
             const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
 
             findings.push({
@@ -835,10 +837,10 @@ const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findi
         return;
     }
 
-    const environment = options.environment ?? process.env;
     // The override carries credentials, not the host PATH: the probe spawns celld and esbuild with this
-    // environment, so without the host variables a tool on PATH reads as missing.
-    const probe = await probeCelldToolchain({ dryRun: true, env: { ...process.env, ...options.environment }, purpose: "deploy" });
+    // environment, so without the host variables a tool on PATH reads as missing. The bucket check reads the same merge.
+    const environment = { ...process.env, ...options.environment };
+    const probe = await probeCelldToolchain({ dryRun: true, env: environment, purpose: "deploy" });
     const warnings = (environment["CELLD_BUCKET"] ?? "").trim() === "" ? [...probe.warnings, BUCKET_UNSET] : probe.warnings;
 
     for (const message of probe.errors) {

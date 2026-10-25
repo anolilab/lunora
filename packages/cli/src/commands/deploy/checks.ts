@@ -11,7 +11,7 @@ import type { AdvisorOpenShardAccess } from "@lunora/advisor";
 import { openShardAccess, runAdvisor } from "@lunora/advisor";
 import { isTestPath, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import type { DiscoveryCache } from "@lunora/config";
-import { COMPOSED_WORKER_ENTRY, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, D1_PLACEHOLDER_ID, discoverContainerInfo, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
@@ -23,10 +23,8 @@ import { isDockerAvailable } from "../../util/docker";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import { isD1PlaceholderId } from "../doctor/fix";
 import type { DeployCommandOptions } from "./types";
-
-/** Placeholder written by `reconcileWranglerBindings` for auto-provisioned D1 bindings. */
-const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 
 interface WranglerD1Entry {
     binding?: string;
@@ -212,13 +210,26 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDep
 };
 
 /**
+ * Whether a D1 `database_id` blocks a deploy to `target`. On Cloudflare that is the exact placeholder.
+ * celld's projection replaces only the exact placeholder (with the database name or a name-derived
+ * id), so there any other placeholder value reaches celld as the database's identity and blocks.
+ */
+const isBlockingPlaceholder = (databaseId: string | undefined, target: string): boolean => {
+    if (target === "celld") {
+        return typeof databaseId === "string" && databaseId !== D1_PLACEHOLDER_ID && isD1PlaceholderId(databaseId);
+    }
+
+    return target === "cloudflare" && databaseId === D1_PLACEHOLDER_ID;
+};
+
+/**
  * Return the name of any D1 binding that still carries the placeholder
  * database_id written by `reconcileWranglerBindings`. Returns `undefined`
  * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
  * the validator will report the real problem in that case).
  */
-const findD1PlaceholderBinding = (cwd: string, environment?: string): string | undefined =>
-    (readWranglerShape(cwd, environment)?.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID)?.binding;
+const findD1PlaceholderBinding = (cwd: string, target: string, environment?: string): string | undefined =>
+    (readWranglerShape(cwd, environment)?.d1_databases ?? []).find((entry) => isBlockingPlaceholder(entry.database_id, target))?.binding;
 
 /**
  * Validate the migration options that would otherwise fail only after the live
@@ -277,8 +288,8 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * — those cases fall through to the validator). Extracted from `runDeployCommand`
  * to keep its cognitive complexity within the 15-node budget.
  */
-const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy", environment?: string): string | undefined => {
-    const placeholderBinding = findD1PlaceholderBinding(cwd, environment);
+const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployCommand, target: string, environment?: string): string | undefined => {
+    const placeholderBinding = findD1PlaceholderBinding(cwd, target, environment);
 
     if (placeholderBinding === undefined) {
         return undefined;
@@ -838,9 +849,7 @@ const runPreDeployChecks = (
     command: PreDeployCommand,
     target: string,
 ): { code: ExitCode; error: string } | undefined => {
-    // The placeholder is Cloudflare's: `wrangler d1 create` mints the real id. celld's
-    // D1 takes any id, and its projection swaps the placeholder for the database name.
-    const d1Error = target === "cloudflare" ? checkD1Placeholder(cwd, options.logger, command, options.env) : undefined;
+    const d1Error = checkD1Placeholder(cwd, options.logger, command, target, options.env);
 
     if (d1Error !== undefined) {
         return { code: EXIT_CODE.USAGE, error: d1Error };

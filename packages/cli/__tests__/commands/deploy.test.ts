@@ -282,6 +282,57 @@ describe("lunora deploy", () => {
             );
             const CELLD_WRANGLER = JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: CELLD_VARS });
 
+            // celld's projection replaces only the exact placeholder; any other placeholder id would be deployed as the database's identity.
+            it("blocks a celld deploy whose D1 database_id is a placeholder the projection does not replace", async () => {
+                expect.assertions(3);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "" }] }),
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/placeholder database_id/u) });
+                expect(calls).toHaveLength(0);
+                expect(result.error).toMatch(/"DB"/u);
+            });
+
+            it("lets a celld deploy through when the D1 id is the exact placeholder, which the projection replaces", async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }] }),
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.error ?? "").not.toMatch(/placeholder database_id/u);
+            });
+
             it("aborts a celld deploy before spawning when a required secret is not in the vars", async () => {
                 expect.assertions(3);
 

@@ -167,8 +167,9 @@ const celldVersionWarning = (stdout: string): string | undefined => {
  * @returns the errors that stop it and the warnings that do not. Nothing is written.
  */
 const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise<CelldToolchainProbe> => {
-    // The tools are looked up and launched with the same environment `CELLD_ESBUILD` is read from.
-    const run = options.run ?? ((command, args) => runCommand(command, args, { env: options.env }));
+    // Read once: the tools must run with the environment their settings come from.
+    const env = options.env ?? process.env;
+    const run = options.run ?? ((command, args) => runCommand(command, args, { env }));
     const errors: string[] = [];
     const warnings: string[] = [];
     const celld = await run("celld", ["--version"]);
@@ -186,7 +187,7 @@ const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise
     }
 
     // celld runs the esbuild `CELLD_ESBUILD` names, else the one on PATH.
-    const configured = (options.env?.["CELLD_ESBUILD"] ?? "").trim();
+    const configured = (env["CELLD_ESBUILD"] ?? "").trim();
     const esbuildCommand = configured === "" ? "esbuild" : configured;
     const esbuild = await run(esbuildCommand, ["--version"]);
 
@@ -200,7 +201,7 @@ const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise
         errors.push(`\`${esbuildCommand} --version\` ${failure(esbuild)} — the esbuild celld bundles the worker with does not run`);
     }
 
-    if (options.purpose === "deploy" && options.dryRun !== true && (options.env?.["CELLD_BUCKET"] ?? "").trim() === "") {
+    if (options.purpose === "deploy" && options.dryRun !== true && (env["CELLD_BUCKET"] ?? "").trim() === "") {
         errors.push("CELLD_BUCKET is not set — `celld deploy` writes the deployment to the fleet bucket it names");
     }
 

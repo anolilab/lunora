@@ -147,7 +147,9 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
         const secret = siblingSecretOf(options.env);
 
         if (secret === undefined) {
-            throw new LunoraError("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object");
+            throw new LunoraError("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object", {
+                code: "RELAY_MISCONFIGURED",
+            });
         }
 
         const url = `${REGISTRY_BASE_URL}${path}`;

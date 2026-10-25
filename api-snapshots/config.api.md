@@ -303,6 +303,12 @@ interface ContainerLogStreamOptions {
 }
 ```
 
+### `D1_PLACEHOLDER_ID` (const)
+
+```ts
+const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
+```
+
 ### `DEFAULT_BUNDLE_META_PATH` (const)
 
 ```ts
@@ -1924,6 +1930,15 @@ const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: st
 
 ```ts
 const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
+```
+
+### `writeCelldDevProjection` (const)
+
+```ts
+const writeCelldDevProjection: (options: {
+    probe?: () => Promise<CelldToolchainProbe>;
+    projectRoot: string;
+}) => Promise<string[]>;
 ```
 
 ### `writeDevServerState` (const)

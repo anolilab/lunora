@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,7 +7,8 @@ import { basename, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startCelldDevSession } from "../src/celld/dev-session";
+import { planCelldConfig } from "../src/celld/celld-config";
+import { startCelldDevSession, writeCelldDevProjection } from "../src/celld/dev-session";
 import type { DevProcessSpawner } from "../src/dev-process";
 
 /** A free TCP port, released before it is handed back. */
@@ -211,5 +212,26 @@ describe("celld dev session", () => {
         await expect(
             startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) }),
         ).rejects.toThrow(/could not read the lunora\.config services/u);
+    });
+
+    it("writes the app's dev projection for a --no-worker run once the toolchain passes", async () => {
+        expect.assertions(2);
+
+        await expect(writeCelldDevProjection({ probe: noProblems, projectRoot: root })).resolves.toStrictEqual([]);
+        expect(existsSync(planCelldConfig(root, "dev").configPath)).toBe(true);
+    });
+
+    it("writes nothing for a --no-worker run whose toolchain has an error", async () => {
+        expect.assertions(2);
+
+        await expect(
+            writeCelldDevProjection({
+                probe: async () => {
+                    return { errors: ["celld is not on PATH"], warnings: [] };
+                },
+                projectRoot: root,
+            }),
+        ).rejects.toThrow(/celld is not on PATH/u);
+        expect(existsSync(planCelldConfig(root, "dev").configPath)).toBe(false);
     });
 });

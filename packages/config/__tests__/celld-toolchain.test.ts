@@ -92,6 +92,18 @@ describe("probeCelldToolchain", () => {
         await expect(errorsOf({ dryRun: true, env: {}, purpose: "deploy", run: tools(ALL) })).resolves.toStrictEqual([]);
     });
 
+    it("reads CELLD_BUCKET from the host environment when no env is given, as it runs the tools with that environment", async () => {
+        expect.assertions(1);
+
+        vi.stubEnv("CELLD_BUCKET", "s3://fleet");
+
+        try {
+            await expect(errorsOf({ purpose: "deploy", run: tools(ALL) })).resolves.toStrictEqual([]);
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
     it("errors when celld or esbuild starts but exits nonzero", async () => {
         expect.assertions(1);
 

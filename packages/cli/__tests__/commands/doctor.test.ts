@@ -993,6 +993,18 @@ describe("runDoctor", () => {
 
             expect(findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
         });
+
+        // The projection replaces only the exact placeholder, so any other empty id still reaches celld as a database identity.
+        it("still fails a celld project for a placeholder the projection does not replace", async () => {
+            expect.assertions(1);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", ""));
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+        });
     });
 
     describe("celld toolchain", () => {
@@ -1001,14 +1013,21 @@ describe("runDoctor", () => {
         it("warns, never fails, when CELLD_BUCKET is unset", async () => {
             expect.assertions(2);
 
-            seed(workdir, CLEAN_WRANGLER);
-            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+            // The probe reads the host environment too, so an inherited CELLD_BUCKET would hide the warning.
+            vi.stubEnv("CELLD_BUCKET", "");
 
-            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
-            const bucket = findings.filter((finding) => finding.message.includes("CELLD_BUCKET"));
+            try {
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
 
-            expect(bucket.map((finding) => finding.level)).toStrictEqual(["warn"]);
-            expect(bucket[0]?.code).toBe("celld-toolchain-warn");
+                const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+                const bucket = findings.filter((finding) => finding.message.includes("CELLD_BUCKET"));
+
+                expect(bucket.map((finding) => finding.level)).toStrictEqual(["warn"]);
+                expect(bucket[0]?.code).toBe("celld-toolchain-warn");
+            } finally {
+                vi.unstubAllEnvs();
+            }
         });
 
         // The override carries only credentials. The tools live on the host PATH, so the probe must still find them.
@@ -1034,6 +1053,29 @@ describe("runDoctor", () => {
             } finally {
                 process.env["PATH"] = hostPath;
                 rmSync(bin, { force: true, recursive: true });
+            }
+        });
+
+        // The bucket is read from the same merge the probe runs with, so a host-set CELLD_BUCKET is not reported unset.
+        it("reads CELLD_BUCKET from the host environment when the override carries credentials only", async () => {
+            expect.assertions(1);
+
+            const hostBucket = process.env["CELLD_BUCKET"];
+
+            try {
+                process.env["CELLD_BUCKET"] = "fleet";
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const { findings } = await runDoctor({ cwd: workdir, environment: { CELLD_ACCOUNT: "acct" }, logger: makeLogger().logger });
+
+                expect(findings.filter((finding) => finding.code === "celld-toolchain-warn")).toStrictEqual([]);
+            } finally {
+                if (hostBucket === undefined) {
+                    delete process.env["CELLD_BUCKET"];
+                } else {
+                    process.env["CELLD_BUCKET"] = hostBucket;
+                }
             }
         });
     });
