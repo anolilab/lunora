@@ -575,6 +575,16 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
     });
 
+    it("does not report the relay secret for a comment or a string that names the registry client", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/notes.ts", '// createApp().shardRegistry((env) => env.SHARD_REGISTRY);\nexport const note = "createDynamicShardRegistry({ env })";\n');
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+    });
+
     it("reconciles a fresh merged app into a config the validator accepts", async () => {
         expect.assertions(3);
 

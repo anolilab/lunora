@@ -19,18 +19,15 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => {
+/** A `database_id` that is empty or an angle-bracket template such as `<replace-with-d1-create-id>`. */
+const isTemplateD1Id = (databaseId: string): boolean => {
     const value = databaseId.trim();
 
-    if (value === "") {
-        return true;
-    }
-
-    const lower = value.toLowerCase();
-
-    return lower.includes("replace") || (lower.startsWith("<") && lower.endsWith(">"));
+    return value === "" || (value.startsWith("<") && value.endsWith(">"));
 };
+
+/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
+const isD1PlaceholderId = (databaseId: string): boolean => isTemplateD1Id(databaseId) || databaseId.trim().toLowerCase().includes("replace");
 
 const LINE_BREAK = /\r?\n/u;
 
@@ -354,5 +351,5 @@ const applyDoctorFixes = async (options: DoctorFixOptions): Promise<DoctorFixRes
     return result;
 };
 
-export { applyDoctorFixes, isD1PlaceholderId };
+export { applyDoctorFixes, isD1PlaceholderId, isTemplateD1Id };
 export type { DoctorFixOptions, DoctorFixResult };

@@ -208,5 +208,5 @@ const probeCelldToolchain = async (options: CelldToolchainProbeOptions): Promise
     return { errors, warnings };
 };
 
-export type { CelldCommandResult, CelldCommandRunner, CelldToolchainProbe, CelldToolchainProbeOptions };
-export { CELLD_RATED_VERSION, launchOptions, probeCelldToolchain, runCommand };
+export type { CelldCommandRunner, CelldToolchainProbe, CelldToolchainProbeOptions };
+export { launchOptions, probeCelldToolchain, runCommand };

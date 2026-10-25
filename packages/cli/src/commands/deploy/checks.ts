@@ -23,7 +23,7 @@ import { isDockerAvailable } from "../../util/docker";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isD1PlaceholderId } from "../doctor/fix";
+import { isTemplateD1Id } from "../doctor/fix";
 import type { DeployCommandOptions } from "./types";
 
 interface WranglerD1Entry {
@@ -212,24 +212,24 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDep
 /**
  * Whether a D1 `database_id` blocks a deploy to `target`. On Cloudflare that is the exact placeholder.
  * celld's projection replaces only the exact placeholder (with the database name or a name-derived
- * id), so there any other placeholder value reaches celld as the database's identity and blocks.
+ * id), so there any other empty or template value reaches celld as the database's identity and blocks.
+ * A real identity that merely contains "replace" is not a template, so it passes.
  */
 const isBlockingPlaceholder = (databaseId: string | undefined, target: string): boolean => {
     if (target === "celld") {
-        return typeof databaseId === "string" && databaseId !== D1_PLACEHOLDER_ID && isD1PlaceholderId(databaseId);
+        return typeof databaseId === "string" && databaseId !== D1_PLACEHOLDER_ID && isTemplateD1Id(databaseId);
     }
 
     return target === "cloudflare" && databaseId === D1_PLACEHOLDER_ID;
 };
 
 /**
- * Return the name of any D1 binding that still carries the placeholder
- * database_id written by `reconcileWranglerBindings`. Returns `undefined`
- * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
- * the validator will report the real problem in that case).
+ * Return the D1 binding that still carries a placeholder database_id, as written by
+ * `reconcileWranglerBindings`. Returns `undefined` when no placeholder is found (or when
+ * wrangler.jsonc is absent/unparseable — the validator will report the real problem in that case).
  */
-const findD1PlaceholderBinding = (cwd: string, target: string, environment?: string): string | undefined =>
-    (readWranglerShape(cwd, environment)?.d1_databases ?? []).find((entry) => isBlockingPlaceholder(entry.database_id, target))?.binding;
+const findD1PlaceholderEntry = (cwd: string, target: string, environment?: string): WranglerD1Entry | undefined =>
+    (readWranglerShape(cwd, environment)?.d1_databases ?? []).find((entry) => isBlockingPlaceholder(entry.database_id, target));
 
 /**
  * Validate the migration options that would otherwise fail only after the live
@@ -289,16 +289,19 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * to keep its cognitive complexity within the 15-node budget.
  */
 const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployCommand, target: string, environment?: string): string | undefined => {
-    const placeholderBinding = findD1PlaceholderBinding(cwd, target, environment);
+    const placeholder = findD1PlaceholderEntry(cwd, target, environment);
 
-    if (placeholderBinding === undefined) {
+    if (placeholder === undefined) {
         return undefined;
     }
 
     const message =
-        `${command} blocked: the "${placeholderBinding}" D1 binding has a placeholder database_id ` +
-        `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
-        `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
+        target === "celld"
+            ? `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ("${placeholder.database_id ?? ""}"), ` +
+              `which celld would use as the database's identity. Set database_id to the database celld should use, then ${command} again.`
+            : `${command} blocked: the "${placeholder.binding ?? "<unnamed>"}" D1 binding has a placeholder database_id ` +
+              `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
+              `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
 
     logger.error(message);
 

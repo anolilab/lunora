@@ -36,7 +36,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import { Project } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
@@ -77,8 +77,37 @@ const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
-/** A registry client: `createDynamicShardRegistry(...)`, or the `.shardRegistry(...)` builder option that wires one. Each request to the registry is signed, so either one needs `LUNORA_RELAY_SECRET`, whichever worker owns the registry. */
-const SHARD_REGISTRY_CLIENT_PATTERN = /\bcreateDynamicShardRegistry\s*\(|\.shardRegistry\s*\(/u;
+
+/**
+ * Text that may name a registry client call: a cheap prefilter ahead of the parse in
+ * {@link callsShardRegistryClient}. A registry request is signed, so a call to either
+ * API needs `LUNORA_RELAY_SECRET`, whichever worker owns the registry.
+ */
+const SHARD_REGISTRY_CLIENT_PATTERN = /\bcreateDynamicShardRegistry\b|\.shardRegistry\b/u;
+
+/** Parses single files for {@link callsShardRegistryClient}; its files are dropped after each parse. */
+const registryProbe = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+/**
+ * Whether source calls the registry client: `createDynamicShardRegistry(...)`, or the
+ * builder's `.shardRegistry(...)`. Only a parsed call counts, so a comment or a string
+ * that names either one does not.
+ */
+const callsShardRegistryClient = (code: string): boolean => {
+    const probe = registryProbe.createSourceFile("registry-probe.tsx", code, { overwrite: true });
+
+    try {
+        return probe.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => {
+            const callee = call.getExpression();
+
+            return Node.isIdentifier(callee)
+                ? callee.getText() === "createDynamicShardRegistry"
+                : Node.isPropertyAccessExpression(callee) && callee.getName() === "shardRegistry";
+        });
+    } finally {
+        probe.forget();
+    }
+};
 
 // Provisioning behaviour per capability (see plans 027/028/031/032/035/036):
 //   kv          → kv_namespaces             → written without an id (wrangler creates the namespace on deploy)
@@ -483,7 +512,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
-            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code);
+            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code) && callsShardRegistryClient(code);
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.

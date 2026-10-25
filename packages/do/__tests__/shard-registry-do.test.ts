@@ -101,6 +101,18 @@ describe("shardRegistryDO — authentication", () => {
         expect(state.storage.entries.size).toBe(0);
     });
 
+    it("caps the body it buffers, so an oversized request is refused before its signature is checked", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const registry = new ShardRegistryDO(state, ENV);
+        const oversized = JSON.stringify({ shardKey: "a".repeat(128 * 1024), table: "messages" });
+        const response = await registry.fetch(await signed("POST", "/register", oversized));
+
+        expect(response.status).toBe(413);
+        expect(state.storage.entries.size).toBe(0);
+    });
+
     it("refuses a signature made under another secret and leaves storage untouched", async () => {
         expect.assertions(2);
 

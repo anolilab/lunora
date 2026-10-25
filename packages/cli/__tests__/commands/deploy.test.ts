@@ -306,7 +306,7 @@ describe("lunora deploy", () => {
 
                 expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/placeholder database_id/u) });
                 expect(calls).toHaveLength(0);
-                expect(result.error).toMatch(/"DB"/u);
+                expect(result.error).toMatch(/"DB".*\(""\), which celld would use/u);
             });
 
             it("lets a celld deploy through when the D1 id is the exact placeholder, which the projection replaces", async () => {
@@ -315,6 +315,30 @@ describe("lunora deploy", () => {
                 writeFileSync(
                     join(workdir, "wrangler.jsonc"),
                     JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }] }),
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.error ?? "").not.toMatch(/placeholder database_id/u);
+            });
+
+            it('lets a celld deploy through when a real database identity merely contains "replace"', async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "replacement-orders" }] }),
                     "utf8",
                 );
 

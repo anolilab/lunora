@@ -56,10 +56,18 @@
 import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "@lunora/shard-engine";
 
 import { jsonResponse } from "../../../shared/json-response";
+import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 
 /** Ceiling on one registry round trip from a shard. */
 const REGISTER_TIMEOUT_MS = 5000;
+
+/**
+ * Largest request body the registry buffers. It is read before the signature can be
+ * checked, so this bounds what an unauthenticated caller can make the DO hold. A
+ * registration is one table name and one shard key.
+ */
+const MAX_REQUEST_BYTES = 64 * 1024;
 
 /** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
 const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
@@ -193,11 +201,25 @@ class ShardRegistryDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
-        const raw = await request.text();
-        const refusal = await this.refuseUnauthenticated(request, raw);
+        const unsigned = this.refuseUnsigned(request);
 
-        if (refusal) {
-            return refusal;
+        if (unsigned) {
+            return unsigned;
+        }
+
+        const raw = await readBodyTextCapped(request, MAX_REQUEST_BYTES);
+
+        if (raw === null) {
+            return jsonResponse(
+                { error: { code: "PAYLOAD_TOO_LARGE", message: `shard registry requests are capped at ${String(MAX_REQUEST_BYTES)} bytes` } },
+                413,
+            );
+        }
+
+        const forged = await this.refuseBadSignature(request, raw);
+
+        if (forged) {
+            return forged;
         }
 
         await this.ensureLoaded();
@@ -224,12 +246,12 @@ class ShardRegistryDO {
     }
 
     /**
-     * Refuse a request that does not prove it holds `LUNORA_RELAY_SECRET`, before
-     * any state is loaded or touched. `verifySiblingBody` alone passes an
-     * unconfigured DO (the relay channel's legacy network-trust), which is the
-     * hole this closes, so a missing secret is its own refusal.
+     * Refuse a request that cannot be signed, before its body is read: a DO without
+     * `LUNORA_RELAY_SECRET`, or a request without a signature header. `verifySiblingBody`
+     * alone passes an unconfigured DO (the relay channel's legacy network-trust), which
+     * is the hole this closes, so a missing secret is its own refusal.
      */
-    private async refuseUnauthenticated(request: Request, raw: string): Promise<Response | undefined> {
+    private refuseUnsigned(request: Request): Response | undefined {
         if (siblingSecretOf(this.env) === undefined) {
             return jsonResponse(
                 { error: { code: "FORBIDDEN", message: "the shard registry requires LUNORA_RELAY_SECRET to be set on the Durable Object's environment" } },
@@ -237,6 +259,15 @@ class ShardRegistryDO {
             );
         }
 
+        if (!request.headers.has(RELAY_SIGNATURE_HEADER)) {
+            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        }
+
+        return undefined;
+    }
+
+    /** Refuse a request whose signature does not cover its body, once the body has been read. */
+    private async refuseBadSignature(request: Request, raw: string): Promise<Response | undefined> {
         const frame = shardRegistryFrame(request.method, request.url, raw);
 
         if (!(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), frame))) {
