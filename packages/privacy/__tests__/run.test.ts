@@ -55,6 +55,13 @@ const memoryData = (initial: Record<string, number>, options: { failCollect?: bo
 
 const NO_GRACE = { graceDays: 0 };
 
+/** A `newId` that returns the given ids in order, so a test names its requests and runs. */
+const idsInOrder = (...ids: string[]): (() => string) => {
+    const queue = [...ids];
+
+    return () => queue.shift() ?? "";
+};
+
 describe("runExport", () => {
     it("exports a bigint and a bytes column, writing each as the wire codec's tagged leaf", async () => {
         const row = { blob: new Uint8Array([0, 1, 254, 255]).buffer, id: 12_345_678_901_234_567_890n };
@@ -808,6 +815,51 @@ describe("runExport", () => {
         await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "completed" });
         expect(store.rows.get(exported.id)?.status).toBe("expired");
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
+    it("deletes only its own run's files when another run's path contains its run id", async () => {
+        const files = memoryFiles();
+        const { privacy } = setup({ data: memoryData({}, { failCollect: true }).port, files, newId: idsInOrder("r1", "foo") });
+        const opened = await privacy.requestExport();
+
+        files.files.set("r1/other/foo/bar/parts/tasks.json", "another run's part");
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect([...files.files.keys()]).toStrictEqual(["r1/other/foo/bar/parts/tasks.json"]);
+    });
+
+    it("keeps a winner's archive and deletes its own files when the winner's path only contains its run id", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                // Another run made the export ready first, with an archive under a path that only contains this run's id.
+                if (patch.status === "ready") {
+                    await store.update(id, { status: "ready", storageKey: "r1/other/foo/bar/export.zip" });
+
+                    return false;
+                }
+
+                return store.claim(id, from, patch);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, files, newId: idsInOrder("r1", "foo"), store: racing });
+        const opened = await privacy.requestExport();
+
+        files.files.set("r1/other/foo/bar/export.zip", "winner");
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ archiveKey: "r1/other/foo/bar/export.zip", status: "ready" });
+        expect([...files.files.keys()]).toStrictEqual(["r1/other/foo/bar/export.zip"]);
+    });
+
+    it("refuses a run id with a path separator, and writes nothing", async () => {
+        const files = memoryFiles();
+        const { privacy } = setup({ data: memoryData({}).port, files, newId: idsInOrder("r1", "other/foo/bar") });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect([...files.files.keys()]).toStrictEqual([]);
     });
 });
 

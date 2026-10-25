@@ -217,6 +217,8 @@ export interface HarnessOptions {
     readonly datasets?: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
     readonly files?: MemoryFiles;
+    /** Replaces the counter that names requests and runs. */
+    readonly newId?: () => string;
     readonly now?: Date;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
     /** Initial row counts for the default in-memory data port. */
@@ -255,6 +257,13 @@ export const setup = (options: HarnessOptions = {}): Harness => {
     const tombstoneSecret = options.tombstoneSecret === undefined ? SECRET : options.tombstoneSecret;
     let clock = options.now ?? NOW;
     let counter = 0;
+    const newId =
+        options.newId ??
+        (() => {
+            counter += 1;
+
+            return `r${String(counter)}`;
+        });
 
     const privacyFor = definePrivacy({
         datasets: options.datasets ?? [tasksDataset],
@@ -262,11 +271,7 @@ export const setup = (options: HarnessOptions = {}): Harness => {
             return {
                 data,
                 files,
-                newId: () => {
-                    counter += 1;
-
-                    return `r${String(counter)}`;
-                },
+                newId,
                 now: () => clock,
                 store,
                 ...(options.archive === undefined ? {} : { archive: options.archive }),

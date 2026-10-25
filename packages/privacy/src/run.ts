@@ -70,10 +70,24 @@ const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Pro
     await Promise.all([...keys].map(async (key) => files.delete(key)));
 };
 
-/** Delete the files one export run wrote: every key under the request that carries the run's id. Returns how many. */
+/**
+ * The key prefix of one export run's files. A run id is a single path segment (see the `run` step), so the prefix
+ * names that run and no other: `foo` does not match the files of a run whose id is `other/foo/bar`.
+ */
+const runPrefixOf = (requestId: string, runId: string): string => `${requestId}/${runId}/`;
+
+/** The id an export run names its files with. An app's `newId` that returns a path would break the prefix rule above. */
+const runIdOf = (id: string): string => {
+    if (id === "" || id.includes("/")) {
+        throw new LunoraError("INTERNAL", "newId must return a non-empty id without a `/`.");
+    }
+
+    return id;
+};
+
+/** Delete the files one export run wrote under the request. Returns how many. */
 const deleteRunFiles = async (files: StorePort, requestId: string, runId: string): Promise<number> => {
-    const listed = await files.list(`${requestId}/`);
-    const keys = listed.filter((key) => key.includes(`/${runId}/`));
+    const keys = await files.list(runPrefixOf(requestId, runId));
 
     await Promise.all(keys.map(async (key) => files.delete(key)));
 
@@ -367,7 +381,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             const current = status === "ready" ? await requireRequest(scope.ports.store, requestId) : undefined;
             const live = current?.storageKey;
 
-            if (live?.includes(`/${id}/`) === true) {
+            if (live?.startsWith(runPrefixOf(requestId, id)) === true) {
                 return { status };
             }
 
@@ -398,8 +412,9 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             return { status: await failStep(scope, steps, requestId, "UNPROCESSABLE: the subject was erased before the export ran") };
         }
 
-        // Every file this run writes is named under its own id, journaled so a replay keeps it.
-        runId = await steps.do("run", () => Promise.resolve(scope.ports.newId()));
+        // Every file this run writes is named under its own id, journaled so a replay keeps it. The id is one path segment:
+        // a `/` in it would let this run's prefix contain another run's files.
+        runId = await steps.do("run", () => Promise.resolve(runIdOf(scope.ports.newId())));
 
         const ownId = runId;
 
@@ -440,7 +455,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
             const current = await requireRequest(scope.ports.store, requestId);
             const live = current.status === "ready" ? current.storageKey : undefined;
 
-            if (live?.includes(`/${ownId}/`) !== true) {
+            if (live?.startsWith(runPrefixOf(requestId, ownId)) !== true) {
                 await deleteRunFiles(scope.ports.files, requestId, ownId);
             }
 
