@@ -145,20 +145,30 @@ describe("probeCelldToolchain", () => {
     });
 });
 
+/**
+ * A fake tool that prints its version, in the form each platform runs: a `.cmd` shim
+ * for cmd.exe on Windows (found through PATHEXT), an executable script elsewhere.
+ */
+const writeFakeTool = (directory: string, name: string, version: string): void => {
+    if (process.platform === "win32") {
+        writeFileSync(join(directory, `${name}.cmd`), `@echo off\r\necho ${version}\r\n`);
+
+        return;
+    }
+
+    writeFileSync(join(directory, name), `#!/bin/sh\necho "${version}"\n`);
+    chmodSync(join(directory, name), 0o755);
+};
+
 describe("probeCelldToolchain with the default runner", () => {
-    // The tools are real scripts, so the lookup is the one `execFile` makes.
-    it.skipIf(process.platform === "win32")("looks the tools up on the PATH of the env it is given, not the host's", async () => {
+    // The tools are real programs, so the lookup is the one the platform's launcher makes.
+    it("looks the tools up on the PATH of the env it is given, not the host's", async () => {
         expect.assertions(2);
 
         const directory = mkdtempSync(join(tmpdir(), "celld-toolchain-"));
 
-        for (const [name, version] of [
-            ["celld", "celld 0.6.1"],
-            ["esbuild", "0.25.0"],
-        ] as const) {
-            writeFileSync(join(directory, name), `#!/bin/sh\necho "${version}"\n`);
-            chmodSync(join(directory, name), 0o755);
-        }
+        writeFakeTool(directory, "celld", "celld 0.6.1");
+        writeFakeTool(directory, "esbuild", "0.25.0");
 
         try {
             await expect(probeCelldToolchain({ env: { ...BUCKET, PATH: directory }, purpose: "deploy" })).resolves.toStrictEqual({ errors: [], warnings: [] });
