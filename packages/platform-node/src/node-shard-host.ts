@@ -206,18 +206,24 @@ const createAlarms = (
 
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
 
+    // Prepared after the `CREATE TABLE` above, which they need to compile against.
+    const deleteAlarm = database.prepare("DELETE FROM _lunora_alarm WHERE id = 0");
+    const upsertAlarm = database.prepare<[number]>(
+        "INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for",
+    );
+    const insertAlarmIfEmpty = database.prepare<[number]>("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO NOTHING");
+    const selectAlarm = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0");
+    const deleteFiredAlarm = database.prepare<[number]>("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?");
+
     const persist = (timestamp: number | undefined): void => {
         if (timestamp === undefined) {
-            database.prepare("DELETE FROM _lunora_alarm WHERE id = 0").run();
+            deleteAlarm.run();
         } else {
-            database
-                .prepare("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for")
-                .run(timestamp);
+            upsertAlarm.run(timestamp);
         }
     };
 
-    const persistIfEmpty = (timestamp: number): boolean =>
-        database.prepare("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO NOTHING").run(timestamp).changes > 0;
+    const persistIfEmpty = (timestamp: number): boolean => insertAlarmIfEmpty.run(timestamp).changes > 0;
 
     /**
      * Claim the alarm that just fired by deleting its row, and report whether
@@ -225,10 +231,7 @@ const createAlarms = (
      * and atomic in SQLite, so when two processes share one database file and
      * both re-armed the same row, exactly one sees `changes === 1` and delivers.
      */
-    const selectAlarm = (): { scheduled_for: number } | undefined =>
-        database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
-
-    const consume = (firedAt: number): boolean => database.prepare("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?").run(firedAt).changes > 0;
+    const consume = (firedAt: number): boolean => deleteFiredAlarm.run(firedAt).changes > 0;
 
     /**
      * Set while the armed timer is only waiting for another task's transaction to
@@ -258,6 +261,17 @@ const createAlarms = (
             step();
         }, FOREIGN_TRANSACTION_RETRY_MS);
         waitingOnTransaction = true;
+    };
+
+    /** Arm the timer for whatever alarm the durable row holds, if it holds one. */
+    const armFromRow = (): void => {
+        const durable = selectAlarm.get();
+
+        if (durable !== undefined) {
+            alarmAt = durable.scheduled_for;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(durable.scheduled_for);
+        }
     };
 
     /**
@@ -307,14 +321,7 @@ const createAlarms = (
         }
 
         attempts = 0;
-
-        const durable = selectAlarm();
-
-        if (durable !== undefined) {
-            alarmAt = durable.scheduled_for;
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above
-            arm(durable.scheduled_for);
-        }
+        armFromRow();
     };
 
     /** Deliver the alarm armed for `ms`, once no other task holds a transaction open. */
@@ -358,13 +365,7 @@ const createAlarms = (
             // newer alarm replaced it); delivering again would fire it twice.
             // A replacing alarm is armed by its own commit, but a timer that
             // was armed for it may have been dropped, so re-arm from the row.
-            const durable = selectAlarm();
-
-            if (durable !== undefined) {
-                alarmAt = durable.scheduled_for;
-                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see `retryFailedDelivery`
-                arm(durable.scheduled_for);
-            }
+            armFromRow();
 
             return;
         }
@@ -499,7 +500,7 @@ const createAlarms = (
             return;
         }
 
-        const durable = selectAlarm();
+        const durable = selectAlarm.get();
 
         // A timer waiting out the transaction is re-armed too, so the alarm is delivered now that it has ended.
         if (durable !== undefined && (alarmTimeout === undefined || waitingOnTransaction || alarmAt !== durable.scheduled_for)) {
@@ -531,12 +532,7 @@ const createAlarms = (
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
     // `arm` means an alarm whose time passed while nothing was running fires on
     // the next tick rather than never — late, but delivered.
-    const restored = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
-
-    if (restored !== undefined) {
-        alarmAt = restored.scheduled_for;
-        arm(restored.scheduled_for);
-    }
+    armFromRow();
 
     return { alarms, commit, dispose, rollback };
 };
