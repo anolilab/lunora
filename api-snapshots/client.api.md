@@ -545,6 +545,9 @@ class LunoraClient {
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
     isCrossTabFollower(): boolean;
+    expectsPush(options?: {
+        shardKey?: string;
+    }): boolean;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
@@ -1536,7 +1539,7 @@ class SubscriptionRegistry {
 
 ```ts
 interface SubscriptionState {
-    acked: boolean;
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
