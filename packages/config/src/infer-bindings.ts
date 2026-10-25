@@ -132,11 +132,16 @@ const callsShardRegistryClient = (code: string, file: string): boolean => {
             }
         }
 
+        const rootsAtBuilder = (expression: Node): boolean => {
+            const root = chainRoot(expression);
+
+            return root !== undefined && builders.has(root);
+        };
+
         for (const variable of probe.getVariableDeclarations()) {
             const initializer = variable.getInitializer();
-            const root = initializer === undefined ? undefined : chainRoot(initializer);
 
-            if (root !== undefined && builders.has(root)) {
+            if (initializer !== undefined && rootsAtBuilder(initializer)) {
                 builders.add(variable.getName());
             }
         }
@@ -156,9 +161,7 @@ const callsShardRegistryClient = (code: string, file: string): boolean => {
                 return true;
             }
 
-            const root = chainRoot(callee.getExpression());
-
-            return callee.getName() === BUILDER_REGISTRY_METHOD && root !== undefined && builders.has(root);
+            return callee.getName() === BUILDER_REGISTRY_METHOD && rootsAtBuilder(callee.getExpression());
         });
     } finally {
         probe.forget();
