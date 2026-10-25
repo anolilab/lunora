@@ -1046,6 +1046,7 @@ class LunoraError extends Error {
     readonly data: unknown;
     readonly why: string | undefined;
     readonly internal: Record<string, unknown> | undefined;
+    readonly headers: Readonly<Record<string, string>> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -1083,6 +1084,7 @@ interface LunoraErrorOptions {
     cause?: unknown;
     data?: unknown;
     docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
     hint?: ErrorHint;
     internal?: Record<string, unknown>;
     location?: ErrorLocation;

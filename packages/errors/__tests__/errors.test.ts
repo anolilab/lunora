@@ -482,6 +482,40 @@ describe("raise", () => {
     });
 });
 
+describe("lunoraError response headers", () => {
+    // Distinctive sentinel: a response's cookie must never appear in anything a client receives.
+    const COOKIE = "session=sentinel-cookie-value";
+
+    it("is absent on an error that did not come from a response", () => {
+        expect.assertions(2);
+
+        const error = new LunoraError("CONFLICT", "stale");
+
+        expect(error.headers).toBeUndefined();
+        expect(Object.getOwnPropertyDescriptor(error, "headers")).toBeUndefined();
+    });
+
+    it("exposes the headers it was given, read-only and non-enumerable", () => {
+        expect.assertions(4);
+
+        const error = new LunoraError("TOO_MANY_REQUESTS", "slow down", { headers: { "retry-after": "3" } });
+
+        expect(error.headers).toStrictEqual({ "retry-after": "3" });
+        expect(Object.getOwnPropertyDescriptor(error, "headers")?.writable).toBe(false);
+        expect(Object.keys(error)).not.toContain("headers");
+        expect(JSON.stringify(error)).not.toContain("retry-after");
+    });
+
+    it("keeps headers out of the client envelope and the wire body", () => {
+        expect.assertions(2);
+
+        const error = new LunoraError("INTERNAL", "boom", { headers: { "set-cookie": COOKIE } });
+
+        expect(JSON.stringify(error)).not.toContain(COOKIE);
+        expect(toErrorBody(error).body).not.toHaveProperty("headers");
+    });
+});
+
 describe("lunoraError internal and why", () => {
     // Distinctive sentinel: it must never appear in anything a client receives.
     const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";

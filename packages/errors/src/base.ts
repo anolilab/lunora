@@ -50,6 +50,13 @@ export interface LunoraErrorOptions {
     /** Link to deeper docs for this error. */
     docsUrl?: string;
 
+    /**
+     * The HTTP response headers of the reply this error came from, keys lowercased. Set by the
+     * client's RPC, batch and replay paths; absent on every other error. Kept non-enumerable like
+     * `internal`: a response's `set-cookie` must never ride the wire codec or a JSON log line.
+     */
+    headers?: Readonly<Record<string, string>>;
+
     /** Actionable fix (Markdown). Defaults to the catalog entry's hint. */
     hint?: ErrorHint;
 
@@ -130,6 +137,9 @@ export class LunoraError extends Error {
      */
     declare public readonly internal: Record<string, unknown> | undefined;
 
+    /** Response headers of the reply this error came from. Non-enumerable and absent unless set. */
+    declare public readonly headers: Readonly<Record<string, string>> | undefined;
+
     public constructor(code: LunoraErrorCodeInput, message?: string, options: LunoraErrorOptions = {}) {
         const entry: ErrorCatalogEntry | undefined = getCatalogEntry(code);
 
@@ -160,6 +170,11 @@ export class LunoraError extends Error {
         // would reach the client the moment this error is embedded in a payload.
         if (options.internal !== undefined) {
             Object.defineProperty(this, "internal", { value: options.internal });
+        }
+
+        // Same reasoning for response headers: a `set-cookie` must not reach a client or a log line.
+        if (options.headers !== undefined) {
+            Object.defineProperty(this, "headers", { value: options.headers });
         }
     }
 }

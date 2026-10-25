@@ -212,6 +212,54 @@ const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", t
 await server.connect(myTransport);
 ```
 
+## Expose your app's functions
+
+`createLunoraMcpServer` fronts a deployment with generic tools (`lunora_run_query`, `lunora_run_mutation`, …). To give a model one tool per function in **your** app, with typed arguments, build the server from the OpenRPC document your app generates:
+
+```ts
+import { createFunctionMcpServer } from "@lunora/mcp";
+import { openRpcSpec } from "./lunora/_generated/openrpc";
+
+const server = createFunctionMcpServer({
+    url: env.LUNORA_URL,
+    token: caller.token, // the caller's bearer, not an admin token
+    openRpcSpec,
+    allowWrites: false,
+});
+```
+
+For a Worker that serves MCP over HTTP, build the server per request, with the signed-in user's token, and hand it to `serveStateless`:
+
+```ts
+import { createFunctionMcpServer, serveStateless } from "@lunora/mcp/worker";
+
+export default {
+    async fetch(request: Request, env: Env): Promise<Response> {
+        const user = await resolveUser(request); // your own session check
+        const server = createFunctionMcpServer({ url: env.LUNORA_URL, token: user.token, openRpcSpec });
+
+        return serveStateless(server, request);
+    },
+};
+```
+
+Requirements and behaviour:
+
+- **Generate the document.** Pass `apiSpec: "openrpc"` (or `"both"`) to the Vite plugin, or run `lunora codegen --api-spec openrpc`. Without it, `_generated/openrpc.ts` is not emitted and the import fails.
+- **Identity is the caller's.** Each tool runs as `token` through the public RPC path, so auth and row-level security apply as they do in the app. Nothing calls `/_lunora/admin/*`, so no admin token is needed.
+- **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
+- **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
+- **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
+- **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A nullable or union argument is decoded through the one branch the value fits: its JSON type, its `const`, the `const` properties of an object (a discriminator), and the carrier of a string (a decimal for `v.bigint()`, canonical base64 for `v.bytes()`). A value that still fits several branches (`v.union(v.string(), v.bigint())` with `"5"`) is sent as it is, because picking one would guess. A decimal string whose length is a multiple of four is also canonical base64, so a `v.bigint()`-or-`v.bytes()` union leaves it as it is.
+- **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. `result` is not required in that wrapper, since a handler whose output is optional returns `undefined`, which arrives as an empty object. An object output that returns `undefined` is sent as `{}`, and its `outputSchema` admits the empty object, because the document does not say whether an output can be absent. The same schema therefore accepts `{}` for a required object output too. A function with no `.output()` has no `outputSchema`.
+- **A changed document is announced on the next request.** `openRpcSpec` may be a function that returns the document, and it is read on each `tools/list` and `tools/call`. The tools are rebuilt, and the client is told its tool list changed, when a request finds the document different. A host that wants the change announced before any request has to make a request itself, or watch the file as `lunora mcp serve --functions` does.
+- **A stream is a read-only tool that collects its chunks.** The call runs the stream to completion and returns every chunk, in order, as the text block, with no `outputSchema` and no wrapping. A mid-stream error is an error result. When the caller aborts, the stream is cancelled on the Lunora socket. A stream is capped at 10,000 chunks (`MAX_STREAM_CHUNKS`): the chunk past the cap cancels the stream and returns a `PAYLOAD_TOO_LARGE` error with no chunks. A stream is also capped at 16 MiB of collected chunk JSON (`MAX_STREAM_BYTES`), and the chunk past that cap cancels it the same way. Neither cap bounds the time a stream may run.
+- **Sensitive arguments** (`v.sensitive`) are masked in a write proposal, whole argument at a time, wherever the sensitive value sits inside it. The call is sent on a reference that the client never queues offline.
+- **The deployment URL can resolve late.** `url` may be a function, read on every call. While it returns `undefined`, a call returns `SERVICE_UNAVAILABLE` and the server keeps running. A stream cancelled by the caller returns a `CANCELLED` error, not the chunks it had.
+- **Over stdio, for an editor:** `connectFunctionStdio(options)`, from the root entry or `@lunora/mcp/node`, builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`, and it starts before `lunora dev` is running. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
+- **Stream progress** is one `notifications/progress` per chunk (the progress value is the chunk's index, with no total), sent only when the request carries a `progressToken`. It reaches the caller only over a transport that delivers notifications during the call. `serveStateless` answers each request as a single JSON body, so there the chunks still arrive in the result, but no progress does.
+- **Not yet supported:** `shardKey` is always accepted even for an unsharded function.
+
 ## Expose an agent
 
 A deployment's durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) agents can be fronted as MCP tools. This is **opt-in and fail-closed**, mirroring `allowWrites`: starting an agent run is a side effect, so the agent tools are omitted from the advertised list _and_ refused at dispatch unless you explicitly enable them. `@lunora/mcp` takes no dependency on `@lunora/agent` — it reaches the agent's public `agents:agentRun` mutation over RPC like any other function.

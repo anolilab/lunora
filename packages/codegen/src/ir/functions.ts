@@ -16,6 +16,13 @@ export interface FunctionIR {
     /** A channel registration: a `defineRoom` and its room name. Absent on every other registration. */
     channel?: { kind: "room"; name: string };
 
+    /**
+     * The doc comment on the statement that declares the registration, when there
+     * is one. Read from the JSDoc description only (tags are dropped). Absent when
+     * the export has no doc comment, or when it is an `export default`.
+     */
+    description?: string;
+
     exportName: string;
 
     /**

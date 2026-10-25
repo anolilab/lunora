@@ -209,8 +209,6 @@ Narrow the snapshot with `backupTables`, or take this backup off-platform with `
 
 `400` — Bad request
 
-Also returned for an explicit `_id` that contains a NUL character (U+0000) on a trusted insert: an admin import, a CDC replay, or a write with `allowExplicitId`. The row is refused before anything is written, on every store. An admin import reports it per row, at the row's line, and the row is not stored. Re-mint the id on the source side. A CDC replay that updates a row already stored under such an id rewrites that row in place instead.
-
 ### `BAD_ROW`
 
 `400` — Malformed import row

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "1.0.0-alpha.297",
+    "version": "1.0.0-alpha.299",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -64,23 +64,23 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/agent": "1.0.0-alpha.242",
-        "@lunora/bindings": "1.0.0-alpha.131",
+        "@lunora/agent": "1.0.0-alpha.244",
+        "@lunora/bindings": "1.0.0-alpha.132",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/mail": "1.0.0-alpha.120",
-        "@lunora/notify": "1.0.0-alpha.93",
+        "@lunora/mail": "1.0.0-alpha.121",
+        "@lunora/notify": "1.0.0-alpha.94",
         "@lunora/platform": "1.0.0-alpha.74",
-        "@lunora/queue": "1.0.0-alpha.124",
-        "@lunora/scheduler": "1.0.0-alpha.147",
-        "@lunora/server": "1.0.0-alpha.233",
+        "@lunora/queue": "1.0.0-alpha.125",
+        "@lunora/scheduler": "1.0.0-alpha.148",
+        "@lunora/server": "1.0.0-alpha.235",
         "@lunora/wire": "1.0.0-alpha.2",
         "@visulima/notification": "catalog:notify",
         "ai": "catalog:ai"
     },
     "devDependencies": {
-        "@lunora/observability": "1.0.0-alpha.165",
-        "@lunora/ratelimit": "1.0.0-alpha.164",
-        "@lunora/shard-engine": "1.0.0-alpha.154",
+        "@lunora/observability": "1.0.0-alpha.167",
+        "@lunora/ratelimit": "1.0.0-alpha.166",
+        "@lunora/shard-engine": "1.0.0-alpha.156",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
