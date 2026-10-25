@@ -52,6 +52,12 @@ export const ShardDO = createShardDO({});
 export default { fetch() { return new Response("ok"); } };
 `;
 
+const ENTRY_SHARD_REGISTRY = `import { createShardDO } from "../../lunora/_generated/shard.js";
+
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
+export const ShardDO = createShardDO({});
+`;
+
 const ENTRY_SHARD_AND_SCHEDULER = `import { createShardDO } from "../../lunora/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
@@ -1350,6 +1356,42 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(packages).not.toContain("@lunora/notify:fcm");
         // The package itself carries no secret, so it is not a secret source.
         expect(packages).not.toContain("@lunora/notify");
+    });
+
+    it("keys LUNORA_RELAY_SECRET to a worker entry that exports ShardRegistryDO", async () => {
+        expect.assertions(1);
+
+        // The template shape: the entry re-exports the generated registry class, and that export is the signal.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_REGISTRY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/runtime:shardRegistry");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a composed app whose codegen wrote the registry module", async () => {
+        expect.assertions(1);
+
+        // A `.shardBy()` schema: the composed entry forwards `_generated/shardRegistry.ts`, which is the signal.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/runtime:shardRegistry");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a worker with no shard registry", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).not.toContain("@lunora/runtime:shardRegistry");
     });
 
     it("keys the secret-value key to a tool imported through a relative barrel inside lunora/", async () => {

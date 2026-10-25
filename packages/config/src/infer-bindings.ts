@@ -733,6 +733,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     };
 };
 
+/** The secret source a worker exporting `ShardRegistryDO` needs — see PACKAGE_SECRETS_REGISTRY. */
+const SHARD_REGISTRY_SECRET_SOURCE = "@lunora/runtime:shardRegistry";
+
 /**
  * The secret sources a project uses — the {@link PACKAGE_SECRETS_REGISTRY} keys
  * whose secrets it needs, derived from its already-resolved {@link InferredBindings}.
@@ -741,12 +744,16 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
  * {@link FLAG_PACKAGES}' sources whose flag is `true` in `bindings` — in
  * flag-name order — followed by the configured `@lunora/notify` channels
- * ({@link SECRET_SOURCE_FLAGS}), keeping only sources that carry secrets.
+ * ({@link SECRET_SOURCE_FLAGS}) and the shard registry when the worker exports
+ * `ShardRegistryDO`, keeping only sources that carry secrets.
  */
-const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
-    [...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
+const secretSourcesFromBindings = (bindings: InferredBindings): string[] => [
+    ...[...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
         .filter(([flag, source]) => bindings[flag] && PACKAGE_SECRETS_REGISTRY[source] !== undefined)
-        .map(([, source]) => source);
+        .map(([, source]) => source),
+    // The shard registry fails closed without LUNORA_RELAY_SECRET, and no import announces it, so the exported class is the signal.
+    ...(bindings.durableObjects.some((object) => object.className === "ShardRegistryDO") ? [SHARD_REGISTRY_SECRET_SOURCE] : []),
+];
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
 export { inferLunoraBindings, secretSourcesFromBindings };

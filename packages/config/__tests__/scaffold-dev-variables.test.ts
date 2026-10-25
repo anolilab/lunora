@@ -161,6 +161,16 @@ describe("planDevVariablesScaffold", () => {
         expect(plan.content).toContain("# Generate a strong secret with: openssl rand -hex 32");
     });
 
+    it("mints LUNORA_RELAY_SECRET from its placeholder, so a shard-registry app boots from a fresh scaffold", () => {
+        expect.assertions(3);
+
+        const example = 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n';
+        const plan = generatePlan(planDevVariablesScaffold({ devVarsExists: false, exampleContent: example, randomHex: fixedHex }));
+
+        expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+
     it("catches common placeholder conventions beyond the example's own (todo / placeholder / change_this)", () => {
         expect.assertions(2);
 

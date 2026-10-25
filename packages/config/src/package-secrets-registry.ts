@@ -161,6 +161,17 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
+    // Keyed by the registry DO an app exports rather than a package import: `createDynamicShardRegistry`
+    // refuses every request without this secret, and ShardRegistryDO fails closed on the same value.
+    "@lunora/runtime:shardRegistry": [
+        {
+            description:
+                "Signs the calls between the worker and the shard registry and event-log Durable Objects. Any strong random value, distinct from the others. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/packages/runtime",
+            key: "LUNORA_RELAY_SECRET",
+            placeholderValue: "replace-with-openssl-rand-hex-32",
+        },
+    ],
     // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
     // channel `defineNotify` configures, so a webPush-only app is not told to set
     // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
