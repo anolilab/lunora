@@ -165,6 +165,8 @@ export interface ProjectedConfig {
     configPath: string;
     /** Every key removed, as a dotted path (`observability`, `containers[0].rollout_step_percentage`). */
     dropped: ReadonlyArray<string>;
+    /** The `vars` the projection deploys — for a host with no secret store, the only channel a secret has. */
+    vars: Readonly<Record<string, unknown>>;
     /** Write the projection (and any build-artifact cleanup it planned). */
     write: () => void;
 }

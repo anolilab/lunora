@@ -8,6 +8,7 @@ import {
     inferLunoraBindings,
     isPlaceholderValue,
     parseDevVariableEntries,
+    probeCelldToolchain,
     readProjectDependencies,
     resolveSchemaDirectory,
 } from "@lunora/config";
@@ -64,6 +65,9 @@ const DOCTOR_CODES = [
     "artifacts-jurisdiction-ok",
     "artifacts-jurisdiction-unchecked",
     "artifacts-namespace-missing",
+    "celld-toolchain-missing",
+    "celld-toolchain-ok",
+    "celld-toolchain-warn",
     "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
@@ -397,8 +401,9 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
 };
 
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
-const checkD1Placeholders = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
-    if (parsed === undefined) {
+const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    // celld's projection replaces the placeholder with a name-derived id, so it never reaches a deploy there.
+    if (parsed === undefined || (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld") {
         return;
     }
 
@@ -818,6 +823,37 @@ const checkDurableObjectClassBudget = async (
     }
 };
 
+const BUCKET_UNSET = "CELLD_BUCKET is not set — a live `lunora deploy` needs it to name the fleet bucket; `lunora dev` and a dry run do not.";
+
+/**
+ * The celld toolchain a deploy needs (`celld`, `esbuild`, `CELLD_BUCKET`), checked
+ * the way `lunora deploy` checks it. Only for a celld project. A missing bucket
+ * only warns: a project that runs `lunora dev` or dry-run deploys never needs it.
+ */
+const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "celld") {
+        return;
+    }
+
+    const environment = options.environment ?? process.env;
+    // The override carries credentials, not the host PATH: the probe spawns celld and esbuild with this
+    // environment, so without the host variables a tool on PATH reads as missing.
+    const probe = await probeCelldToolchain({ dryRun: true, env: { ...process.env, ...options.environment }, purpose: "deploy" });
+    const warnings = (environment["CELLD_BUCKET"] ?? "").trim() === "" ? [...probe.warnings, BUCKET_UNSET] : probe.warnings;
+
+    for (const message of probe.errors) {
+        findings.push({ code: "celld-toolchain-missing", level: "fail", message });
+    }
+
+    for (const message of warnings) {
+        findings.push({ code: "celld-toolchain-warn", level: "warn", message });
+    }
+
+    if (probe.errors.length === 0 && warnings.length === 0) {
+        findings.push({ code: "celld-toolchain-ok", level: "pass", message: "celld, esbuild and CELLD_BUCKET are in place for a deploy." });
+    }
+};
+
 /** The doctor code and level for each Artifacts jurisdiction verdict. Unchecked warns: residency is not best-effort. */
 const ARTIFACTS_JURISDICTION_FINDINGS = {
     mismatch: { code: "artifacts-jurisdiction-mismatch", level: "fail" },
@@ -895,7 +931,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     checkWrangler(cwd, parsed, path, findings);
     checkCloudflareCliConfig(cwd, findings);
-    checkD1Placeholders(parsed, findings);
+    checkD1Placeholders(cwd, parsed, findings);
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);
     checkR2Lifecycle(parsed, findings);
@@ -916,6 +952,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkCelldToolchain(cwd, options, findings);
     await checkDurableObjectClassBudget(cwd, parsed, options, findings);
     await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);

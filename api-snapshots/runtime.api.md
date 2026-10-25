@@ -590,10 +590,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: ShardNamespaceLike;
-    secret?: string;
 }
 ```
 

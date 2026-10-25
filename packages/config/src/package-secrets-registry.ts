@@ -127,6 +127,18 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-base64-32-byte-key>",
         },
     ],
+    // Keyed `<package>:<detail>` because nothing imports it: `ShardRegistryDO` is bound by
+    // wrangler and called from generated code, so `secretSourcesFromBindings` reports it
+    // off the registry binding (`usesShardRegistry`).
+    "@lunora/do:shardRegistry": [
+        {
+            description:
+                "Signs every request to ShardRegistryDO, which refuses unsigned ones, and the shard-to-shard control channel. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/concepts/sharding#the-shard-registry",
+            key: "LUNORA_RELAY_SECRET",
+            placeholderValue: "replace-with-openssl-rand-hex-32",
+        },
+    ],
     // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to

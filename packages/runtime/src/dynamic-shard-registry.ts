@@ -13,7 +13,7 @@
  * 2. Construct the client once per worker request:
  *
  * ```ts
- * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY, secret: env.SHARD_REGISTRY_DO_SECRET });
+ * const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });
  * const coordinator = createQueryCoordinator({ registry });
  * ```
  *
@@ -38,7 +38,9 @@
  * coordination across them).
  */
 
-import { SHARD_REGISTRY_SECRET_HEADER } from "../../../shared/internal-secret";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody } from "@lunora/shard-engine";
+
+import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 import { LunoraError } from "./errors";
 import type { ShardRegistry } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
@@ -75,6 +77,13 @@ interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
 
     /**
+     * The worker's `env`, read for `LUNORA_RELAY_SECRET`. Every request to the
+     * registry is signed with it and the registry refuses any that is not, so
+     * without it each call rejects before it is sent.
+     */
+    env: unknown;
+
+    /**
      * DO instance name. Defaults to {@link SHARD_REGISTRY_DO_NAME}. Override
      * only if you run multiple isolated registries in one environment.
      */
@@ -88,9 +97,6 @@ interface DynamicShardRegistryOptions {
     jurisdiction?: DurableObjectJurisdiction;
     /** DO namespace binding (`env.SHARD_REGISTRY`). */
     namespace: ShardNamespaceLike;
-
-    /** The registry's `SHARD_REGISTRY_DO_SECRET`, sent on every request; omit when none is provisioned. */
-    secret?: string;
 }
 
 /**
@@ -131,24 +137,33 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     // Pin the registry DO to the configured jurisdiction (unchanged when unset).
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
-    const secretHeaders: Record<string, string> = options.secret ? { [SHARD_REGISTRY_SECRET_HEADER]: options.secret } : {};
-
     // Resolved per call, never cached: a registry is built once per isolate
     // (the generated worker memoizes its options), and workerd refuses I/O on
     // a stub created during a different request — so a cached stub serves the
     // first request and throws on every one after it.
     const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
-    const post = async (path: string, body: unknown): Promise<Response> =>
-        stub().fetch(
-            new Request(`${REGISTRY_BASE_URL}${path}`, {
-                body: JSON.stringify(body),
-                headers: { "content-type": "application/json", ...secretHeaders },
-                method: "POST",
-            }),
-        );
+    const send = async (method: "GET" | "POST", path: string, body?: unknown): Promise<Response> => {
+        const secret = siblingSecretOf(options.env);
 
-    const get = async (path: string): Promise<Response> => stub().fetch(new Request(`${REGISTRY_BASE_URL}${path}`, { headers: secretHeaders, method: "GET" }));
+        if (secret === undefined) {
+            throw new LunoraError("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object");
+        }
+
+        const url = `${REGISTRY_BASE_URL}${path}`;
+        const payload = body === undefined ? undefined : JSON.stringify(body);
+        const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame(method, url, payload ?? "")) };
+
+        if (payload !== undefined) {
+            headers["content-type"] = "application/json";
+        }
+
+        return stub().fetch(new Request(url, { body: payload, headers, method }));
+    };
+
+    const post = async (path: string, body: unknown): Promise<Response> => send("POST", path, body);
+
+    const get = async (path: string): Promise<Response> => send("GET", path);
 
     return {
         invalidate(table) {

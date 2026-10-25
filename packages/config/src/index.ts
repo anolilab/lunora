@@ -16,6 +16,8 @@ export type { MarkedApiSpec } from "./api-spec-marker";
 export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api-spec-marker";
 export { MissingBuildOutputError } from "./build-output-error";
 export { default as canonicalPath } from "./canonical-path";
+export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/celld-toolchain";
+export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
 export { startCelldDevSession } from "./celld/dev-session";
 export {
@@ -97,6 +99,7 @@ export {
     runnableTargetIds,
     targetRunsOwnDevServer,
 } from "./driver-registry";
+export { default as ensureGitignoreEntries } from "./ensure-gitignore";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";

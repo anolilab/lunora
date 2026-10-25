@@ -1,6 +1,11 @@
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
+import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 import { ShardRegistryDO } from "../src/shard-registry-do";
+
+const SECRET = "test-relay-secret";
+const ENV = { LUNORA_RELAY_SECRET: SECRET };
 
 /**
  * In-memory `DurableObjectState` substitute — same shape SessionDO tests use.
@@ -37,25 +42,107 @@ const createFakeState = (
     };
 };
 
-const post = (path: string, body: unknown): Request =>
-    new Request(`https://shard-registry.internal${path}`, {
-        body: JSON.stringify(body),
-        headers: { "content-type": "application/json" },
-        method: "POST",
+const BASE = "https://shard-registry.internal";
+
+/** A request signed the way the registry's clients sign it. */
+const signed = async (method: "GET" | "POST", path: string, body = "", secret = SECRET): Promise<Request> =>
+    new Request(`${BASE}${path}`, {
+        body: method === "POST" ? body : undefined,
+        headers: {
+            "content-type": "application/json",
+            [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame(method, `${BASE}${path}`, body)),
+        },
+        method,
     });
 
-const get = (path: string): Request => new Request(`https://shard-registry.internal${path}`, { method: "GET" });
+const post = async (path: string, body: unknown): Promise<Request> => signed("POST", path, JSON.stringify(body));
+
+const get = async (path: string): Promise<Request> => signed("GET", path);
+
+describe("shardRegistryDO — authentication", () => {
+    const unsigned = (method: "GET" | "POST", path: string, body?: unknown): Request =>
+        new Request(`${BASE}${path}`, { body: body === undefined ? undefined : JSON.stringify(body), method });
+
+    it("refuses every route when the DO has no LUNORA_RELAY_SECRET, even for a signed request", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const registry = new ShardRegistryDO(state, {});
+        const body = JSON.stringify({ shardKey: "a", table: "messages" });
+
+        const requests = await Promise.all([
+            signed("POST", "/register", body),
+            signed("POST", "/unregister", body),
+            signed("GET", "/list?table=messages"),
+            signed("GET", "/snapshot"),
+        ]);
+        const responses = await Promise.all(requests.map(async (request) => registry.fetch(request)));
+
+        expect(responses.map((response) => response.status)).toStrictEqual([403, 403, 403, 403]);
+        expect(state.storage.entries.size).toBe(0);
+    });
+
+    it("refuses an unsigned request on every route", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const registry = new ShardRegistryDO(state, ENV);
+
+        const responses = await Promise.all(
+            [
+                unsigned("POST", "/register", { shardKey: "a", table: "messages" }),
+                unsigned("POST", "/unregister", { shardKey: "a", table: "messages" }),
+                unsigned("GET", "/list?table=messages"),
+                unsigned("GET", "/snapshot"),
+            ].map(async (request) => registry.fetch(request)),
+        );
+
+        expect(responses.map((response) => response.status)).toStrictEqual([403, 403, 403, 403]);
+        expect(state.storage.entries.size).toBe(0);
+    });
+
+    it("refuses a signature made under another secret and leaves storage untouched", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const registry = new ShardRegistryDO(state, ENV);
+        const response = await registry.fetch(await signed("POST", "/register", JSON.stringify({ shardKey: "a", table: "messages" }), "another-secret"));
+
+        expect(response.status).toBe(403);
+        expect(state.storage.entries.size).toBe(0);
+    });
+
+    it("refuses a signature replayed against a different route or query", async () => {
+        expect.assertions(3);
+
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
+        const listMessages = await signed("GET", "/list?table=messages");
+        const header = listMessages.headers.get(RELAY_SIGNATURE_HEADER) ?? "";
+
+        const replay = async (path: string): Promise<number> => {
+            const response = await registry.fetch(new Request(`${BASE}${path}`, { headers: { [RELAY_SIGNATURE_HEADER]: header } }));
+
+            return response.status;
+        };
+
+        // The signature serves the request it was made for, and nothing else.
+        await expect(replay("/list?table=messages")).resolves.toBe(200);
+        // Moved to another table's list and to the snapshot.
+        await expect(replay("/list?table=secrets")).resolves.toBe(403);
+        await expect(replay("/snapshot")).resolves.toBe(403);
+    });
+});
 
 describe("shardRegistryDO", () => {
     it("starts empty — /list returns an empty shardKeys array", async () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const registry = new ShardRegistryDO(state, {});
+        const registry = new ShardRegistryDO(state, ENV);
         // construction kicks off blockConcurrencyWhile; the fake awaits it synchronously
         // but the fetch path still works either way.
 
-        const response = await registry.fetch(get("/list?table=messages"));
+        const response = await registry.fetch(await get("/list?table=messages"));
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ shardKeys: [] });
@@ -64,18 +151,18 @@ describe("shardRegistryDO", () => {
     it("/register adds a shard key and reports changed=true on first add", async () => {
         expect.assertions(4);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const first = await registry.fetch(post("/register", { shardKey: "channel-1", table: "messages" }));
+        const first = await registry.fetch(await post("/register", { shardKey: "channel-1", table: "messages" }));
 
         expect(first.status).toBe(200);
         await expect(first.json()).resolves.toEqual({ changed: true, ok: true });
 
-        const second = await registry.fetch(post("/register", { shardKey: "channel-1", table: "messages" }));
+        const second = await registry.fetch(await post("/register", { shardKey: "channel-1", table: "messages" }));
 
         await expect(second.json()).resolves.toEqual({ changed: false, ok: true });
 
-        const list = await registry.fetch(get("/list?table=messages"));
+        const list = await registry.fetch(await get("/list?table=messages"));
 
         await expect(list.json()).resolves.toEqual({ shardKeys: ["channel-1"] });
     });
@@ -83,14 +170,14 @@ describe("shardRegistryDO", () => {
     it("/register accumulates multiple shard keys per table", async () => {
         expect.assertions(1);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
         for (const key of ["channel-1", "channel-2", "channel-3"]) {
             // eslint-disable-next-line no-await-in-loop -- ordered registrations must apply sequentially
-            await registry.fetch(post("/register", { shardKey: key, table: "messages" }));
+            await registry.fetch(await post("/register", { shardKey: key, table: "messages" }));
         }
 
-        const list = await registry.fetch(get("/list?table=messages"));
+        const list = await registry.fetch(await get("/list?table=messages"));
         const body = await list.json<{ shardKeys: string[] }>();
 
         expect(body.shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["channel-1", "channel-2", "channel-3"]);
@@ -99,14 +186,14 @@ describe("shardRegistryDO", () => {
     it("tables are isolated — registering one table doesn't leak into another", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        await registry.fetch(post("/register", { shardKey: "a", table: "messages" }));
-        await registry.fetch(post("/register", { shardKey: "b", table: "tasks" }));
+        await registry.fetch(await post("/register", { shardKey: "a", table: "messages" }));
+        await registry.fetch(await post("/register", { shardKey: "b", table: "tasks" }));
 
-        const messagesResponse = await registry.fetch(get("/list?table=messages"));
+        const messagesResponse = await registry.fetch(await get("/list?table=messages"));
         const m = await messagesResponse.json();
-        const tasksResponse = await registry.fetch(get("/list?table=tasks"));
+        const tasksResponse = await registry.fetch(await get("/list?table=tasks"));
         const t = await tasksResponse.json();
 
         expect(m).toEqual({ shardKeys: ["a"] });
@@ -116,15 +203,15 @@ describe("shardRegistryDO", () => {
     it("/unregister removes a key and reports changed=true once, changed=false on repeat", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        await registry.fetch(post("/register", { shardKey: "x", table: "messages" }));
+        await registry.fetch(await post("/register", { shardKey: "x", table: "messages" }));
 
-        const first = await registry.fetch(post("/unregister", { shardKey: "x", table: "messages" }));
+        const first = await registry.fetch(await post("/unregister", { shardKey: "x", table: "messages" }));
 
         await expect(first.json()).resolves.toEqual({ changed: true, ok: true });
 
-        const second = await registry.fetch(post("/unregister", { shardKey: "x", table: "messages" }));
+        const second = await registry.fetch(await post("/unregister", { shardKey: "x", table: "messages" }));
 
         await expect(second.json()).resolves.toEqual({ changed: false, ok: true });
     });
@@ -132,9 +219,9 @@ describe("shardRegistryDO", () => {
     it("/unregister on an unknown table is a quiet no-op", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const response = await registry.fetch(post("/unregister", { shardKey: "x", table: "ghost" }));
+        const response = await registry.fetch(await post("/unregister", { shardKey: "x", table: "ghost" }));
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ changed: false, ok: true });
@@ -143,9 +230,9 @@ describe("shardRegistryDO", () => {
     it("/list rejects requests without a table parameter", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const response = await registry.fetch(get("/list"));
+        const response = await registry.fetch(await get("/list"));
 
         expect(response.status).toBe(400);
 
@@ -157,13 +244,13 @@ describe("shardRegistryDO", () => {
     it("/register rejects missing fields", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const noTable = await registry.fetch(post("/register", { shardKey: "x" }));
+        const noTable = await registry.fetch(await post("/register", { shardKey: "x" }));
 
         expect(noTable.status).toBe(400);
 
-        const noShardKey = await registry.fetch(post("/register", { table: "messages" }));
+        const noShardKey = await registry.fetch(await post("/register", { table: "messages" }));
 
         expect(noShardKey.status).toBe(400);
     });
@@ -171,15 +258,9 @@ describe("shardRegistryDO", () => {
     it("/register rejects malformed JSON", async () => {
         expect.assertions(1);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const response = await registry.fetch(
-            new Request("https://shard-registry.internal/register", {
-                body: "not json",
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
+        const response = await registry.fetch(await signed("POST", "/register", "not json"));
 
         expect(response.status).toBe(400);
     });
@@ -187,9 +268,9 @@ describe("shardRegistryDO", () => {
     it("unknown route returns 404", async () => {
         expect.assertions(1);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        const response = await registry.fetch(get("/missing"));
+        const response = await registry.fetch(await get("/missing"));
 
         expect(response.status).toBe(404);
     });
@@ -197,13 +278,13 @@ describe("shardRegistryDO", () => {
     it("/snapshot returns the full table → keys map", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
 
-        await registry.fetch(post("/register", { shardKey: "a", table: "messages" }));
-        await registry.fetch(post("/register", { shardKey: "b", table: "messages" }));
-        await registry.fetch(post("/register", { shardKey: "c", table: "tasks" }));
+        await registry.fetch(await post("/register", { shardKey: "a", table: "messages" }));
+        await registry.fetch(await post("/register", { shardKey: "b", table: "messages" }));
+        await registry.fetch(await post("/register", { shardKey: "c", table: "tasks" }));
 
-        const response = await registry.fetch(get("/snapshot"));
+        const response = await registry.fetch(await get("/snapshot"));
         const body = await response.json<{ tables: Record<string, string[]> }>();
 
         expect(body.tables["messages"]!.toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
@@ -232,21 +313,21 @@ describe("shardRegistryDO", () => {
                 }
             },
         });
-        const registry = new ShardRegistryDO(state, {});
+        const registry = new ShardRegistryDO(state, ENV);
 
         // 5,000 UUID-shaped keys — ~195 KB as one serialized snapshot.
         const shardKeys = Array.from({ length: 5000 }, (_unused, index) => `3f2504e0-4f89-11d3-9a0c-${String(index).padStart(12, "0")}`);
 
         for (const shardKey of shardKeys) {
             // eslint-disable-next-line no-await-in-loop -- registrations are serialized by `blockConcurrencyWhile` anyway
-            const response = await registry.fetch(post("/register", { shardKey, table: "channels" }));
+            const response = await registry.fetch(await post("/register", { shardKey, table: "channels" }));
 
             if (response.status !== 200) {
                 throw new Error(`register failed at ${shardKey}`);
             }
         }
 
-        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const listResponse = await registry.fetch(await get("/list?table=channels"));
         const list = await listResponse.json<{ shardKeys: string[] }>();
 
         expect(list.shardKeys).toHaveLength(5000);
@@ -267,11 +348,11 @@ describe("shardRegistryDO", () => {
                 throw new Error("value too large");
             },
         });
-        const registry = new ShardRegistryDO(state, {});
+        const registry = new ShardRegistryDO(state, ENV);
 
-        await expect(registry.fetch(post("/register", { shardKey: "channel-1", table: "channels" }))).rejects.toThrow("value too large");
+        await expect(registry.fetch(await post("/register", { shardKey: "channel-1", table: "channels" }))).rejects.toThrow("value too large");
 
-        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const listResponse = await registry.fetch(await get("/list?table=channels"));
         const list = await listResponse.json<{ shardKeys: string[] }>();
 
         expect(list.shardKeys).toStrictEqual([]);
@@ -280,12 +361,12 @@ describe("shardRegistryDO", () => {
     it("refuses a table/shardKey pair too long to be a storage key", async () => {
         expect.assertions(2);
 
-        const registry = new ShardRegistryDO(createFakeState(), {});
-        const response = await registry.fetch(post("/register", { shardKey: "x".repeat(2100), table: "channels" }));
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
+        const response = await registry.fetch(await post("/register", { shardKey: "x".repeat(2100), table: "channels" }));
 
         expect(response.status).toBe(400);
 
-        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const listResponse = await registry.fetch(await get("/list?table=channels"));
         const list = await listResponse.json<{ shardKeys: string[] }>();
 
         expect(list.shardKeys).toStrictEqual([]);
@@ -295,52 +376,20 @@ describe("shardRegistryDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const first = new ShardRegistryDO(state, {});
+        const first = new ShardRegistryDO(state, ENV);
 
-        await first.fetch(post("/register", { shardKey: "alpha", table: "messages" }));
-        await first.fetch(post("/register", { shardKey: "beta", table: "messages" }));
+        await first.fetch(await post("/register", { shardKey: "alpha", table: "messages" }));
+        await first.fetch(await post("/register", { shardKey: "beta", table: "messages" }));
 
         // Same storage, new instance — mirrors a DO restart.
-        const second = new ShardRegistryDO(state, {});
+        const second = new ShardRegistryDO(state, ENV);
 
         // Give the blockConcurrencyWhile callback a microtask to complete.
         await Promise.resolve();
 
-        const listResponse = await second.fetch(get("/list?table=messages"));
+        const listResponse = await second.fetch(await get("/list?table=messages"));
         const list = await listResponse.json();
 
         expect((list as { shardKeys: string[] }).shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["alpha", "beta"]);
-    });
-});
-
-const statusOf = async (response: Promise<Response>): Promise<number> => response.then((resolved) => resolved.status);
-
-describe("shardRegistryDO secret", () => {
-    const withSecret = (request: Request, secret: string): Request => {
-        const headers = new Headers(request.headers);
-
-        headers.set("x-lunora-shard-registry-do-secret", secret);
-
-        return new Request(request, { headers });
-    };
-
-    it("rejects every route without the secret when SHARD_REGISTRY_DO_SECRET is set", async () => {
-        expect.assertions(5);
-
-        const registry = new ShardRegistryDO(createFakeState(), { SHARD_REGISTRY_DO_SECRET: "s3cret" });
-
-        await expect(statusOf(registry.fetch(post("/register", { shardKey: "a", table: "messages" })))).resolves.toBe(401);
-        await expect(statusOf(registry.fetch(post("/unregister", { shardKey: "a", table: "messages" })))).resolves.toBe(401);
-        await expect(statusOf(registry.fetch(get("/snapshot")))).resolves.toBe(401);
-        await expect(statusOf(registry.fetch(withSecret(get("/snapshot"), "wrong")))).resolves.toBe(401);
-        await expect(statusOf(registry.fetch(withSecret(get("/snapshot"), "s3cret")))).resolves.toBe(200);
-    });
-
-    it("stays open when no secret is provisioned", async () => {
-        expect.assertions(1);
-
-        const registry = new ShardRegistryDO(createFakeState(), {});
-
-        await expect(statusOf(registry.fetch(get("/snapshot")))).resolves.toBe(200);
     });
 });

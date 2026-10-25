@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -978,6 +978,63 @@ describe("runDoctor", () => {
             seed(workdir, CLEAN_WRANGLER);
 
             expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
+    describe("d1 placeholder on a celld project", () => {
+        // celld's projection gives the placeholder a name-derived id, so a deploy never sees it.
+        it("does not fail a celld project for the placeholder reconcile used to write", async () => {
+            expect.assertions(1);
+
+            seed(workdir, PLACEHOLDER_WRANGLER);
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+    });
+
+    describe("celld toolchain", () => {
+        // `lunora dev` and a dry-run deploy never touch the fleet bucket, so a
+        // dev-only celld project must not fail doctor for lacking one.
+        it("warns, never fails, when CELLD_BUCKET is unset", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+            const bucket = findings.filter((finding) => finding.message.includes("CELLD_BUCKET"));
+
+            expect(bucket.map((finding) => finding.level)).toStrictEqual(["warn"]);
+            expect(bucket[0]?.code).toBe("celld-toolchain-warn");
+        });
+
+        // The override carries only credentials. The tools live on the host PATH, so the probe must still find them.
+        it("finds celld and esbuild on the host PATH when the override carries credentials only", async () => {
+            expect.assertions(1);
+
+            const bin = mkdtempSync(join(tmpdir(), "doctor-celld-bin-"));
+            const hostPath = process.env["PATH"] ?? "";
+
+            try {
+                for (const tool of ["celld", "esbuild"]) {
+                    writeFileSync(join(bin, tool), "#!/bin/sh\necho 1.0.0\n", "utf8");
+                    chmodSync(join(bin, tool), 0o755);
+                }
+
+                process.env["PATH"] = `${bin}:${hostPath}`;
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const { findings } = await runDoctor({ cwd: workdir, environment: { CELLD_BUCKET: "fleet" }, logger: makeLogger().logger });
+
+                expect(findings.filter((finding) => finding.code === "celld-toolchain-missing")).toStrictEqual([]);
+            } finally {
+                process.env["PATH"] = hostPath;
+                rmSync(bin, { force: true, recursive: true });
+            }
         });
     });
 

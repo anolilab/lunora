@@ -182,6 +182,9 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
 const SECRET_SOURCE_FLAGS = [
     ["usesNotifyFcm", "@lunora/notify:fcm"],
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
+    // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
+    ["usesShardRegistry", "@lunora/do:shardRegistry"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -353,6 +356,8 @@ interface InferredBindings {
     usesRequestSecretTool: boolean;
     /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
+    /** The app binds `ShardRegistryDO` (`SHARD_REGISTRY`) or codegen wrote its module → the `LUNORA_RELAY_SECRET` that registry requires (no package import to report it). */
+    usesShardRegistry: boolean;
     /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
     /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
@@ -729,6 +734,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
+        usesShardRegistry:
+            durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+            existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts")),
         workflows,
     };
 };

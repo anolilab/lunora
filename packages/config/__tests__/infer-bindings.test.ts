@@ -540,6 +540,25 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
     });
 
+    it("reports the shard registry's relay secret for an app that binds the registry, merged or not", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+
+        // A merged app exports `LunoraDO` and binds no `SHARD_REGISTRY`; the generated module still says it has one.
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
     it("reconciles a fresh merged app into a config the validator accepts", async () => {
         expect.assertions(3);
 
