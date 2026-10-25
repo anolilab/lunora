@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
-import { consumeStudioWrite } from "@lunora/config/studio-host";
+import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startCodegenWatch } from "../../src/util/codegen-watch";
@@ -23,6 +23,13 @@ vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return { ...actual, consumeStudioWrite: vi.fn<typeof actual.consumeStudioWrite>() };
+});
+
+// Real by default; a test that needs exact events replaces one call with a listener it drives itself.
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, watch: vi.fn<typeof actual.watch>(actual.watch) };
 });
 
 const silentLogger = (): { errors: string[]; logger: Logger; warns: string[] } => {
@@ -69,6 +76,11 @@ describe("startCodegenWatch", () => {
 
         vi.mocked(consumeStudioWrite).mockReset();
         vi.mocked(consumeStudioWrite).mockImplementation(studioHost.consumeStudioWrite);
+
+        const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+        vi.mocked(watch).mockReset();
+        vi.mocked(watch).mockImplementation(fs.watch);
     });
 
     afterEach(() => {
@@ -543,24 +555,37 @@ describe("startCodegenWatch", () => {
 
             vi.mocked(consumeStudioWrite).mockImplementation((path) => path === schemaPath);
 
+            // The watcher's listener, driven by hand: a real watch also reports the fixture files written just before it started
+            // (macOS), and only becomes active some time after `watch()` returns.
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            // Only the clock the settle window reads: the debounce timer stays real.
+            vi.useFakeTimers({ toFake: ["Date"] });
+
             const handle = startCodegenWatch({ debounceMs: 50, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
 
             try {
                 await handle.ready;
 
-                // Past HOOK_SETTLE_MS, or the watcher would treat this write as the startup hook's own.
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 350);
-                });
+                // Past HOOK_SETTLE_MS (300), or the watcher would treat this write as the startup hook's own.
+                vi.setSystemTime(Date.now() + 301);
 
-                writeFileSync(`${schemaPath}.lunora-tmp`, "// studio edit", "utf8");
-                renameSync(`${schemaPath}.lunora-tmp`, schemaPath);
+                emit?.("rename", `schema.ts${STUDIO_WRITE_TEMP_SUFFIX}`);
+                emit?.("rename", "schema.ts");
+                emit?.("change", "schema.ts");
 
                 await hookRuns.reached(2);
 
                 // Startup only: the studio write ran the hook without codegen.
                 expect(runCodegen).toHaveBeenCalledTimes(1);
             } finally {
+                vi.useRealTimers();
                 await handle.close();
                 rmSync(workdir, { force: true, recursive: true });
             }
