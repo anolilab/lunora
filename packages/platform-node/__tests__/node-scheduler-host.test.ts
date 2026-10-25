@@ -185,6 +185,57 @@ describe("createNodeSchedulerHost", () => {
         }
     });
 
+    it("retries the claim-column migration while another process holds the file's write lock", async () => {
+        expect.assertions(2);
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-scheduler-"));
+        const path = join(directory, "scheduler.sqlite3");
+        const database = new Database(path);
+
+        database.exec(
+            `CREATE TABLE _lunora_scheduler_jobs (
+                id TEXT PRIMARY KEY,
+                function_path TEXT NOT NULL,
+                args BLOB NOT NULL,
+                scheduled_for INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                retry BLOB,
+                state TEXT NOT NULL DEFAULT 'pending'
+            )`,
+        );
+
+        // The first ALTER meets a write lock held by a process that is still migrating an older build.
+        const exec = database.exec.bind(database);
+        let locked = 1;
+
+        database.exec = (source: string) => {
+            if (source.includes("ADD COLUMN claimed_at") && locked > 0) {
+                locked -= 1;
+
+                throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+            }
+
+            return exec(source);
+        };
+
+        try {
+            const host = createNodeSchedulerHost(database);
+
+            host.dispose();
+
+            expect(locked).toBe(0);
+            expect(
+                database
+                    .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
+                    .all()
+                    .map((column) => column.name),
+            ).toContain("claimed_at");
+        } finally {
+            database.close();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("starts when another process adds the claim column between its check and its ALTER", async () => {
         expect.assertions(1);
 

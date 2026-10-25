@@ -81,6 +81,10 @@ const CLAIM_RENEW_MS = CLAIM_LEASE_MS / 3;
 // A claim that throws (SQLITE_BUSY while another process holds the write lock) is retried after this.
 const CLAIM_RETRY_MS = 1000;
 
+// Migrating a database written by an older build: a locked file is retried with back-off, bounded.
+const MIGRATION_RETRY_LIMIT = 5;
+const MIGRATION_RETRY_BASE_MS = 20;
+
 /**
  * How long a timer-driven statement waits before looking again when another
  * task holds a transaction open on the shared connection. The shard host's
@@ -192,16 +196,38 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             .all()
             .some((column) => column.name === "claimed_at");
 
-    if (!hasClaimColumn()) {
-        try {
-            database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
-        } catch (error) {
-            // Another process sharing the file added it between our check and
-            // our ALTER; anything else is a real failure.
-            if (!hasClaimColumn()) {
-                throw error;
+    // Construction is synchronous, so the back-off blocks the thread for the wait: bounded, and short.
+    const sleepSync = (ms: number): void => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    };
+
+    const addClaimColumn = (): void => {
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                database.exec("ALTER TABLE _lunora_scheduler_jobs ADD COLUMN claimed_at INTEGER");
+
+                return;
+            } catch (error) {
+                // Another process sharing the file added it between our check and
+                // our ALTER: nothing left to do.
+                if (hasClaimColumn()) {
+                    return;
+                }
+
+                // A lock held by a process still migrating is transient; anything else is a real failure.
+                const busy = error instanceof Error && "code" in error && error.code === "SQLITE_BUSY";
+
+                if (!busy || attempt >= MIGRATION_RETRY_LIMIT) {
+                    throw error;
+                }
+
+                sleepSync(MIGRATION_RETRY_BASE_MS * 2 ** attempt);
             }
         }
+    };
+
+    if (!hasClaimColumn()) {
+        addClaimColumn();
     }
 
     database.exec(
