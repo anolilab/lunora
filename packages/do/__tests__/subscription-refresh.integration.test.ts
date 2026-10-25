@@ -361,7 +361,7 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     // Case 2 — MEMO-MISS RE-RUNS TO BE SAFE
     //
     // A subscription has no memo (its first execute returned null so
-    // pushSubscriptionData was never called, leaving subMemos unpopulated).
+    // pushSubscriptionData was never called, leaving its memo unpopulated).
     // When any table is mutated the subscription must still re-execute because
     // a missing memo means "unknown deps — run to be safe".
     //
