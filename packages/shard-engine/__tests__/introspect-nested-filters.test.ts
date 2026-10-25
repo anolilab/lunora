@@ -589,6 +589,23 @@ describe("readTablePage — nested paths and array membership", () => {
             expect(topIds("tags", ",")).toStrictEqual([]);
             expect(topIds("box", "city")).toStrictEqual([]);
         });
+
+        it("matches the first two elements of a user array that starts with the wire tag, on a field and in a table-wide search", () => {
+            expect.assertions(5);
+
+            // The array is stored as an `arr` escape frame, so its own first two leaves sit one level below the frame's tag.
+            database.sql.exec(`INSERT INTO "topc" VALUES (?, ?, ?)`, "t6", 1, encodeDocJson({ escaped: ["$lunora.wire$", "amber", "coral"] }));
+
+            const searched = (search: string): string[] => readTablePage(database.sql, { search, table: "topc" }).rows.map((row) => (row as { id: string }).id);
+
+            // Element 1 is the user's value; element 0 is the sentinel string the user stored, which is a value too.
+            expect(topSelected("escaped", "amber")).toStrictEqual(["t6"]);
+            expect(topSelected("escaped", "lunora")).toStrictEqual(["t6"]);
+            expect(searched("amber")).toStrictEqual(["t6"]);
+            expect(searched("lunora")).toStrictEqual(["t6"]);
+            // The escape frame's own `arr` tag is still the codec's, not a value the user stored.
+            expect(topSelected("escaped", "arr")).toStrictEqual([]);
+        });
     });
 
     describe("parameter budget", () => {

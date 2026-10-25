@@ -1474,11 +1474,14 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
  * remove it). The payload from element 2 on stays searchable, because it is the
  * value itself: the digits of a bigint, the epoch of a date. A sibling lookup by
  * `parent` id rather than by `path`, so no stored key is ever parsed as a JSON path.
- * A user array that starts with the tag is stored inside an `arr` frame and its
- * first two elements are hidden from search too, which can only lose a match.
+ * A user array that starts with the tag is stored as the payload of an `arr` frame,
+ * and its elements are user data, so that payload is not excluded.
+ *
+ * `documentExpression` is walked three times, so a caller that binds a path there
+ * binds it three times.
  */
 const wireFrameTagExclusion = (documentExpression: string): string =>
-    `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}'))`;
+    `NOT (typeof(j.key) = 'integer' AND j.key IN (0, 1) AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS f WHERE f.parent = j.parent AND f.key = 0 AND f.type = 'text' AND f.atom = '${WIRE_TAG}') AND NOT EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS g WHERE g.id = j.parent AND (SELECT count(*) FROM json_tree(${documentExpression}) AS h WHERE h.parent = g.parent AND typeof(h.key) = 'integer' AND ((h.key = 0 AND h.atom = '${WIRE_TAG}') OR (h.key = 1 AND h.atom = 'arr'))) = 2))`;
 
 /**
  * `contains` on a top-level `__doc__` field. A scalar keeps the plain substring test
@@ -1493,7 +1496,7 @@ const wireFrameTagExclusion = (documentExpression: string): string =>
  */
 const buildTopLevelContains = (document: string, path: unknown, term: string): { params: unknown[]; sql: string } => {
     return {
-        params: [path, path, term, path, path, term, path],
+        params: [path, path, term, path, path, term, path, path, path],
         sql: `CASE WHEN json_type(${document}, ?) IN ('text', 'integer', 'real') THEN ${containsSql(`json_extract(${document}, ?)`)} WHEN json_type(${document}, ?) IN ('array', 'object') THEN EXISTS (SELECT 1 FROM json_tree(${document}, ?) AS j WHERE j.type IN ('text', 'integer', 'real') AND ${containsSql("j.value")} AND ${wireFrameTagExclusion(`${document}, ?`)}) ELSE 0 END`,
     };
 };
