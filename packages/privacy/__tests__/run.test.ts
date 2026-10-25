@@ -323,6 +323,64 @@ describe("runExport", () => {
         expect(store.rows.get(exported.id)?.status).toBe("failed");
     });
 
+    it("stops a failed export that a retry claims after an erasure re-keyed it, so no archive is published", async () => {
+        const store = memoryRequests();
+        let raced = false;
+        let erase: (() => Promise<unknown>) | undefined;
+        const racing = {
+            ...store,
+            claim: async (id: string, from: Parameters<typeof store.claim>[1], patch: Parameters<typeof store.claim>[2]) => {
+                const row = store.rows.get(id);
+
+                // The retry's erased check read the subject before the erasure, and its claim lands after the erasure completed.
+                if (!raced && erase !== undefined && row?.type === "export" && row.status === "failed" && patch.status === "processing") {
+                    raced = true;
+                    await erase();
+                }
+
+                return store.claim(id, from, patch);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(exported.id, { ...exported, status: "failed" });
+        erase = async () => privacy.runErasure(erasure.id);
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(raced).toBe(true);
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+    });
+
+    it("fails an export a run claimed while the erasure was re-keying it", async () => {
+        const store = memoryRequests();
+        let claimedDuringRekey = false;
+        const racing = {
+            ...store,
+            update: async (id: string, patch: Parameters<typeof store.update>[1]) => {
+                const row = store.rows.get(id);
+
+                // A run claims `processing` after the erasure read the export as failed, just before the re-key lands.
+                if (!claimedDuringRekey && row?.type === "export" && row.status === "failed" && patch.subjectId !== undefined) {
+                    claimedDuringRekey = true;
+                    store.rows.set(id, { ...row, status: "processing" });
+                }
+
+                await store.update(id, patch);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, erasure: NO_GRACE, store: racing });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(exported.id, { ...exported, status: "failed" });
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "completed" });
+        expect(claimedDuringRekey).toBe(true);
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+    });
+
     it("stays failed, with no archive, when an erasure completes between the ready step's read and its write", async () => {
         const store = memoryRequests();
         let erase: (() => Promise<unknown>) | undefined;

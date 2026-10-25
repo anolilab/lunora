@@ -335,12 +335,35 @@ const subjectWasErased = async (store: RequestStore, subjectId: string): Promise
 };
 
 /**
+ * Whether an erasure has begun for the subject id a request carries. The erasure writes its tombstone key first, before any
+ * data is erased, and re-keys the subject's requests to that key. So a request the erasure has touched carries a key on record,
+ * while a raw subject id never is one, which keeps a later request for a reused id unblocked.
+ */
+const erasureBegun = async (tombstones: TombstonePort | undefined, subjectId: string): Promise<boolean> => {
+    if (tombstones === undefined) {
+        return false;
+    }
+
+    const keys = await tombstones.keys();
+
+    return keys.has(subjectId);
+};
+
+/**
  * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
  */
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
+    // Every export step reads the request's subject id afresh, so a step that finds an erasure has begun refuses to read any data:
+    // an erasure re-keys a failed export after its data is gone, and a retry can claim that export before the erasure completes.
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
-        whileProcessing(scope, steps, requestId, name, run);
+        whileProcessing(scope, steps, requestId, name, async (request) => {
+            if (await erasureBegun(scope.ports.tombstones, request.subjectId)) {
+                throw new Error("UNPROCESSABLE: the subject was erased before the export ran");
+            }
+
+            return run(request);
+        });
     let runId: string | undefined;
 
     // A run that stops after writing removes what it wrote, and only that: another run of the export keeps its files.
@@ -375,7 +398,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
         const erased = await steps.do("erased", async () => {
             const { subjectId } = await requireRequest(scope.ports.store, requestId);
 
-            return subjectWasErased(scope.ports.store, subjectId);
+            return (await subjectWasErased(scope.ports.store, subjectId)) || (await erasureBegun(scope.ports.tombstones, subjectId));
         });
 
         if (erased) {
@@ -536,6 +559,16 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
             }
 
             await ports.store.update(request.id, { subjectId: key });
+
+            // A run that claimed after the reads above still holds the raw subject id, so its data may be gone. Recheck the rekeyed
+            // request: a processing export is failed, and one that went ready meanwhile is expired.
+            const rekeyed = (await ports.store.get(request.id)) ?? current;
+
+            if (rekeyed.type === "export" && rekeyed.status === "processing") {
+                await failOpenRequest(ports, rekeyed, "UNPROCESSABLE: the subject was erased before the export finished");
+            } else if (rekeyed.status === "ready" && current.status !== "ready") {
+                await expireRequestFiles(ports, rekeyed);
+            }
         }),
     );
     await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
