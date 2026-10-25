@@ -501,7 +501,7 @@ no-op, so a redelivered start is safe.
 
 ### 4.6 Export workflow (`privacyExport`)
 
-**Implemented file layout (supersedes the paths below).** Each export run takes a run id from a
+**Implemented file layout.** Each export run takes a run id from a
 journaled step and writes its files under `<requestId>/<runId>/`: `parts/<dataset>.json`,
 `export.zip` and `summary.pdf`. A run that loses the ready claim deletes only its own files, so
 two runs of one export never touch each other's archive. **Upgrade:** an export in flight across
@@ -515,7 +515,7 @@ no read fallback for the old names.
 2. For each dataset, then table, then page: `privacy/v1/export/collect/<dataset>/<table>/<n>`.
     - The step runs the collector on the dataset's placement shard.
     - It applies `omit` and third-party redaction.
-    - It writes NDJSON to `privacy/exports/<requestId>/parts/<dataset>/<table>/<n>.ndjson`.
+    - It writes the dataset's part to `<requestId>/<runId>/parts/<dataset>.json`, in the wire codec.
     - It returns `{ key, count, sha256, cursor }`.
 
     Page size defaults to 500 rows and adapts down if a page exceeds 4 MiB. The step name is
@@ -525,7 +525,7 @@ no read fallback for the old names.
 3. `privacy/v1/export/files/<dataset>`: copy the subject's storage objects that a dataset declares
    (`files: { prefix | list }`) into the archive.
 4. `privacy/v1/export/assemble`: stream a ZIP from the parts into a multipart upload at
-   `privacy/exports/<requestId>/export.zip`.
+   `<requestId>/<runId>/export.zip`, and the summary at `<requestId>/<runId>/summary.pdf`.
     - The ZIP uses **DEFLATE** compression (decided 2026-10-11, overriding the earlier STORE choice
       that kept CPU cost lowest). Compression is the main CPU cost of this step. **Phase 0 check:** measure
       the DEFLATE cost on a heavy export (the largest dataset the app allows) against the Workers CPU
@@ -537,8 +537,8 @@ no read fallback for the old names.
     - **Phase 0 check:** `fflate` `ZipDeflate` is verified on workerd (not `AsyncZipDeflate`, which fails there). It writes `manifest.json` and `summary.pdf`, a human-readable Art. 15 copy in the
       subject's locale, defaulting to English and German. **Phase 0 check:** a PDF library must run
       on Workers (pure JS, no native code) and must produce identical bytes for an identical export.
-5. `privacy/v1/export/finalize`: set `ready` and `expiresAt` (default 7 days), arm the expiry
-   `runAt`, and delete the parts.
+5. `privacy/v1/export/finalize`: set `ready` and `expiresAt` (default 7 days) and arm the expiry
+   `runAt`. The parts stay until expiry, which deletes every file under `<requestId>/`.
 6. `privacy/v1/export/notify`: run the `exportReady` hook with a dedup id.
 7. `privacy/v1/export/audit`.
 
