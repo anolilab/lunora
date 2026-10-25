@@ -683,7 +683,9 @@ interface ApplyOnDeleteOptions {
  * holder not yet processed. Each processed holder drops out of the next read,
  * so re-reading from the start is the cursor. `firstPage`, when given, stands
  * in for the first read: holders the caller already read are not read (and
- * charged to the transaction meter) a second time.
+ * charged to the transaction meter) a second time. It never ends the walk,
+ * however short: it was read before any holder was applied, so a holder a
+ * trigger inserted while it was being applied is only found by a read.
  */
 const walkHolderPages = async (
     readPage: () => Promise<Record<string, unknown>[]>,
@@ -696,6 +698,7 @@ const walkHolderPages = async (
     let pending = firstPage;
 
     for (;;) {
+        const supplied = pending !== undefined;
         // eslint-disable-next-line no-await-in-loop -- each page is read after the previous one was processed
         const page = pending ?? (await readPage());
         let progressed = false;
@@ -719,6 +722,10 @@ const walkHolderPages = async (
 
             // eslint-disable-next-line no-await-in-loop -- holders are cascaded/nulled one at a time so a thrown restrict/cascade aborts deterministically
             await apply(holderId);
+        }
+
+        if (supplied) {
+            continue;
         }
 
         if (page.length < CASCADE_PAGE_SIZE) {
@@ -835,8 +842,8 @@ const applyPlan = async (options: ApplyOnDeleteOptions, plan: RelationPlan, prob
  * The first relation applied walks its probed ids as its first page; every
  * later one reads its own. Holders are then re-read {@link CASCADE_PAGE_SIZE}
  * at a time from the start until a page comes back short — a processed holder
- * no longer matches (deleted, soft-deleted, or its FK nulled). A short page
- * ends the walk, the probe included, so a holder inserted mid-cascade (by a
+ * no longer matches (deleted, soft-deleted, or its FK nulled). A short read
+ * ends the walk (the probe never does), so a holder inserted mid-cascade (by a
  * trigger, say) is only caught by a re-read that runs after it was inserted:
  * one inserted after the last page was read keeps referencing the deleted
  * parent. The ceiling is per relation per level: a

@@ -46,6 +46,47 @@ describe("applyOnDelete holder reads", () => {
         expect(rowsRead).toBe(1200);
     });
 
+    it("cascades a holder a trigger inserts while a short probe is being cascaded", async () => {
+        expect.assertions(1);
+
+        // Fewer than one page: a probe this short used to end the walk before anything re-read the holders.
+        const holders = new Set(["m0", "m1", "m2"]);
+
+        await applyOnDelete({
+            deletedId: "u1",
+            deletedReference: () => undefined,
+            findHolders: async (_table, _field, _value, page) =>
+                [...holders].slice(0, page.limit).map((id) => {
+                    return { _id: id };
+                }),
+            onCascade: async (_table, id) => {
+                holders.delete(id);
+
+                // A delete trigger on m0 inserts a new holder of the same parent.
+                if (id === "m0") {
+                    holders.add("m3");
+                }
+            },
+            onRestrict: (message) => {
+                throw new Error(message);
+            },
+            onSetNull: async () => {},
+            schema: {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: { author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" } },
+                        shape: {},
+                    },
+                    users: { indexes: [], shape: {} },
+                },
+            },
+            tableName: "users",
+        });
+
+        expect([...holders]).toStrictEqual([]);
+    });
+
     it("probes a single holder for a restrict relation instead of the full ceiling", async () => {
         expect.assertions(2);
 
