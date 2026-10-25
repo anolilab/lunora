@@ -225,14 +225,14 @@ statement:
 ```
 
 `EventLogDOClient` wraps the DO's `fetch()` RPC surface. `fetch` is a function that dispatches a request to the
-instance you want, which is where the namespace and instance id are chosen. When the DO has an
-`EVENT_LOG_DO_SECRET` var or secret, every route rejects requests without it (401); pass the same
-value as the client's `secret` option and it is sent on every request:
+instance you want, which is where the namespace and instance id are chosen.
+Every route of the DO requires a signed request. The client signs each request with `LUNORA_RELAY_SECRET`,
+read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
 const client = new EventLogDOClient({
+    env,
     fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
-    secret: env.EVENT_LOG_DO_SECRET, // omit when the DO has no secret
 });
 
 // Append takes an ARRAY of events and returns them with their assigned `seq`s.

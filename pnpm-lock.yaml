@@ -4684,6 +4684,9 @@ importers:
 
   packages/replica:
     dependencies:
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/wire':
         specifier: 1.0.0-alpha.2
         version: link:../wire

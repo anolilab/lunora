@@ -17,8 +17,10 @@
  * |        |                         | the entry count or payload budget    |
  */
 
-import { EVENT_LOG_SECRET_ENV, EVENT_LOG_SECRET_HEADER, hasInternalSecret } from "../../../shared/internal-secret";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, verifySiblingBody } from "@lunora/shard-engine";
+
 import type { EventLogEntry } from "./event-log";
+import { eventLogFrame } from "./event-log-frame";
 
 // ── Idempotency fingerprint ─────────────────────────────────────────────
 
@@ -297,18 +299,23 @@ export class EventLogDO {
     // ── Fetch (RPC dispatch) ──────────────────────────────────────────
 
     public async fetch(request: Request): Promise<Response> {
-        // Opt-in: with `EVENT_LOG_DO_SECRET` set, every route needs it in `x-lunora-event-log-do-secret`.
-        if (!hasInternalSecret(request, EVENT_LOG_SECRET_HEADER, (this.env as Record<string, unknown> | undefined)?.[EVENT_LOG_SECRET_ENV])) {
-            return errorResponse(401, "UNAUTHORIZED", "missing or invalid event log secret");
+        // Fail closed: without the relay secret no route answers, GET included, so the log is never readable unauthenticated.
+        if (siblingSecretOf(this.env) === undefined) {
+            return errorResponse(403, "FORBIDDEN", "event log requires LUNORA_RELAY_SECRET");
+        }
+
+        const url = new URL(request.url);
+        const raw = await request.text();
+
+        if (!(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), eventLogFrame(request.method, url, raw)))) {
+            return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
         }
 
         this.#ensureTable();
 
-        const url = new URL(request.url);
-
         try {
             if (request.method === "POST" && url.pathname === "/append") {
-                return await this.#handleAppend(request);
+                return await this.#handleAppend(raw);
             }
             if (request.method === "GET" && url.pathname === "/since") {
                 return this.#handleSince(url);
@@ -335,11 +342,11 @@ export class EventLogDO {
     // ── Handlers ──────────────────────────────────────────────────────
 
     /** POST /append — insert events, return entries with assigned seqs. */
-    async #handleAppend(request: Request): Promise<Response> {
+    async #handleAppend(raw: string): Promise<Response> {
         let body: AppendRequest;
 
         try {
-            body = (await request.json()) as AppendRequest;
+            body = JSON.parse(raw) as AppendRequest;
         } catch {
             return errorResponse(400, "BAD_REQUEST", "invalid JSON body");
         }

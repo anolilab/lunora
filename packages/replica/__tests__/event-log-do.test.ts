@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventLogDO } from "../src/event-log-do";
+import { eventLogFrame } from "../src/event-log-frame";
+import { signedRequest, TEST_ENV } from "./_helpers/signed-request";
 
 // ── Mock SqlStorage ────────────────────────────────────────────────────
 
@@ -121,20 +124,11 @@ const createMockState = () => {
 describe(EventLogDO, () => {
     const createDO = (): EventLogDO => {
         const state = createMockState();
-        return new EventLogDO(state, {});
+        return new EventLogDO(state, TEST_ENV);
     };
 
-    const doFetch = (do_: EventLogDO, method: string, path: string, body?: unknown): Promise<Response> => {
-        const url = `http://localhost${path}`;
-        const init: RequestInit & { headers: Record<string, string> } = {
-            method,
-            headers: { "content-type": "application/json" },
-        };
-        if (body !== undefined) {
-            init.body = JSON.stringify(body);
-        }
-        return do_.fetch(new Request(url, init));
-    };
+    const doFetch = async (do_: EventLogDO, method: string, path: string, body?: unknown): Promise<Response> =>
+        do_.fetch(await signedRequest(method, `http://localhost${path}`, body === undefined ? "" : JSON.stringify(body)));
 
     it("returns empty state initially", async () => {
         expect.assertions(3);
@@ -528,5 +522,65 @@ describe(EventLogDO, () => {
 
         expect(negative.status).toBe(400);
         expect(nonInteger.status).toBe(400);
+    });
+});
+
+describe("eventLogDO relay gate", () => {
+    const gatedDO = (env: unknown): { do_: EventLogDO; exec: ReturnType<typeof vi.spyOn> } => {
+        const state = createMockState();
+
+        return { do_: new EventLogDO(state, env), exec: vi.spyOn(state.storage.sql, "exec") };
+    };
+
+    it("answers 403 to an unsigned request before creating the table", async () => {
+        expect.assertions(2);
+
+        const { do_, exec } = gatedDO(TEST_ENV);
+        const response = await do_.fetch(new Request("http://localhost/append", { body: "{}", method: "POST" }));
+
+        expect(response.status).toBe(403);
+        expect(exec).not.toHaveBeenCalled();
+    });
+
+    it("answers 403 when the signature was made for another method", async () => {
+        expect.assertions(1);
+
+        const { do_ } = gatedDO(TEST_ENV);
+        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame("POST", new URL("http://localhost/size"), ""));
+        const response = await do_.fetch(new Request("http://localhost/size", { headers: { [RELAY_SIGNATURE_HEADER]: signature }, method: "GET" }));
+
+        expect(response.status).toBe(403);
+    });
+
+    it("answers 403 when the signature was made for another path", async () => {
+        expect.assertions(1);
+
+        const { do_ } = gatedDO(TEST_ENV);
+        const signature = await signSiblingBody(TEST_ENV.LUNORA_RELAY_SECRET, eventLogFrame("GET", new URL("http://localhost/size"), ""));
+        const response = await do_.fetch(new Request("http://localhost/state", { headers: { [RELAY_SIGNATURE_HEADER]: signature }, method: "GET" }));
+
+        expect(response.status).toBe(403);
+    });
+
+    it("serves a correctly signed request", async () => {
+        expect.assertions(2);
+
+        const { do_ } = gatedDO(TEST_ENV);
+        const response = await do_.fetch(await signedRequest("GET", "http://localhost/size"));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ count: 0 });
+    });
+
+    it("answers 403 on every route, GET included, when no relay secret is configured", async () => {
+        expect.assertions(3);
+
+        const { do_, exec } = gatedDO({});
+        const unsigned = await do_.fetch(new Request("http://localhost/size", { method: "GET" }));
+        const signed = await do_.fetch(await signedRequest("GET", "http://localhost/size"));
+
+        expect(unsigned.status).toBe(403);
+        expect(signed.status).toBe(403);
+        expect(exec).not.toHaveBeenCalled();
     });
 });

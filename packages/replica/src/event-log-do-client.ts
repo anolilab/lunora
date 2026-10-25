@@ -9,6 +9,7 @@
  *
  * ```ts
  * const client = new EventLogDOClient({
+ *   env,
  *   fetch: (req) => env.EVENT_LOG_DO.get(id).fetch(req),
  * });
  *
@@ -16,8 +17,10 @@
  * await client.append([{ type: "chat.messageSent", payload: { text: "hi" } }]);
  * ```
  */
-import { EVENT_LOG_SECRET_HEADER } from "../../../shared/internal-secret";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody } from "@lunora/shard-engine";
+
 import type { EventLogEntry } from "./event-log";
+import { eventLogFrame } from "./event-log-frame";
 import type { InputEvent, Seq } from "./seq";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -50,6 +53,12 @@ export interface AppendEventInput {
  */
 export interface EventLogDOClientOptions {
     /**
+     * The Worker env. The client signs every request with `LUNORA_RELAY_SECRET`
+     * read from it, and construction throws when that secret is not set.
+     */
+    env: unknown;
+
+    /**
      * A function that dispatches an HTTP request to the target EventLogDO
      * instance. In a Cloudflare Worker this is:
      *
@@ -58,8 +67,6 @@ export interface EventLogDOClientOptions {
      * ```
      */
     fetch: (request: Request) => Promise<Response>;
-    /** The DO's `EVENT_LOG_DO_SECRET`, sent on every request; omit when none is provisioned. */
-    secret?: string;
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
@@ -74,11 +81,17 @@ export interface EventLogDOClientOptions {
 export class EventLogDOClient {
     readonly #fetch: (request: Request) => Promise<Response>;
 
-    readonly #secretHeaders: Record<string, string>;
+    readonly #secret: string;
 
     public constructor(options: EventLogDOClientOptions) {
+        const secret = siblingSecretOf(options.env);
+
+        if (secret === undefined) {
+            throw new Error("EventLogDOClient requires LUNORA_RELAY_SECRET in env");
+        }
+
         this.#fetch = options.fetch;
-        this.#secretHeaders = options.secret ? { [EVENT_LOG_SECRET_HEADER]: options.secret } : {};
+        this.#secret = secret;
     }
 
     // ── Append ─────────────────────────────────────────────────────────
@@ -95,13 +108,7 @@ export class EventLogDOClient {
      */
     public async append(events: AppendEventInput[], options?: { batchId?: string }): Promise<EventLogEntry[]> {
         const body = JSON.stringify({ events, batchId: options?.batchId });
-        const response = await this.#fetch(
-            new Request("https://do/append", {
-                method: "POST",
-                headers: { "content-type": "application/json", ...this.#secretHeaders },
-                body,
-            }),
-        );
+        const response = await this.#send("POST", "/append", body);
 
         if (!response.ok) {
             throw await EventLogDOClient.#toError(response, "append");
@@ -162,12 +169,29 @@ export class EventLogDOClient {
 
     // ── Internal ────────────────────────────────────────────────────────
 
+    /**
+     * Send one signed request. The URL is built once and both the request and
+     * the signed frame are taken from it, so the path the DO verifies is the
+     * path it receives.
+     */
+    async #send(method: "GET" | "POST", path: string, body = ""): Promise<Response> {
+        const url = new URL(`https://do${path}`);
+        const signature = await signSiblingBody(this.#secret, eventLogFrame(method, url, body));
+        const headers: Record<string, string> = { [RELAY_SIGNATURE_HEADER]: signature };
+
+        if (method === "POST") {
+            headers["content-type"] = "application/json";
+        }
+
+        return this.#fetch(new Request(url.href, { method, headers, body: method === "POST" ? body : undefined }));
+    }
+
     /** GET `path` from the DO, throwing a descriptive error on a non-OK status. */
-    async #get<T>(path: string, method: string): Promise<T> {
-        const response = await this.#fetch(new Request(`https://do${path}`, { headers: this.#secretHeaders }));
+    async #get<T>(path: string, operation: string): Promise<T> {
+        const response = await this.#send("GET", path);
 
         if (!response.ok) {
-            throw await EventLogDOClient.#toError(response, method);
+            throw await EventLogDOClient.#toError(response, operation);
         }
 
         return (await response.json()) as T;
