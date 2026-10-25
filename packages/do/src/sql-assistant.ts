@@ -221,14 +221,16 @@ const extractJson = (raw: string): unknown => {
 };
 
 /**
- * The nested `path` a model proposed for a clause. Absent or an empty list means
- * the column itself; a non-empty list of non-empty strings is a nested path. Any
- * other value is `undefined` (refused): the caller drops the whole clause rather
- * than keep it and test the parent column, which is not what the model asked for.
+ * The nested `path` a model proposed for a clause. Absent, `null` or an empty list
+ * means the column itself. Models emit `"path": null` on top-level columns, and
+ * that clause still filters the column the model named, so reading it as absent
+ * widens nothing. A non-empty list of non-empty strings is a nested path. Any other
+ * value is `undefined`: the caller rejects the whole suggestion, because keeping
+ * the other clauses would apply a wider set of rows than the model described.
  * @returns the path to attach (`{}` for none), or `undefined` when the path is malformed
  */
 const assistantPath = (raw: unknown): { path?: string[] } | undefined => {
-    if (raw === undefined) {
+    if (raw === undefined || raw === null) {
         return {};
     }
 
@@ -250,15 +252,22 @@ const isKeptFilterValue = (value: unknown): boolean =>
  * Validate a model-proposed filter set against the table's REAL columns.
  *
  * Structured output, not raw SQL — so the data browser's existing filter
- * validation and parameter binding apply unchanged, and a hallucinated column or
- * operator is simply dropped rather than reaching the query builder.
+ * validation and parameter binding apply unchanged. A column or operator the table
+ * does not have is dropped, as a hallucinated name is. Any clause the suggestion
+ * cannot apply as written instead refuses the whole suggestion: a dropped clause
+ * widens the rest of the set, and bulk actions run against that set.
+ *
+ * `physical` is the table's storage-level column names, from `PRAGMA table_info`.
+ * The shard compiler refuses a `has` or a nested path on one of them, so Studio
+ * must not be offered a filter it would then fail to run.
  */
-const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>): AssistantFilterClause[] | undefined => {
+const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physical: ReadonlyArray<string>): AssistantFilterClause[] | undefined => {
     if (!Array.isArray(parsed)) {
         return undefined;
     }
 
     const known = new Set(columns);
+    const stored = new Set(physical);
     const clauses: AssistantFilterClause[] = [];
 
     for (const entry of parsed) {
@@ -267,18 +276,29 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>): Assis
         }
 
         const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };
+
+        if (typeof column !== "string" || !known.has(column) || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
+            continue;
+        }
+
         const nested = assistantPath(path);
 
-        if (typeof column === "string" && known.has(column) && typeof operator === "string" && FILTER_OPERATORS.has(operator) && nested !== undefined) {
-            // The browser discards a row whose value renders blank. Dropping only that clause
-            // would widen the rest of the set, which bulk actions then run against; refuse the
-            // whole suggestion instead.
-            if (operator !== "eq" && operator !== "ne" && !isKeptFilterValue(value)) {
-                return undefined;
-            }
-
-            clauses.push({ column, operator, ...nested, value });
+        if (nested === undefined) {
+            return undefined;
         }
+
+        if (stored.has(column) && (operator === "has" || nested.path !== undefined)) {
+            return undefined;
+        }
+
+        // The browser discards a row whose value renders blank. Dropping only that clause
+        // would widen the rest of the set, which bulk actions then run against; refuse the
+        // whole suggestion instead.
+        if (operator !== "eq" && operator !== "ne" && !isKeptFilterValue(value)) {
+            return undefined;
+        }
+
+        clauses.push({ column, operator, ...nested, value });
     }
 
     return clauses.length === 0 ? undefined : clauses;
@@ -559,7 +579,12 @@ const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, s
  * validation and parameter binding untouched, so a hallucinated column or
  * operator is dropped here rather than reaching the query builder.
  */
-const generateFilter = async (binding: unknown, rawArgs: Record<string, unknown>, columns: ReadonlyArray<string>): Promise<GenerateFilterResult> => {
+const generateFilter = async (
+    binding: unknown,
+    rawArgs: Record<string, unknown>,
+    columns: ReadonlyArray<string>,
+    physical: ReadonlyArray<string>,
+): Promise<GenerateFilterResult> => {
     const prompt = capped(rawArgs.prompt, PROMPT_CAP);
 
     if (prompt === "") {
@@ -574,7 +599,7 @@ const generateFilter = async (binding: unknown, rawArgs: Record<string, unknown>
     const facts = `Columns available on this table: ${named.join(", ")}`;
     const outcome = await attempt(
         async () => runPrompt(binding, modelFor(rawArgs), structuredSystemPrompt("filter"), structuredUserPrompt(facts, prompt)),
-        (raw) => validateClauses(extractJson(raw), columns),
+        (raw) => validateClauses(extractJson(raw), columns, physical),
     );
 
     return outcome.degraded ? outcome : { clauses: outcome.value, degraded: false };
