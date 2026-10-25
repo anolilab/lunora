@@ -128,6 +128,7 @@ export const memoryTombstones = (): TombstonePort & { stored: Map<string, Date> 
         add: async (key, erasedAt) => {
             stored.set(key, erasedAt);
         },
+        has: async (key) => stored.has(key),
         keys: async () => new Set(stored.keys()),
         stored,
     };

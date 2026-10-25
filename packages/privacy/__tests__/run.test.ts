@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
+import type { TombstonePort } from "../src/tombstones";
 import type { MemoryFiles } from "./harness";
-import { codeOf, exportFileOf, memoryFiles, memoryRequests, setup } from "./harness";
+import { codeOf, exportFileOf, memoryFiles, memoryRequests, memoryTombstones, setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -130,6 +131,55 @@ describe("runExport", () => {
 
         expect(details.join("|")).toContain("INTERNAL");
         expect(details.join("|")).not.toContain("disk full");
+    });
+
+    it("checks the erasure for one subject by key, and never lists every tombstone", async () => {
+        const tombstones = memoryTombstones();
+        let listed = 0;
+        const port: TombstonePort = {
+            add: tombstones.add,
+            has: tombstones.has,
+            keys: async () => {
+                listed += 1;
+
+                throw new Error("an export must not list every tombstone");
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, tombstones: port });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+        expect(listed).toBe(0);
+    });
+
+    it("records UNPROCESSABLE, not INTERNAL, when an erasure is found to have begun mid-export", async () => {
+        const tombstones = memoryTombstones();
+        let checks = 0;
+        // The first check is the export's pre-run one; the second, inside the first collect step, finds the erasure.
+        const port: TombstonePort = {
+            add: tombstones.add,
+            has: async () => {
+                checks += 1;
+
+                return checks > 1;
+            },
+            keys: tombstones.keys,
+        };
+        const store = memoryRequests();
+        const details: string[] = [];
+        const recording = {
+            ...store,
+            addEvent: async (requestId: string, at: Date, kind: string, detail?: string) => {
+                details.push(detail ?? "");
+                await store.addEvent(requestId, at, kind, detail);
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, store: recording, tombstones: port });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(details.join("|")).toContain("UNPROCESSABLE: the run stopped before it finished");
+        expect(details.join("|")).not.toContain("INTERNAL");
     });
 
     it("does not start a request a cancel reached between the start read and the claim", async () => {

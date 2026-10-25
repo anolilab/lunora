@@ -105,6 +105,7 @@ describe("the port codec table", () => {
         await remote.files.delete("r1/a.bin");
         await remote.tombstones.add("k", NOW);
 
+        await expect(remote.tombstones.has("k")).resolves.toBe(true);
         await expect(remote.tombstones.keys()).resolves.toStrictEqual(new Set(["k"]));
         await expect(remote.archive.purgeBatch(NOW)).resolves.toStrictEqual({ hasMore: false, purged: 0 });
 
@@ -127,6 +128,7 @@ describe("the port codec table", () => {
             "store.listOpen",
             "store.update",
             "tombstones.add",
+            "tombstones.has",
             "tombstones.keys",
         ]);
     });

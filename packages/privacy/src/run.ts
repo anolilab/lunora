@@ -339,15 +339,8 @@ const subjectWasErased = async (store: RequestStore, subjectId: string): Promise
  * data is erased, and re-keys the subject's requests to that key. So a request the erasure has touched carries a key on record,
  * while a raw subject id never is one, which keeps a later request for a reused id unblocked.
  */
-const erasureBegun = async (tombstones: TombstonePort | undefined, subjectId: string): Promise<boolean> => {
-    if (tombstones === undefined) {
-        return false;
-    }
-
-    const keys = await tombstones.keys();
-
-    return keys.has(subjectId);
-};
+const erasureBegun = async (tombstones: TombstonePort | undefined, subjectId: string): Promise<boolean> =>
+    tombstones !== undefined && (await tombstones.has(subjectId));
 
 /**
  * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
@@ -359,7 +352,7 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
         whileProcessing(scope, steps, requestId, name, async (request) => {
             if (await erasureBegun(scope.ports.tombstones, request.subjectId)) {
-                throw new Error("UNPROCESSABLE: the subject was erased before the export ran");
+                throw new LunoraError("UNPROCESSABLE", "The subject was erased before the export ran.");
             }
 
             return run(request);
