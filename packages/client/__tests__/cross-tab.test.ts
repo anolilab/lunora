@@ -1753,7 +1753,7 @@ describe("lunoraClient — a snapshot-guarded write held across a leader handove
         const follower = new BroadcastChannel(clientChannel(client));
         const relayed: unknown[] = [];
 
-        follower.addEventListener("message", (event: MessageEvent<{ cursor?: number; data?: unknown; type: string }>) => {
+        follower.addEventListener("message", (event: MessageEvent<RawLeaderMessage>): void => {
             if (event.data.type === "subscription-data") {
                 relayed.push({ cursor: event.data.cursor, data: event.data.data });
             }
