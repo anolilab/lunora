@@ -69,9 +69,9 @@ class GatedSubscriptionShard extends FixedSubscriptionShard {
     public readonly parked = Promise.withResolvers<boolean>();
 
     public baseline(ws: FakeSocket, subId: string): string | undefined {
-        const internals = this as unknown as { subMemos: WeakMap<object, Map<string, { lastJson: string }>> };
+        const internals = this as unknown as { socketIndex: { memo: (socket: object, id: string) => { lastJson: string } | undefined } };
 
-        return internals.subMemos.get(ws)?.get(subId)?.lastJson;
+        return internals.socketIndex.memo(ws, subId)?.lastJson;
     }
 
     public deliverNewer(ws: FakeSocket, subId: string, result: unknown, generation: number): void {

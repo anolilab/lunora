@@ -310,6 +310,7 @@ import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
+    ADMIN_WILDCARD,
     batchedTableLookup,
     readAdminAuditLog,
     readAdminDurableSignal,
@@ -404,6 +405,8 @@ import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import type { SubscriptionMemo } from "./socket-table-index";
+import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
@@ -1259,34 +1262,6 @@ interface SocketDelivery {
     pageDeltas: boolean;
 }
 
-/** Per-subscription memo used to suppress no-op pushes. */
-interface SubscriptionMemo {
-    clientWatermark?: number;
-    cursor?: number;
-    epoch?: string;
-
-    /**
-     * {@link ShardDO.writeGeneration} captured before the run that produced this
-     * baseline started reading. A later push carrying a LOWER generation read
-     * state older than this baseline and is dropped instead of sent.
-     */
-    generation: number;
-
-    lastJson: string;
-
-    /**
-     * Index slices this subscription's reads were provably confined to, keyed
-     * by table. A table present here was read ONLY through the listed ranges,
-     * so a write landing outside all of them cannot change the result. A table
-     * in {@link SubscriptionMemo.tables} but absent here was read in some
-     * unnarrowable way (a scan, a search, a join) and always re-runs.
-     */
-    ranges?: Map<string, KeyRange[]>;
-    /** A later unrelated write cannot settle past a value the socket never received. */
-    retryData?: boolean;
-    tables: Set<string>;
-}
-
 /**
  * Sentinel diff baseline meaning "no value has ever been delivered to this
  * socket for this subscription". Stored as a memo's `lastJson` when the very
@@ -1618,15 +1593,6 @@ const ROOT_SHARD_NAME = "__root__";
 
 /** How long a failed shard-registry registration waits before a later write retries it. */
 const SHARD_REGISTRY_RETRY_MS = 30_000;
-
-/**
- * Dependency-set sentinel for admin introspection subscriptions that aren't
- * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
- * `migrationStatus`). It is `"*"` — a name no real SQLite table can take, so it
- * never collides with a tracked write — and `refreshSubscriptions` treats
- * a memo carrying it as "re-run on every write-flush".
- */
-const ADMIN_WILDCARD = "*";
 
 /**
  * Whether a subscription's memo proves this write cannot have changed its
@@ -2736,14 +2702,8 @@ abstract class ShardDO {
     /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
     private refreshInFlight = false;
 
-    /**
-     * Last pushed result per `(socket, subId)`, keyed by socket. Lets
-     * `refreshSubscriptions` skip re-running queries whose tables were
-     * untouched and suppress pushes when the re-run result is unchanged. Held
-     * in memory only — it does not survive hibernation, which is safe: a cold
-     * memo simply forces one re-run and (at most) one redundant push.
-     */
-    private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+    /** Subscription memos and the socket table index the write-flush fan-outs filter on. */
+    private readonly socketIndex = new SocketTableIndex();
 
     /**
      * Decoded socket attachments, so a write flush's two fan-out passes do not each
@@ -2761,26 +2721,9 @@ abstract class ShardDO {
     /**
      * Subscriptions whose refresh keeps throwing, so a deterministic failure is
      * not re-run (and re-announced) on every write flush. In memory only, like
-     * {@link ShardDO.subMemos}: a cold DO forgets and simply retries.
+     * the subscription memos: a cold DO forgets and simply retries.
      */
     private readonly subscriptionFailures = new SubscriptionFailureLatch();
-
-    /**
-     * Per socket, the union of its memos' `tables` — the table → socket index the
-     * write-flush fan-out filters on, so a write visits (and reads the attachment
-     * of) only the sockets that could care. `tables` is set by the end of a
-     * {@link ShardDO.refreshSubscriptions} visit, and only when every
-     * subscription on the socket held a memo that can be skipped by table
-     * (no admin wildcard, no `retryData`). A socket with no entry, or an entry
-     * without `tables`, is always visited: a fresh socket after hibernation, one
-     * with a just-subscribed (unmemoized) query, one mid-visit. `subscribe`
-     * deletes the entry; a memo write widens it. Over-covering only costs a
-     * visit; the entry is never allowed to under-cover.
-     */
-    private readonly socketTables = new WeakMap<ShardSocketLike, { tables?: Set<string> }>();
-
-    /** Sockets a shape poke found holding no shapes; skipped until `shapeSubscribe` registers one. */
-    private readonly shapeFreeSockets = new WeakSet<ShardSocketLike>();
 
     /**
      * Count of committed write batches handed to {@link ShardDO.flushChangedTables}.
@@ -3588,9 +3531,8 @@ abstract class ShardDO {
             // the socket in the WeakMap until GC and (more importantly) keep the
             // stale memo set around if the same socket id is reused after a
             // bounce. Cheap to recompute on the next subscribe.
-            this.subMemos.delete(ws);
+            this.socketIndex.forgetSocket(ws);
             this.subscriptionFailures.clearSocket(ws);
-            this.socketTables.delete(ws);
             this.shapeMemos.delete(ws);
             this.globalShapeSnapshots.delete(ws);
             this.liveGrantSockets.delete(ws);
@@ -6167,12 +6109,11 @@ abstract class ShardDO {
         // Drop the diff baseline. A (re)subscribe asks for the current value, so
         // the seed must go out as a full snapshot; diffed against the old memo it
         // is answered `settled` (or a delta against a value the client just
-        // discarded) and the client never gets the snapshot it asked for.
-        this.subMemos.get(ws)?.delete(subId);
+        // discarded) and the client never gets the snapshot it asked for. The new
+        // subscription has no memo yet, so the socket is visited on every flush until one indexes it.
+        this.socketIndex.resubscribed(ws, subId);
         // New args or a re-snapshot request: a subscription that was failing is retried at once.
         this.subscriptionFailures.clear(ws, subId);
-        // The new subscription has no memo yet, so the socket must be visited on every flush until one indexes it.
-        this.socketTables.delete(ws);
 
         return "ok";
     }
@@ -6207,7 +6148,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.subMemos.get(ws)?.delete(subId);
+        this.socketIndex.forgetMemo(ws, subId);
         this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
@@ -6247,7 +6188,7 @@ abstract class ShardDO {
             return "serialize_failed";
         }
 
-        this.shapeFreeSockets.delete(ws);
+        this.socketIndex.markHoldsShapes(ws);
 
         return "ok";
     }
@@ -9272,7 +9213,7 @@ abstract class ShardDO {
             return;
         }
         this.unsubscribe(ws, subId);
-        this.subMemos.get(ws)?.delete(subId);
+        this.socketIndex.forgetMemo(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
         this.sendSubscriptionError(ws, subId, "FORBIDDEN", "AccessDenied");
     }
@@ -9339,7 +9280,7 @@ abstract class ShardDO {
             try {
                 // The host's structured-clone budget includes the permit and decoded query arguments.
                 this.writeAttachment(ws, next);
-                const memo = this.subMemos.get(ws)?.get(subId);
+                const memo = this.socketIndex.memo(ws, subId);
                 if (memo !== undefined) {
                     memo.lastJson = UNDELIVERED_BASELINE;
                 }
@@ -13487,7 +13428,7 @@ abstract class ShardDO {
      * observable behavior rather than being a pure optimization:
      *
      * (a) Per-socket memo divergence. The frame a socket receives depends on its
-     * OWN `subMemos` entry (`pushSubscriptionData`): one socket may need a
+     * OWN subscription memo (`pushSubscriptionData`): one socket may need a
      * `{type:"delta"}`, a freshly-subscribed socket a full `{type:"data"}`
      * snapshot, and an up-to-date socket nothing at all. So only the QUERY RUN +
      * its result can be shared — `pushSubscriptionData` must still run per socket.
@@ -13589,7 +13530,7 @@ abstract class ShardDO {
      * an authorized run can settle from the memo instead of re-running the query.
      */
     private memoSkipsRun(ws: ShardSocketLike, subId: string, changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): boolean {
-        const memo = this.subMemos.get(ws)?.get(subId);
+        const memo = this.socketIndex.memo(ws, subId);
 
         return (
             this.deliveryAuthorization !== undefined &&
@@ -13599,23 +13540,9 @@ abstract class ShardDO {
         );
     }
 
-    /**
-     * Whether a flush touching `changed` can affect `ws`. A socket with no table
-     * index is always visited, and delivery authorization settles every
-     * subscription on every flush, so it never skips one.
-     */
-    private socketMayCare(ws: ShardSocketLike, changed: Set<string>): boolean {
-        if (this.deliveryAuthorization) {
-            return true;
-        }
-
-        const tables = this.socketTables.get(ws)?.tables;
-
-        return tables === undefined || setsIntersect(tables, changed);
-    }
-
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
-        const sockets = [...this.runner.sockets()].filter((ws) => this.socketMayCare(ws, changed));
+        // Delivery authorization settles every subscription on every flush, so it never skips a socket.
+        const sockets = [...this.runner.sockets()].filter((ws) => this.deliveryAuthorization !== undefined || this.socketIndex.mayCare(ws, changed));
 
         // The post-write high-watermark is the same for every sub flushed in
         // this pass (they all observe the committed state), so resolve it once
@@ -13632,11 +13559,8 @@ abstract class ShardDO {
         const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
 
         const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
-            // Claimed before the first await: a `subscribe` landing mid-visit
-            // replaces it, and this visit then leaves the socket unindexed.
-            const indexEntry: { tables?: Set<string> } = {};
-
-            this.socketTables.set(ws, indexEntry);
+            // Claimed before the first await; see `SocketTableIndex.beginVisit`.
+            const finishIndexVisit = this.socketIndex.beginVisit(ws);
 
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
@@ -13781,7 +13705,7 @@ abstract class ShardDO {
                     continue;
                 }
 
-                const memo = this.subMemos.get(ws)?.get(subId);
+                const memo = this.socketIndex.memo(ws, subId);
 
                 if (!this.deliveryAuthorization && memoProvesUnchanged(memo, changed, changedKeys)) {
                     continue;
@@ -13798,8 +13722,7 @@ abstract class ShardDO {
                 await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
             }
 
-            // A `subscribe` that landed mid-visit replaced this entry, so writing it is then a no-op.
-            indexEntry.tables = this.memoTableUnion(ws, subs);
+            finishIndexVisit(subs);
         };
 
         // Bounded fan-out (default 8 in flight): each worker drains its sockets
@@ -14229,7 +14152,7 @@ abstract class ShardDO {
             this.rejectRetainedShapesAndRooms();
             return;
         }
-        const sockets = [...this.runner.sockets()].filter((ws) => !this.shapeFreeSockets.has(ws));
+        const sockets = [...this.runner.sockets()].filter((ws) => !this.socketIndex.isShapeFree(ws));
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
@@ -14261,7 +14184,7 @@ abstract class ShardDO {
             const { shapes } = attachment;
 
             if (!shapes || Object.keys(shapes).length === 0) {
-                this.shapeFreeSockets.add(ws);
+                this.socketIndex.markShapeFree(ws);
 
                 return;
             }
@@ -16010,10 +15933,10 @@ abstract class ShardDO {
      * its next result in full. Summed on demand over a socket's few memos (the
      * per-socket subscription cap), so there is nothing to keep in step.
      */
-    private boundedBaseline(memos: Map<string, SubscriptionMemo>, subId: string, json: string): string {
+    private boundedBaseline(memos: ReadonlyMap<string, SubscriptionMemo> | undefined, subId: string, json: string): string {
         let held = json.length;
 
-        for (const [id, memo] of memos) {
+        for (const [id, memo] of memos ?? []) {
             if (id !== subId && memo.lastJson !== UNDELIVERED_BASELINE) {
                 held += memo.lastJson.length;
             }
@@ -16029,11 +15952,11 @@ abstract class ShardDO {
      * write-flush can diff against it.
      */
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
-        const memos = socketMap(this.subMemos, ws);
+        const memos = this.socketIndex.socketMemos(ws);
 
         // A refresh that started after this seed already recorded a newer baseline. Checked BEFORE the size cap: a stale
         // oversized result must not throw and unsubscribe a query whose newer, smaller result was already delivered.
-        if ((memos.get(subId)?.generation ?? -1) > generation) {
+        if ((memos?.get(subId)?.generation ?? -1) > generation) {
             return;
         }
 
@@ -16043,60 +15966,12 @@ abstract class ShardDO {
         // so it answers to the same per-result cap as a full seed.
         this.assertResultWithinLimit(json);
 
-        memos.set(subId, {
+        this.socketIndex.setMemo(ws, subId, {
             generation,
             lastJson: this.boundedBaseline(memos, subId, json),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
-        this.widenSocketTables(ws, outcome.tables);
-    }
-
-    /**
-     * The union of `subs`' memo tables for {@link ShardDO.socketTables}, or
-     * `undefined` when any subscription lacks a memo or holds one that must
-     * re-run on every flush (admin wildcard, `retryData`).
-     */
-    private memoTableUnion(ws: ShardSocketLike, subs: SocketAttachment["subs"]): Set<string> | undefined {
-        const memos = this.subMemos.get(ws);
-        const union = new Set<string>();
-
-        for (const subId of Object.keys(subs)) {
-            if (!subs[subId]?.functionPath) {
-                continue;
-            }
-
-            const memo = memos?.get(subId);
-
-            if (memo === undefined || memo.retryData || memo.tables.has(ADMIN_WILDCARD)) {
-                return undefined;
-            }
-
-            for (const table of memo.tables) {
-                union.add(table);
-            }
-        }
-
-        return union;
-    }
-
-    /** Fold a memo's freshly recorded `tables` into an indexed socket's union, so the index never under-covers it. */
-    private widenSocketTables(ws: ShardSocketLike, tables: Set<string>): void {
-        const entry = this.socketTables.get(ws);
-
-        if (entry?.tables === undefined) {
-            return;
-        }
-
-        if (tables.has(ADMIN_WILDCARD)) {
-            this.socketTables.delete(ws);
-
-            return;
-        }
-
-        for (const table of tables) {
-            entry.tables.add(table);
-        }
     }
 
     /**
@@ -16136,8 +16011,7 @@ abstract class ShardDO {
         if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
-        const memos = socketMap(this.subMemos, ws);
-        const existing = memos.get(subId);
+        const existing = this.socketIndex.memo(ws, subId);
 
         const { cursor, epoch, generation } = stamp;
         const cursorSuffix = cdcSuffix(cursor, epoch);
@@ -16161,8 +16035,7 @@ abstract class ShardDO {
 
             existing.generation = generation;
             existing.retryData = false;
-            existing.tables = outcome.tables;
-            this.widenSocketTables(ws, outcome.tables);
+            this.socketIndex.retable(ws, subId, outcome.tables);
             // `ranges` legitimately shifts run-to-run even when the result is
             // byte-identical (a recency-windowed query is the obvious case) — it's
             // recomputed per execution from the index slices actually touched, not
@@ -16218,24 +16091,23 @@ abstract class ShardDO {
         const delivered = frames.map((frame) => this.sendFrame(ws, frame, { subId, permit })).every(Boolean);
 
         const guardedFailure = this.deliveryAuthorization !== undefined && !delivered;
-        if (guardedFailure && existing !== undefined && memos.get(subId) === existing) {
+        if (guardedFailure && existing !== undefined && this.socketIndex.memo(ws, subId) === existing) {
             existing.retryData = true;
         }
         if (guardedFailure) {
             return;
         }
-        memos.set(subId, {
+        this.socketIndex.setMemo(ws, subId, {
             cursor: delivered ? cursor : existing?.cursor,
             epoch: delivered ? epoch : existing?.epoch,
             clientWatermark: delivered ? clientWatermark : existing?.clientWatermark,
             // Tracks `lastJson`: an undelivered value leaves the baseline, and so
             // its generation, where the last delivered one put it.
             generation: delivered ? generation : (existing?.generation ?? generation),
-            lastJson: delivered ? this.boundedBaseline(memos, subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            lastJson: delivered ? this.boundedBaseline(this.socketIndex.socketMemos(ws), subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
-        this.widenSocketTables(ws, outcome.tables);
     }
 
     private sendSubscriptionSettlement(
@@ -16246,7 +16118,7 @@ abstract class ShardDO {
         permit: SubscriptionDeliveryPermit | undefined,
         advanceOnly = false,
     ): boolean {
-        const memo = this.subMemos.get(ws)?.get(subId);
+        const memo = this.socketIndex.memo(ws, subId);
         if (memo === undefined || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return false;
         }
@@ -16281,7 +16153,7 @@ abstract class ShardDO {
         // current baseline read older state; sending it would roll the client
         // back to a value a later write already replaced (and stamp a cursor on
         // it). The baseline's own run already delivered the newer value.
-        const existing = this.subMemos.get(ws)?.get(subId);
+        const existing = this.socketIndex.memo(ws, subId);
         return existing === undefined || generation >= existing.generation;
     }
 
