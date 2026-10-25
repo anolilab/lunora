@@ -488,15 +488,24 @@ const sendImport = async (
         // caller's catch, which keeps the structured errors above for display. Rows the shard accepted are already written, so the
         // message names how many and where a re-import has to resume; a whole-file re-import would write them twice.
         if (result.errors.length > 0) {
+            const written = insertedRowCount(total.inserted);
+
             throw new Error(
-                t(
-                    "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
-                    {
-                        count: result.errors.length,
-                        line: startLine + rows.length,
-                        written: insertedRowCount(total.inserted),
-                    },
-                ),
+                written === 0
+                    ? t(
+                          "The shard refused {count} rows, so the rest of the file was not sent. Nothing was written. Fix the rows listed below and import again.",
+                          {
+                              count: result.errors.length,
+                          },
+                      )
+                    : t(
+                          "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
+                          {
+                              count: result.errors.length,
+                              line: startLine + rows.length,
+                              written,
+                          },
+                      ),
             );
         }
     };
@@ -596,7 +605,8 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         if (failure === undefined) {
             recordShard(shardKey);
             setImportResult(total);
-        } else if (failure.rows > 0) {
+        } else if (failure.rows > 0 && total.errors.length === 0) {
+            // A transport failure: the failed chunk may have written rows, which the counts cannot show.
             setImportResult(total);
             setError(
                 t("Import stopped after {rows} rows: {message}. The counts below cover completed chunks only; the failed chunk may also have written rows.", {
@@ -605,7 +615,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 }),
             );
         } else {
-            // A refused file names its bad rows, so the errors are shown with the message that says nothing was written.
+            // A refusal names its bad rows and its message already says how many rows were written, so it is shown as it is.
             if (total.errors.length > 0) {
                 setImportResult(total);
             }

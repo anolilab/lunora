@@ -401,7 +401,7 @@ describe("exportImportPanel", () => {
     });
 
     it("tells the user how many rows a refused chunk left written, and where to resume", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const mock = createMockClient({
             query: (reference, args): unknown => {
@@ -438,6 +438,43 @@ describe("exportImportPanel", () => {
 
         expect(error.textContent).toContain("999 rows were already written");
         expect(error.textContent).toContain("from line 1001 onward");
+        // The "counts below cover completed chunks only" hedge is for a transport failure, where the failed chunk's writes are unknown.
+        expect(error.textContent).not.toContain("counts below");
+    });
+
+    it("says nothing was written when the first chunk is refused before any row lands", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    if ((args as { dryRun?: boolean }).dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION", line: 2, message: "text must be a string", table: "messages" }],
+                        inserted: {},
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toBe(
+            "The shard refused 1 rows, so the rest of the file was not sent. Nothing was written. Fix the rows listed below and import again.",
+        );
+        expect(importCalls(mock)).toHaveLength(1);
     });
 
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
