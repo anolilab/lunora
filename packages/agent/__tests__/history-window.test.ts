@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readHistoryWindow, trimLeadingToolRows } from "../src/agent-loop";
+import { readHistoryWindow, trimLeadingToolRows } from "../src/history-window";
 import type { AgentMessageRow } from "../src/types";
 
 const msg = (role: AgentMessageRow["role"], seq: number): AgentMessageRow => {
