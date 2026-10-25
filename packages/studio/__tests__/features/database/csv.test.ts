@@ -301,6 +301,20 @@ describe("coerceCsvDocuments", () => {
         }
     });
 
+    it("refuses a timestamp with digits finer than a millisecond, and keeps one whose extra digits are zeros", () => {
+        expect.assertions(2);
+
+        // A Date holds whole milliseconds, so the micro digits of this value could only be dropped.
+        expect(coerced("day", "2026-10-23T08:00:00.123000Z")).toBe(Date.UTC(2026, 9, 23, 8) + 123);
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,day\nm1,2026-10-23T08:00:00.123456Z\n"), kinds))).toStrictEqual({
+            column: "day",
+            expected: "date",
+            kind: "cell-type",
+            record: 2,
+            value: "2026-10-23T08:00:00.123456Z",
+        });
+    });
+
     it("reads whole-number epoch milliseconds into a date or timestamp column, with surrounding spaces", () => {
         expect.assertions(2);
 

@@ -236,6 +236,11 @@ const ISO_DAY_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/u;
  */
 const ISO_CLOCK_TEXT = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/u;
 
+/** The fractional-second digits of a clock. */
+const CLOCK_FRACTION_TEXT = /\.(\d+)/u;
+
+const NON_ZERO_DIGIT_TEXT = /[1-9]/u;
+
 /** The sign, digits and exponent of decimal text; `Number#toExponential` output matches too. */
 const DECIMAL_PARTS = /^[+-]?(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?$/iu;
 
@@ -341,6 +346,13 @@ const parseIsoDate = (text: string): { millis: number } | { zoneless: true } | u
     const [, hour = "0", minute = "0", second = "0", offset] = clock ?? [];
 
     if (!isRealClock(hour, minute, second, offset ?? "Z")) {
+        return undefined;
+    }
+
+    // A Date holds whole milliseconds, so digits past the third would be dropped without a word. Trailing zeros lose nothing.
+    const fraction = CLOCK_FRACTION_TEXT.exec(clockText ?? "")?.[1] ?? "";
+
+    if (NON_ZERO_DIGIT_TEXT.test(fraction.slice(3))) {
         return undefined;
     }
 
