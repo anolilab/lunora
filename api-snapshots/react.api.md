@@ -1245,6 +1245,7 @@ interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    readonly revision?: number;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
     readonly updatedAt: number;
 }
