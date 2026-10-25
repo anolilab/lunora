@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.74...@lunora/platform@1.0.0-alpha.75) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
 ## @lunora/platform [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.73...@lunora/platform@1.0.0-alpha.74) (2026-10-22)
 
 ### Features
