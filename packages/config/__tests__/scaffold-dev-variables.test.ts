@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MINTABLE_SECRET_KEYS } from "../src/package-secrets-registry";
+import { MINTABLE_SECRET_KEYS, mintableSecretKeysFor } from "../src/package-secrets-registry";
 import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
 import {
     ensureDevVariables,
@@ -705,6 +705,28 @@ describe("planDevSecretsFill", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // fillDevSecrets — I/O
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("the relay secret is minted by its host only", () => {
+    const CLIENT_TEMPLATE = "<copy-from-the-worker-that-hosts-the-registry>";
+
+    it("mints the relay secret for a host, not for a client", () => {
+        expect(mintableSecretKeysFor(["@lunora/do:shardRegistry"]).has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(mintableSecretKeysFor(["@lunora/do:shardRegistryClient"]).has("LUNORA_RELAY_SECRET")).toBe(false);
+        expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(false);
+    });
+
+    it("generates the relay line a host scaffolded, and leaves a client's template for the operator", () => {
+        expect.assertions(4);
+
+        const host = planDevSecretsFill({ existingContent: 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n', randomHex: fixedHex });
+        const client = planDevSecretsFill({ existingContent: `LUNORA_RELAY_SECRET="${CLIENT_TEMPLATE}"\n`, randomHex: fixedHex });
+
+        expect(host.filledKeys).toContain("LUNORA_RELAY_SECRET");
+        expect(host.content).toContain(`LUNORA_RELAY_SECRET="${fixedHex(32)}"`);
+        expect(client.filledKeys).not.toContain("LUNORA_RELAY_SECRET");
+        expect(client.content).toContain(`LUNORA_RELAY_SECRET="${CLIENT_TEMPLATE}"`);
+    });
+});
 
 describe("fillDevSecrets", () => {
     let dir: string;

@@ -289,7 +289,7 @@ const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: 
             continue;
         }
 
-        if (isMintableSecretKey(entry.key)) {
+        if (isMintableSecretKey(entry.key, entry.value)) {
             minted.push(entry.key);
         } else {
             result.skipped.push(`${DEV_VARS_FILE}: ${entry.key} is a provider key and cannot be minted here; fill it in by hand.`);

@@ -8,7 +8,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { CORE_SECRETS, MINTABLE_SECRET_KEYS, secretsForPackages } from "./package-secrets-registry";
+import { CORE_SECRETS, MINTABLE_SECRET_KEYS, secretsForPackages, SHARD_RELAY_HOST_PLACEHOLDER, SHARD_RELAY_SECRET_KEY } from "./package-secrets-registry";
 
 /** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
 const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
@@ -121,7 +121,8 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  * runtime — over the developer's own half-filled `.dev.vars` — and hide the gap
  * from `lunora env doctor`, whose job is to report it as unfilled.
  */
-const isMintableSecretKey = (key: string): boolean => MINTABLE_SECRET_KEYS.has(key);
+const isMintableSecretKey = (key: string, value: string): boolean =>
+    key === SHARD_RELAY_SECRET_KEY ? value === SHARD_RELAY_HOST_PLACEHOLDER : MINTABLE_SECRET_KEYS.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`
@@ -138,7 +139,7 @@ const isMintableSecretKey = (key: string): boolean => MINTABLE_SECRET_KEYS.has(k
  * (the provider would reject it) and would hide the misconfiguration.
  */
 const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string): string | undefined =>
-    isMintableSecretKey(key) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
+    isMintableSecretKey(key, value) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
 
 /** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
 const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);

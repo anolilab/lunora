@@ -274,7 +274,8 @@ const SECRET_SOURCE_FLAGS = [
     ["usesNotifyWebPush", "@lunora/notify:webPush"],
     // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
     // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
-    ["usesShardRegistry", "@lunora/do:shardRegistry"],
+    ["hostsShardRegistry", "@lunora/do:shardRegistry"],
+    ["usesShardRegistryClient", "@lunora/do:shardRegistryClient"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -368,6 +369,9 @@ interface InferredBindings {
      */
     flagshipBinding?: string;
 
+    /** The app hosts the registry (binds `ShardRegistryDO` as `SHARD_REGISTRY`, or wrote its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    hostsShardRegistry: boolean;
+
     /**
      * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
      * hints whose resource takes its residency at creation (Artifacts), so the
@@ -376,6 +380,7 @@ interface InferredBindings {
     jurisdiction?: SchemaInfo["jurisdiction"];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
+
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
     queues: InferredQueue[];
 
@@ -393,6 +398,7 @@ interface InferredBindings {
     usesAiSearch: boolean;
     /** `@lunora/bindings/analytics` is imported or `ctx.analytics` read → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
+
     /** `@lunora/bindings/analytics-sql` is value-imported or `ctx.analyticsSql` read → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
     usesAnalyticsSql: boolean;
 
@@ -446,8 +452,8 @@ interface InferredBindings {
     usesRequestSecretTool: boolean;
     /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
-    /** The app binds `ShardRegistryDO` (`SHARD_REGISTRY`), wrote its module, or wires a registry client (`createDynamicShardRegistry`, `.shardRegistry(`) → the `LUNORA_RELAY_SECRET` that registry requires (no package import to report it). */
-    usesShardRegistry: boolean;
+    /** The app calls a registry (`createDynamicShardRegistry`, `.shardRegistry(`) without hosting one, so it needs the host's `LUNORA_RELAY_SECRET` and must not mint its own. */
+    usesShardRegistryClient: boolean;
     /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
     /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
@@ -467,7 +473,10 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesShardRegistry" | "usesWorkerLoader">;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader"> & {
+    /** The scanned sources call a registry client; whether this app also hosts the registry is decided by the bindings. */
+    callsShardRegistry: boolean;
+};
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -606,7 +615,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         ...flags,
         needsD1: usesEnvDatabase,
         usesRequestSecretTool: lunora.requestSecretTool,
-        usesShardRegistry: usesShardRegistryClient,
+        callsShardRegistry: usesShardRegistryClient,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
@@ -780,6 +789,11 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
+    // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
+    const hostsRegistry =
+        durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+        existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts"));
+
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
@@ -828,10 +842,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
         // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
-        usesShardRegistry:
-            capabilities.usesShardRegistry ||
-            durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
-            existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts")),
+        hostsShardRegistry: hostsRegistry,
+        usesShardRegistryClient: capabilities.callsShardRegistry && !hostsRegistry,
         workflows,
     };
 };

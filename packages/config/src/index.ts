@@ -125,7 +125,7 @@ export {
     toolchainExecArgs,
 } from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
-export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+export { mintableSecretKeysFor, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { RemotePreference } from "./project-config";

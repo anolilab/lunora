@@ -766,6 +766,7 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
@@ -797,7 +798,7 @@ interface InferredBindings {
     usesR2sql: boolean;
     usesRequestSecretTool: boolean;
     usesScheduler: boolean;
-    usesShardRegistry: boolean;
+    usesShardRegistryClient: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
     usesX402: boolean;
@@ -1570,7 +1571,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string) => boolean;
+const isMintableSecretKey: (key: string, value: string) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1601,6 +1602,12 @@ const isRunnableTarget: (target: string) => boolean;
 
 ```ts
 const lunoraLine: (message: string) => string;
+```
+
+### `mintableSecretKeysFor` (const)
+
+```ts
+const mintableSecretKeysFor: (packageNames: ReadonlyArray<string>) => ReadonlySet<string>;
 ```
 
 ### `padBadge` (const)

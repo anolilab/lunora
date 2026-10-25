@@ -11,8 +11,8 @@ import {
     ensureGitignoreEntries,
     generateSecretValue,
     inferLunoraBindings,
-    isMintableSecretKey,
     isPlaceholderValue,
+    mintableSecretKeysFor,
     parseDevVariableEntries,
     requiredSecrets,
     resolveSchemaDirectory,
@@ -77,7 +77,10 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
 };
 
 /** The secret keys this project requires on the deployed worker, by source: its packages', and the secret-typed local vars. */
-const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | undefined): Promise<{ fromLocal: string[]; fromPackages: string[] }> => {
+const resolveRequiredSecretKeys = async (
+    cwd: string,
+    cache: DiscoveryCache | undefined,
+): Promise<{ fromLocal: string[]; fromPackages: string[]; mintableKeys: ReadonlySet<string> }> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
@@ -104,7 +107,7 @@ const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | un
         // Unreadable .dev.vars → packages-only.
     }
 
-    return { fromLocal: fromLocal.filter((key) => !fromPackages.includes(key)), fromPackages };
+    return { fromLocal: fromLocal.filter((key) => !fromPackages.includes(key)), fromPackages, mintableKeys: mintableSecretKeysFor(packages) };
 };
 
 /**
@@ -419,7 +422,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     }
 
     const remoteNames = new Set(remote.names);
-    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const { fromLocal, fromPackages, mintableKeys } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
     const missing = [...fromPackages, ...fromLocal].filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {
@@ -437,11 +440,11 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         };
     }
 
-    for (const key of missing.filter((name) => !isMintableSecretKey(name))) {
+    for (const key of missing.filter((name) => !mintableKeys.has(name))) {
         logger.warn(`required secret ${key} is not set on the target — set it with: wrangler secret put ${key}${environmentFlag}`);
     }
 
-    const mintable = missing.filter((key) => isMintableSecretKey(key));
+    const mintable = missing.filter((key) => mintableKeys.has(key));
 
     if (mintable.length === 0) {
         return {};

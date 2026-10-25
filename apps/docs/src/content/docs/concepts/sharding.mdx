@@ -264,11 +264,12 @@ export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";
 The registry decides which shards every fan-out reaches, so it only answers
 requests signed with `LUNORA_RELAY_SECRET` and refuses all of them while that
 secret is unset. Set the same value on the worker and on every Durable Object
-(it is one Worker secret). `lunora dev` generates it into `.dev.vars` once the
-app has a registry; for production run `lunora env push` or
-`wrangler secret put LUNORA_RELAY_SECRET`. Without it a shard logs that its
-registration failed, and a fan-out over a `.shardBy()` table fails with an error
-naming `LUNORA_RELAY_SECRET`.
+(it is one Worker secret). `lunora dev` generates it into `.dev.vars` for the app
+that exports `ShardRegistryDO`; a worker that only calls a registry another worker
+hosts does not generate it, so copy the host's value. For production run
+`lunora env push` or `wrangler secret put LUNORA_RELAY_SECRET`. Without it a
+shard logs that its registration failed, and a fan-out over a `.shardBy()` table
+fails with an error naming `LUNORA_RELAY_SECRET`.
 
 Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
 naming it rather than quietly covering the default shard alone. Root and
