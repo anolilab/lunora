@@ -1,3 +1,12 @@
+## @lunora/privacy [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.26...@lunora/privacy@1.0.0-alpha.27) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/auth:** upgraded to 1.0.0-alpha.230
+
 ## @lunora/privacy [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.25...@lunora/privacy@1.0.0-alpha.26) (2026-10-24)
 
 
