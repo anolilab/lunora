@@ -23,7 +23,7 @@ import { isDockerAvailable } from "../../util/docker";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isTemplateD1Id } from "../doctor/fix";
+import { isUnfinishedD1Id } from "../doctor/fix";
 import type { DeployCommandOptions } from "./types";
 
 interface WranglerD1Entry {
@@ -217,7 +217,7 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDep
  */
 const isBlockingPlaceholder = (databaseId: string | undefined, target: string): boolean => {
     if (target === "celld") {
-        return typeof databaseId === "string" && databaseId !== D1_PLACEHOLDER_ID && isTemplateD1Id(databaseId);
+        return typeof databaseId === "string" && databaseId !== D1_PLACEHOLDER_ID && isUnfinishedD1Id(databaseId);
     }
 
     return target === "cloudflare" && databaseId === D1_PLACEHOLDER_ID;

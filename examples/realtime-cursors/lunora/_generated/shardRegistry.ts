@@ -27,18 +27,18 @@ export { ShardRegistryDO } from "lunorash/do";
  */
 export class ShardRegistryEntrypoint extends WorkerEntrypoint<{ SHARD_REGISTRY: unknown; LUNORA_RELAY_SECRET?: string }> {
     public register(table: string, shardKey: string): Promise<void> {
-        return hostedShardRegistry(this.env).register(table, shardKey);
+        return hostedShardRegistry(this.env, undefined).register(table, shardKey);
     }
 
     public unregister(table: string, shardKey: string): Promise<void> {
-        return hostedShardRegistry(this.env).unregister(table, shardKey);
+        return hostedShardRegistry(this.env, undefined).unregister(table, shardKey);
     }
 
     public listShardKeys(table: string): Promise<string[]> {
-        return hostedShardRegistry(this.env).listShardKeys(table);
+        return hostedShardRegistry(this.env, undefined).listShardKeys(table);
     }
 
     public snapshot(): Promise<Record<string, string[]>> {
-        return hostedShardRegistry(this.env).snapshot();
+        return hostedShardRegistry(this.env, undefined).snapshot();
     }
 }

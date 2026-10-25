@@ -994,6 +994,24 @@ describe("runDoctor", () => {
             expect(findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
         });
 
+        // A replace-with stand-in is unfinished too: celld would take it as the database identity.
+        it("still fails a celld project for a replace-with stand-in, but not for a real identity that starts with replace", async () => {
+            expect.assertions(2);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", "REPLACE_WITH_ID"));
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const stand = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(stand.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", "replacement-orders"));
+
+            const identity = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(identity.findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+
         // The projection replaces only the exact placeholder, so any other empty id still reaches celld as a database identity.
         it("still fails a celld project for a placeholder the projection does not replace", async () => {
             expect.assertions(1);

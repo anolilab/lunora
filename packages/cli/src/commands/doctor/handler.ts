@@ -38,7 +38,7 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
-import { applyDoctorFixes, isD1PlaceholderId, isTemplateD1Id } from "./fix";
+import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
 import checkPaidProducts from "./paid-product-checks";
@@ -414,7 +414,7 @@ const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, fi
     for (const database of databases) {
         const databaseId = typeof database.database_id === "string" ? database.database_id : "";
 
-        const blocks = celld ? isTemplateD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
+        const blocks = celld ? isUnfinishedD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
 
         if (blocks) {
             const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";

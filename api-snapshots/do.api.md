@@ -894,7 +894,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `hostedShardRegistry` (const)
 
 ```ts
-const hostedShardRegistry: (env: unknown) => ShardRegistryRpc;
+const hostedShardRegistry: (env: unknown, jurisdiction?: string) => ShardRegistryRpc;
 ```
 
 ### `importShardRows` (const)

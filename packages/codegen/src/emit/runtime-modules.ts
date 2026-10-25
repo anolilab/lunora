@@ -1,4 +1,4 @@
-import type { CronJobIR, TableIR, VectorIndexIR } from "../ir";
+import type { CronJobIR, JurisdictionIR, TableIR, VectorIndexIR } from "../ir";
 import { isShardByTable } from "../ir";
 import { baseSpecifiers, GENERATED_HEADER } from "./shared";
 
@@ -75,10 +75,13 @@ export { SchedulerDO } from "@lunora/scheduler";
  * the same signal — so none of the three can disagree about whether the app has
  * a registry.
  */
-const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean): string => {
+const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean, jurisdiction?: JurisdictionIR): string => {
     if (!tables.some((table) => isShardByTable(table))) {
         return "";
     }
+
+    // Schema `.jurisdiction("…")` pins the entrypoint's registry to the same region as the shards that register with it.
+    const registryJurisdiction = jurisdiction ? JSON.stringify(jurisdiction) : "undefined";
 
     return `${GENERATED_HEADER}import { WorkerEntrypoint } from "cloudflare:workers";
 import { hostedShardRegistry } from "${baseSpecifiers(useUmbrella).do}";
@@ -106,19 +109,19 @@ export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
  */
 export class ShardRegistryEntrypoint extends WorkerEntrypoint<{ SHARD_REGISTRY: unknown; LUNORA_RELAY_SECRET?: string }> {
     public register(table: string, shardKey: string): Promise<void> {
-        return hostedShardRegistry(this.env).register(table, shardKey);
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).register(table, shardKey);
     }
 
     public unregister(table: string, shardKey: string): Promise<void> {
-        return hostedShardRegistry(this.env).unregister(table, shardKey);
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).unregister(table, shardKey);
     }
 
     public listShardKeys(table: string): Promise<string[]> {
-        return hostedShardRegistry(this.env).listShardKeys(table);
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).listShardKeys(table);
     }
 
     public snapshot(): Promise<Record<string, string[]>> {
-        return hostedShardRegistry(this.env).snapshot();
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).snapshot();
     }
 }
 `;

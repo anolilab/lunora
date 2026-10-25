@@ -26,6 +26,14 @@ const isTemplateD1Id = (databaseId: string): boolean => {
     return value === "" || (value.startsWith("<") && value.endsWith(">"));
 };
 
+const REPLACE_STAND_IN = /replace[-_\s]?(?:with|me)(?![a-z])/iu;
+
+/**
+ * A `database_id` a celld project never finished: empty, an angle-bracket template, or a replace-with / replace-me
+ * stand-in such as `REPLACE_WITH_ID`. A word that merely starts with "replace" (`replacement-orders`) is an identity.
+ */
+const isUnfinishedD1Id = (databaseId: string): boolean => isTemplateD1Id(databaseId) || REPLACE_STAND_IN.test(databaseId);
+
 /** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
 const isD1PlaceholderId = (databaseId: string): boolean => isTemplateD1Id(databaseId) || databaseId.trim().toLowerCase().includes("replace");
 
@@ -351,5 +359,5 @@ const applyDoctorFixes = async (options: DoctorFixOptions): Promise<DoctorFixRes
     return result;
 };
 
-export { applyDoctorFixes, isD1PlaceholderId, isTemplateD1Id };
+export { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id };
 export type { DoctorFixOptions, DoctorFixResult };

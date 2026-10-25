@@ -508,13 +508,14 @@ const isRegistryNamespace = (binding: unknown): boolean =>
  * surface a client worker reaches through a service binding. Signed with
  * `LUNORA_RELAY_SECRET`, which only the host holds.
  */
-const hostedShardRegistry = (env: unknown): ShardRegistryRpc => {
+const hostedShardRegistry = (env: unknown, jurisdiction?: string): ShardRegistryRpc => {
     const registry = (): RegistryStub => {
+        // The framework provisions the host's registry binding as `SHARD_REGISTRY`, so the entrypoint reads that name.
         const binding = typeof env === "object" && env !== null && "SHARD_REGISTRY" in env ? env.SHARD_REGISTRY : undefined;
-        const stub = stubByName(binding, SHARD_REGISTRY_DO_NAME);
+        const stub = stubByName(binding, SHARD_REGISTRY_DO_NAME, jurisdiction);
 
         if (stub === undefined) {
-            throw new Error("the shard registry binding is not a Durable Object namespace in this worker");
+            throw new Error("the shard registry entrypoint needs this worker's Durable Object namespace bound as SHARD_REGISTRY");
         }
 
         return stub;
