@@ -583,4 +583,15 @@ describe("eventLogDO relay gate", () => {
         expect(signed.status).toBe(403);
         expect(exec).not.toHaveBeenCalled();
     });
+
+    it("refuses an unsigned request without reading its body", async () => {
+        expect.assertions(2);
+
+        const { do_ } = gatedDO(TEST_ENV);
+        const request = new Request("http://localhost/append", { body: "x".repeat(1_048_576), method: "POST" });
+        const response = await do_.fetch(request);
+
+        expect(response.status).toBe(403);
+        expect(request.bodyUsed).toBe(false);
+    });
 });

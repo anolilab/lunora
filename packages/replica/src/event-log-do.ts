@@ -304,10 +304,17 @@ export class EventLogDO {
             return errorResponse(403, "FORBIDDEN", "event log requires LUNORA_RELAY_SECRET");
         }
 
+        // Refuse before the body is read: a request with no signature cannot verify, and buffering its body first is memory the caller spends for free.
+        const signature = request.headers.get(RELAY_SIGNATURE_HEADER);
+
+        if (signature === null) {
+            return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
+        }
+
         const url = new URL(request.url);
         const raw = await request.text();
 
-        if (!(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), eventLogFrame(request.method, url, raw)))) {
+        if (!(await verifySiblingBody(this.env, signature, eventLogFrame(request.method, url, raw)))) {
             return errorResponse(403, "FORBIDDEN", "missing or invalid event log signature");
         }
 

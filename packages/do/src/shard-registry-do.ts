@@ -190,10 +190,17 @@ class ShardRegistryDO {
             return jsonResponse({ error: { code: "FORBIDDEN", message: "shard registry requires LUNORA_RELAY_SECRET" } }, 403);
         }
 
+        // Refuse before the body is read: a request with no signature cannot verify, and buffering its body first is memory the caller spends for free.
+        const signature = request.headers.get(RELAY_SIGNATURE_HEADER);
+
+        if (signature === null) {
+            return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
+        }
+
         const url = new URL(request.url);
         const raw = await request.text();
 
-        if (!(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), shardRegistryFrame(request.method, url, raw)))) {
+        if (!(await verifySiblingBody(this.env, signature, shardRegistryFrame(request.method, url, raw)))) {
             return jsonResponse({ error: { code: "FORBIDDEN", message: "missing or invalid shard registry signature" } }, 403);
         }
 

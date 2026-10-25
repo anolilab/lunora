@@ -352,6 +352,16 @@ describe("shardRegistryDO relay gate", () => {
         expect(list).not.toHaveBeenCalled();
     });
 
+    it("answers 403 to an unsigned request without reading its body", async () => {
+        expect.assertions(2);
+
+        const registry = new ShardRegistryDO(createFakeState(), TEST_ENV);
+        const request = post("/register", { shardKey: "a", table: "x".repeat(1_048_576) });
+
+        await expect(statusOf(registry.fetch(request))).resolves.toBe(403);
+        expect(request.bodyUsed).toBe(false);
+    });
+
     it("answers 403 when the signature was made for another method", async () => {
         expect.assertions(1);
 
