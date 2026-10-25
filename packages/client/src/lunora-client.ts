@@ -897,7 +897,7 @@ class LunoraClient {
     // eslint-disable-next-line unicorn/no-null -- public auth-token contract sentinel
     private authToken: string | null = null;
 
-    /** Hash of the last bearer seen by `identityFingerprint`, keyed on the token so a new token misses once. */
+    /** Hash of the current bearer, keyed on the token so a new token misses once. `setAuthToken` drops it on every change, so a replaced or signed-out bearer is not retained. */
     private tokenFingerprint: { hash: string; token: string } | undefined;
 
     /**
@@ -1371,6 +1371,13 @@ class LunoraClient {
         const previousToken = this.authToken;
 
         this.authToken = token;
+
+        // The cache holds the raw bearer it hashed. Neither a sign-out nor a
+        // subject-labelled identity ever re-hashes, so nothing else evicts it.
+        if (tokenChanged) {
+            this.tokenFingerprint = undefined;
+        }
+
         this.applySubject(token, subject);
 
         const newIdentity = this.identityFingerprint();
