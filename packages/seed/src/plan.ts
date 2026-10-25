@@ -578,10 +578,10 @@ const planUniqueDeals = (
 
         const pool = field.fkTable === undefined ? undefined : poolOf(field);
 
-        // An FK with no parent to point at never reaches the pool: every row
-        // takes `fkFallback`, which is a fresh uuid (distinct), or an absent /
-        // null cell (which no UNIQUE constraint counts). Nothing to deal, and
-        // nothing to refuse.
+        // An FK with no parent to point at never reaches the pool, so there is nothing
+        // to deal. Each row takes `fkFallback`: an optional key is omitted, a nullable
+        // key is nulled, a fresh (distinct) uuid is used only under `allowOrphans`, and
+        // otherwise a required key refuses at generation time, row by row.
         if (pool?.length === 0) {
             continue;
         }
