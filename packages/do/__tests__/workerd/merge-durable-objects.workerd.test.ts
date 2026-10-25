@@ -4,12 +4,27 @@
  * merged instance the name it was addressed by — on a request, and on an alarm
  * wake after eviction, where there is no request to route by.
  */
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { env, evictAllDurableObjects } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { shardRegistryFrame } from "../../../../shared/shard-registry-frame";
 import { roleNamespace } from "../../src/merge-durable-objects";
 
 const text = async (response: Response): Promise<string> => await response.text();
+
+/** A registry request signed with the workerd project's relay secret, as a shard or worker signs one. */
+const signedRegistryRequest = async (method: string, url: string, body = ""): Promise<Request> => {
+    const secret = (env as { LUNORA_RELAY_SECRET?: string }).LUNORA_RELAY_SECRET;
+
+    if (secret === undefined) {
+        throw new Error("the workerd project must provision LUNORA_RELAY_SECRET");
+    }
+
+    const signature = await signSiblingBody(secret, shardRegistryFrame(method, new URL(url), body));
+
+    return new Request(url, { body: body === "" ? undefined : body, headers: { [RELAY_SIGNATURE_HEADER]: signature }, method });
+};
 
 /** Re-read until the alarm has recorded something, at most `attempts` times, 20ms apart. */
 const pollFired = async (read: () => Promise<string>, attempts: number): Promise<string> => {
@@ -43,13 +58,15 @@ describe("mergeDurableObjects (workerd)", () => {
         // `blockConcurrencyWhile` over storage, which must work through the merge.
         const registry = roleNamespace(env.MERGED, "shardRegistry").getByName("__lunora_shard_registry__");
         const registered = await registry.fetch(
-            new Request("https://do.internal/register", { body: JSON.stringify({ shardKey: "user-42", table: "posts" }), method: "POST" }),
+            await signedRegistryRequest("POST", "https://do.internal/register", JSON.stringify({ shardKey: "user-42", table: "posts" })),
         );
 
         await registered.arrayBuffer();
 
         expect(registered.ok).toBe(true);
-        await expect(registry.fetch("https://do.internal/list?table=posts").then(async (response) => await response.json())).resolves.toStrictEqual({
+        await expect(
+            registry.fetch(await signedRegistryRequest("GET", "https://do.internal/list?table=posts")).then(async (response) => await response.json()),
+        ).resolves.toStrictEqual({
             shardKeys: ["user-42"],
         });
     });

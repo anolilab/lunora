@@ -9,6 +9,8 @@ import createSqliteExec from "./_helpers/node-sqlite";
 let database: ReturnType<typeof createSqliteExec>;
 
 const ADMIN_TOKEN = "admin-token";
+const RELAY_SECRET = "s3cret";
+const SHARD_ENV: Record<string, unknown> = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_RELAY_SECRET: RELAY_SECRET };
 
 const makeState = (name = "channel-1", jurisdiction?: string): ShardDOState => {
     database = createSqliteExec();
@@ -63,8 +65,9 @@ class RegistryShard extends ShardDO {
     public constructor(
         state: ShardDOState,
         private readonly registryNamespace: unknown,
+        env: Record<string, unknown> = SHARD_ENV,
     ) {
-        super(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        super(state, env);
     }
 
     // eslint-disable-next-line class-methods-use-this -- override stub; this suite drives the flush directly
@@ -122,6 +125,19 @@ describe("shardDO — shard registry", () => {
         expect(registry.calls).toStrictEqual([
             { body: { shardKey: "channel-1", table: "messages" }, jurisdiction: undefined, name: SHARD_REGISTRY_DO_NAME, route: "/register" },
         ]);
+    });
+
+    it("sends no registration without the relay secret, and logs that as the reason", async () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const registry = fakeRegistry();
+        const shard = new RegistryShard(makeState(), registry.namespace, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.write("messages");
+
+        expect(registry.calls).toStrictEqual([]);
+        expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "shard registry requires LUNORA_RELAY_SECRET" }));
     });
 
     it("registers in the shard's own jurisdiction, where the worker reads the registry", async () => {
