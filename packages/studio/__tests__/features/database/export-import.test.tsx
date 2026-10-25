@@ -140,6 +140,61 @@ const createCheckingClient = (badLine?: number): MockClientHooks =>
         },
     });
 
+/** The columns of the CSV test table: two text columns, so every cell is kept as the text it was written as. */
+const CSV_COLUMNS: ColumnMeta[] = [
+    { name: "id", optional: false, type: "string" },
+    { name: "body", optional: false, type: "string" },
+];
+
+/** A server for a CSV import into `messages`. `refusedRecord`, when given, is a record the check refuses; writes insert every row sent. */
+const createCsvServer = (refusedRecord?: number): MockClientHooks =>
+    createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: 0 }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.describeTable) {
+                return { columns: CSV_COLUMNS };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.importShard) {
+                const { dryRun, rows, startLine } = args as ImportArgs;
+                const index = refusedRecord === undefined ? -1 : refusedRecord - startLine;
+
+                if (dryRun === true && index >= 0 && index < rows.length) {
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION_ERROR", line: startLine + index, message: "text must be a string", table: "messages" }],
+                        inserted: {},
+                    };
+                }
+
+                return { conflicts: 0, errors: [], inserted: dryRun === true ? {} : { messages: rows.length } };
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+    });
+
+/**
+ * A CSV of 600 rows, with a blank line before the header and another before row 300, CRLF and LF endings mixed, and a line break inside
+ * the quoted cell of row 5. Every blank line takes a record number, so row k is record 3 + k, or 4 + k from row 300 on.
+ */
+const mixedCsv = (): string => {
+    const lines = ["", "id,body"];
+
+    for (let row = 0; row < 600; row += 1) {
+        if (row === 300) {
+            lines.push("");
+        }
+
+        lines.push(row === 5 ? `m${row.toString()},"line one\nline two"` : `m${row.toString()},text ${row.toString()}`);
+    }
+
+    return lines.map((line, index) => `${line}${index % 2 === 0 ? "\r\n" : "\n"}`).join("");
+};
+
 /** Click Download and capture the Blob handed to `URL.createObjectURL`. */
 const downloadBlob = (): { blobs: Blob[] } => {
     const createObjectURL = vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue("blob:fake");
@@ -835,5 +890,40 @@ describe("exportImportPanel", () => {
 
         expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
         expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([1, 501, 1001]);
+    });
+
+    it("chunks a CSV with blank lines, CRLF endings and a line break in a cell at its blank lines, keeping the cell's text", async () => {
+        expect.assertions(4);
+
+        const mock = createCsvServer();
+
+        render(renderPanel(mock));
+
+        await importCsv(mixedCsv(), "messages");
+
+        await screen.findByTestId("ei-import-result");
+
+        expect(dryChecks(mock).map((call) => call.startLine)).toStrictEqual([3, 304]);
+        expect(importCalls(mock).map((call) => call.startLine)).toStrictEqual([3, 304]);
+        expect(importCalls(mock).reduce((sum, call) => sum + call.rows.length, 0)).toBe(600);
+        expect(importCalls(mock)[0]?.rows[5]?.doc).toStrictEqual({ body: "line one\nline two", id: "m5" });
+    });
+
+    it("names the record a check refuses in a CSV with blank lines, and writes nothing", async () => {
+        expect.assertions(3);
+
+        // Record 454 is row 450, in the second chunk.
+        const mock = createCsvServer(454);
+
+        render(renderPanel(mock));
+
+        await importCsv(mixedCsv(), "messages");
+
+        const errors = await screen.findByTestId("ei-import-errors");
+        const error = await screen.findByTestId("ei-error");
+
+        expect(errors.textContent).toBe("line 454 (messages): text must be a string");
+        expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
+        expect(importCalls(mock)).toHaveLength(0);
     });
 });

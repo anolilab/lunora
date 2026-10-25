@@ -455,3 +455,29 @@ describe("coerceCsvDocuments", () => {
         expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,x\nm2,y\n"), kinds))).toMatchObject({ record: 2, value: "x" });
     });
 });
+
+describe("problem precedence", () => {
+    // A file with two problems reports the earlier stage: a quote error, then the header, then a row of the wrong width, then a cell.
+    it("reports a quote error after a row of the wrong width, since a quote error is found first", () => {
+        expect.assertions(1);
+
+        expect(problemOf(() => parseCsvDocuments('a,b\n1\n2,"open'))).toStrictEqual({ kind: "unterminated-quote", record: 3 });
+    });
+
+    it("reports a duplicate header before a row of the wrong width", () => {
+        expect.assertions(1);
+
+        expect(problemOf(() => parseCsvDocuments("a,a\n1"))).toStrictEqual({ kind: "duplicate-header", name: "a" });
+    });
+
+    it("reports a row of the wrong width before a cell that does not fit its column", () => {
+        expect.assertions(1);
+
+        expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,x\nm2\n"), new Map([["count", "number"]])))).toStrictEqual({
+            expected: 2,
+            found: 1,
+            kind: "ragged",
+            record: 3,
+        });
+    });
+});
