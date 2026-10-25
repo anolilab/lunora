@@ -166,6 +166,58 @@ describe("readTablePage — nested paths and array membership", () => {
         });
     });
 
+    describe("boolean and number leaves under a nested path", () => {
+        beforeEach(() => {
+            database.raw(`CREATE TABLE "switches" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                String.raw`INSERT INTO "switches" VALUES
+                    ('s1', 1, '{"meta":{"on":true}}'),
+                    ('s2', 2, '{"meta":{"on":1}}'),
+                    ('s3', 3, '{"meta":{"on":false}}'),
+                    ('s4', 4, '{"meta":{"on":0}}'),
+                    ('s5', 5, '{"meta":{"on":"1"}}'),
+                    ('s6', 6, '{"meta":{"on":1.0}}'),
+                    ('s7', 7, '{"meta":{"on":null}}'),
+                    ('s8', 8, '{"meta":{}}')`,
+            );
+        });
+
+        const on = (operator: "eq" | "ne", value: unknown): FilterClause => {
+            return { column: "meta", operator, path: ["on"], value };
+        };
+        const switchIds = (filter: FilterClause): string[] =>
+            readTablePage(database.sql, { filters: [filter], table: "switches" }).rows.map((row) => (row as { id: string }).id);
+        const selectedSwitchIds = (filter: FilterClause): string[] => selectMatchingIds(database.sql, { filters: [filter], table: "switches" }).ids;
+
+        it("matches a nested true only to a JSON boolean, never to a stored 1", () => {
+            expect.assertions(4);
+
+            expect(switchIds(on("eq", true))).toStrictEqual(["s1"]);
+            expect(selectedSwitchIds(on("eq", true))).toStrictEqual(["s1"]);
+            expect(switchIds(on("eq", 1))).toStrictEqual(["s2", "s6"]);
+            expect(selectedSwitchIds(on("eq", 1))).toStrictEqual(["s2", "s6"]);
+        });
+
+        it("matches a nested false only to a JSON boolean, never to a stored 0", () => {
+            expect.assertions(4);
+
+            expect(switchIds(on("eq", false))).toStrictEqual(["s3"]);
+            expect(selectedSwitchIds(on("eq", false))).toStrictEqual(["s3"]);
+            expect(switchIds(on("eq", 0))).toStrictEqual(["s4"]);
+            expect(selectedSwitchIds(on("eq", 0))).toStrictEqual(["s4"]);
+        });
+
+        it("keeps ne the complement over the present leaves, so a stored 1 is not true and a true is not 1", () => {
+            expect.assertions(4);
+
+            // Absent and JSON null leaves stay out of both sets, as they do for every other ne.
+            expect(switchIds(on("ne", true))).toStrictEqual(["s2", "s3", "s4", "s5", "s6"]);
+            expect(selectedSwitchIds(on("ne", true))).toStrictEqual(["s2", "s3", "s4", "s5", "s6"]);
+            expect(switchIds(on("ne", 1))).toStrictEqual(["s1", "s3", "s4", "s5"]);
+            expect(selectedSwitchIds(on("ne", 1))).toStrictEqual(["s1", "s3", "s4", "s5"]);
+        });
+    });
+
     describe("has", () => {
         it("matches when the array contains the scalar", () => {
             expect.assertions(1);

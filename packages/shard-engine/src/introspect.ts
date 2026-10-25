@@ -1426,6 +1426,15 @@ const nestedStoredText = (value: unknown): string | undefined => {
     }
 };
 
+/** The `json_type` names a leaf holding `value` has: a JSON boolean and a JSON number are distinct types, though both read back as 0/1. */
+const jsonTypesOf = (value: boolean | number): string => {
+    if (typeof value === "number") {
+        return "'integer', 'real'";
+    }
+
+    return value ? "'true'" : "'false'";
+};
+
 /**
  * The comparison for a clause under a nested path whose value or operator needs more
  * than the plain `expr op ?` form, or `undefined` when the plain form is right.
@@ -1461,6 +1470,24 @@ const buildNestedLeafClause = (clause: FilterClause, expression: string, pathPar
             // A nested leaf has no declared kind, so the value binds unprojected.
             params: [...pathParameters, ...pathParameters, filterBindValue(clause, undefined)],
             sql: `(json_type(${quoteIdentifier(DOC_COLUMN)}, ?) NOT IN ('array', 'object') AND ${expression} ${FILTER_SQL_OPERATOR[operator]} ?)`,
+        };
+    }
+
+    // `json_extract` returns a JSON boolean as the integer 0 or 1, so `= 1` would
+    // select a stored `true` and `= true` a stored 1. Equality therefore also checks
+    // the leaf's JSON type. `ne` is the complement over the leaves that are present
+    // and not null, which is the set `ne` already selects for every other value.
+    if ((operator === "eq" || operator === "ne") && (typeof clause.value === "boolean" || typeof clause.value === "number")) {
+        const sameType = `json_type(${quoteIdentifier(DOC_COLUMN)}, ?) IN (${jsonTypesOf(clause.value)}) AND ${expression} = ?`;
+        const bind = filterBindValue(clause, undefined);
+
+        if (operator === "eq") {
+            return { params: [...pathParameters, ...pathParameters, bind], sql: `(${sameType})` };
+        }
+
+        return {
+            params: [...pathParameters, ...pathParameters, ...pathParameters, bind],
+            sql: `(${expression} IS NOT NULL AND NOT (${sameType}))`,
         };
     }
 
