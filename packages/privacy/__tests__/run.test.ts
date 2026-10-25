@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
 import type { TombstonePort } from "../src/tombstones";
+import { tombstoneKeyOf } from "../src/tombstones";
 import type { MemoryFiles } from "./harness";
-import { codeOf, exportFileOf, memoryFiles, memoryRequests, memoryTombstones, setup } from "./harness";
+import { codeOf, exportFileOf, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, setup, SUBJECT } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -140,7 +141,7 @@ describe("runExport", () => {
         expect(details.join("|")).not.toContain("disk full");
     });
 
-    it("checks the erasure for one subject by key, and never lists every tombstone", async () => {
+    it("reads the tombstone store by key, and never lists every tombstone", async () => {
         const tombstones = memoryTombstones();
         let listed = 0;
         const port: TombstonePort = {
@@ -152,10 +153,12 @@ describe("runExport", () => {
                 throw new Error("an export must not list every tombstone");
             },
         };
-        const { privacy } = setup({ data: memoryData({}).port, tombstones: port });
+        const { privacy, runExportWorkflow, store } = setup({ data: memoryData({}).port, tombstones: port });
         const opened = await privacy.requestExport();
 
-        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+        await runExportWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
         expect(listed).toBe(0);
     });
 
@@ -171,16 +174,18 @@ describe("runExport", () => {
             },
             keys: tombstones.keys,
         };
-        const { privacy } = setup({ data: memoryData({}).port, tombstones: port });
+        const { privacy, runExportWorkflow, store } = setup({ data: memoryData({}).port, tombstones: port });
         const opened = await privacy.requestExport();
 
-        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+        await runExportWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
         expect(checks).toBe(1);
     });
 
-    it("records UNPROCESSABLE, not INTERNAL, when the subject was erased before the export ran", async () => {
+    it("records UNPROCESSABLE, not INTERNAL, when a tombstone holds the key of the export's rekeyed subject", async () => {
         const tombstones = memoryTombstones();
-        const port: TombstonePort = { add: tombstones.add, has: async () => true, keys: tombstones.keys };
+        const key = tombstoneKeyOf(SUBJECT.subjectId, SECRET);
         const store = memoryRequests();
         const details: string[] = [];
         const recording = {
@@ -190,12 +195,47 @@ describe("runExport", () => {
                 await store.addEvent(requestId, at, kind, detail);
             },
         };
-        const { privacy } = setup({ data: memoryData({}).port, store: recording, tombstones: port });
+        const { privacy, runExportWorkflow } = setup({ data: memoryData({}).port, store: recording, tombstones });
+        const opened = await privacy.requestExport();
+
+        // An erasure re-keyed this failed export and is still open under the raw id: the tombstone is the only record of it.
+        await tombstones.add(key, NOW);
+        store.rows.set(opened.id, { ...opened, status: "failed", subjectId: key });
+        await runExportWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect(details.join("|")).toContain("UNPROCESSABLE: the subject's erasure has begun or completed");
+        expect(details.join("|")).not.toContain("INTERNAL");
+    });
+
+    it("completes an inline export when the tombstone store is unreachable, as from a mutation", async () => {
+        const unreachable: TombstonePort = {
+            add: async () => {
+                throw new Error("tombstone store unreachable");
+            },
+            has: async () => {
+                throw new Error("tombstone store unreachable");
+            },
+            keys: async () => {
+                throw new Error("tombstone store unreachable");
+            },
+        };
+        const { privacy } = setup({ data: memoryData({}).port, tombstones: unreachable });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+    });
+
+    it("refuses an inline run of a failed export, which admin.retry sends to the workflow", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        const { privacy } = setup({ data: memoryData({}, { failCollect: true }).port, files, store });
         const opened = await privacy.requestExport();
 
         await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
-        expect(details.join("|")).toContain("UNPROCESSABLE: the subject was erased before the export ran");
-        expect(details.join("|")).not.toContain("INTERNAL");
+
+        await expect(codeOf(privacy.runExport(opened.id))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
     });
 
     it("does not start a request a cancel reached between the start read and the claim", async () => {
@@ -306,6 +346,35 @@ describe("runExport", () => {
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
     });
 
+    it("refuses an export whose run starts after an erasure stopped partway, and publishes nothing", async () => {
+        const { port } = memoryData({ goals: 250, tasks: 250 });
+        let batches = 0;
+        const stopping: DataPort = {
+            ...port,
+            eraseBatch: async (dataset, subjectId, now, disposition) => {
+                batches += 1;
+
+                // The first batch deletes rows and the second fails, so the erasure stops with its requests still under the raw id.
+                if (batches > 1) {
+                    throw new Error("connection lost");
+                }
+
+                return port.eraseBatch(dataset, subjectId, now, disposition);
+            },
+        };
+        const { files, operator, privacy, store } = setup({ data: stopping, erasure: NO_GRACE });
+        const exported = await privacy.requestExport();
+        const erasure = await privacy.requestErasure();
+
+        await expect(privacy.runErasure(erasure.id)).resolves.toStrictEqual({ leftover: [], status: "failed" });
+        expect(batches).toBe(2);
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+        await expect(codeOf(operator.admin.retry(exported.id))).resolves.toBe("UNPROCESSABLE");
+    });
+
     it("fails a queued export when the subject's erasure completes first, and the export's run publishes nothing", async () => {
         const { calls, port } = memoryData({});
         const { files, privacy, runErasureWorkflow, runExportWorkflow, store } = setup({ data: port, erasure: NO_GRACE });
@@ -407,14 +476,15 @@ describe("runExport", () => {
                 return store.claim(id, from, patch);
             },
         };
-        const { privacy } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store: racing });
+        const { privacy, runExportWorkflow } = setup({ data: memoryData({}).port, datasets: [tasks], erasure: NO_GRACE, store: racing });
         const exported = await privacy.requestExport();
         const erasure = await privacy.requestErasure();
 
         store.rows.set(exported.id, { ...exported, status: "failed" });
         erase = async () => privacy.runErasure(erasure.id);
 
-        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        await runExportWorkflow(exported.id);
+
         expect(raced).toBe(true);
         expect(store.rows.get(exported.id)?.status).toBe("failed");
     });
@@ -800,13 +870,15 @@ describe("runExport", () => {
         const { listForSubject } = store;
         let lists = 0;
 
-        // The erasure lists the subject's requests in its files step and again when it completes; the export
-        // finishes between the two.
+        // The export was claimed before the erasure began, so its run is in flight. Its ready write lands between the
+        // erasure's files step and its completion, which lists the subject's requests the second time.
+        store.rows.set(exported.id, { ...exported, status: "processing" });
+        files.files.set(`${exported.id}/run-1/export.zip`, "archive");
         store.listForSubject = async (subjectId) => {
             lists += 1;
 
             if (lists === 2) {
-                await privacy.runExport(exported.id);
+                store.rows.set(exported.id, { ...exported, status: "ready", storageKey: `${exported.id}/run-1/export.zip` });
             }
 
             return listForSubject(subjectId);

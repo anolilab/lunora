@@ -341,28 +341,29 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
         return "failed" as const;
     });
 
-/** Whether an erasure of the subject has completed. Their requests carry the tombstone key from then on. */
-const subjectWasErased = async (store: RequestStore, subjectId: string): Promise<boolean> => {
-    const requests = await store.listForSubject(subjectId);
-
-    return requests.some((request) => request.type === "erasure" && request.status === "completed");
-};
+/** The erasure statuses that block an export of the subject: its data is partly or wholly gone, or the subject was erased. */
+const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing"]);
 
 /**
- * Whether an erasure has begun for the subject id a request carries. The erasure writes its tombstone key first, before any
- * data is erased, and re-keys the subject's requests to that key. So a request the erasure has touched carries a key on record,
- * while a raw subject id never is one, which keeps a later request for a reused id unblocked.
+ * Whether the subject's erasure has begun or completed, read from the subject's request records. An erasure that is
+ * processing or failed has deleted some of the data and still carries the raw id, so its own record finds it. A completed
+ * erasure has re-keyed the subject's requests to the tombstone key, so the requests that carry that key find it.
  */
-const erasureBegun = async (tombstones: TombstonePort | undefined, subjectId: string): Promise<boolean> =>
-    tombstones !== undefined && (await tombstones.has(subjectId));
+const subjectErasureBlocks = async (store: RequestStore, subjectId: string): Promise<boolean> => {
+    const requests = await store.listForSubject(subjectId);
+
+    return requests.some((request) => request.type === "erasure" && ERASURE_BLOCKING.has(request.status));
+};
 
 /**
  * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
+ *
+ * `tombstones` is passed by the workflow only. A failed export that an erasure re-keyed carries the tombstone key while the
+ * erasure may still be open under the raw id, and only the tombstone records that. The one-call path cannot reach the store from
+ * a mutation, so it does not check; it refuses a failed export, and `admin.retry` sends those to the workflow.
  */
-const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
-    // The erasure is checked once per run, by the `erased` step, so the tombstone store is read once. An erasure that completes
-    // mid-run fails the export in its own write (see `completeErasure`), and the ready claim needs `processing`.
+const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string, tombstones?: TombstonePort): Promise<ExportOutcome> => {
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
         whileProcessing(scope, steps, requestId, name, run);
     let runId: string | undefined;
@@ -391,7 +392,11 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
         });
     };
 
-    await loadStep(scope, steps, requestId);
+    const loaded = await loadStep(scope, steps, requestId);
+
+    if (tombstones === undefined && loaded.status === "failed") {
+        throw new LunoraError("UNPROCESSABLE", "A failed export is retried through admin.retry, which starts its workflow.");
+    }
 
     try {
         const started = await startStep(scope, steps, requestId);
@@ -405,11 +410,11 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
         const erased = await steps.do("erased", async () => {
             const { subjectId } = await requireRequest(scope.ports.store, requestId);
 
-            return (await subjectWasErased(scope.ports.store, subjectId)) || (await erasureBegun(scope.ports.tombstones, subjectId));
+            return (await subjectErasureBlocks(scope.ports.store, subjectId)) || (tombstones !== undefined && (await tombstones.has(subjectId)));
         });
 
         if (erased) {
-            return { status: await failStep(scope, steps, requestId, "UNPROCESSABLE: the subject was erased before the export ran") };
+            return { status: await failStep(scope, steps, requestId, "UNPROCESSABLE: the subject's erasure has begun or completed") };
         }
 
         // Every file this run writes is named under its own id, journaled so a replay keeps it. The id is one path segment:
@@ -661,5 +666,5 @@ export {
     type RunScope,
     setStatus,
     type StepRunner,
-    subjectWasErased,
+    subjectErasureBlocks,
 };

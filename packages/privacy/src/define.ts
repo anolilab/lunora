@@ -21,7 +21,7 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, subjectWasErased } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, subjectErasureBlocks } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -210,10 +210,9 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    // An erasure rewrote this export's subject to the tombstone key; a run now would collect under that key and
-    // publish an archive without the subject's data. The completed erasure shares the key, so the log shows it.
-    if (record.type === "export" && (await subjectWasErased(scope.ports.store, record.subjectId))) {
-        throw new LunoraError("UNPROCESSABLE", "This export's subject was erased; it cannot be retried.");
+    // An erasure of the subject has begun or completed; a run now would collect data the erasure has removed or is removing.
+    if (record.type === "export" && (await subjectErasureBlocks(scope.ports.store, record.subjectId))) {
+        throw new LunoraError("UNPROCESSABLE", "This export's subject is being erased or was erased; it cannot be retried.");
     }
 
     // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
@@ -427,7 +426,7 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
             },
             exportHandler: async (context) => {
                 await requireType(scope, context.params.requestId, "export");
-                await exportRun(scope, context.step, context.params.requestId);
+                await exportRun(scope, context.step, context.params.requestId, scope.ports.tombstones);
             },
         },
     };
