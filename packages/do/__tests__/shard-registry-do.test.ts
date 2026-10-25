@@ -412,8 +412,12 @@ describe("hostedShardRegistry", () => {
 
         const registry = new ShardRegistryDO(createFakeState(), ENV);
         const namespace = {
-            get: () => {return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) }},
-            getByName: () => {return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) }},
+            get: () => {
+                return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) };
+            },
+            getByName: () => {
+                return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) };
+            },
             idFromName: (name: string) => name,
         };
         const host = hostedShardRegistry({ ...ENV, SHARD_REGISTRY: namespace });

@@ -246,12 +246,14 @@ const signedRegistry = (options: DynamicShardRegistryOptions & { namespace: Shar
 };
 
 /** The transport for a service binding: the host's RPC surface, which carries the capability itself. */
-const rpcRegistry = (rpc: ShardRegistryRpc): RegistryTransport => {return {
-    list: async (table) => rpc.listShardKeys(table),
-    register: async (table, shardKey) => rpc.register(table, shardKey),
-    snapshot: async () => rpc.snapshot(),
-    unregister: async (table, shardKey) => rpc.unregister(table, shardKey),
-}};
+const rpcRegistry = (rpc: ShardRegistryRpc): RegistryTransport => {
+    return {
+        list: async (table) => rpc.listShardKeys(table),
+        register: async (table, shardKey) => rpc.register(table, shardKey),
+        snapshot: async () => rpc.snapshot(),
+        unregister: async (table, shardKey) => rpc.unregister(table, shardKey),
+    };
+};
 
 const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): DynamicShardRegistry => {
     const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;

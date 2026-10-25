@@ -100,10 +100,10 @@ describe("createDynamicShardRegistry through a service binding", () => {
         expect.assertions(4);
 
         const rows = new Map<string, string[]>([["messages", ["a"]]]);
-        const listShardKeys = vi.fn(async (table: string) => [...(rows.get(table) ?? [])]);
+        const listShardKeys = vi.fn<(table: string) => Promise<string[]>>(async (table) => [...(rows.get(table) ?? [])]);
         const rpc = {
             listShardKeys,
-            register: vi.fn(async (table: string, shardKey: string) => {
+            register: vi.fn<(table: string, shardKey: string) => Promise<void>>(async (table, shardKey) => {
                 rows.set(table, [...(rows.get(table) ?? []), shardKey]);
             }),
             snapshot: async () => Object.fromEntries(rows),
