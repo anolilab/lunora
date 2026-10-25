@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import { mapError } from "../core/map-error";
 import { createProjectFormController, NAME_MAX_LENGTH } from "../core/project-form";
 import type { ProjectsView } from "../core/projects";
 import { DEFAULT_VIEW, projectCounts, selectProjects } from "../core/projects";
@@ -30,6 +31,8 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
     const [view, setView] = useState<ProjectsView>(DEFAULT_VIEW);
     const nameId = useId();
     const archivedId = useId();
+    const archiveErrorId = useId();
+    const [archiveError, setArchiveError] = useState<string | undefined>(undefined);
     // Built once, reading the latest `onCreate` through a ref: a parent passing
     // a fresh arrow each render must not rebuild the controller, which would
     // wipe the typed name and orphan an in-flight submit.
@@ -51,6 +54,18 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
 
     const counts = projectCounts(rows);
     const visible = selectProjects(rows, view);
+
+    // The caller's promise is awaited here: an unhandled rejection would leave the row
+    // in place with nothing on screen to say the archive did not happen.
+    const archive = async (id: string): Promise<void> => {
+        setArchiveError(undefined);
+
+        try {
+            await onArchive(id);
+        } catch (error: unknown) {
+            setArchiveError(mapError(error));
+        }
+    };
 
     return (
         <Card subtitle={`${counts.active.toString()} active · ${counts.archived.toString()} archived`} title="Projects">
@@ -84,6 +99,8 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
                     <FieldError id={`${nameId}-error`} message={form.errors.name ?? form.formError} />
                 </form>
             ) : undefined}
+
+            <FieldError id={archiveErrorId} message={archiveError} />
 
             <div className="lu-saas-toolbar">
                 <input
@@ -133,7 +150,7 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
                                 <button
                                     className="lu-saas-button lu-saas-button--quiet"
                                     onClick={() => {
-                                        void onArchive(project._id);
+                                        void archive(project._id);
                                     }}
                                     type="button"
                                 >

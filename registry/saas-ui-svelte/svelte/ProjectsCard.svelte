@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { ProjectRow, ProjectsView } from "../core";
-    import { createProjectFormController, DEFAULT_VIEW, NAME_MAX_LENGTH, projectCounts, selectProjects } from "../core";
+    import { createProjectFormController, DEFAULT_VIEW, mapError, NAME_MAX_LENGTH, projectCounts, selectProjects } from "../core";
     import Card from "./Card.svelte";
     import Empty from "./Empty.svelte";
     import { createFormState } from "./use-form.svelte";
@@ -31,6 +31,20 @@
 
     const counts = $derived(rows ? projectCounts(rows) : { active: 0, archived: 0, total: 0 });
     const visible = $derived(rows ? selectProjects(rows, view) : []);
+
+    let archiveError = $state<string | undefined>(undefined);
+
+    // Awaited here for the same reason as the React port: a dropped rejection leaves
+    // the row in place with nothing on screen to say the archive did not happen.
+    const archive = async (id: string): Promise<void> => {
+        archiveError = undefined;
+
+        try {
+            await onArchive(id);
+        } catch (error: unknown) {
+            archiveError = mapError(error);
+        }
+    };
 </script>
 
 <Card subtitle={`${counts.active} active · ${counts.archived} archived`} title="Projects">
@@ -98,6 +112,10 @@
             </label>
         </div>
 
+        {#if archiveError}
+            <p class="lu-saas-error" role="alert">{archiveError}</p>
+        {/if}
+
         {#if visible.length === 0}
             <Empty title={counts.total === 0 ? "No projects yet" : "Nothing matches that search"} />
         {:else}
@@ -110,7 +128,7 @@
                             <button
                                 class="lu-saas-button lu-saas-button--quiet"
                                 onclick={() => {
-                                    void onArchive(project._id);
+                                    void archive(project._id);
                                 }}
                                 type="button">Archive</button
                             >

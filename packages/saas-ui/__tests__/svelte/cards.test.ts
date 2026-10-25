@@ -79,6 +79,17 @@ describe("projectsCard", () => {
 
         expect(onArchive).toHaveBeenCalledWith("p-Alpha");
     });
+
+    it("says why an archive failed rather than leaving the row unexplained", async () => {
+        const onArchive = vi.fn(async () => {
+            throw Object.assign(new Error("slow down"), { code: "TOO_MANY_REQUESTS" });
+        });
+
+        render(ProjectsCard, { canWrite: true, onArchive, onCreate: noop, rows: [project("Alpha")] });
+        await fireEvent.click(screen.getByText("Archive"));
+
+        await expect(screen.findByText("Too many requests — try again in a moment.")).resolves.toBeInTheDocument();
+    });
 });
 
 describe("createFormState", () => {
