@@ -54,7 +54,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
             "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
         );
         expect(output).toContain(
-            "options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry, secret: (env as { SHARD_REGISTRY_DO_SECRET?: string }).SHARD_REGISTRY_DO_SECRET }) });",
+            "options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry, env }) });",
         );
         expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
     });
