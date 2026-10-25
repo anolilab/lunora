@@ -395,7 +395,11 @@ const assignDigits = (carriers: ReadonlyArray<Carrier>, capacity: number, deals:
  *
  * Skipped, leaving the columns to the generator, when a member is already unique on
  * its own (the index is then satisfied), a self-reference (its pool is not known
- * yet), a foreign key with no parents, a server-filled column, or is overridden.
+ * yet), a foreign key with no parents, or a server-filled column. An overridden
+ * member keeps its deal: an override that resolves to `undefined` for a row defers
+ * to the generator, which then takes the dealt value, while a value the override
+ * supplies stands as the caller's. Unlike a single column, the composite's capacity
+ * is still asserted, because a deferred override is the case the deal exists for.
  * A column an earlier composite index already dealt keeps that deal, so it never takes two digits.
  * A later index sharing such a column is still checked: it is distinct for as many rows as the
  * earlier index's leading carriers it holds are, and otherwise only through the members it deals
@@ -409,7 +413,6 @@ const planCompositeDeal = (
     count: number,
     offset: number,
     now: number,
-    tableOverrides: Record<string, unknown>,
     poolOf: (field: FieldSpec) => ReadonlyArray<string>,
     deals: Map<string, UniqueDeal>,
 ): void => {
@@ -419,7 +422,6 @@ const planCompositeDeal = (
     const undealable = (field: FieldSpec): boolean =>
         field.unique ||
         field.fkTable === table ||
-        Object.hasOwn(tableOverrides, field.name) ||
         (field.hasServerDefault && field.fkTable === undefined) ||
         (field.fkTable !== undefined && poolOf(field).length === 0);
 
@@ -491,14 +493,13 @@ const planCompositeDeals = (
     count: number,
     offset: number,
     now: number,
-    tableOverrides: Record<string, unknown>,
     poolOf: (field: FieldSpec) => ReadonlyArray<string>,
     deals: Map<string, UniqueDeal>,
 ): void => {
     const byName = new Map(fields.map((field) => [field.name, field]));
 
     for (const index of uniqueIndexes) {
-        planCompositeDeal(index, byName, table, count, offset, now, tableOverrides, poolOf, deals);
+        planCompositeDeal(index, byName, table, count, offset, now, poolOf, deals);
     }
 };
 
@@ -605,7 +606,7 @@ const planUniqueDeals = (
         deals.set(field.name, deal);
     }
 
-    planCompositeDeals(uniqueIndexes, fields, table, count, offset, now, tableOverrides, poolOf, deals);
+    planCompositeDeals(uniqueIndexes, fields, table, count, offset, now, poolOf, deals);
 
     return deals;
 };

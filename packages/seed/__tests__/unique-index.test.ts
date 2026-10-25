@@ -308,6 +308,38 @@ describe("seedPlan — multi-column unique indexes", () => {
         expect(new Set(rows.map((row) => `${String(row.a)}|${String(row.b)}`)).size).toBe(4);
     });
 
+    it("deals a composite member whose override defers, so a bounded pair cannot repeat", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({ kind: v.union(v.literal("a"), v.literal("b")), status: v.union(v.literal("x"), v.literal("y")) }).index(
+                "by_kind_status",
+                ["kind", "status"],
+                { unique: true },
+            ),
+        });
+        const overrides = { slots: { status: () => undefined } };
+        const pairs = new Set(rowsOf(seedPlan(schema, { counts: { slots: 4 }, overrides }), "slots").map((row) => `${String(row.kind)}|${String(row.status)}`));
+
+        expect(pairs.size).toBe(4);
+        expect(() => seedPlan(schema, { counts: { slots: 5 }, overrides })).toThrow(/by_kind_status/u);
+    });
+
+    it("keeps the value a composite member's override supplies", () => {
+        expect.hasAssertions();
+
+        const schema = defineSchema({
+            slots: defineTable({ kind: v.union(v.literal("a"), v.literal("b")), status: v.union(v.literal("x"), v.literal("y")) }).index(
+                "by_kind_status",
+                ["kind", "status"],
+                { unique: true },
+            ),
+        });
+        const overrides = { slots: { status: ({ index }: { index: number }) => (index === 0 ? "y" : undefined) } };
+
+        expect(rowsOf(seedPlan(schema, { counts: { slots: 4 }, overrides }), "slots")[0]).toMatchObject({ status: "y" });
+    });
+
     it("makes a single-column unique index behave like .unique()", () => {
         expect.hasAssertions();
 
