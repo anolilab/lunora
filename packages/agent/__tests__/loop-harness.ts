@@ -375,13 +375,23 @@ export const collectConditions = (build: (q: unknown) => unknown): [string, unkn
 export const makeIndexQuery = (
     candidates: FakeRow[],
     build: (q: unknown) => unknown,
-): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
+): {
+    collect: () => Promise<FakeRow[]>;
+    first: () => Promise<FakeRow | null>;
+    order: (direction: "asc" | "desc") => { take: (limit: number) => Promise<FakeRow[]> };
+} => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
 
     return {
         collect: async () => matches(),
         first: async () => matches()[0] ?? null,
+        // Index order is ascending; `order("desc").take(n)` is the bounded newest-tail read.
+        order: (direction) => {
+            return {
+                take: async (limit: number) => (direction === "desc" ? matches().toReversed() : matches()).slice(0, limit),
+            };
+        },
     };
 };
 

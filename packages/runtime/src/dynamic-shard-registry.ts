@@ -13,7 +13,7 @@
  * 2. Construct the client once per worker request:
  *
  * ```ts
- * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY });
+ * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY, secret: env.SHARD_REGISTRY_DO_SECRET });
  * const coordinator = createQueryCoordinator({ registry });
  * ```
  *
@@ -38,6 +38,7 @@
  * coordination across them).
  */
 
+import { SHARD_REGISTRY_SECRET_HEADER } from "../../../shared/internal-secret";
 import { LunoraError } from "./errors";
 import type { ShardRegistry } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
@@ -87,6 +88,9 @@ interface DynamicShardRegistryOptions {
     jurisdiction?: DurableObjectJurisdiction;
     /** DO namespace binding (`env.SHARD_REGISTRY`). */
     namespace: ShardNamespaceLike;
+
+    /** The registry's `SHARD_REGISTRY_DO_SECRET`, sent on every request; omit when none is provisioned. */
+    secret?: string;
 }
 
 /**
@@ -127,6 +131,8 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     // Pin the registry DO to the configured jurisdiction (unchanged when unset).
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
+    const secretHeaders: Record<string, string> = options.secret ? { [SHARD_REGISTRY_SECRET_HEADER]: options.secret } : {};
+
     // Resolved per call, never cached: a registry is built once per isolate
     // (the generated worker memoizes its options), and workerd refuses I/O on
     // a stub created during a different request — so a cached stub serves the
@@ -137,12 +143,12 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
         stub().fetch(
             new Request(`${REGISTRY_BASE_URL}${path}`, {
                 body: JSON.stringify(body),
-                headers: { "content-type": "application/json" },
+                headers: { "content-type": "application/json", ...secretHeaders },
                 method: "POST",
             }),
         );
 
-    const get = async (path: string): Promise<Response> => stub().fetch(new Request(`${REGISTRY_BASE_URL}${path}`, { method: "GET" }));
+    const get = async (path: string): Promise<Response> => stub().fetch(new Request(`${REGISTRY_BASE_URL}${path}`, { headers: secretHeaders, method: "GET" }));
 
     return {
         invalidate(table) {

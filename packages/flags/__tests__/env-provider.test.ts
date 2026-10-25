@@ -139,6 +139,36 @@ describe("envProvider", () => {
                 value: { fallback: true },
             });
         });
+
+        it("parse-errors on a non-finite number", async () => {
+            expect.assertions(1);
+
+            const provider = envProvider()({ FLAG_PAGE_SIZE: "Infinity" });
+
+            await expect(provider.resolveNumberEvaluation("page-size", 10, {}, console)).resolves.toMatchObject({ errorCode: "PARSE_ERROR", value: 10 });
+        });
+
+        it.each(["null", "42"])("parse-errors on valid JSON that is not an object (%s)", async (raw) => {
+            expect.assertions(1);
+
+            const provider = envProvider()({ FLAG_ROLLOUT: raw });
+
+            await expect(provider.resolveObjectEvaluation("rollout", { fallback: true }, {}, console)).resolves.toMatchObject({
+                errorCode: "PARSE_ERROR",
+                value: { fallback: true },
+            });
+        });
+
+        it.each([
+            ['{"a":1}', { a: 1 }],
+            ["[1]", [1]],
+        ])("resolves a JSON object or array (%s)", async (raw, expected) => {
+            expect.assertions(1);
+
+            const provider = envProvider()({ FLAG_ROLLOUT: raw });
+
+            await expect(provider.resolveObjectEvaluation("rollout", {}, {}, console)).resolves.toMatchObject({ reason: "STATIC", value: expected });
+        });
     });
 
     describe("envProvider — missing values & non-string env", () => {

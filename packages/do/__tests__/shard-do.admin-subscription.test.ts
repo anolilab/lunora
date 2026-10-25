@@ -440,6 +440,19 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
     });
 
+    it("stamps admin:true for a ?token ticket when the header carries a session bearer", async () => {
+        expect.assertions(1);
+
+        const minted = await mintWsAdminToken(ADMIN_TOKEN);
+        const attachment = await upgradeAndCaptureAttachment(
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            `https://shard.internal/?token=${encodeURIComponent(minted.token)}`,
+            { Authorization: "Bearer session-token" },
+        );
+
+        expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
+    });
+
     it("stamps admin:false when the minted ephemeral token has expired", async () => {
         expect.assertions(1);
 

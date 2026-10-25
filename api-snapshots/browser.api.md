@@ -254,6 +254,8 @@ interface LunoraBrowserOptions {
     binding: BrowserBindingLike;
     connect?: BrowserConnectLike;
     launch?: BrowserLaunchLike;
+    maxCrawlDepth?: number;
+    maxCrawlPages?: number;
     resolveDns?: boolean;
     restApi?: BrowserRestApiOptions;
     sessions?: BrowserSessionsLike;

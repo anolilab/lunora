@@ -6,7 +6,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { DatabaseWriterLike, SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
+import { CompanionMemo, createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
@@ -1055,10 +1055,10 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         const tuned = new GeneratedLikeShard(createFakeState(), {}, { maxRelationKeys: 9000, relationExistsPushDown: "never" });
         const bare = new GeneratedLikeShard(createFakeState(), {});
 
-        expect(tuned.tuning()).toStrictEqual({ maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        expect(tuned.tuning()).toStrictEqual({ companionMemo: expect.any(CompanionMemo), maxRelationKeys: 9000, relationExistsPushDown: "never" });
         // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
         // clobber an engine default with an explicit undefined.
-        expect(bare.tuning()).toStrictEqual({});
+        expect(bare.tuning()).toStrictEqual({ companionMemo: expect.any(CompanionMemo) });
     });
 });
 

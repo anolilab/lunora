@@ -312,3 +312,35 @@ describe("shardRegistryDO", () => {
         expect((list as { shardKeys: string[] }).shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["alpha", "beta"]);
     });
 });
+
+const statusOf = async (response: Promise<Response>): Promise<number> => response.then((resolved) => resolved.status);
+
+describe("shardRegistryDO secret", () => {
+    const withSecret = (request: Request, secret: string): Request => {
+        const headers = new Headers(request.headers);
+
+        headers.set("x-lunora-shard-registry-do-secret", secret);
+
+        return new Request(request, { headers });
+    };
+
+    it("rejects every route without the secret when SHARD_REGISTRY_DO_SECRET is set", async () => {
+        expect.assertions(5);
+
+        const registry = new ShardRegistryDO(createFakeState(), { SHARD_REGISTRY_DO_SECRET: "s3cret" });
+
+        await expect(statusOf(registry.fetch(post("/register", { shardKey: "a", table: "messages" })))).resolves.toBe(401);
+        await expect(statusOf(registry.fetch(post("/unregister", { shardKey: "a", table: "messages" })))).resolves.toBe(401);
+        await expect(statusOf(registry.fetch(get("/snapshot")))).resolves.toBe(401);
+        await expect(statusOf(registry.fetch(withSecret(get("/snapshot"), "wrong")))).resolves.toBe(401);
+        await expect(statusOf(registry.fetch(withSecret(get("/snapshot"), "s3cret")))).resolves.toBe(200);
+    });
+
+    it("stays open when no secret is provisioned", async () => {
+        expect.assertions(1);
+
+        const registry = new ShardRegistryDO(createFakeState(), {});
+
+        await expect(statusOf(registry.fetch(get("/snapshot")))).resolves.toBe(200);
+    });
+});

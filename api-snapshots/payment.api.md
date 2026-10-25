@@ -198,6 +198,13 @@ interface LunoraDatabaseLike {
     }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patchIf?: (table: string, id: string, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
 }
 ```
 
@@ -252,8 +259,8 @@ class MemoryPaymentStore implements PaymentStore {
     sumUsage(referenceId: string, featureId: string, since: number): Promise<number>;
     sumUsageByFeature(referenceId: string, featureIds: ReadonlyArray<string>, since: number): Promise<ReadonlyMap<string, number>>;
     upsertCustomer(customer: Customer): Promise<void>;
-    upsertPaymentSession(session: PaymentSession): Promise<void>;
-    upsertSubscription(subscription: Subscription): Promise<void>;
+    upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean>;
+    upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean>;
 }
 ```
 
@@ -337,6 +344,7 @@ interface PaymentDatabase {
     findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patchIf: (table: string, id: string, where: Record<string, unknown>, patch: Record<string, unknown>) => Promise<boolean>;
 }
 ```
 
@@ -439,6 +447,7 @@ interface PaymentSession {
     readonly provider: ProviderId;
     readonly referenceId: string;
     readonly refundedAmount: Money;
+    readonly revision?: number;
     readonly state: PaymentState;
     readonly subscriptionId?: string;
     readonly updatedAt: number;
@@ -468,8 +477,8 @@ interface PaymentStore {
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
-    upsertPaymentSession: (session: PaymentSession) => Promise<void>;
-    upsertSubscription: (subscription: Subscription) => Promise<void>;
+    upsertPaymentSession: (session: PaymentSession, guard?: RevisionGuard) => Promise<boolean>;
+    upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
 }
 ```
 
@@ -611,6 +620,7 @@ interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    readonly revision?: number;
     readonly state: SubscriptionState;
     readonly updatedAt: number;
 }
@@ -1266,5 +1276,13 @@ interface CheckoutRequest {
     readonly quantity?: number;
     readonly referenceId: string;
     readonly successUrl: string;
+}
+```
+
+### `RevisionGuard` (interface)
+
+```ts
+interface RevisionGuard {
+    readonly ifRevision: number | undefined;
 }
 ```

@@ -2,9 +2,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handleSchemaEditRequest } from "../../src/studio-host/schema-edit-handler";
+import { consumeStudioWrite } from "../../src/studio-host/studio-writes";
+
+// The real codegen, wrapped so a test can make one run fail.
+vi.mock(import("@lunora/codegen"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen) };
+});
 
 const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
@@ -130,6 +139,54 @@ describe("handleSchemaEditRequest", () => {
         } finally {
             delete process.env.LUNORA_CODEGEN;
         }
+    });
+
+    /**
+     * A recorded write tells the dev watcher it may skip codegen for the write's
+     * own event. That is only true once this handler's codegen emitted: a run
+     * that failed has to be left to the watcher, which retries it and shows the
+     * failure the way a source save would.
+     */
+    describe("the write record the dev watcher skips codegen for", () => {
+        const addColumn = () =>
+            handleSchemaEditRequest({
+                body: { column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" },
+                method: "POST",
+                projectRoot,
+            });
+
+        it("records the write once codegen has emitted from it", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA);
+
+            expect(addColumn().status).toBe(200);
+            expect(consumeStudioWrite(schemaPath)).toBe(true);
+        });
+
+        it("does not record the write when codegen throws", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA);
+            vi.mocked(runCodegen).mockImplementationOnce(() => {
+                throw new Error("codegen exploded");
+            });
+
+            expect(addColumn().status).toBe(500);
+            expect(consumeStudioWrite(schemaPath)).toBe(false);
+        });
+
+        it("does not record the write when codegen reports a diagnostic", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA);
+            vi.mocked(runCodegen).mockImplementationOnce(() => {
+                throw new CodegenDiagnosticError("index references an unknown field", schemaPath, 1, 1);
+            });
+
+            expect((addColumn().body as { diagnostics: ReadonlyArray<string> }).diagnostics).toHaveLength(1);
+            expect(consumeStudioWrite(schemaPath)).toBe(false);
+        });
     });
 
     it("returns 409 needsMigration on a destructive POST and does NOT write the file", () => {

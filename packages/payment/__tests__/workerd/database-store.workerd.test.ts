@@ -130,7 +130,7 @@ describe("database payment store on workerd", () => {
 
             const stored = await store.getPaymentSession("stripe", "cs_1");
 
-            expect(stored).toEqual(
+            expect(stored).toMatchObject(
                 session({
                     amount: money(huge, "EUR"),
                     capturedAmount: money(huge, "EUR"),
@@ -152,7 +152,7 @@ describe("database payment store on workerd", () => {
             // A session without a subscription reads the column back as absent.
             await store.upsertPaymentSession(session({ id: "cs_2" }));
 
-            await expect(store.getPaymentSession("stripe", "cs_2")).resolves.toEqual(session({ id: "cs_2" }));
+            await expect(store.getPaymentSession("stripe", "cs_2")).resolves.toMatchObject(session({ id: "cs_2" }));
             await expect(store.getPaymentSession("stripe", "cs_missing")).resolves.toBeUndefined();
         });
     });
@@ -181,7 +181,7 @@ describe("database payment store on workerd", () => {
                 subscription({ currentPeriodEnd: 200, currentPeriodStart: 100, lastEventAt: 50, priceIds: ["price_base", "price_addon"] }),
             );
 
-            await expect(store.getSubscription("stripe", "sub_1")).resolves.toEqual(
+            await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject(
                 subscription({ currentPeriodEnd: 200, currentPeriodStart: 100, lastEventAt: 50, priceIds: ["price_base", "price_addon"] }),
             );
 
@@ -194,11 +194,24 @@ describe("database payment store on workerd", () => {
             await store.upsertSubscription(subscription({ id: "sub_2" }));
             await store.upsertSubscription(subscription({ id: "sub_3", referenceId: "org_2" }));
 
-            await expect(store.getSubscription("stripe", "sub_2")).resolves.toEqual(subscription({ id: "sub_2" }));
+            await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject(subscription({ id: "sub_2" }));
 
             const listed = await store.listSubscriptionsByReference("org_1");
 
             expect(listed.map((row) => row.id).toSorted((a, b) => a.localeCompare(b))).toEqual(["sub_1", "sub_2"]);
+        });
+    });
+
+    it("applies a guarded subscription write only while its revision is current, on real storage", async () => {
+        expect.assertions(3);
+
+        await withStore(async (store) => {
+            await store.upsertSubscription(subscription());
+
+            await expect(store.upsertSubscription(subscription({ state: "past_due", updatedAt: 2 }), { ifRevision: 1 })).resolves.toBe(true);
+            // A second writer that read revision 1 finds the row already moved on.
+            await expect(store.upsertSubscription(subscription({ state: "canceled", updatedAt: 3 }), { ifRevision: 1 })).resolves.toBe(false);
+            await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ revision: 2, state: "past_due" });
         });
     });
 

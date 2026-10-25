@@ -251,6 +251,13 @@ class AdminShard extends ShardDO {
     }
 }
 
+/** Exposes the companions the shard's ctx-db memo holds as verified. */
+class CompanionMemoShard extends AdminShard {
+    public verifiedCompanions(): Set<string> {
+        return this.ctxDbTuning().companionMemo.verified;
+    }
+}
+
 /**
  * Mirrors the codegen subclass that overrides `workflowsMetadata()` with the
  * project's discovered workflow declarations — shared by every test that needs
@@ -1231,17 +1238,22 @@ describe("shardDO admin introspection", () => {
     });
 
     it("forgets every companion rebuild marker on rebuildCompanions", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // A marker as a migrated shard holds it; the base class never migrates one.
         database.raw(`CREATE TABLE "__lunora_companion_state" ("companion" TEXT PRIMARY KEY, "signature" TEXT NOT NULL)`);
         database.raw(`INSERT INTO "__lunora_companion_state" VALUES ('todos__agg_byProject', 'sig')`);
 
-        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CompanionMemoShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Verified by an earlier write: left in the memo, the next write would skip the rebuild.
+        shard.verifiedCompanions().add("todos__agg_byProject");
+
         const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.rebuildCompanions, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { ok: true } });
         expect(database.raw(`SELECT * FROM "__lunora_companion_state"`)).toHaveLength(0);
+        expect(shard.verifiedCompanions().size).toBe(0);
     });
 
     it("starts a workflow instance through the declared workflow on ctx.exports", async () => {

@@ -4,6 +4,7 @@ import { detectAgentRules } from "../agent-rules";
 import { resolveAdminToken } from "./admin-token";
 import { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
 import { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, studioAssetsStamp } from "./assets";
+import createStudioDocumentCache from "./document-cache";
 import { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";
 import renderStudioHtml from "./render-html";
 import { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";
@@ -103,7 +104,24 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
 
     let assets: StudioAssets | undefined;
     let assetsStamp: number | undefined;
-    let html: string | undefined;
+
+    // The basepath is fixed, but the admin token the document embeds is not, so
+    // the cache re-renders it when `.dev.vars` changes.
+    const currentDocument = createStudioDocumentCache(projectRoot, () =>
+        renderStudioHtml({
+            adminToken: resolveAdminToken(projectRoot),
+            basePath: STUDIO_PATH,
+            // Loopback-only dev route (it 403s on a non-loopback bind), so the
+            // developer owns the data — let them edit rows, run-as a user, and edit
+            // the schema by default.
+            dataEditable: true,
+            rulesInstalled: detectAgentRules(projectRoot).installed,
+            runAsIdentity: true,
+            schemaEditable: true,
+            scriptSrc: STUDIO_SCRIPT_PATH,
+            styleHref: STUDIO_STYLE_PATH,
+        }),
+    );
 
     // Serve a static studio asset — the compiled stylesheet, the `studio.js`
     // entry, or one of its on-demand `chunk-*.js` code-split siblings — re-reading
@@ -226,25 +244,9 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
             return;
         }
 
-        // Built once per dev session: the basepath is fixed, and the admin token
-        // is read from `.dev.vars` at startup.
-        html ??= renderStudioHtml({
-            adminToken: resolveAdminToken(projectRoot),
-            basePath: STUDIO_PATH,
-            // Loopback-only dev route (it 403s on a non-loopback bind), so the
-            // developer owns the data — let them edit rows, run-as a user, and edit
-            // the schema by default.
-            dataEditable: true,
-            rulesInstalled: detectAgentRules(projectRoot).installed,
-            runAsIdentity: true,
-            schemaEditable: true,
-            scriptSrc: STUDIO_SCRIPT_PATH,
-            styleHref: STUDIO_STYLE_PATH,
-        });
-
         // The document embeds the admin token, so it is `no-store` and never
         // carries an ETag — same helper the CLI host serves its document with.
-        sendStudioDocument(response, html);
+        sendStudioDocument(response, currentDocument());
     };
 };
 

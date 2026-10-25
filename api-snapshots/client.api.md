@@ -544,6 +544,10 @@ class LunoraClient {
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
+    isCrossTabFollower(): boolean;
+    expectsPush(options?: {
+        shardKey?: string;
+    }): boolean;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
@@ -556,6 +560,7 @@ class LunoraClient {
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
     peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
     peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): {
+        answered: boolean;
         present: boolean;
         value: unknown;
     };
@@ -921,6 +926,7 @@ type LunoraClientError = Error & {
 ```ts
 interface LunoraClientOptions {
     authBasePath?: string;
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
     clientId?: string;
     connectionContext?: Record<string, unknown>;
@@ -1534,7 +1540,7 @@ class SubscriptionRegistry {
 
 ```ts
 interface SubscriptionState {
-    acked: boolean;
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
