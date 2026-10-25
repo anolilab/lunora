@@ -24,9 +24,10 @@ interface EditableFilter {
      * empty under a sidebar still reading "2". A NULL group fared the same way,
      * flattening to `""`.
      *
-     * Cleared the moment the operator edits the column or the value, because
-     * from then on the text IS the source of truth and must be coerced like any
-     * typed value (`age > 18` has to compare numerically).
+     * Cleared the moment the operator edits the column or the value, or switches
+     * the row to `has`, because from then on the text IS the source of truth and
+     * must be coerced like any typed value (`age > 18` has to compare numerically;
+     * `has true` has to find a boolean element).
      */
     literal?: [unknown];
 
@@ -271,7 +272,18 @@ const DataFilters = ({
         const index = Number(event.currentTarget.dataset.index);
         const next = event.currentTarget.value as FilterOperator;
 
-        onFiltersChange(filters.map((filter, position) => (position === index ? { ...filter, operator: next } : filter)));
+        // Entering `has` drops a pinned literal: membership reads the box text by its type
+        // (`true` is a boolean element), so the box must say what the row will send. Between
+        // comparison operators the pin holds, so a facet's exact text is not re-typed.
+        onFiltersChange(
+            filters.map((filter, position) => {
+                if (position !== index) {
+                    return filter;
+                }
+
+                return next === "has" ? typedFilter(filter, { operator: next }) : { ...filter, operator: next };
+            }),
+        );
     };
 
     const changePath = (event: ChangeEvent<HTMLInputElement>): void => {

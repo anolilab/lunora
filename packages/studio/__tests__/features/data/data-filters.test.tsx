@@ -239,6 +239,36 @@ describe("dataFilters — nested path and has", () => {
         expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "has", path: "", value: "Berlin" }]);
     });
 
+    it("drops a pinned literal when the operator switches to has, so the box text is read by type", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+        const pinned: EditableFilter = { column: "flags", literal: ["true"], operator: "eq", value: "true" };
+
+        render(<DataFilters columns={COLUMNS} filters={[pinned]} onFiltersChange={onFiltersChange} onSearchChange={noop()} search="" />);
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-operator"), { target: { value: "has" } });
+
+        const [switched] = onFiltersChange.mock.lastCall?.[0] as EditableFilter[];
+
+        expect(toFilterClauses([switched as EditableFilter])).toStrictEqual([{ column: "flags", operator: "has", value: true }]);
+    });
+
+    it("keeps a pinned literal when the operator switches between comparison operators", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+        const pinned: EditableFilter = { column: "zip", literal: ["12345"], operator: "eq", value: "12345" };
+
+        render(<DataFilters columns={COLUMNS} filters={[pinned]} onFiltersChange={onFiltersChange} onSearchChange={noop()} search="" />);
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-operator"), { target: { value: "ne" } });
+
+        const [switched] = onFiltersChange.mock.lastCall?.[0] as EditableFilter[];
+
+        expect(toFilterClauses([switched as EditableFilter])).toStrictEqual([{ column: "zip", operator: "ne", value: "12345" }]);
+    });
+
     it("keeps a pinned literal when only the path is edited, and drops the carried segments", () => {
         expect.assertions(2);
 
