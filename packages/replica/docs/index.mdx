@@ -200,7 +200,8 @@ const client = new EventLogDOClient({
 });
 
 // `append` takes an ARRAY and returns the entries with their assigned `seq`s.
-// Pass `{ batchId }` to make a retry idempotent.
+// Pass `{ batchId }` to make a retry idempotent. Without one the client mints a
+// fresh key per call, so a captured append cannot be replayed into a duplicate.
 const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
 
 // The log is append-only and ordered, so reads are by sequence number — there

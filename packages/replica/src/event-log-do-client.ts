@@ -100,14 +100,15 @@ export class EventLogDOClient {
      * Append one or more events to the log.
      * @param events The events to append.
      * @param options Idempotency controls for the batch.
-     * @param options.batchId Optional idempotency key for the whole batch — a
-     * retried `append` call with the same `batchId` (e.g. after a network
-     * timeout that hid a successful response) returns the originally-persisted
-     * entries instead of inserting duplicates.
+     * @param options.batchId Idempotency key for the whole batch. Omit it for a
+     * fresh key per call; pass the same key to retry a call whose response was
+     * lost (e.g. a network timeout that hid a successful append), which returns
+     * the originally-persisted entries instead of inserting duplicates.
      * @returns The persisted entries with their assigned `seq` numbers.
      */
     public async append(events: AppendEventInput[], options?: { batchId?: string }): Promise<EventLogEntry[]> {
-        const body = JSON.stringify({ events, batchId: options?.batchId });
+        // Every append carries a key: the DO refuses one without it, and the key is what makes a captured, replayed request a no-op.
+        const body = JSON.stringify({ events, batchId: options?.batchId ?? crypto.randomUUID() });
         const response = await this.#send("POST", "/append", body);
 
         if (!response.ok) {

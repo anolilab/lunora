@@ -10,7 +10,8 @@
  *
  * | Method | Path                    | Description                          |
  * |--------|-------------------------|--------------------------------------|
- * | POST   | `/append`               | Insert events, return assigned seqs  |
+ * | POST   | `/append`               | Insert events (needs `batchId`),     |
+ * |        |                         | return assigned seqs                 |
  * | GET    | `/since?seq=N&limit=M`  | ONE bounded page of `seq >= N`       |
  * | GET    | `/size`                 | Number of stored events              |
  * | GET    | `/state`                | Whole log in one body; 413 when over |
@@ -133,11 +134,12 @@ interface AppendRequestEvent {
 
 interface AppendRequest {
     /**
-     * Optional idempotency key for the whole batch. A retried `/append` with
-     * the same `batchId` returns the originally-persisted entries instead of
-     * inserting duplicates — see `#handleAppend`.
+     * Idempotency key for the whole batch, required. A `/append` with a
+     * `batchId` already persisted returns the originally-persisted entries
+     * instead of inserting duplicates, so a captured signed request replayed
+     * later writes nothing — see `#runAppendBatch`.
      */
-    batchId?: string;
+    batchId: string;
     events: AppendRequestEvent[];
 }
 
@@ -370,8 +372,8 @@ export class EventLogDO {
 
         // Run the whole batch (lookup + inserts) inside the DO's native
         // transaction primitive so a mid-batch failure persists nothing —
-        // the caller sees a 500 and can safely retry the whole batch (which,
-        // with a `batchId`, is now also idempotent). Test doubles whose
+        // the caller sees a 500 and can safely retry the whole batch (the
+        // `batchId` makes that retry idempotent). Test doubles whose
         // storage lacks `transaction` fall back to a bare call — their fakes
         // carry no transactional semantics anyway (see ShardDO.runInTransaction
         // in `@lunora/do` for the same convention).
@@ -405,21 +407,16 @@ export class EventLogDO {
      * event batch throws an idempotency-conflict error instead of silently
      * dropping the new events and returning unrelated entries.
      */
-    static async #runAppendBatch(sql: SqlExec, body: AppendRequest, batchId: string | undefined): Promise<EventLogEntry[]> {
-        let fingerprint: string | undefined;
+    static async #runAppendBatch(sql: SqlExec, body: AppendRequest, batchId: string): Promise<EventLogEntry[]> {
+        const fingerprint = await fingerprintBatch(body.events);
+        const existing = EventLogDO.#findBatch(sql, batchId);
 
-        if (typeof batchId === "string") {
-            fingerprint = await fingerprintBatch(body.events);
-
-            const existing = EventLogDO.#findBatch(sql, batchId);
-
-            if (existing) {
-                if (existing.fingerprint !== fingerprint) {
-                    throw createIdempotencyConflictError(`batchId "${batchId}" was already used for a different event batch`);
-                }
-
-                return existing.entries;
+        if (existing) {
+            if (existing.fingerprint !== fingerprint) {
+                throw createIdempotencyConflictError(`batchId "${batchId}" was already used for a different event batch`);
             }
+
+            return existing.entries;
         }
 
         const now = Date.now();
@@ -440,13 +437,11 @@ export class EventLogDO {
             entries.push(entry);
         }
 
-        if (typeof batchId === "string" && fingerprint !== undefined) {
-            const firstSeq = entries[0]?.seq;
-            const lastSeq = entries.at(-1)?.seq;
+        const firstSeq = entries[0]?.seq;
+        const lastSeq = entries.at(-1)?.seq;
 
-            if (firstSeq !== undefined && lastSeq !== undefined) {
-                EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
-            }
+        if (firstSeq !== undefined && lastSeq !== undefined) {
+            EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
         }
 
         return entries;
@@ -464,7 +459,9 @@ export class EventLogDO {
             return "events[] with a non-empty string `type` required";
         }
 
-        if (body.batchId !== undefined && (typeof body.batchId !== "string" || body.batchId.length === 0)) {
+        // Required, not optional: a signature proves who sent a frame, not that it is new, so a
+        // captured signed append replays forever. Only the batch ledger turns a replay into a no-op.
+        if (typeof body.batchId !== "string" || body.batchId.length === 0) {
             return "batchId must be a non-empty string";
         }
 
@@ -647,7 +644,7 @@ export class EventLogDO {
                 "parent_seq INTEGER" +
                 ")",
         );
-        // Idempotency ledger for `/append`'s optional `batchId`: one row per
+        // Idempotency ledger for `/append`'s required `batchId`: one row per
         // batch, `batch_id` UNIQUE so a concurrent double-insert of the same
         // batch (belt-and-suspenders alongside the `#findBatch` pre-check
         // inside the same transaction) fails loudly instead of duplicating.

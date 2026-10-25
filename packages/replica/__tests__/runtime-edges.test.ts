@@ -34,7 +34,10 @@ describe("eventLogDOClient wire contract", () => {
         expect(entries).toHaveLength(1);
         expect(requests[0]?.method).toBe("POST");
         expect(new URL(requests[0]?.url as string).pathname).toBe("/append");
-        await expect(requests[0]?.json()).resolves.toStrictEqual({ events: [{ payload: { n: 1 }, type: "a" }] });
+        await expect(requests[0]?.json()).resolves.toStrictEqual({
+            batchId: expect.any(String),
+            events: [{ payload: { n: 1 }, type: "a" }],
+        });
     });
 
     it("getSince encodes its cursor and limit in the query string", async () => {

@@ -5,6 +5,9 @@ import { EventLogDO } from "../src/event-log-do";
 import { eventLogFrame } from "../src/event-log-frame";
 import { signedRequest, TEST_ENV } from "./_helpers/signed-request";
 
+/** A fresh idempotency key per append, so no test's batches collide in the ledger. */
+const nextBatchId = (): string => crypto.randomUUID();
+
 // ── Mock SqlStorage ────────────────────────────────────────────────────
 
 interface StoredRow {
@@ -162,6 +165,7 @@ describe(EventLogDO, () => {
 
         const do_ = createDO();
         const res = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [
                 { type: "test.event1", payload: { msg: "hello" } },
                 { type: "test.event2", payload: { num: 42 } },
@@ -188,6 +192,7 @@ describe(EventLogDO, () => {
 
         // Append 3 events
         await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [
                 { type: "e.1", payload: {} },
                 { type: "e.2", payload: {} },
@@ -215,6 +220,7 @@ describe(EventLogDO, () => {
 
         // Append 5 events
         await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [
                 { type: "e.1", payload: {} },
                 { type: "e.2", payload: {} },
@@ -258,6 +264,7 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: Array.from({ length: 501 }, () => {
                 return { type: "e", payload: {} };
             }),
@@ -283,6 +290,7 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: Array.from({ length: 1001 }, () => {
                 return { type: "e", payload: {} };
             }),
@@ -303,7 +311,7 @@ describe(EventLogDO, () => {
         // A log that still fits keeps working unchanged.
         const small = createDO();
 
-        await doFetch(small, "POST", "/append", { events: [{ type: "e", payload: {} }] });
+        await doFetch(small, "POST", "/append", { batchId: nextBatchId(), events: [{ type: "e", payload: {} }] });
 
         const smallRes = await doFetch(small, "GET", "/state");
 
@@ -328,6 +336,7 @@ describe(EventLogDO, () => {
         const bigPayload = { blob: "x".repeat(32_000) };
 
         const appendRes = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: Array.from({ length: 140 }, () => {
                 return { payload: bigPayload, type: "e" };
             }),
@@ -356,14 +365,14 @@ describe(EventLogDO, () => {
 
         const do_ = createDO();
 
-        const tooBig = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(64_000) }, type: "e" }] });
+        const tooBig = await doFetch(do_, "POST", "/append", { batchId: nextBatchId(), events: [{ payload: { blob: "x".repeat(64_000) }, type: "e" }] });
 
         expect(tooBig.status).toBe(400);
 
         // The per-event budget must leave every accepted event readable: an
         // event at the limit has to fit in a response, or it would be stored
         // and then permanently unreadable through both read routes.
-        const atLimit = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(32_000) }, type: "e" }] });
+        const atLimit = await doFetch(do_, "POST", "/append", { batchId: nextBatchId(), events: [{ payload: { blob: "x".repeat(32_000) }, type: "e" }] });
 
         expect(atLimit.status).toBe(200);
 
@@ -376,7 +385,7 @@ describe(EventLogDO, () => {
         expect.assertions(1);
 
         const do_ = createDO();
-        const res = await doFetch(do_, "POST", "/append", { events: [{ type: "e" }] });
+        const res = await doFetch(do_, "POST", "/append", { batchId: nextBatchId(), events: [{ type: "e" }] });
 
         expect(res.status).toBe(400);
     });
@@ -406,7 +415,7 @@ describe(EventLogDO, () => {
         expect.assertions(1);
 
         const do_ = createDO();
-        const res = await doFetch(do_, "POST", "/append", { events: [] });
+        const res = await doFetch(do_, "POST", "/append", { batchId: nextBatchId(), events: [] });
 
         expect(res.status).toBe(400);
     });
@@ -435,6 +444,7 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [
                 { type: "t.1", payload: { x: 1 } },
                 { type: "t.2", payload: { x: 2 } },
@@ -455,6 +465,7 @@ describe(EventLogDO, () => {
         const ts = 1_234_567_890;
 
         const res = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [{ type: "t.1", payload: { v: 1 }, timestamp: ts }],
         });
 
@@ -471,6 +482,7 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         const res = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [{ type: "t.1", payload: { v: 1 }, clientId: "client-1", sessionId: "session-1", parentSeqNum: 3 }],
         });
 
@@ -502,6 +514,7 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         const res = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [{ type: "t.1", payload: {}, timestamp: Number.NaN }],
         });
 
@@ -514,14 +527,27 @@ describe(EventLogDO, () => {
         const do_ = createDO();
 
         const negative = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [{ type: "t.1", payload: {}, parentSeqNum: -1 }],
         });
         const nonInteger = await doFetch(do_, "POST", "/append", {
+            batchId: nextBatchId(),
             events: [{ type: "t.1", payload: {}, parentSeqNum: 1.5 }],
         });
 
         expect(negative.status).toBe(400);
         expect(nonInteger.status).toBe(400);
+    });
+
+    it("refuses a signed append that carries no batchId", async () => {
+        expect.assertions(2);
+
+        const do_ = createDO();
+        const response = await doFetch(do_, "POST", "/append", { events: [{ payload: {}, type: "t.1" }] });
+        const size = await doFetch(do_, "GET", "/size");
+
+        expect(response.status).toBe(400);
+        await expect(size.json()).resolves.toStrictEqual({ count: 0 });
     });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EventLogDO } from "../src/event-log-do";
+import { EventLogDOClient } from "../src/event-log-do-client";
 import { signedRequest, TEST_ENV } from "./_helpers/signed-request";
 
 // ── Mock SqlStorage with a REAL (rollback-on-throw) transaction ────────
@@ -155,6 +156,7 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
         const do_ = new EventLogDO(createMockState(), TEST_ENV);
 
         const res = await doFetch(do_, "POST", "/append", {
+            batchId: "batch-mid-failure",
             events: [
                 { type: "a", payload: { ok: true } },
                 { type: "b", payload: { poison: FAIL_MARKER } },
@@ -278,5 +280,39 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
         const size = (await sizeRes.json()) as { count: number };
 
         expect(size.count).toBe(1);
+    });
+});
+
+/** The single request a client sent; a replay test fails here, not on an undefined `Request`, if the append sent none. */
+const onlyRequest = (requests: Request[]): Request => {
+    const [request] = requests;
+
+    if (request === undefined) {
+        throw new Error("append sent no request");
+    }
+
+    return request;
+};
+
+describe("eventLogDO /append — replay", () => {
+    it("a captured signed append, re-sent to the DO, writes no second event", async () => {
+        expect.assertions(3);
+
+        const do_ = new EventLogDO(createMockState(), TEST_ENV);
+        const captured: Request[] = [];
+        const client = new EventLogDOClient({
+            env: TEST_ENV,
+            fetch: (req) => {
+                captured.push(req.clone());
+                return do_.fetch(req);
+            },
+        });
+
+        const appended = await client.append([{ payload: { n: 1 }, type: "a" }]);
+        const replay = await do_.fetch(onlyRequest(captured).clone());
+
+        expect(replay.status).toBe(200);
+        await expect(replay.json()).resolves.toMatchObject({ entries: appended.map((entry) => ({ seq: entry.seq })) });
+        await expect(client.getSize()).resolves.toBe(1);
     });
 });
