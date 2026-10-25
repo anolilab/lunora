@@ -343,7 +343,9 @@ describe("createNodeShardHost alarms", () => {
     });
 
     it("delivers an alarm once when two hosts share one database file", async () => {
-        expect.assertions(1);
+        expect.assertions(4);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
         const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-"));
         const path = join(directory, "shard.sqlite3");
@@ -360,9 +362,13 @@ describe("createNodeShardHost alarms", () => {
             const second = createNodeShardHost({ onAlarm, path });
 
             try {
-                await sleep(300);
+                // Past both hosts' timers, and any re-arm either one makes after losing the claim.
+                await vi.advanceTimersByTimeAsync(1000);
 
                 expect(delivered).toBe(1);
+                expect(alarmRowCount(first.database)).toBe(0);
+                expect(first.host.alarms.get()).toBeNull();
+                expect(second.host.alarms.get()).toBeNull();
             } finally {
                 second.dispose();
                 second.database.close();
@@ -370,6 +376,7 @@ describe("createNodeShardHost alarms", () => {
         } finally {
             first.dispose();
             first.database.close();
+            vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }
     });
