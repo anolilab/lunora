@@ -363,6 +363,43 @@ describe("exportImportPanel", () => {
         expect(importCalls(mock)).toHaveLength(2);
     });
 
+    it("stops writing once a chunk reports a refused row, so the chunks after it are never sent", async () => {
+        expect.assertions(2);
+
+        let writes = 0;
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    if ((args as { dryRun?: boolean }).dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
+                    writes += 1;
+
+                    return {
+                        conflicts: 0,
+                        errors: [{ code: "VALIDATION", line: 2, message: "text must be a string", table: "messages" }],
+                        inserted: { messages: 499 },
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("The shard refused 1 rows, so the rest of the file was not sent.");
+        expect(writes).toBe(1);
+    });
+
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
         expect.assertions(3);
 

@@ -480,6 +480,16 @@ const sendImport = async (
         }
 
         sent += rows.length;
+
+        // The shard refused rows that the check let through, so the rest of the file is not sent. The thrown error reaches the
+        // caller's catch, which keeps the structured errors above for display.
+        if (result.errors.length > 0) {
+            throw new Error(
+                t("The shard refused {count} rows, so the rest of the file was not sent. Fix the rows listed below and import again.", {
+                    count: result.errors.length,
+                }),
+            );
+        }
     };
 
     try {
