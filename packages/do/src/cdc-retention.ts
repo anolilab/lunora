@@ -56,10 +56,9 @@ const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
  * A malformed value reads as the default rather than as a tighter window — the
  * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
  *
- * The default is withheld when `LUNORA_CDC_LOG_RETENTION` is unset and only
- * `LUNORA_CDC_PAYLOAD_RETENTION` is set: that operator asked for compaction, and a
- * row window they never configured would delete changelog rows the payload setting
- * is meant to keep. A malformed row window is not "unset" and still gets the default.
+ * `LUNORA_CDC_PAYLOAD_RETENTION` does not change this: compaction strips payloads
+ * but keeps every row, so a payload window on its own would leave the log growing
+ * without bound. Only an explicit `off` removes the row window.
  * @returns the row count to keep, or `undefined` when row retention is switched off
  */
 const resolveCdcLogRetention = (environment: unknown): number | undefined => {
@@ -69,16 +68,7 @@ const resolveCdcLogRetention = (environment: unknown): number | undefined => {
         return undefined;
     }
 
-    const configured = envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY);
-
-    if (configured !== undefined) {
-        return configured;
-    }
-
-    // A present-but-malformed row window is a typo, not an absence: only a genuinely unset knob defers to payload-only compaction.
-    const unset = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
-
-    return unset && envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION") !== undefined ? undefined : DEFAULT_CDC_LOG_RETENTION_ROWS;
+    return envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY) ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
 };
 
 /**
@@ -207,8 +197,8 @@ class CdcRetentionRunner {
      * `LUNORA_CDC_LOG_RETENTION` deletes rows outright past N, which is the
      * level that destroys information and the one the archive exists for. It
      * defaults to {@link DEFAULT_CDC_LOG_RETENTION_ROWS} so the log is bounded
-     * out of the box, except when only `LUNORA_CDC_PAYLOAD_RETENTION` is set: then
-     * no row window applies, and `off` restores the unbounded log.
+     * out of the box, whether or not a payload window is set; `off` restores the
+     * unbounded log.
      *
      * Both levels are enforced on the READ paths, not merely intended here —
      * `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`, and
