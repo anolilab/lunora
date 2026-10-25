@@ -20,6 +20,7 @@ import { assembleExport, collectPart } from "./export";
 import type { RequestStatus } from "./lifecycle";
 import { canTransition, transition } from "./lifecycle";
 import type { PrivacyPorts, StorePort } from "./ports";
+import { isUnboundPort } from "./ports";
 import type { RequestRecord, RequestStore } from "./requests";
 import { requireRequest } from "./requests";
 import type { TombstonePort } from "./tombstones";
@@ -356,12 +357,31 @@ const subjectErasureBlocks = async (store: RequestStore, subjectId: string): Pro
 };
 
 /**
+ * Whether an erasure of the subject has begun or completed, found from the request store alone. A completed erasure rekeys its
+ * requests to the tombstone key, so the raw id misses it: the key is derived from the secret, so this needs no tombstone port and
+ * runs wherever the secret is set. Without a secret no erasure can have completed (`requireTombstones` refuses one), so only the raw
+ * id is read.
+ */
+const erasureBlocksSubject = async (store: RequestStore, subjectId: string, secret: string | undefined): Promise<boolean> => {
+    if (await subjectErasureBlocks(store, subjectId)) {
+        return true;
+    }
+
+    if (secret === undefined || secret === "") {
+        return false;
+    }
+
+    return subjectErasureBlocks(store, tombstoneKeyOf(subjectId, secret));
+};
+
+/**
  * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
  *
- * `tombstones` is passed by the workflow only. A failed export that an erasure re-keyed carries the tombstone key while the
- * erasure may still be open under the raw id, and only the tombstone records that. The one-call path cannot reach the store from
- * a mutation, so it does not check; it refuses a failed export, and `admin.retry` sends those to the workflow.
+ * Every path checks the request store for a begun or completed erasure (`erasureBlocksSubject`). `tombstones` is passed by the
+ * workflow only. Its probe answers for a request an erasure re-keyed, whose erasure may no longer be found under its key; a fresh
+ * request carries the raw id, which no tombstone matches. The one-call path cannot reach the tombstone store from a mutation, so it
+ * does not pass one; it refuses a failed export, and `admin.retry` sends those to the workflow.
  */
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string, tombstones?: TombstonePort): Promise<ExportOutcome> => {
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
@@ -410,7 +430,27 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string, 
         const erased = await steps.do("erased", async () => {
             const { subjectId } = await requireRequest(scope.ports.store, requestId);
 
-            return (await subjectErasureBlocks(scope.ports.store, subjectId)) || (tombstones !== undefined && (await tombstones.has(subjectId)));
+            if (await erasureBlocksSubject(scope.ports.store, subjectId, scope.tombstoneSecret)) {
+                return true;
+            }
+
+            // The tombstone is keyed by HMAC. A request an erasure re-keyed already carries that key, so the probe asks for it
+            // as stored. A fresh request carries the raw id, which no tombstone matches; the store check above covers it.
+            if (tombstones === undefined || scope.tombstoneSecret === undefined || scope.tombstoneSecret === "") {
+                return false;
+            }
+
+            try {
+                return await tombstones.has(subjectId);
+            } catch (error) {
+                // An app with no tombstone store leaves the port unbound, so the answer is "not tombstoned". Only that error
+                // is absorbed: the request store check above has already run, and any other failure stops the export.
+                if (isUnboundPort(error, "tombstones")) {
+                    return false;
+                }
+
+                throw error;
+            }
         });
 
         if (erased) {
@@ -656,6 +696,7 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
 export {
     eraseDataset,
+    erasureBlocksSubject,
     type ErasureOutcome,
     erasureRun,
     expireRequestFiles,

@@ -21,7 +21,7 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, subjectErasureBlocks } from "./run";
+import { eraseDataset, erasureBlocksSubject, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -211,7 +211,7 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
     }
 
     // An erasure of the subject has begun or completed; a run now would collect data the erasure has removed or is removing.
-    if (record.type === "export" && (await subjectErasureBlocks(scope.ports.store, record.subjectId))) {
+    if (record.type === "export" && (await erasureBlocksSubject(scope.ports.store, record.subjectId, scope.tombstoneSecret))) {
         throw new LunoraError("UNPROCESSABLE", "This export's subject is being erased or was erased; it cannot be retried.");
     }
 

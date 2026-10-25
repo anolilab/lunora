@@ -78,4 +78,14 @@ interface PrivacyPorts {
     readonly tombstones?: TombstonePort;
 }
 
+/** The error a port call gets when the mutation side binds no such port. */
+const unboundPortMessage = (port: string): string => `The privacy port "${port}" is not bound for this call.`;
+
+/**
+ * Whether an error is the "not bound" answer for one port. A workflow's `remotePorts` always defines every port, so a call to
+ * a port the app left out comes back as this error; the caller decides what an absent port means.
+ */
+const isUnboundPort = (error: unknown, port: string): boolean => error instanceof Error && error.message.includes(unboundPortMessage(port));
+
 export type { ArchivePort, DataPort, PrivacyPorts, StorePort };
+export { isUnboundPort, unboundPortMessage };

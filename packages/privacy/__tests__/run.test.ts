@@ -3,11 +3,25 @@ import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
-import type { DataPort } from "../src/ports";
+import { definePrivacy } from "../src/define";
+import type { DataPort, PrivacyPorts } from "../src/ports";
 import type { TombstonePort } from "../src/tombstones";
 import { tombstoneKeyOf } from "../src/tombstones";
+import { dispatchPort, remotePorts } from "../src/workflow";
 import type { MemoryFiles } from "./harness";
-import { codeOf, exportFileOf, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, setup, SUBJECT } from "./harness";
+import {
+    codeOf,
+    durableStep,
+    exportFileOf,
+    memoryFiles,
+    memoryRequests,
+    memoryTombstones,
+    NOW,
+    SECRET,
+    setup,
+    SUBJECT,
+    tasksDataset as harnessTasks,
+} from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -1082,5 +1096,68 @@ describe("run entries", () => {
         await expect(codeOf(privacy.runErasure(exported.id))).resolves.toBe("UNPROCESSABLE");
         expect(store.rows.get(erasure.id)?.status).toBe("grace");
         expect(store.rows.get(exported.id)?.status).toBe("received");
+    });
+});
+
+describe("export after an erasure", () => {
+    it("refuses an inline export of a subject whose erasure completed, with no tombstone port", async () => {
+        const { files, privacy, runErasureWorkflow, store } = setup();
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toStrictEqual({ status: "failed" });
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+    });
+
+    it("refuses an admin retry of a failed export whose subject's erasure completed", async () => {
+        const { operator, privacy, runErasureWorkflow, store } = setup();
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        const exported = await privacy.requestExport();
+
+        store.rows.set(exported.id, { ...exported, status: "failed" });
+
+        await expect(codeOf(operator.admin.retry(exported.id))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get(exported.id)?.status).toBe("failed");
+    });
+
+    it("runs a workflow export when the app binds no tombstone store", async () => {
+        const store = memoryRequests();
+        const files = memoryFiles();
+        // The mutation side binds no `tombstones` port, as an app without a tombstone store does.
+        const mutation: PrivacyPorts = { data: memoryData({}).port, files, newId: () => "run", now: () => NOW, store };
+        const send = async ({ method, payload }: { method: string; payload: string }) => dispatchPort({ datasets: [harnessTasks] }, mutation, method, payload);
+        const privacyFor = definePrivacy({
+            datasets: [harnessTasks],
+            ports: () => remotePorts(send),
+            tombstoneSecret: SECRET,
+        });
+        const opened = await privacyFor(undefined, SUBJECT).requestExport();
+
+        await privacyFor(undefined).workflows.exportHandler({ params: { requestId: opened.id }, step: durableStep().step });
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+    });
+
+    it("writes each export run's parts, archive and summary under that run's own prefix", async () => {
+        const { files, privacy } = setup();
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        // Request ids and run ids come from one counter in the harness: the request is r1, its run r2.
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`)).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            `${opened.id}/r2/export.zip`,
+            `${opened.id}/r2/parts/tasks.json`,
+            `${opened.id}/r2/summary.pdf`,
+        ]);
     });
 });

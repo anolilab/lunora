@@ -22,6 +22,7 @@ import type { PrivacyConfig } from "./define";
 import type { RowDisposition } from "./erasure";
 import { dispositionForPresets } from "./erasure";
 import type { PrivacyPorts } from "./ports";
+import { unboundPortMessage } from "./ports";
 
 /** The ports a workflow reaches over the wire. The clock and the id source stay on the caller's side. */
 type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
@@ -143,7 +144,7 @@ const dispatchPort = async (
     const target = ports[call.port];
 
     if (target === undefined) {
-        throw new LunoraError("BAD_REQUEST", `The privacy port "${call.port}" is not bound for this call.`);
+        throw new LunoraError("BAD_REQUEST", unboundPortMessage(call.port));
     }
 
     const context: DecodeContext = {
