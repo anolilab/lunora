@@ -1,3 +1,18 @@
+## @lunora/runtime [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.237...@lunora/runtime@1.0.0-alpha.238) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/observability:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
 ## @lunora/runtime [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.236...@lunora/runtime@1.0.0-alpha.237) (2026-10-25)
 
 
