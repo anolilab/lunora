@@ -87,7 +87,9 @@ current as organizations are created, renamed, deleted and gain or lose members.
 Billing is the deliberate exception: a provider webhook arrives with no tenant
 to route by, so the payment tables live on the root shard and carry the
 organization in `referenceId`. The plan catalog is `lunora/plans.ts`, read by
-both the pricing page and the server's entitlements.
+both the pricing page and the server's entitlements. Each plan's `apiCalls` is
+its `api_calls` allowance per billing period; the free plan has none, so an
+organisation needs a paid subscription before `track` and `check` grant anything.
 
 ## Before you deploy
 

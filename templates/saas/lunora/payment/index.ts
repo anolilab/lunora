@@ -57,7 +57,7 @@ import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
-import { PLANS } from "../plans.js";
+import { API_CALLS, PLANS } from "../plans.js";
 
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
@@ -202,7 +202,7 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
 export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
     const referenceId = await billingReference(ctx);
 
-    const result = await ctx.payments.track({ featureId: "api_calls", referenceId });
+    const result = await ctx.payments.track({ featureId: API_CALLS, referenceId });
 
     return { recorded: result.recorded };
 });
@@ -214,7 +214,7 @@ export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean 
 export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
     const referenceId = await billingReference(ctx);
 
-    const result = await ctx.payments.check({ featureId: "api_calls", referenceId });
+    const result = await ctx.payments.check({ featureId: API_CALLS, referenceId });
 
     return { allowed: result.allowed, balance: result.balance };
 });

@@ -6144,6 +6144,9 @@ importers:
       '@lunora/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@lunora/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react

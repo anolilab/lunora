@@ -9,7 +9,7 @@ import Stripe from "stripe";
 import { authOptions, getAuth } from "./auth/index.js";
 import { defineApp } from "./_generated/app.js";
 import http from "./http.js";
-import { PLANS } from "./plans.js";
+import { entitlementsFromPlans, PLANS } from "./plans.js";
 
 interface Env extends Record<string, unknown> {
     BETTER_AUTH_SECRET: string;
@@ -30,20 +30,12 @@ interface Env extends Record<string, unknown> {
  * disagree. The free plan has no price, so it grants nothing here: a tenant
  * with no subscription is on it by definition.
  *
- * Nothing in the kit calls `ctx.payments.check` for these features yet. Gate a
- * feature where it is served, from an action on the root shard (the billing
- * tables live there): `(await ctx.payments.check({ featureId: "export",
- * referenceId: organizationId })).allowed`.
+ * `lunora/payment/index.ts` checks `api_calls` against the per-plan allowance in
+ * the catalog. The other features are not called by the kit; gate one where it is
+ * served, from an action on the root shard (the billing tables live there), e.g.
+ * `(await ctx.payments.check({ featureId: "export", referenceId: organizationId })).allowed`.
  */
-const ENTITLEMENTS: EntitlementsConfig = {
-    plans: Object.fromEntries(
-        PLANS.flatMap((plan) =>
-            plan.priceId === undefined
-                ? []
-                : [[plan.id, { features: plan.features, priceIds: [plan.priceId], ...(plan.seats === undefined ? {} : { limits: { seats: plan.seats } }) }]],
-        ),
-    ),
-};
+const ENTITLEMENTS: EntitlementsConfig = entitlementsFromPlans(PLANS);
 
 /**
  * The Stripe adapter, built once per isolate.
