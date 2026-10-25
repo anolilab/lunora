@@ -2480,11 +2480,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Send one row write's aggregate and rank companion statements after it, ahead
-     * of its search sync. Its CDC statements follow the search sync, so a consumer
-     * that reads the event finds the index already updated. They are ORDERED (a
-     * rank DELETE precedes its INSERT, an aggregate step precedes its prune), so
-     * they go through `runInOrder`, not the unordered
+     * Send one row write's aggregate, rank and CDC companion statements after
+     * it. They are ORDERED (a rank DELETE precedes its INSERT, an aggregate step
+     * precedes its prune), so they go through `runInOrder`, not the unordered
      * `queryBatch`: one atomic `exec.batch` on the sqlite dialect (D1, the Node
      * host), sequential `run()`s on an exec without `batch` or on Postgres/MySQL,
      * whose `batch` is concurrent.
@@ -2740,9 +2738,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return undefined;
         }
 
-        await runCompanionStatements([...(await aggregateStatements(tableName, existing, merged)), ...(await rankStatements(tableName, id, existing, merged))]);
+        await runCompanionStatements([
+            ...(await aggregateStatements(tableName, existing, merged)),
+            ...(await rankStatements(tableName, id, existing, merged)),
+            ...cdcStatements(tableName, id, "update", merged),
+        ]);
         await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
-        await runCompanionStatements(cdcStatements(tableName, id, "update", merged));
 
         if (hasMatchingTrigger(tableName, "after", "update")) {
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -3273,9 +3274,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 await runCompanionStatements([
                     ...(await aggregateStatements(tableName, existing, merged)),
                     ...(await rankStatements(tableName, id, existing, undefined)),
+                    ...cdcStatements(tableName, id, "update", merged),
                 ]);
                 await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
-                await runCompanionStatements(cdcStatements(tableName, id, "update", merged));
 
                 // `delete()` was called → fire the DELETE triggers (the flag flip
                 // is the storage detail of how the delete is recorded).
@@ -3300,9 +3301,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await runCompanionStatements([
                 ...(await aggregateStatements(tableName, existing ?? undefined, undefined)),
                 ...(await rankStatements(tableName, id, existing ?? undefined, undefined)),
+                ...cdcStatements(tableName, id, "delete"),
             ]);
             await syncSearch(tableName, id, undefined);
-            await runCompanionStatements(cdcStatements(tableName, id, "delete"));
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
@@ -3668,10 +3669,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await runCompanionStatements([
                 ...(await aggregateStatements(tableName, undefined, documentWithMeta)),
                 ...(await rankStatements(tableName, id, undefined, documentWithMeta)),
+                ...cdcStatements(tableName, id, "insert", documentWithMeta),
             ]);
             // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
             await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
-            await runCompanionStatements(cdcStatements(tableName, id, "insert", documentWithMeta));
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
                 await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
@@ -4371,9 +4372,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await runCompanionStatements([
                 ...(await aggregateStatements(tableName, previous, replaced)),
                 ...(await rankStatements(tableName, id, previous, replaced)),
+                ...cdcStatements(tableName, id, "update", replaced),
             ]);
             await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
-            await runCompanionStatements(cdcStatements(tableName, id, "update", replaced));
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });

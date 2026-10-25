@@ -810,8 +810,8 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
         }
     });
 
-    it("sends a patch's aggregate and rank companion writes as one batch, its CDC append after the search sync", async () => {
-        expect.assertions(6);
+    it("sends a patch's aggregate, rank and CDC companion writes as exactly one batch", async () => {
+        expect.assertions(5);
 
         const harness = createSqliteBatchHarness();
 
@@ -823,10 +823,9 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
 
             await writer.patch(id, { archived: true, priority: 2 });
 
-            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT. Then the CDC append, after the search sync.
-            expect(batch).toHaveBeenCalledTimes(2);
-            expect(batch.mock.calls[0]?.[0]).toHaveLength(6);
-            expect(batch.mock.calls[1]?.[0]).toHaveLength(1);
+            expect(batch).toHaveBeenCalledTimes(1);
+            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
+            expect(batch.mock.calls[0]?.[0]).toHaveLength(7);
 
             const groups = await writer.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
 
@@ -3390,67 +3389,5 @@ describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
         const row = await writer.findFirst("notes", { includeDeleted: true, where: { slug: "a" } });
 
         expect(row?.touched).toBe(99);
-    });
-});
-
-describe("a global write's change event follows its search sync", () => {
-    // Fails any statement against a search companion once `state.failing` is set, so the row write and
-    // the aggregate/rank batch succeed and only the search sync throws.
-    const failingSearch = (exec: SqlCtxExec, state: { failing: boolean }): SqlCtxExec => {
-        const guard = (sql: string): void => {
-            if (state.failing && sql.includes("__fts_")) {
-                throw new Error("search sync failed");
-            }
-        };
-
-        return {
-            all: (sql, parameters) => exec.all(sql, parameters),
-            ...(exec.batch
-                ? {
-                      batch: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => {
-                          for (const statement of statements) {
-                              guard(statement.sql);
-                          }
-
-                          return exec.batch?.(statements) ?? Promise.resolve();
-                      },
-                  }
-                : {}),
-            run: (sql, parameters) => {
-                guard(sql);
-
-                return exec.run(sql, parameters);
-            },
-        };
-    };
-
-    it("records no change event for a write whose search sync fails", async () => {
-        expect.assertions(2);
-
-        const base = createSqliteHarness();
-        const state = { failing: false };
-
-        try {
-            const writer = createSqlCtxDb({
-                cdc: true,
-                clock: () => 1,
-                dialect: makeSqliteDialect(),
-                exec: failingSearch(base.exec, state),
-                schema: searchSchema,
-            });
-
-            await writer.insert("notes", { body: "first" });
-
-            const before = await base.exec.all(`SELECT COUNT(*) AS "n" FROM "__cdc_log"`, []);
-
-            state.failing = true;
-
-            await expect(writer.insert("notes", { body: "second" })).rejects.toThrow("search sync failed");
-
-            // The change event describes a change the search index has not caught up with, so it is not recorded.
-            await expect(base.exec.all(`SELECT COUNT(*) AS "n" FROM "__cdc_log"`, [])).resolves.toStrictEqual(before);
-        } finally {
-            base.close();
-        }
     });
 });
