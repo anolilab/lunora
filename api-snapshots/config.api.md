@@ -3276,6 +3276,12 @@ const assetContentType: (fileName: string) => string;
 const consumeStudioWrite: (path: string, now?: number) => boolean;
 ```
 
+### `createStudioDocumentCache` (const)
+
+```ts
+const createStudioDocumentCache: <T>(root: string, render: () => T) => (() => T);
+```
+
 ### `createStudioMiddleware` (const)
 
 ```ts
