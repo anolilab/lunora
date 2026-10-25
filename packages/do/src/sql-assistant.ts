@@ -243,10 +243,20 @@ const assistantPath = (raw: unknown): { path?: string[] } | undefined => {
 
 /**
  * Whether the data browser keeps a suggested clause's value. A filter row is a text input: a
- * non-scalar value renders blank, and every operator but `eq`/`ne` discards a blank row.
+ * non-scalar value renders blank. `eq` and `ne` keep a blank text value and a null, which the
+ * browser pins as a literal; every other operator discards a blank row.
  */
-const isKeptFilterValue = (value: unknown): boolean =>
-    (typeof value === "string" && value.trim() !== "") || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+const isKeptFilterValue = (operator: string, value: unknown): boolean => {
+    if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+        return true;
+    }
+
+    if (operator === "eq" || operator === "ne") {
+        return value === null || typeof value === "string";
+    }
+
+    return typeof value === "string" && value.trim() !== "";
+};
 
 /**
  * Validate a model-proposed filter set against the table's REAL columns.
@@ -295,7 +305,7 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physic
         // The browser discards a row whose value renders blank. Dropping only that clause
         // would widen the rest of the set, which bulk actions then run against; refuse the
         // whole suggestion instead.
-        if (operator !== "eq" && operator !== "ne" && !isKeptFilterValue(value)) {
+        if (!isKeptFilterValue(operator, value)) {
             return undefined;
         }
 

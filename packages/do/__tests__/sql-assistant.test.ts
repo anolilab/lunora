@@ -350,6 +350,18 @@ describe("generateFilter", () => {
         expect(result.degraded).toBe(true);
     });
 
+    it.each([['{"column":"status","operator":"eq","value":{"a":1}}'], ['{"column":"status","operator":"ne","value":["x"]}']])(
+        "degrades the whole suggestion when %s holds a value a filter row cannot show",
+        async (clause) => {
+            expect.assertions(1);
+
+            const ai = binding(`[{"column":"status","operator":"eq","value":"open"},${clause}]`);
+            const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+            expect(result.degraded).toBe(true);
+        },
+    );
+
     it("leaves eq and ne alone, since the browser keeps a blank row for them", async () => {
         expect.assertions(1);
 
