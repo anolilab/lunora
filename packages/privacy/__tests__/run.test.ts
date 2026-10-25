@@ -873,11 +873,12 @@ describe("runExport", () => {
         // The export was claimed before the erasure began, so its run is in flight. Its ready write lands between the
         // erasure's files step and its completion, which lists the subject's requests the second time.
         store.rows.set(exported.id, { ...exported, status: "processing" });
-        files.files.set(`${exported.id}/run-1/export.zip`, "archive");
         store.listForSubject = async (subjectId) => {
             lists += 1;
 
             if (lists === 2) {
+                // Written here, not before the erasure: the files step would otherwise delete it first.
+                files.files.set(`${exported.id}/run-1/export.zip`, "archive");
                 store.rows.set(exported.id, { ...exported, status: "ready", storageKey: `${exported.id}/run-1/export.zip` });
             }
 
