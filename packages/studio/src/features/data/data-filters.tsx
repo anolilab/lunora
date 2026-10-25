@@ -265,7 +265,11 @@ const DataFilters = ({
         const index = Number(event.currentTarget.dataset.index);
         const next = event.currentTarget.value;
 
-        onFiltersChange(filters.map((filter, position) => (position === index ? typedFilter(filter, { column: next }) : filter)));
+        // A nested path names a field inside the old column; it means nothing on the new one, and
+        // a physical column refuses it outright, so the new column starts with no path.
+        onFiltersChange(
+            filters.map((filter, position) => (position === index ? typedFilter(filter, { column: next, path: undefined, pathSegments: undefined }) : filter)),
+        );
     };
 
     const changeOperator = (event: ChangeEvent<HTMLSelectElement>): void => {

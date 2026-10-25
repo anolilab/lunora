@@ -326,6 +326,52 @@ describe("dataFilters — nested path and has", () => {
 
         expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "address", operator: "eq", path: "city", value: "Paris" }]);
     });
+
+    it("clears the nested path of the old column when the column changes", () => {
+        expect.assertions(2);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+        const columns: ReadonlyArray<string> = ["address", "status"];
+
+        render(
+            <DataFilters
+                columns={columns}
+                filters={[{ column: "address", operator: "eq", path: "city", pathSegments: ["city"], value: "Berlin" }]}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={noop()}
+                search=""
+            />,
+        );
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-column"), { target: { value: "status" } });
+
+        const [changed] = onFiltersChange.mock.lastCall?.[0] as EditableFilter[];
+
+        expect(changed?.path).toBeUndefined();
+        expect(toFilterClauses([changed as EditableFilter])).toStrictEqual([{ column: "status", operator: "eq", value: "Berlin" }]);
+    });
+
+    it("keeps the nested path when the operator changes on the same column", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = vi.fn<(filters: EditableFilter[]) => void>();
+
+        render(
+            <DataFilters
+                columns={COLUMNS}
+                filters={[{ column: "address", operator: "eq", path: "city", pathSegments: ["city"], value: "Berlin" }]}
+                onFiltersChange={onFiltersChange}
+                onSearchChange={noop()}
+                search=""
+            />,
+        );
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-operator"), { target: { value: "ne" } });
+
+        expect(toFilterClauses(onFiltersChange.mock.lastCall?.[0] as EditableFilter[])).toStrictEqual([
+            { column: "address", operator: "ne", path: ["city"], value: "Berlin" },
+        ]);
+    });
 });
 
 describe("dataFilters", () => {
