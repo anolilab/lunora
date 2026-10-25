@@ -14,12 +14,15 @@
  * would then not hold, which is the one thing this gate exists to guarantee. A
  * `WeakMap` means an evicted DO's entry is collected with it.
  *
- * `key` is the SCOPE the caller's delete actually covers. A table-wide trim
- * passes the default; a trim narrowed to one row-group (`WHERE path = ?`) must
- * pass that group, or the first writer of a window claims it for groups it
- * never prunes and their rows grow without bound. Callers cap their own key
- * space (the recorders admit a bounded set of paths), so the inner map is
- * bounded by that cap.
+ * `key` is the SCOPE the caller's delete actually covers. Every caller shares
+ * one key space per handle, so each caller namespaces its key (`auth`,
+ * `request-log`, `fn:<path>`); an unprefixed key from one recorder could equal
+ * another's and skip that recorder's trim. A table-wide trim passes its
+ * namespace; a trim narrowed to one row-group (`WHERE path = ?`) must pass that
+ * group, or the first writer of a window claims it for groups it never prunes
+ * and their rows grow without bound. Callers cap their own key space (the
+ * recorders admit a bounded set of paths), so the inner map is bounded by that
+ * cap.
  */
 const lastPrunedBucket = new WeakMap<object, Map<string, number>>();
 

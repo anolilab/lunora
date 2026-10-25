@@ -1,3 +1,17 @@
+## @lunora/vite [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.377...@lunora/vite@1.0.0-alpha.378) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.351
+* **@lunora/config:** upgraded to 1.0.0-alpha.404
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/studio:** upgraded to 1.0.0-alpha.339
+
 ## @lunora/vite [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.376...@lunora/vite@1.0.0-alpha.377) (2026-10-24)
 
 
