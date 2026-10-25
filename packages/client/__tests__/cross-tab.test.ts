@@ -1911,6 +1911,7 @@ describe("lunoraClient — a follower's snapshot-guarded write across a leader r
 describe("lunoraClient — a follower's snapshot-guarded write behind a query opened after the leader reconnected", () => {
     const listKey = SubscriptionRegistry.key("todos.list", {});
     const otherKey = SubscriptionRegistry.key("todos.other", {});
+    const bodyOf = (init: RequestInit | undefined): unknown => JSON.parse(typeof init?.body === "string" ? init.body : "{}");
 
     it("holds a write whose hydrated query has not been relayed yet, instead of judging it against the hydrated value", async () => {
         expect.assertions(3);
@@ -1928,7 +1929,7 @@ describe("lunoraClient — a follower's snapshot-guarded write behind a query op
                 return jsonResponse({ result: { ok: true } });
             }
 
-            const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { calls: { id: number }[] };
+            const body = bodyOf(init) as { calls: { id: number }[] };
 
             return jsonResponse({
                 results: body.calls.map((call) => {
@@ -1962,10 +1963,7 @@ describe("lunoraClient — a follower's snapshot-guarded write behind a query op
         /** The text of every write that went out, in order. */
         const sentWrites = (): unknown[] =>
             fetchMock.mock.calls.flatMap(([, init]) => {
-                const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-                    args?: { text?: unknown };
-                    calls?: { args?: { text?: unknown } }[];
-                };
+                const body = bodyOf(init) as { args?: { text?: unknown }; calls?: { args?: { text?: unknown } }[] };
 
                 return (body.calls ?? [body]).map((call) => call.args?.text);
             });

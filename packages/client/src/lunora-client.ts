@@ -9500,8 +9500,8 @@ class LunoraClient {
     }
 
     /**
-     * Holds `state` for the leader's next relay, bounded on its own: a subscription
-     * opened later than the transition gets the same wait, not the one already running.
+     * Holds `state` for the leader's next relay. Its timer is its own, so settling
+     * one subscription early never releases another.
      */
     private awaitLeaderAnswer(state: SubscriptionState): void {
         this.awaitingAnswer.add(state);
