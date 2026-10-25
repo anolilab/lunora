@@ -54,10 +54,16 @@ import {
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_lunora";
 
-/** Forward an HTTP request to the worker and pipe its response back. */
 /** Milliseconds to wait for the worker to answer a proxied HTTP request before giving up. */
 const PROXY_RESPONSE_TIMEOUT_MS = 30_000;
 
+/**
+ * Forward an HTTP request to the worker and pipe its response back.
+ *
+ * Both server routes use the default `timeoutMs`. The parameter exists for the
+ * `proxyHttp timeout` test in `__tests__/util/studio-server.test.ts`, which needs
+ * a timeout short enough to elapse inside a test run.
+ */
 const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL, timeoutMs: number = PROXY_RESPONSE_TIMEOUT_MS): void => {
     const upstream = httpRequest(
         {
