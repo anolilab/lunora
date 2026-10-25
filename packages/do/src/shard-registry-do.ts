@@ -169,9 +169,10 @@ const readTableShardBody = (raw: string): { kind: "error"; response: Response } 
 
 /**
  * Concrete (not abstract) DO class. Apps register this binding in their
- * `wrangler.jsonc` as `SHARD_REGISTRY` (or any name) — no subclassing
- * required. The runtime's `createDynamicShardRegistry` takes the namespace
- * binding and the conventional instance name and produces a `ShardRegistry`.
+ * `wrangler.jsonc` as `SHARD_REGISTRY` — the name the hosted entrypoint and
+ * binding inference both read — with no subclassing required. The runtime's
+ * `createDynamicShardRegistry` takes the namespace binding and the conventional
+ * instance name and produces a `ShardRegistry`.
  */
 class ShardRegistryDO {
     protected env: unknown;
