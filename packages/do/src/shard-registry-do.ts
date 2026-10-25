@@ -499,8 +499,10 @@ const isRegistryRpc = (binding: unknown): binding is ShardRegistryRpc => {
     return typeof rpc?.register === "function" && typeof rpc.unregister === "function";
 };
 
+// An RPC stub is a proxy that can answer any property, so `idFromName` alone does not prove a namespace: the
+// registry's RPC methods are checked first.
 const isRegistryNamespace = (binding: unknown): boolean =>
-    typeof binding === "object" && binding !== null && "idFromName" in binding && typeof binding.idFromName === "function";
+    !isRegistryRpc(binding) && typeof binding === "object" && binding !== null && "idFromName" in binding && typeof binding.idFromName === "function";
 
 /**
  * The registry, as the host worker calls its own Durable Object namespace. The

@@ -158,8 +158,9 @@ interface RegistryTransport {
  * Whether a binding is a Durable Object namespace rather than a service binding's RPC stub.
  * Checked here instead of imported from `@lunora/do`, which `@lunora/runtime` must not depend on.
  */
+// An RPC stub is a proxy that can answer any property, so the registry's RPC methods are checked first.
 const isDurableObjectNamespace = (binding: ShardNamespaceLike | ShardRegistryRpc): binding is ShardNamespaceLike =>
-    "idFromName" in binding && typeof binding.idFromName === "function";
+    typeof (binding as Partial<ShardRegistryRpc>).register !== "function" && "idFromName" in binding && typeof binding.idFromName === "function";
 
 const decodeJson = async <T>(response: Response): Promise<T> =>
     // Response.json() throws on non-JSON; the registry always returns JSON so this

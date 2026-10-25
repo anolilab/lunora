@@ -96,6 +96,23 @@ const createFakeNamespace = (stub: { fetch: (request: Request) => Promise<Respon
 };
 
 describe("createDynamicShardRegistry through a service binding", () => {
+    it("takes the RPC path even when the stub also answers idFromName, as a service binding's proxy can", async () => {
+        expect.assertions(1);
+
+        const rpc = {
+            idFromName: () => "not-a-namespace",
+            listShardKeys: vi.fn<(table: string) => Promise<string[]>>(async () => ["a"]),
+            register: async () => {},
+            snapshot: async () => {
+                return {};
+            },
+            unregister: async () => {},
+        };
+        const registry = createDynamicShardRegistry({ namespace: rpc });
+
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+    });
+
     it("reads and writes the host's RPC surface with no secret, and caches the list", async () => {
         expect.assertions(4);
 
