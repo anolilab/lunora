@@ -12,19 +12,14 @@ const customerKey = (provider: ProviderId, referenceId: string): string => `${pr
 const recordKey = (provider: ProviderId, id: string): string => `${provider}:${id}`;
 
 /** Applies a write to a revisioned row, returning whether it applied. An unguarded write always applies. */
-const applyRevisioned = <T extends { readonly revision?: number }>(
-    rows: Map<string, T>,
-    key: string,
-    record: Omit<T, "revision">,
-    guard: RevisionGuard | undefined,
-): boolean => {
+const applyRevisioned = <T extends { readonly revision?: number }>(rows: Map<string, T>, key: string, record: T, guard: RevisionGuard | undefined): boolean => {
     const current = rows.get(key)?.revision;
 
     if (guard !== undefined && current !== guard.ifRevision) {
         return false;
     }
 
-    rows.set(key, { ...record, revision: (current ?? 0) + 1 } as T);
+    rows.set(key, { ...record, revision: (current ?? 0) + 1 });
 
     return true;
 };

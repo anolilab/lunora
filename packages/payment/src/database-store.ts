@@ -314,7 +314,6 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return true;
         }
 
-        // An absent revision is the column's SQL NULL, which `where` expresses as null.
         // eslint-disable-next-line unicorn/no-null -- SQL bind value: `where` matches an unwritten column with null, not undefined.
         return database.patchIf(table, existing._id, { revision: guard.ifRevision ?? null }, revised);
     };
