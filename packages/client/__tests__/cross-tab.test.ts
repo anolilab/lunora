@@ -1,7 +1,9 @@
+import { stableWireKey } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import { TabCoordinator } from "../src/cross-tab";
 import { LunoraClient } from "../src/lunora-client";
+import { createInMemoryQueryCache, queryCacheKey } from "../src/query-cache";
 import type { SubscriptionError } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
 import type { FunctionReference } from "../src/types";
@@ -1898,6 +1900,106 @@ describe("lunoraClient — a follower's snapshot-guarded write across a leader r
 
             expect(outcome.settled).toBe("sent");
             expect(rpcCalls()).toBe(1);
+        } finally {
+            rogue.close();
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("lunoraClient — a follower's snapshot-guarded write behind a query opened after the leader reconnected", () => {
+    const listKey = SubscriptionRegistry.key("todos.list", {});
+    const otherKey = SubscriptionRegistry.key("todos.other", {});
+
+    it("holds a write whose hydrated query has not been relayed yet, instead of judging it against the hydrated value", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        // `todos.other` is hydrated from the durable cache, so it reads as answered before the leader has said anything.
+        const queryCache = createInMemoryQueryCache();
+
+        await queryCache.put(queryCacheKey("todos.other", stableWireKey({})), { identity: null, ts: Date.now(), value: [{ _id: "stale" }] });
+
+        // Replayed writes coalesce into one batch, so the batch body is what says which writes went out.
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!String(input instanceof Request ? input.url : input).endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({ result: { ok: true } });
+            }
+
+            const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { calls: { id: number }[] };
+
+            return jsonResponse({
+                results: body.calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, hydrateOnStart: true, persistence: false, queryCache, url: TEST_URL });
+
+        await client.whenReady();
+
+        const rogue = new BroadcastChannel(clientChannel(client));
+        const send = async (message: RawLeaderMessage | RawMessage): Promise<void> => {
+            rogue.postMessage(message);
+            await vi.advanceTimersByTimeAsync(20);
+        };
+        const settled = new Map<string, string | undefined>();
+        const track = (name: string, promise: Promise<unknown>): void => {
+            promise
+                .then(
+                    () => "sent",
+                    (error: unknown) => (error as { code?: string }).code,
+                )
+                .then((result) => {
+                    settled.set(name, result);
+
+                    return result;
+                })
+                .catch(() => undefined);
+        };
+        /** The text of every write that went out, in order. */
+        const sentWrites = (): unknown[] =>
+            fetchMock.mock.calls.flatMap(([, init]) => {
+                const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+                    args?: { text?: unknown };
+                    calls?: { args?: { text?: unknown } }[];
+                };
+
+                return (body.calls ?? [body]).map((call) => call.args?.text);
+            });
+
+        try {
+            await send({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" });
+            client.subscribe(fnRef("todos.list"), {}, () => {});
+            await send({ status: "connected", tabId: SMALLER_ID, type: "connection-status" });
+            await send({ cursor: 1, data: [{ _id: "t1" }], key: listKey, tabId: SMALLER_ID, type: "subscription-data" });
+
+            const listPrecondition = client.snapshotPrecondition(fnRef("todos.list"), {});
+
+            await send({ status: "offline", tabId: SMALLER_ID, type: "connection-status" });
+            track("list", client.mutation(fnRef("todos.set"), { text: "a" }, { precondition: listPrecondition }));
+
+            // The leader's socket is back and has answered nothing on it yet: the list write is held for its relay.
+            await send({ status: "connected", tabId: SMALLER_ID, type: "connection-status" });
+
+            // Subscribed after that connected status, so it is hydrated and unanswered by the leader.
+            client.subscribe(fnRef("todos.other"), {}, () => {});
+
+            const otherPrecondition = client.snapshotPrecondition(fnRef("todos.other"), {});
+
+            track("other", client.mutation(fnRef("todos.set"), { text: "b" }, { precondition: otherPrecondition }));
+
+            // The list relays unchanged: its write replays, but the other write must still wait for its own relay.
+            await send({ cursor: 2, data: [{ _id: "t1" }], key: listKey, tabId: SMALLER_ID, type: "subscription-data" });
+
+            expect(sentWrites()).toStrictEqual(["a"]);
+
+            await send({ cursor: 2, data: [{ _id: "fresh" }], key: otherKey, tabId: SMALLER_ID, type: "subscription-data" });
+
+            expect(settled.get("other")).toBe("OFFLINE_PRECONDITION_FAILED");
+            expect(sentWrites()).toStrictEqual(["a"]);
         } finally {
             rogue.close();
             client.close();

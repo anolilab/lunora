@@ -1181,8 +1181,8 @@ class LunoraClient {
     /** Connection keys whose last flush left a write waiting on {@link LunoraClient.awaitingAnswer}; an answer there flushes again. */
     private readonly answerHeldShards = new Set<string>();
 
-    /** Gives up on the leader relaying an answer, see {@link LunoraClient.awaitLeaderAnswers}. */
-    private leaderAnswerTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Gives up on the leader relaying an answer, one per subscription, see {@link LunoraClient.awaitLeaderAnswer}. */
+    private readonly leaderAnswerTimers = new Map<SubscriptionState, ReturnType<typeof setTimeout>>();
 
     /**
      * Per-shard replay backoff, keyed by {@link connectionKey} exactly as the
@@ -4029,6 +4029,13 @@ class LunoraClient {
             this.subscriptions.add(state);
             this.emitSyncStatus();
 
+            // Opened while the leader is live, after the transition that armed `awaitLeaderAnswers` for the subscriptions
+            // then open. A hydrated value would otherwise read as answered, and a write guarded by it would be judged
+            // against that value before the leader's relay.
+            if (this.isCrossTabFollower() && isLiveStatus(this.computeStatus())) {
+                this.awaitLeaderAnswer(state);
+            }
+
             if (cached !== undefined) {
                 this.cacheSeededQueries.set(key, cached);
             }
@@ -4425,8 +4432,11 @@ class LunoraClient {
         this.replayRetryTimers.clear();
         this.replayRetryState.clear();
 
-        clearTimeout(this.leaderAnswerTimer);
-        this.leaderAnswerTimer = undefined;
+        for (const timer of this.leaderAnswerTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        this.leaderAnswerTimers.clear();
 
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
@@ -9485,23 +9495,30 @@ class LunoraClient {
      */
     private awaitLeaderAnswers(): void {
         for (const state of this.subscriptions.all()) {
-            this.awaitingAnswer.add(state);
-            this.answeredUnreadable.delete(state);
+            this.awaitLeaderAnswer(state);
         }
+    }
 
-        clearTimeout(this.leaderAnswerTimer);
-        this.leaderAnswerTimer = setTimeout(() => {
-            this.leaderAnswerTimer = undefined;
+    /**
+     * Holds `state` for the leader's next relay, bounded on its own: a subscription
+     * opened later than the transition gets the same wait, not the one already running.
+     */
+    private awaitLeaderAnswer(state: SubscriptionState): void {
+        this.awaitingAnswer.add(state);
+        this.answeredUnreadable.delete(state);
 
-            // A tab promoted since is answered by its own socket, which bounds its own wait.
-            if (!this.isCrossTabFollower()) {
-                return;
-            }
+        clearTimeout(this.leaderAnswerTimers.get(state));
+        this.leaderAnswerTimers.set(
+            state,
+            setTimeout(() => {
+                this.leaderAnswerTimers.delete(state);
 
-            for (const state of this.subscriptions.all()) {
-                this.settleAwaitedAnswer(state, false);
-            }
-        }, 2 * RESUBSCRIBE_ACK_TIMEOUT_MS);
+                // A tab promoted since is answered by its own socket, which bounds its own wait.
+                if (this.isCrossTabFollower()) {
+                    this.settleAwaitedAnswer(state, false);
+                }
+            }, 2 * RESUBSCRIBE_ACK_TIMEOUT_MS),
+        );
     }
 
     /**
@@ -9510,6 +9527,9 @@ class LunoraClient {
      * before the seed.
      */
     private settleAwaitedAnswer(state: SubscriptionState, readable: boolean): void {
+        clearTimeout(this.leaderAnswerTimers.get(state));
+        this.leaderAnswerTimers.delete(state);
+
         if (readable) {
             this.answeredUnreadable.delete(state);
         }
