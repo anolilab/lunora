@@ -388,6 +388,9 @@ interface ExportedShard {
 /** The client `sendImport` writes through; the panel's own `useLunora()` result. */
 type ImportClient = ReturnType<typeof useLunora>;
 
+/** The rows a shard reported as written, summed over its tables. */
+const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
+
 /**
  * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show and how many rows were
  * written before it stopped. The rows are read and checked in full first, so a malformed line or record is rejected before anything is
@@ -482,12 +485,18 @@ const sendImport = async (
         sent += rows.length;
 
         // The shard refused rows that the check let through, so the rest of the file is not sent. The thrown error reaches the
-        // caller's catch, which keeps the structured errors above for display.
+        // caller's catch, which keeps the structured errors above for display. Rows the shard accepted are already written, so the
+        // message names how many and where a re-import has to resume; a whole-file re-import would write them twice.
         if (result.errors.length > 0) {
             throw new Error(
-                t("The shard refused {count} rows, so the rest of the file was not sent. Fix the rows listed below and import again.", {
-                    count: result.errors.length,
-                }),
+                t(
+                    "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
+                    {
+                        count: result.errors.length,
+                        line: startLine + rows.length,
+                        written: insertedRowCount(total.inserted),
+                    },
+                ),
             );
         }
     };
@@ -497,8 +506,8 @@ const sendImport = async (
 
         return { failure: undefined, total };
     } catch (error_) {
-        // Chunks sent before the failure may already have written rows; the caller shows their counts next to the error.
-        return { failure: { message: errorMessage(error_), rows: sent }, total };
+        // The rows the shard reported as written, not the rows sent: a refused row is never written. The caller shows this count next to the error.
+        return { failure: { message: errorMessage(error_), rows: insertedRowCount(total.inserted) }, total };
     }
 };
 

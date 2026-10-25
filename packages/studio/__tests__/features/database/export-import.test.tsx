@@ -400,6 +400,46 @@ describe("exportImportPanel", () => {
         expect(writes).toBe(1);
     });
 
+    it("tells the user how many rows a refused chunk left written, and where to resume", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.importShard) {
+                    const { dryRun, rows, startLine } = args as ImportArgs;
+
+                    if (dryRun === true) {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    }
+
+                    // The first chunk (lines 1-500) writes every row. The second (lines 501-1000) refuses line 510 and writes the other 499.
+                    if (startLine === 501) {
+                        return {
+                            conflicts: 0,
+                            errors: [{ code: "VALIDATION", line: 510, message: "text must be a string", table: "messages" }],
+                            inserted: { messages: rows.length - 1 },
+                        };
+                    }
+
+                    return { conflicts: 0, errors: [], inserted: { messages: rows.length } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        const lines = Array.from({ length: 1200 }, (_, index) => JSON.stringify({ doc: { __id__: `m${index.toString()}` }, table: "messages" }));
+
+        render(renderPanel(mock));
+
+        importText(lines.join("\n"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("999 rows were already written");
+        expect(error.textContent).toContain("from line 1001 onward");
+    });
+
     it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
         expect.assertions(3);
 

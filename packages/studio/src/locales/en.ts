@@ -272,7 +272,7 @@ const MESSAGE_IDS = [
     "Choose a table",
     "Checking {total} rows before writing…",
     "Nothing was written, because some rows would be refused. Fix the rows listed below and import again.",
-    "The shard refused {count} rows, so the rest of the file was not sent. Fix the rows listed below and import again.",
+    "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
     "This server cannot check an import before writing, so the check may already have written rows. Nothing more was sent.",
     "Target table",
     "ip",
