@@ -1,3 +1,16 @@
+## @lunora/solid [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.254...@lunora/solid@1.0.0-alpha.255) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/solid [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.253...@lunora/solid@1.0.0-alpha.254) (2026-10-24)
 
 
