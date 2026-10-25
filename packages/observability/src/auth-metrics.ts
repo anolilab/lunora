@@ -176,8 +176,8 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
 
     // Bounded retention: keep only the most recent buckets — run once per
     // window instead of on every recorded attempt. The delete is table-wide, so
-    // the default (unscoped) marker key covers exactly what it prunes.
-    pruneOncePerWindow(sql, bucket, "", () => {
+    // the marker key is this table's own namespace and covers exactly what it prunes.
+    pruneOncePerWindow(sql, bucket, "auth", () => {
         runSql(
             sql,
             `DELETE FROM "${AUTH_METRICS_BUCKETS_TABLE}"
