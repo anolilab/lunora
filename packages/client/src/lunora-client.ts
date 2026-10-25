@@ -143,6 +143,7 @@ import { abortReason, raceAbort, withinRpcDeadline } from "./rpc-deadline";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
+import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-precondition-source";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
@@ -1157,6 +1158,27 @@ class LunoraClient {
      */
     private readonly offlineFlushes = new Map<string, Promise<void>>();
     /* eslint-enable jsdoc/check-indentation */
+
+    /**
+     * Subscriptions a socket `open` un-answered that no value-bearing frame has
+     * answered since. What they hold is the previous socket's value, or a blank
+     * after a cold reconnect, and the server acks a `subscribe` before it seeds
+     * it, so neither `lastValue` nor `ack` says the value is current. A queued
+     * write whose snapshot precondition reads one of them is not evaluated yet:
+     * see {@link LunoraClient.snapshotAnswer}.
+     */
+    private readonly awaitingAnswer = new WeakSet<SubscriptionState>();
+
+    /**
+     * Subscriptions whose wait ended without a value to read: the seed was
+     * refused or undecodable, or the resubscribe was given up on. Still acked and
+     * blank after a cold reconnect, so a snapshot comparison would read the blank
+     * as a change; a guard over one of them is no evidence either way.
+     */
+    private readonly answeredUnreadable = new WeakSet<SubscriptionState>();
+
+    /** Connection keys whose last flush left a write waiting on {@link LunoraClient.awaitingAnswer}; an answer there flushes again. */
+    private readonly answerHeldShards = new Set<string>();
 
     /**
      * Per-shard replay backoff, keyed by {@link connectionKey} exactly as the
@@ -4069,6 +4091,8 @@ class LunoraClient {
 
                 this.releaseIdleShard(subscriptionState.shardKey);
                 this.emitSyncStatus();
+                // Unwatched, a guard has no subscription to wait for.
+                this.settleAwaitedAnswer(subscriptionState, true);
             }
         };
 
@@ -5338,7 +5362,7 @@ class LunoraClient {
                 // only replay under the identity that queued it.
                 identity: issuingIdentity,
                 // Optional precondition checked before replay — see drainConflict.
-                precondition,
+                precondition: this.holdWhileUnanswered(precondition),
                 // Confirm the per-call optimistic layer(s) against the commit cursor
                 // the flush replay echoes (see flushOfflineQueue).
                 onCommit: (commitCursor) => {
@@ -7432,6 +7456,8 @@ class LunoraClient {
 
                 if (socketOpened) {
                     state.valueReceived = false;
+                    this.awaitingAnswer.add(state);
+                    this.answeredUnreadable.delete(state);
                 }
             }
         }
@@ -7606,6 +7632,8 @@ class LunoraClient {
                 if (final) {
                     conn.unackedWatchdogs.delete(state.id);
                     releaseSubscribeFrame(state);
+                    // Nothing is waiting for its answer any more, so neither may a write.
+                    this.settleAwaitedAnswer(state, false);
 
                     return;
                 }
@@ -7895,6 +7923,9 @@ class LunoraClient {
         // A poll's own refusal is ackless by construction, even on the pass that proves the origin reachable, before the gate reads `polling`.
         ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling,
     ): void {
+        // Before the early return: a refused seed arrives after the subscribe's own `ack`.
+        this.settleAwaitedAnswer(state, false);
+
         if (ackless ? state.valueReceived : state.ack === "acked") {
             return;
         }
@@ -8014,6 +8045,8 @@ class LunoraClient {
                 code: "WIRE_DECODE_FAILED",
                 message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
             });
+            // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
+            this.settleAwaitedAnswer(state, false);
 
             return;
         }
@@ -8082,6 +8115,8 @@ class LunoraClient {
 
             this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint());
         }
+
+        this.settleAwaitedAnswer(state, true);
     }
 
     /**
@@ -8102,6 +8137,7 @@ class LunoraClient {
         // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
         state.pendingDeltaRun = undefined;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+        this.settleAwaitedAnswer(state, true);
     }
 
     /**
@@ -9371,6 +9407,90 @@ class LunoraClient {
         }
     }
 
+    /**
+     * Where a snapshot precondition's subscription stands on its socket, when
+     * comparing would mislead: `"awaiting"` while a reconnect has un-answered it
+     * and no value has answered since (the comparison would judge the previous
+     * socket's value, or a blank), `"unreadable"` once that wait ended with no
+     * value to read. `undefined` for any other precondition or subscription.
+     */
+    private snapshotAnswer(precondition: (() => boolean) | undefined): "awaiting" | "unreadable" | undefined {
+        const source = snapshotSourceOf(precondition);
+        const state = source && this.subscriptions.get(SubscriptionRegistry.key(source.functionPath, source.args, source.shardKey));
+
+        if (state === undefined) {
+            return undefined;
+        }
+
+        if (this.awaitingAnswer.has(state)) {
+            return "awaiting";
+        }
+
+        return this.answeredUnreadable.has(state) ? "unreadable" : undefined;
+    }
+
+    /**
+     * The precondition a queued write carries. A snapshot precondition reads as
+     * holding while its subscription is awaited, so `drainConflict` keeps the
+     * write rather than drop it on a blank the server acked but has not seeded
+     * yet (the drain then holds it back, {@link drainOfflineQueue}), and once the
+     * wait ended unreadable, which is no evidence the value changed.
+     */
+    private holdWhileUnanswered(precondition: (() => boolean) | undefined): (() => boolean) | undefined {
+        const source = snapshotSourceOf(precondition);
+
+        if (precondition === undefined || source === undefined) {
+            return precondition;
+        }
+
+        const guarded = (): boolean => this.snapshotAnswer(precondition) !== undefined || precondition();
+
+        registerSnapshotSource(guarded, source);
+
+        return guarded;
+    }
+
+    /**
+     * `state` has been answered on its socket (`readable`), or will not be: release
+     * any write held for it. Not called for an `ack`, which the server sends
+     * before the seed.
+     */
+    private settleAwaitedAnswer(state: SubscriptionState, readable: boolean): void {
+        if (readable) {
+            this.answeredUnreadable.delete(state);
+        }
+
+        if (!this.awaitingAnswer.delete(state)) {
+            return;
+        }
+
+        if (!readable) {
+            this.answeredUnreadable.add(state);
+        }
+
+        if (this.answerHeldShards.delete(connectionKey(state.shardKey))) {
+            this.flushOfflineQueue(state.shardKey).catch(() => undefined);
+        }
+    }
+
+    /**
+     * Put back a drained write whose snapshot cannot be compared yet, and every
+     * write behind it (replaying those first would reorder the shard), recording
+     * the hold so the answer flushes again. Returns the writes that may go on.
+     */
+    private holdUndecidedWrites(key: string, drained: QueuedMutation[]): QueuedMutation[] {
+        const undecidedAt = drained.findIndex((item) => this.snapshotAnswer(item.precondition) === "awaiting");
+
+        if (undecidedAt === -1) {
+            return drained;
+        }
+
+        this.offlineQueue.requeue(drained.slice(undecidedAt));
+        this.answerHeldShards.add(key);
+
+        return drained.slice(0, undecidedAt);
+    }
+
     private async drainOfflineQueue(shardKey: string | undefined, authToken: null | string): Promise<void> {
         // Drop stale writes whose precondition no longer holds before draining
         // the remaining valid mutations for replay. Each conflicted entry is
@@ -9388,7 +9508,10 @@ class LunoraClient {
         }
 
         const key = connectionKey(shardKey);
-        const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
+        const drained = this.holdUndecidedWrites(
+            key,
+            this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key),
+        );
 
         if (drained.length === 0) {
             return;

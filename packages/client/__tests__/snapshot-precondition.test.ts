@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- the flagged strings are the `peekActiveQuerySnapshot` method name, not credentials */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
 import createSnapshotPrecondition from "../src/snapshot-precondition";
@@ -150,6 +150,7 @@ describe("lunoraClient.snapshotPrecondition", () => {
  */
 describe("snapshotPrecondition across a cold reconnect", () => {
     interface Frames {
+        close: () => void;
         open: () => void;
         receive: (payload: unknown) => void;
         sent: Record<string, unknown>[];
@@ -166,6 +167,9 @@ describe("snapshotPrecondition across a cold reconnect", () => {
 
         public constructor(public readonly url: string) {
             sockets.push({
+                close: () => {
+                    this.close();
+                },
                 open: () => {
                     this.readyState = 1;
                     this.emit("open");
@@ -231,5 +235,207 @@ describe("snapshotPrecondition across a cold reconnect", () => {
         expect(precondition()).toBe(true);
 
         client.close();
+    });
+
+    /**
+     * The offline queue replays on a socket's `open`, before any resubscribe is answered, and the server acks a
+     * `subscribe` before it seeds it. A write guarded by a snapshot of a still-mounted query must wait for that seed:
+     * judged earlier, it compares against a blank (cold) or the previous socket's value (warm), and replays a write
+     * whose data changed while it was queued.
+     */
+    describe("a queued write guarded by a snapshot", () => {
+        const subscribeId = (socket: Frames | undefined): unknown => socket?.sent.find((message) => message.type === "subscribe")?.id;
+        const isRpc = ([input]: Parameters<typeof fetch>): boolean => !String(input instanceof Request ? input.url : input).includes("get-session");
+
+        /** A client with one answered `todos.list` subscription, a captured snapshot of it, and the RPC calls it makes. */
+        const answeredClient = () => {
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: true } }, { status: 200 }));
+            const client = new LunoraClient({
+                authTokenOnUpgrade: true,
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                persistence: false,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "http://app.test",
+                WebSocket: MockSocket as unknown as typeof WebSocket,
+            });
+            const unsubscribe = client.subscribe(fnRef("todos.list"), {}, () => {});
+            const first = sockets.at(-1);
+
+            first?.open();
+            first?.receive({ type: "ack", id: subscribeId(first) });
+            first?.receive({ cursor: 1, data: [{ _id: "t1" }], id: subscribeId(first), type: "data" });
+
+            const precondition = client.snapshotPrecondition(fnRef("todos.list"), {});
+            const rpcCalls = (): number => fetchMock.mock.calls.filter((call) => isRpc(call)).length;
+
+            return { client, precondition, rpcCalls, unsubscribe };
+        };
+
+        const queueWrite = (client: LunoraClient, precondition: () => boolean): Promise<unknown> =>
+            client.mutation(fnRef("todos.set"), { text: "a" }, { precondition }).then(
+                () => "sent",
+                (error: unknown) => (error as { code?: string }).code,
+            );
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("drops it when the seed after a cold reconnect differs, even after the subscribe was acked", async () => {
+            expect.assertions(3);
+
+            const { client, precondition, rpcCalls } = answeredClient();
+
+            // A bearer sign-in on this transport reconnects cold: the value is blanked until the new socket seeds it.
+            client.setAuthToken("tok-a", "user-a");
+
+            const outcome = queueWrite(client, precondition);
+            const reconnected = sockets.at(-1);
+
+            reconnected?.open();
+            await vi.advanceTimersByTimeAsync(0);
+            reconnected?.receive({ type: "ack", id: subscribeId(reconnected) });
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(rpcCalls()).toBe(0);
+
+            reconnected?.receive({ cursor: 2, data: [{ _id: "t1" }, { _id: "t2" }], id: subscribeId(reconnected), type: "data" });
+
+            await expect(outcome).resolves.toBe("OFFLINE_PRECONDITION_FAILED");
+
+            expect(rpcCalls()).toBe(0);
+
+            client.close();
+        });
+
+        it("sends it once the seed after a cold reconnect matches the snapshot, not on the ack before it", async () => {
+            expect.assertions(2);
+
+            const { client, precondition, rpcCalls } = answeredClient();
+
+            client.setAuthToken("tok-a", "user-a");
+
+            const outcome = queueWrite(client, precondition);
+            const reconnected = sockets.at(-1);
+
+            reconnected?.open();
+            await vi.advanceTimersByTimeAsync(0);
+            // Judged here, the acked blank would read as a changed value and drop the write.
+            reconnected?.receive({ type: "ack", id: subscribeId(reconnected) });
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(rpcCalls()).toBe(0);
+
+            reconnected?.receive({ cursor: 2, data: [{ _id: "t1" }], id: subscribeId(reconnected), type: "data" });
+
+            await expect(outcome).resolves.toBe("sent");
+
+            client.close();
+        });
+
+        it("keeps it held, unjudged, while another query on the shard is answered first", async () => {
+            expect.assertions(2);
+
+            const { client, precondition, rpcCalls } = answeredClient();
+
+            client.subscribe(fnRef("todos.count"), {}, () => {});
+            client.setAuthToken("tok-a", "user-a");
+
+            const outcome = queueWrite(client, precondition);
+            const reconnected = sockets.at(-1);
+            const idOf = (path: string): unknown =>
+                reconnected?.sent.find((message) => message.type === "subscribe" && (message.query as { functionPath?: string }).functionPath === path)?.id;
+
+            reconnected?.open();
+            await vi.advanceTimersByTimeAsync(0);
+            reconnected?.receive({ type: "ack", id: idOf("todos.list") });
+            // This answer re-runs the flush while the guarded query sits acked and blank.
+            reconnected?.receive({ cursor: 2, data: 1, id: idOf("todos.count"), type: "data" });
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(rpcCalls()).toBe(0);
+
+            reconnected?.receive({ cursor: 2, data: [{ _id: "t1" }], id: idOf("todos.list"), type: "data" });
+
+            await expect(outcome).resolves.toBe("sent");
+
+            client.close();
+        });
+
+        it("sends it when the seed after a cold reconnect is refused, rather than reading the acked blank as a change", async () => {
+            expect.assertions(1);
+
+            const { client, precondition } = answeredClient();
+
+            client.setAuthToken("tok-a", "user-a");
+
+            const outcome = queueWrite(client, precondition);
+            const reconnected = sockets.at(-1);
+
+            reconnected?.open();
+            await vi.advanceTimersByTimeAsync(0);
+            reconnected?.receive({ type: "ack", id: subscribeId(reconnected) });
+            reconnected?.receive({
+                code: "SUBSCRIPTION_SEED_FAILED",
+                error: { code: "SUBSCRIPTION_SEED_FAILED", message: "subscription seed failed" },
+                id: subscribeId(reconnected),
+                type: "error",
+            });
+
+            await expect(outcome).resolves.toBe("sent");
+
+            client.close();
+        });
+
+        it("waits on a warm reconnect for the resume rather than judging the previous socket's value", async () => {
+            expect.assertions(2);
+
+            const { client, precondition, rpcCalls } = answeredClient();
+
+            sockets.at(-1)?.close();
+
+            const outcome = queueWrite(client, precondition);
+
+            await vi.advanceTimersByTimeAsync(10);
+
+            const reconnected = sockets.at(-1);
+
+            reconnected?.open();
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(rpcCalls()).toBe(0);
+
+            reconnected?.receive({ cursor: 1, id: subscribeId(reconnected), type: "resume" });
+
+            await expect(outcome).resolves.toBe("sent");
+
+            client.close();
+        });
+
+        it("sends it when the guarded query unmounts before it is answered", async () => {
+            expect.assertions(2);
+
+            const { client, precondition, rpcCalls, unsubscribe } = answeredClient();
+
+            sockets.at(-1)?.close();
+
+            const outcome = queueWrite(client, precondition);
+
+            await vi.advanceTimersByTimeAsync(10);
+            sockets.at(-1)?.open();
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(rpcCalls()).toBe(0);
+
+            unsubscribe();
+
+            await expect(outcome).resolves.toBe("sent");
+
+            client.close();
+        });
     });
 });
