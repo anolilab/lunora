@@ -28,12 +28,13 @@ import preparedStatement from "./prepared-statement";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
- * How many times a throwing alarm handler is re-delivered before the wakeup is
- * abandoned, and the first backoff step. workerd retries a Durable Object's
- * `alarm()` with exponential backoff and gives up after a bounded number of
- * attempts; this host mirrors the shape, not the constants — its backoff starts
- * an order of magnitude shorter because a redelivery here is a `setTimeout` in
- * a process that is already warm, not a cold object wake.
+ * How many times a throwing alarm handler is re-delivered, and how many times an
+ * alarm claim that hits a locked database is retried, before the wakeup is
+ * abandoned. workerd retries a Durable Object's `alarm()` with exponential
+ * backoff and gives up after a bounded number of attempts; this host mirrors the
+ * shape, not the constants — its backoff starts an order of magnitude shorter
+ * because a redelivery here is a `setTimeout` in a process that is already warm,
+ * not a cold object wake.
  */
 const ALARM_RETRY_LIMIT = 6;
 const ALARM_RETRY_BASE_MS = 100;
