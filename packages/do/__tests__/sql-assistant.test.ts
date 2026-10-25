@@ -359,13 +359,24 @@ describe("generateFilter", () => {
         expect(result.degraded).toBe(false);
     });
 
-    it("keeps the valid clauses when only some are bad", async () => {
+    it("refuses the whole suggestion when an unknown column sits beside a valid clause", async () => {
         expect.assertions(1);
 
+        // The valid predicate beside the unknown column is what a bulk action would run
+        // against alone, so keeping it would apply a wider set than the model described.
         const ai = binding('[{"column":"nope","operator":"eq","value":1},{"column":"status","operator":"eq","value":"open"}]');
         const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
 
-        expect(result.degraded ? undefined : result.clauses).toHaveLength(1);
+        expect(result.degraded).toBe(true);
+    });
+
+    it("refuses the whole suggestion when an unknown operator sits beside a valid clause", async () => {
+        expect.assertions(1);
+
+        const ai = binding('[{"column":"status","operator":"like","value":"op%"},{"column":"status","operator":"eq","value":"open"}]');
+        const result = await generateFilter(ai, { prompt: "x" }, COLUMNS, PHYSICAL);
+
+        expect(result.degraded).toBe(true);
     });
 });
 

@@ -252,10 +252,10 @@ const isKeptFilterValue = (value: unknown): boolean =>
  * Validate a model-proposed filter set against the table's REAL columns.
  *
  * Structured output, not raw SQL — so the data browser's existing filter
- * validation and parameter binding apply unchanged. A column or operator the table
- * does not have is dropped, as a hallucinated name is. Any clause the suggestion
- * cannot apply as written instead refuses the whole suggestion: a dropped clause
- * widens the rest of the set, and bulk actions run against that set.
+ * validation and parameter binding apply unchanged. An unknown column or operator,
+ * a malformed path, or a value the browser would discard refuses the whole
+ * suggestion: a dropped clause widens the rest of the set, and bulk actions run
+ * against that set.
  *
  * `physical` is the table's storage-level column names, from `PRAGMA table_info`.
  * The shard compiler refuses a `has` or a nested path on one of them, so Studio
@@ -277,8 +277,9 @@ const validateClauses = (parsed: unknown, columns: ReadonlyArray<string>, physic
 
         const { column, operator, path, value } = entry as { column?: unknown; operator?: unknown; path?: unknown; value?: unknown };
 
+        // Dropping this clause would keep its siblings, a wider set than the model described.
         if (typeof column !== "string" || !known.has(column) || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
-            continue;
+            return undefined;
         }
 
         const nested = assistantPath(path);
@@ -577,7 +578,7 @@ const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, s
  *
  * Structured, not SQL: the clauses go through the data browser's existing filter
  * validation and parameter binding untouched, so a hallucinated column or
- * operator is dropped here rather than reaching the query builder.
+ * operator refuses the suggestion here rather than reaching the query builder.
  */
 const generateFilter = async (
     binding: unknown,
