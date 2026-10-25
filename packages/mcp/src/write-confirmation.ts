@@ -151,7 +151,7 @@ const digestSecret = (client: LunoraClient): string => {
     if (token === null || token === "") {
         throw new LunoraError(
             "UNAUTHORIZED",
-            "write confirmation needs the deployment's admin token: it is the secret half of the digest key, and without it a digest would be forgeable by anyone.",
+            "write confirmation needs a bearer token for this deployment: it is the secret half of the digest key, and without it a digest would be forgeable by anyone.",
         );
     }
 
@@ -288,6 +288,13 @@ const displayedProposal = (proposal: ProposedWrite, sensitiveArgs: ReadonlyArray
     return { ...proposal, args: shown };
 };
 
+/** What a generic write tool takes back on the second call. A per-function tool names its function in the tool, not in its input. */
+const GENERIC_RESEND_FIELDS: ReadonlyArray<string> = ["functionPath", "args", "shardKey", "idempotencyKey"];
+
+/** The fields as prose: `a, b and c`. */
+const joinFields = (fields: ReadonlyArray<string>): string =>
+    fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1) ?? ""}` : fields.join("");
+
 /**
  * The `action_required` result: the proposal a human reviews, plus the digest
  * that binds it.
@@ -297,11 +304,16 @@ const displayedProposal = (proposal: ProposedWrite, sensitiveArgs: ReadonlyArray
  * masked. The next step says to resend the real values, because the placeholder
  * would fail verification.
  */
-const actionRequired = (proposal: ProposedWrite, minted: { actionDigest: string; expiresAt: number }, sensitiveArgs: ReadonlyArray<string>): ToolResult =>
+const actionRequired = (
+    proposal: ProposedWrite,
+    minted: { actionDigest: string; expiresAt: number },
+    sensitiveArgs: ReadonlyArray<string>,
+    resend: ReadonlyArray<string>,
+): ToolResult =>
     ok({
         actionDigest: minted.actionDigest,
         expiresAt: new Date(minted.expiresAt).toISOString(),
-        nextStep: `Show proposedAction to a human. To execute, call ${proposal.tool} again with the IDENTICAL functionPath, args, shardKey and idempotencyKey, plus confirmed: true and this actionDigest, before expiresAt. Resend the REAL values of any argument shown as "${SENSITIVE_DISPLAY}": that placeholder is display only and will not verify. Nothing has been written or called yet.`,
+        nextStep: `Show proposedAction to a human. To execute, call ${proposal.tool} again with the IDENTICAL ${joinFields(resend)}, plus confirmed: true and this actionDigest, before expiresAt. Resend the REAL values of any argument shown as "${SENSITIVE_DISPLAY}": that placeholder is display only and will not verify. Nothing has been written or called yet.`,
         proposedAction: displayedProposal(proposal, sensitiveArgs),
         status: "action_required",
     });
@@ -332,9 +344,10 @@ const screenWriteConfirmation = async (
     proposal: ProposedWrite,
     confirmation: WriteConfirmation,
     sensitiveArgs: ReadonlyArray<string> = [],
+    resend: ReadonlyArray<string> = GENERIC_RESEND_FIELDS,
 ): Promise<ToolResult | undefined> => {
     if (!confirmation.confirmed || confirmation.actionDigest === undefined) {
-        return actionRequired(proposal, await computeActionDigest(client, proposal), sensitiveArgs);
+        return actionRequired(proposal, await computeActionDigest(client, proposal), sensitiveArgs, resend);
     }
 
     const verdict = await verifyActionDigest(client, proposal, confirmation.actionDigest);

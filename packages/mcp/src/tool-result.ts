@@ -20,11 +20,22 @@ import type { ToolInputSchema, ToolOutputSchema, ToolResult } from "./tool-types
  * back. Raw `JSON.stringify` THROWS on a bigint (turning a successful call into
  * a tool error) and serializes an `ArrayBuffer` to `{}` / a `Uint8Array` to an
  * index-keyed object (silent corruption). Map every bigint → its decimal string
- * and every bytes leaf → base64 so the model sees a faithful value instead.
+ * and every bytes leaf → base64 so the model sees a faithful value instead. A `Map`
+ * or `Set` (what a `v.any()` field can carry) would serialize to `{}`. A Map with only
+ * string keys becomes an object; any other Map becomes its `[key, value]` pairs, so
+ * keys such as `1` and `"1"` stay distinct. A Set becomes an array.
  */
 const jsonResultReplacer = (_key: string, value: unknown): unknown => {
     if (typeof value === "bigint") {
         return value.toString();
+    }
+
+    if (value instanceof Map) {
+        return [...value.keys()].every((key) => typeof key === "string") ? Object.fromEntries(value) : [...value];
+    }
+
+    if (value instanceof Set) {
+        return [...value];
     }
 
     if (value instanceof ArrayBuffer) {
@@ -182,4 +193,4 @@ const withErrorShape = (output: ToolOutputSchema): ToolOutputSchema => {
     };
 };
 
-export { errorFromThrown, errorResult, ok, okStructured, withErrorShape };
+export { errorFromThrown, errorResult, jsonResultReplacer, ok, okStructured, withErrorShape };

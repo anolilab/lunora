@@ -30,7 +30,12 @@ import {
 
 import { isIssueStatus, parseTablePageFilters } from "./admin-rpc-args";
 
-/** Sentinel table name for an admin read that spans every table rather than naming one. */
+/**
+ * Sentinel table name for an admin read that spans every table rather than
+ * naming one (`getMetrics`, `getLogs`, `listTables`, `migrationStatus`). It is
+ * `"*"` — a name no real SQLite table can take, so it never collides with a
+ * tracked write — and a subscription memo carrying it re-runs on every write flush.
+ */
 const ADMIN_WILDCARD = "*";
 
 /**
@@ -315,6 +320,7 @@ const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record
 };
 
 export {
+    ADMIN_WILDCARD,
     batchedTableLookup,
     readAdminAuditLog,
     readAdminDurableSignal,

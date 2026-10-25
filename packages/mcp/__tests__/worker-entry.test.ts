@@ -39,6 +39,17 @@ const externalSpecifiers = (file: string, seen = new Set<string>()): Set<string>
     return found;
 };
 
+describe("@lunora/mcp/worker exports", () => {
+    it("exposes the per-function server, and not the stdio helper", async () => {
+        expect.assertions(2);
+
+        const worker = await import("../src/worker/index");
+
+        expect(worker.createFunctionMcpServer).toBeTypeOf("function");
+        expect(worker).not.toHaveProperty("connectFunctionStdio");
+    });
+});
+
 describe("@lunora/mcp/worker module graph", () => {
     it("statically imports no node:* module and no stdio transport", () => {
         expect.assertions(2);

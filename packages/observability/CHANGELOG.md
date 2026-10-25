@@ -1,3 +1,37 @@
+## @lunora/observability [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.167...@lunora/observability@1.0.0-alpha.168) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
+## @lunora/observability [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.166...@lunora/observability@1.0.0-alpha.167) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
+## @lunora/observability [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.165...@lunora/observability@1.0.0-alpha.166) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/observability [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.164...@lunora/observability@1.0.0-alpha.165) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/observability [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.163...@lunora/observability@1.0.0-alpha.164) (2026-10-22)
 
 

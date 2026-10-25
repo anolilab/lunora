@@ -2,7 +2,7 @@ import type { ConnectionStatus } from "./connection-state";
 import { dropConfirmedLayers, refoldSubscription } from "./optimistic-layers";
 import type { ShapeSubscriptionState } from "./shape-state";
 import type { SubscriptionError, SubscriptionState } from "./subscription";
-import { fanSubscriptionError } from "./subscription";
+import { fanSubscriptionError, setSubscriptionAck } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 
 /**
@@ -35,6 +35,12 @@ export interface TabLeadershipHost {
     /** Every subscription, snapshotted, so a resubscribe cannot change the set it walks. */
     activeSubscriptions: () => SubscriptionState[];
 
+    /**
+     * The leader's socket just came up, before it answered anything on it: what it relayed before is the previous
+     * socket's value, so hold every write guarded by a snapshot of one until the leader relays again.
+     */
+    awaitLeaderAnswers: () => void;
+
     broadcastStatus: (status: ConnectionStatus, identity: string | null) => void;
 
     /** This client's id, which a `settled` frame echoes so only its own watermark is advanced. */
@@ -58,6 +64,12 @@ export interface TabLeadershipHost {
     queuedShardKeys: () => Iterable<string | undefined>;
 
     queueResubscribe: (state: SubscriptionState) => void;
+
+    /**
+     * `state` has been answered (`readable`) or refused, so release any write held for its answer. A tab demoted
+     * after its socket opened still waits on that socket's answer, and only the mirror can deliver it now.
+     */
+    settleAwaitedAnswer: (state: SubscriptionState, readable: boolean) => void;
 
     /** The subscription a frame addresses, or `undefined` when this tab holds none under `key`. */
     subscription: (key: string) => SubscriptionState | undefined;
@@ -108,7 +120,7 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
     // What this tab's own socket acknowledged ends with that socket. A follower is answered by the leader's
     // mirrored values (which set these again), so the demoted tab's old answers must not count towards sync.
     for (const state of host.activeSubscriptions()) {
-        state.acked = false;
+        setSubscriptionAck(state, "idle");
         state.valueReceived = false;
     }
 
@@ -122,7 +134,8 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
 /**
  * The leader reported its status. A frame stamped for another identity is dropped. The
  * mirror and the status emit always run. Offline writes flush when the leader becomes
- * reachable, because they replay over HTTP and need no socket of this tab.
+ * reachable, because they replay over HTTP and need no socket of this tab; one guarded by a
+ * snapshot waits for the leader's next relay, which is the answer its socket gives.
  */
 export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus, identity: string | null | undefined): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
@@ -141,6 +154,7 @@ export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus
     host.emitConnectionStatus();
 
     if (transitioned) {
+        host.awaitLeaderAnswers();
         host.flushOfflineQueues();
     }
 };
@@ -201,6 +215,9 @@ export const onFollowerSubscriptionData = (
     if (firstValue) {
         host.emitConnectionStatus();
     }
+
+    // Last, so a held write is judged against the value just committed.
+    host.settleAwaitedAnswer(state, true);
 };
 
 /** The leader reported an error for `key`. Fan it to this tab's subscribers. */
@@ -221,6 +238,8 @@ export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string
         if (firstAnswer) {
             host.emitConnectionStatus();
         }
+
+        host.settleAwaitedAnswer(state, false);
     }
 };
 

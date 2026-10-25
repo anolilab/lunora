@@ -471,6 +471,77 @@ describe("dispatchToLunoraFunction", () => {
         expect([...Buffer.from(attachment?.content ?? "", "base64")]).toStrictEqual([...bytes]);
     });
 
+    it("drops binary content past the forwarded attachment byte budget and marks it truncated", async () => {
+        expect.assertions(5);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const large = new Uint8Array(5 * 1024 * 1024);
+        const small = new Uint8Array(1024).fill(7);
+        const withAttachments: InboundEmail = {
+            ...fixture,
+            attachments: [
+                { content: large, disposition: "attachment", filename: "large.bin", mimeType: "application/octet-stream" },
+                { content: small, disposition: "attachment", filename: "small.bin", mimeType: "application/octet-stream" },
+            ],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachments, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding: string; truncated?: boolean }[] } };
+        const [dropped, kept] = envelope.args.attachments;
+
+        expect(dropped?.content).toBe("");
+        expect(dropped?.truncated).toBe(true);
+        expect(kept?.truncated).toBeUndefined();
+        expect(kept?.encoding).toBe("base64");
+        expect(kept?.content).toBe(Buffer.from(small).toString("base64"));
+    });
+
+    it("counts string-valued attachments against the forwarded byte budget", async () => {
+        expect.assertions(4);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        // 4 base64 chars decode to 3 bytes, so this string decodes to ~5 MiB and is over budget.
+        const oversizedBase64 = "QUFB".repeat(Math.ceil((5 * 1024 * 1024) / 3));
+        const oversizedText = "x".repeat(5 * 1024 * 1024);
+        const withAttachments: InboundEmail = {
+            ...fixture,
+            attachments: [
+                { content: oversizedBase64, disposition: "attachment", encoding: "base64", filename: "big.b64", mimeType: "text/plain" },
+                { content: oversizedText, disposition: "attachment", encoding: "utf8", filename: "big.txt", mimeType: "text/plain" },
+                { content: "hello", disposition: "attachment", encoding: "utf8", filename: "small.txt", mimeType: "text/plain" },
+            ],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachments, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding: string; truncated?: boolean }[] } };
+        const [base64Part, textPart, small] = envelope.args.attachments;
+
+        expect(base64Part).toMatchObject({ content: "", encoding: "base64", truncated: true });
+        expect(textPart).toMatchObject({ content: "", encoding: "base64", truncated: true });
+        expect(small?.truncated).toBeUndefined();
+        expect(small?.content).toBe("hello");
+    });
+
     it("honours a custom shardKey and resolveArgs", async () => {
         expect.assertions(2);
 

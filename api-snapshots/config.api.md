@@ -3148,6 +3148,12 @@ const STUDIO_SCRIPT_PATH: string;
 const STUDIO_STYLE_PATH: string;
 ```
 
+### `STUDIO_WRITE_TEMP_SUFFIX` (const)
+
+```ts
+const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
+```
+
 ### `SchemaEditRequest` (interface)
 
 ```ts
@@ -3264,10 +3270,28 @@ const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse
 const assetContentType: (fileName: string) => string;
 ```
 
+### `consumeStudioWrite` (const)
+
+```ts
+const consumeStudioWrite: (path: string, now?: number) => boolean;
+```
+
+### `createStudioDocumentCache` (const)
+
+```ts
+const createStudioDocumentCache: <T>(root: string, render: () => T) => (() => T);
+```
+
 ### `createStudioMiddleware` (const)
 
 ```ts
 const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: IncomingMessage, response: ServerResponse, next: () => void) => void);
+```
+
+### `devVariablesStamp` (const)
+
+```ts
+const devVariablesStamp: (root: string) => string;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)

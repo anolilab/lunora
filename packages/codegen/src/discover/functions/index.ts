@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Project, SourceFile, VariableStatement } from "ts-morph";
 import { Node } from "ts-morph";
 
 import declaredOutputWins from "../../declared-output";
@@ -204,16 +204,52 @@ const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): Discove
     };
 };
 
+/**
+ * The JSDoc description of the statement that declares a registration, so the
+ * spec can describe the function to a model. Read from the doc comment placed
+ * above `export const name = query(...)`; tags are dropped. `export default`
+ * carries no statement JSDoc, so it yields nothing.
+ */
+const descriptionOfStatement = (statement: VariableStatement | undefined): string | undefined => {
+    const text = statement?.getJsDocs().at(-1)?.getDescription().trim();
+
+    return text === "" ? undefined : text;
+};
+
+const documentDescriptionOf = (call: CallExpression): string | undefined =>
+    descriptionOfStatement(call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor)));
+
+/**
+ * The JSDoc of the exported statement that names `exportName`. A re-export such as
+ * `export const query = bundle.query` is documented there, while the registration call
+ * sits in an earlier declaration of the bundle, so the call's own comment is the wrong one.
+ */
+const exportedDescriptionOf = (source: SourceFile, exportName: string): string | undefined =>
+    descriptionOfStatement(
+        source
+            .getVariableStatements()
+            .find((statement) => statement.isExported() && statement.getDeclarations().some((declaration) => declaration.getName() === exportName)),
+    );
+
 /** Build a {@link FunctionIR} entry from one classified registration call, or `undefined` when it isn't a Lunora registration. */
-const functionIrFromCall = (call: CallExpression, exportName: string, relativePath: string, lazyFunctions: boolean): FunctionIR | undefined => {
+const functionIrFromCall = (
+    call: CallExpression,
+    exportName: string,
+    relativePath: string,
+    lazyFunctions: boolean,
+    exportedDescription?: string,
+): FunctionIR | undefined => {
     const discovered = discoverFromCall(call, lazyFunctions);
 
     if (!discovered) {
         return undefined;
     }
 
+    const description = exportedDescription ?? documentDescriptionOf(call);
+
     return {
         args: discovered.args,
+        ...(description ? { description } : {}),
         exportName,
         filePath: relativePath,
         kind: discovered.kind as FunctionIR["kind"],
@@ -300,7 +336,7 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFun
             (exportNames.get(localName) ?? [])
                 .filter((name) => isAddressableExportName(name))
                 .flatMap((name) => {
-                    const entry = functionIrFromCall(call, name, relativePath, lazyFunctions);
+                    const entry = functionIrFromCall(call, name, relativePath, lazyFunctions, exportedDescriptionOf(source, name));
                     rememberRoomCall(entry, call);
 
                     return entry ? [entry] : [];

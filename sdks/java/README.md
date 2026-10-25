@@ -41,7 +41,7 @@ client.mutation("messages:send", Map.of("channel", "general", "text", "hi"), nul
 
 // Live subscription: attach your socket, then feed it frames.
 // attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
-client.attachSocket(frame -> socket.send(Json.write(frame)));
+client.attachSocket(frame -> socket.send(Json.write(frame)), null);
 Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, null);
 ```
 
@@ -72,9 +72,11 @@ int attempt = 0;
 String shard = null; // this socket's shard key; null is the default shard
 while (!Thread.currentThread().isInterrupted()) {
     Thread retry = null;
+    Integer closeCode = null; // the close frame's code; null when the socket failed without one
+    String closeReason = null;
     try (Socket socket = connect()) { // your socket library
         // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
-        client.attachSocket(frame -> socket.send(Json.write(frame)));
+        client.attachSocket(frame -> socket.send(Json.write(frame)), null);
         client.resendSubscriptions();
         var report = client.flushOfflineQueue(shard);
         if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
@@ -102,6 +104,8 @@ while (!Thread.currentThread().isInterrupted()) {
         for (String raw; (raw = socket.receive()) != null; ) {
             if ("ack".equals(client.handleFrame(raw))) attempt = 0;
         }
+        closeCode = socket.closeCode(); // your socket library's close frame
+        closeReason = socket.closeReason();
     } catch (Exception e) {
         if (e instanceof InterruptedException) { // a socket call may throw it
             Thread.currentThread().interrupt();
@@ -117,7 +121,7 @@ while (!Thread.currentThread().isInterrupted()) {
                 Thread.currentThread().interrupt();
             }
         }
-        client.detachSocket();
+        client.detachSocket(closeCode, closeReason);
     }
     long ms = Math.min(30_000L, 1_000L << Math.min(attempt++, 5));
     try {
@@ -130,6 +134,17 @@ while (!Thread.currentThread().isInterrupted()) {
 ```
 
 A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a background timer retries the flush, and that timer is stopped when the socket run ends.
+
+`detachSocket(closeCode, reason)` reports how the socket closed; pass `null, null` when there was no close frame. Every detach leaves the client offline.
+
+Token expiry is reported to `client.onTokenExpired(Runnable)` (it returns an unregister handle; a listener that throws is contained):
+
+- a `4001` close, and a `TOKEN_EXPIRED` error frame, always report. The error frame is not routed to its subscription;
+- a `4003` close reports once per session credential. Calling `wsToken(...)` starts a new credential, so the next refusal reports again;
+- a `4003` with the reason `connect deadline` refuses no credential and reports nothing;
+- an `UNAUTHENTICATED` error frame reports nothing and is routed to its subscription like any other error.
+
+Whispers are ephemeral messages between the members of a topic. `whisperSubscribe(topic, listener)` joins a topic and returns an unregister handle, and every attach rejoins each registered topic right after `connect`. `whisper(topic, data)` sends and returns `false`, sending nothing, when no socket is attached: a whisper is never queued. `connectRoom(name, listener)` joins the topic `room:<name>` and returns a `Room` with `send(message)` and `close()`. A room topic is never acknowledged, so a send does not wait for the join.
 
 ## Optimistic updates and offline writes
 

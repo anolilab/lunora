@@ -17,6 +17,7 @@
  * |        |                         | the entry count or payload budget    |
  */
 
+import { EVENT_LOG_SECRET_ENV, EVENT_LOG_SECRET_HEADER, hasInternalSecret } from "../../../shared/internal-secret";
 import type { EventLogEntry } from "./event-log";
 
 // ── Idempotency fingerprint ─────────────────────────────────────────────
@@ -296,6 +297,11 @@ export class EventLogDO {
     // ── Fetch (RPC dispatch) ──────────────────────────────────────────
 
     public async fetch(request: Request): Promise<Response> {
+        // Opt-in: with `EVENT_LOG_DO_SECRET` set, every route needs it in `x-lunora-event-log-do-secret`.
+        if (!hasInternalSecret(request, EVENT_LOG_SECRET_HEADER, (this.env as Record<string, unknown> | undefined)?.[EVENT_LOG_SECRET_ENV])) {
+            return errorResponse(401, "UNAUTHORIZED", "missing or invalid event log secret");
+        }
+
         this.#ensureTable();
 
         const url = new URL(request.url);

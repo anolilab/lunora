@@ -52,7 +52,7 @@
 
 import type { FunctionCallStat, FunctionScanAttribution, SqlExec } from "@lunora/shard-engine";
 
-import { shouldPrune } from "./prune-marker";
+import { pruneOncePerWindow } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -526,7 +526,7 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     // its own, and a path that never lands a window's first write would then
     // never be pruned at all. `admitPath` above caps the distinct paths, so the
     // marker's key space is bounded by that cap.
-    if (shouldPrune(sql, bucket, input.path)) {
+    pruneOncePerWindow(sql, bucket, input.path, () => {
         runSql(
             sql,
             `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
@@ -538,7 +538,7 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
             FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
             input.path,
         );
-    }
+    });
 
     // Causal attribution: one PK-keyed upsert per distinct full-scanned table.
     // Skipped entirely for the common indexed dispatch (empty `scannedTables`),

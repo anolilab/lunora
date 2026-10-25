@@ -238,14 +238,14 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 },
             }) as unknown as DatabaseWriterLike;
 
-        const writerWithCeiling = (crossed: string[], maxWrittenRows: number): DatabaseWriterLike => {
+        const writerWithCeiling = (crossed: string[], maxWrittenRows: number, globalDb = globalDouble(crossed)): DatabaseWriterLike => {
             const { sql } = createHarness();
 
             runShardMigrations(sql, globalSchema);
 
             return createShardContextDatabase({
                 clock: () => 1_700_000_000_000,
-                globalDb: globalDouble(crossed),
+                globalDb,
                 headroom: new TransactionHeadroomTracker({ maxWrittenRows }),
                 schema: globalSchema,
                 sql,
@@ -286,6 +286,39 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             const fits: string[] = [];
 
             await expect(writerWithCeiling(fits, 2).insertMany!("profiles", [{ name: "a" }, { name: "b" }])).resolves.toHaveLength(2);
+        });
+
+        it.each(["per id", "batch"] as const)("charges a global deleteWhere (%s) once per row, up front, before any row crosses", async (path) => {
+            expect.assertions(3);
+
+            /** Three matching rows, deleted one id at a time or through the D1 writer's batch delete. */
+            const matching = (crossed: string[]): DatabaseWriterLike => {
+                const deleteMany = async (ids: ReadonlyArray<string>): Promise<{ deleted: number }> => {
+                    crossed.push(`deleteMany:${String(ids.length)}`);
+
+                    return { deleted: ids.length };
+                };
+
+                return {
+                    ...globalDouble(crossed),
+                    ...(path === "batch" ? { deleteMany } : {}),
+                    findMany: async () => {
+                        return { continueCursor: null, isDone: true, page: [{ _id: "p1" }, { _id: "p2" }, { _id: "p3" }] };
+                    },
+                };
+            };
+            const crossed: string[] = [];
+            // Room for two rows; the match is three.
+            const writer = writerWithCeiling(crossed, 2, matching(crossed));
+
+            await expect(codeOf(async () => writer.deleteWhere!("profiles", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            // The whole match is charged before the first delete, so nothing reached D1.
+            expect(crossed).toStrictEqual([]);
+
+            // And a match that fits is charged exactly once per row: three rows against a three-row ceiling pass.
+            const fits: string[] = [];
+
+            await expect(writerWithCeiling(fits, 3, matching(fits)).deleteWhere!("profiles", {})).resolves.toStrictEqual({ deleted: 3 });
         });
 
         it("keeps a concurrent write metered while a global insert is in flight", async () => {

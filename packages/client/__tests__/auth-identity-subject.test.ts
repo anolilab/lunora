@@ -240,6 +240,30 @@ describe("auth identity subject", () => {
         client.close();
     });
 
+    it("does not retain a signed-out or replaced bearer in the token fingerprint cache", () => {
+        expect.assertions(3);
+
+        const client = new LunoraClient({ fetch: createFetchMock({}), url: "https://app.example", WebSocket: createMockWebSocket() });
+        const cachedBearer = (): string | undefined => (client as unknown as { tokenFingerprint?: { token: string } }).tokenFingerprint?.token;
+
+        client.setAuthToken("jwt-signed-out");
+
+        // The cache is the seam under test: prove it is populated before asserting it empties.
+        expect(cachedBearer()).toBe("jwt-signed-out");
+
+        client.setAuthToken(null);
+
+        expect(cachedBearer()).toBeUndefined();
+
+        // A subject-labelled identity never re-hashes, so the replaced bearer had nothing else to evict it.
+        client.setAuthToken("jwt-replaced");
+        client.setAuthToken("jwt-current", "user-1");
+
+        expect(cachedBearer()).not.toBe("jwt-replaced");
+
+        client.close();
+    });
+
     it("files reads cached after a late subject resolve under the subject, not the socket's boot-time token hash", async () => {
         expect.assertions(1);
 

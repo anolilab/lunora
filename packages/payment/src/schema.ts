@@ -62,6 +62,13 @@ const subscriptions = defineTable({
     quantity: v.number(),
     referenceId: v.string(),
     state: v.string(),
+
+    /**
+     * Bumped by every write the store makes. A reconcile writes only when the revision it read is still
+     * current, so a webhook that landed in between is not overwritten. OPTIONAL, so a row written before
+     * this column reads as absent, which the store treats as revision 0.
+     */
+    revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
     .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
@@ -79,6 +86,13 @@ const sessions = defineTable({
     state: v.string(),
     // The provider subscription this payment started — lends its owner to an unattributed subscription row.
     subscriptionId: v.optional(v.string()),
+
+    /**
+     * Bumped by every write the store makes. A reconcile writes only when the revision it read is still
+     * current, so a webhook that landed in between is not overwritten. OPTIONAL, so a row written before
+     * this column reads as absent, which the store treats as revision 0.
+     */
+    revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
     .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })

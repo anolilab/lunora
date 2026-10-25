@@ -7,7 +7,7 @@ import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLi
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
 const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
     return {
-        acked: false,
+        ack: "idle",
         args: {},
         argsKey: "{}",
         callbacks: new Set<SubscriptionCallback>(),

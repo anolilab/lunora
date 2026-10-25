@@ -2,8 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
+import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
 import { runPostCodegenHook } from "@lunora/config";
+import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
@@ -22,7 +23,16 @@ vi.mock(import("@lunora/codegen"), async (importOriginal) => {
         ...actual,
         createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject),
         findTsconfig: vi.fn<typeof actual.findTsconfig>(actual.findTsconfig),
+        runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen),
     };
+});
+
+// Whether a watcher event is the echo of a studio handler's write is
+// `@lunora/config`'s to decide and test; here a test only says which answer it gets.
+vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, consumeStudioWrite: vi.fn<typeof actual.consumeStudioWrite>(actual.consumeStudioWrite) };
 });
 
 // The plugin's contract with the hook is "call it after a run that produced
@@ -1713,6 +1723,55 @@ export const archive = mutation({
             const warnings = (server.config.logger.warn as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
 
             expect(warnings.join("\n")).toContain("keeps rewriting the schema sources");
+        });
+
+        it("runs everything after codegen, but not codegen, for a studio handler's own write", async () => {
+            expect.assertions(4);
+
+            // The studio handler regenerates in its own request, so the watcher's
+            // codegen would only repeat it. Everything after codegen is the
+            // watcher's alone: the project's `postcodegen`, invalidating
+            // `_generated/` and the reload that tells the worker and the client.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+            vi.mocked(consumeStudioWrite).mockReturnValueOnce(true);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server, workerSend } = makeStubServer();
+
+            wireServer(plugin, server);
+            vi.mocked(runCodegen).mockClear();
+
+            changeListenerFor(server)(join(workdir, "lunora", "schema.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runCodegen).not.toHaveBeenCalled();
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+            expect(workerSend.mock.calls[0]?.[0]).toMatchObject({ path: "*", type: "full-reload" });
+            expect(clientSend.mock.calls[0]?.[0]).toMatchObject({ event: "lunora:api-updated", type: "custom" });
+        });
+
+        it("still runs codegen when a real save lands in the same burst as a studio write", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+            vi.mocked(consumeStudioWrite).mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+            vi.mocked(runCodegen).mockClear();
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            onChange(join(workdir, "lunora", "schema.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runCodegen).toHaveBeenCalledTimes(1);
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
         it("resumes regenerating once the settle window has passed", async () => {

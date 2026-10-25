@@ -59,8 +59,11 @@ export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
 export type {
+    LiveRouterApp,
+    LiveRouterFallback,
     LiveStream,
     LiveStreamConfig,
+    LiveStreamMount,
     LiveSubscribeHandler,
     LiveSubscribeOptions,
     LiveTopicDeclaration,
@@ -69,7 +72,7 @@ export type {
     LiveTopicRef,
     LiveTopics,
 } from "./live-stream";
-export { defineLiveStream } from "./live-stream";
+export { defineLiveStream, liveStreamRouter } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
 export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";

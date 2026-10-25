@@ -1,3 +1,51 @@
+## @lunora/do [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.243...@lunora/do@1.0.0-alpha.244) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/observability:** upgraded to 1.0.0-alpha.168
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.107
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+
+## @lunora/do [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.242...@lunora/do@1.0.0-alpha.243) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.167
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.106
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+
+## @lunora/do [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.241...@lunora/do@1.0.0-alpha.242) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/do [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.240...@lunora/do@1.0.0-alpha.241) (2026-10-22)
+
+### Performance Improvements
+
+* hot-path fixes from the performance sweep ([#1305](https://github.com/anolilab/lunora/issues/1305)) ([4e4ec66](https://github.com/anolilab/lunora/commit/4e4ec66a0040990581ad6bdc22e44c58b36714af))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/do [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.239...@lunora/do@1.0.0-alpha.240) (2026-10-22)
 
 ### Bug Fixes

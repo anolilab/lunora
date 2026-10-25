@@ -52,6 +52,7 @@ import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
+import { assertWithinBatchCap, DEFAULT_BATCH_LIMIT, resolveBatchCap } from "../../../shared/batch-cap";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
@@ -59,6 +60,7 @@ import { backfillSearchIndexesForTable, searchIndexCoversTable } from "./ctx-db-
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange, readCdcDocAtOrBefore } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
+import type { CompanionMemo } from "./ctx-db-companion-state";
 import { createCompanionSync } from "./ctx-db-companions";
 import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
@@ -213,6 +215,46 @@ const assertValidClientId = (clientId: string): void => {
     }
 };
 
+/**
+ * Refuse a trusted-import row id holding U+0000. An id is a key: the SQL writers cache resolved ids under a key with a NUL
+ * between the table and the id, and some SQLite builds truncate text at a NUL on read, so a row stored under such an id
+ * cannot be read back by it. Refused on every store, so one import does not behave differently by store.
+ */
+const assertStorableRowId = (id: string): void => {
+    if (id.includes("\0")) {
+        throw new LunoraError("BAD_REQUEST", `invalid row id ${JSON.stringify(id)}: a row id cannot hold a NUL character (U+0000)`);
+    }
+};
+
+/**
+ * Refuse every trusted-import id in a global batch before any row is written: a global batch writes D1 row by row, and D1
+ * cannot roll back what it already wrote. A shard-local batch is checked in its row builder instead.
+ */
+const assertBatchRowIds = (
+    definition: TableDefinitionLike | undefined,
+    documents: ReadonlyArray<Record<string, unknown>>,
+    allowExplicitId: boolean | undefined,
+    auth: Parameters<typeof applyInsertDefaults>[2],
+): void => {
+    if (allowExplicitId !== true) {
+        return;
+    }
+
+    // A supplied `_id` survives column defaults, except that a server default on the `_id` column always overwrites it.
+    // Only then does the stored id differ from the supplied one, so only then are the defaults applied here (and the
+    // defaults are not invoked twice for every row of an ordinary trusted import).
+    const overridesId = definition !== undefined && "serverDefault" in (definition.shape["_id"]?._meta?.column ?? {});
+
+    for (const document of documents) {
+        // The id each row is stored under: the value the single-row insert checks.
+        const id = overridesId ? applyInsertDefaults(definition, document, auth)["_id"] : document["_id"];
+
+        if (typeof id === "string") {
+            assertStorableRowId(id);
+        }
+    }
+};
+
 /** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
 interface WriteEvent {
     doc?: Record<string, unknown>;
@@ -248,6 +290,7 @@ interface CtxDbOptions {
      * sends, and it makes the stale check answer "not stale".
      */
     baselineSeq?: () => number | undefined;
+
     broadcast?: BroadcastDelta;
 
     /**
@@ -273,6 +316,15 @@ interface CtxDbOptions {
     cdc?: boolean;
 
     clock?: Clock;
+
+    /**
+     * Shard-scoped memo of aggregate / rank companions already verified against
+     * their durable marker. `createShardCtxDb` runs per dispatch, so without a
+     * long-lived memo every dispatch re-checks each companion on first touch; a
+     * host (the generated ShardDO) passes one for the DO's lifetime and owns its
+     * invalidation. Omitted, each writer keeps its own.
+     */
+    companionMemo?: CompanionMemo;
 
     /**
      * Opt into the secure-by-default write-path guard. When `true` AND the
@@ -412,18 +464,6 @@ const MAX_TRIGGER_DEPTH = 50;
 type CountArgs = RestrictableQueryOptions;
 
 /**
- * Default cap on the row count a single batch write
- * (`insertMany`/`deleteMany`/`patchMany`) accepts. Keeps a batch well under the
- * Durable Object request/CPU-burst limits and turns an accidental oversized
- * payload into a clear up-front error instead of a degraded mutation. Override
- * per-call via `options.limit`; callers with larger sets should chunk.
- *
- * Mirrored as `DEFAULT_BATCH_LIMIT` in `@lunora/server`'s RLS middleware (which
- * can't import this package at runtime) — keep the two values in sync.
- */
-const DEFAULT_BATCH_LIMIT = 500;
-
-/**
  * Rows per multi-row `INSERT`. Three bound parameters per row, so one statement
  * lands just under Workerd's per-statement parameter cap — which is where a
  * Durable Object's SQLite refuses to prepare rather than merely running slower.
@@ -454,33 +494,25 @@ const MAX_PROBE_BRANCHES = WORKERD_SQLITE_LIMITS.boundParams;
  */
 const ITERATOR_PAGE_SIZE = 128;
 
+/** A refused batch is a `400`, so the caller sees a clear failure rather than a silent slow path. */
+const batchLimitError = (message: string): LunoraError => new LunoraError("BATCH_LIMIT_EXCEEDED", message, { status: 400 });
+
 /**
  * Reject an over-cap batch write before any row is touched. Enforced by the
  * writer below; the RLS guard delegates its batch methods straight to this
  * writer, so the cap holds whether the guard or the raw writer is outermost.
- * (The RLS middleware in `@lunora/server` keeps its own mirror of this check
- * because its `deleteMany`/`patchMany` loop per-id rather than delegating.)
- * Throws a `400`-class structural error (same shape as the other ctx-db
- * structural throws) so the caller sees a clear failure, not a silent slow path.
  */
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
-
-    if (count > cap) {
-        throw new LunoraError(
-            "BATCH_LIMIT_EXCEEDED",
-            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
-            { status: 400 },
-        );
-    }
+    assertWithinBatchCap(count, resolveBatchCap(limit, op, batchLimitError), op, batchLimitError);
 };
 
 /**
  * Read the rows a `deleteWhere`/`patchWhere` will touch, rejecting an over-cap
  * match before decoding it. The read stops one row past the cap — enough to
  * know the batch is too big — and only the over-cap path pays a `COUNT(*)` so
- * the error still reports the real number of matches. A non-finite cap (no
- * bound at all) reads unbounded.
+ * the error still reports the real number of matches. An `Infinity` limit
+ * reads every match; any other limit that is not a non-negative integer is
+ * rejected before the read.
  */
 const readBatchMatches = async (
     source: DatabaseWriterLike,
@@ -489,14 +521,14 @@ const readBatchMatches = async (
     limit: number | undefined,
     op: string,
 ): Promise<Record<string, unknown>[]> => {
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
-    const bounded = Number.isFinite(cap);
-    const { page } = await source.findMany(tableName, bounded ? { limit: cap + 1, omitContinueCursor: true, where } : { where });
+    // Validated before the read, so a bad limit never reaches it.
+    const cap = resolveBatchCap(limit, op, batchLimitError);
+    const { page } = await source.findMany(tableName, Number.isFinite(cap) ? { limit: cap + 1, omitContinueCursor: true, where } : { where });
 
-    if (bounded && page.length > cap) {
+    if (page.length > cap) {
         // `Math.max` keeps the throw here (not in deleteMany/patchMany) even if
         // the count and the read ever disagree.
-        assertBatchLimit(Math.max(await source.count(tableName, { where }), page.length), limit, op);
+        assertWithinBatchCap(Math.max(await source.count(tableName, { where }), page.length), cap, op, batchLimitError);
     }
 
     return page;
@@ -2738,6 +2770,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         recordCdc,
         schema,
         sql,
+        verified: options.companionMemo?.verified,
     });
 
     /**
@@ -2803,6 +2836,43 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      */
     const globalFallbackFor = (expectedTable?: string): DatabaseWriterLike | undefined =>
         expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
+
+    /**
+     * Delete `.global()` rows by id straight on the D1 writer, skipping the
+     * shard-local probe. These deletes return before `onWrite`, so they charge
+     * the meter here: a row and no bytes each, as `onWrite` charges a local
+     * delete. Every id is charged before the first one crosses, because D1 does
+     * not roll back with the DO's transaction: a ceiling breach must refuse the
+     * whole batch before any row is gone.
+     *
+     * `expectedTable` pins each id on the D1 side. Only the unpinned by-id
+     * `delete` leaves it undefined; anything that knows the table pins it, since
+     * an unpinned D1 delete resolves the id across every `.global()` table.
+     * `batch`, when given, sends the ids through the D1 writer's own batch delete
+     * if it has one.
+     */
+    const deleteGlobalByIds = async (
+        global: DatabaseWriterLike,
+        expectedTable: string | undefined,
+        ids: ReadonlyArray<string>,
+        deleteOptions?: { hard?: boolean },
+        batch?: { options: { limit?: number } | undefined },
+    ): Promise<{ deleted: number }> => {
+        for (let charged = 0; charged < ids.length; charged += 1) {
+            meterWrite(undefined);
+        }
+
+        if (batch !== undefined && global.deleteMany !== undefined) {
+            return global.deleteMany(ids, batch.options, expectedTable);
+        }
+
+        for (const id of ids) {
+            // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
+            await global.delete(id, expectedTable, deleteOptions);
+        }
+
+        return { deleted: ids.length };
+    };
 
     /**
      * Locate a row by id and return both the owning table and the decoded
@@ -3229,17 +3299,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(expectedTable);
 
                 if (global) {
-                    // A delete carries no document, so it costs a row and no
-                    // bytes — exactly what `onWrite` charges for the local paths
-                    // (see its docblock). Charged here because this branch
-                    // returns before that hook, and before the boundary because
-                    // D1 does not roll back with the DO's transaction. Without
-                    // it, `deleteWhere` over a `.global()` table — which routes
-                    // through `deleteMany` to here — was free of the meter
-                    // entirely, however many rows it removed.
-                    meterWrite(undefined);
-
-                    await global.delete(id, expectedTable, deleteOptions);
+                    await deleteGlobalByIds(global, expectedTable, [id], deleteOptions);
                 }
 
                 return;
@@ -3280,8 +3340,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing[references],
-                findHolders: async (holderTable, field, value) => {
-                    const holders = await routeForHolder(holderTable).findMany(holderTable, { includeDeleted: hard, where: { [field]: value } });
+                findHolders: async (holderTable, field, value, page) => {
+                    const holders = await routeForHolder(holderTable).findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
 
                     return holders.page;
                 },
@@ -3335,10 +3395,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 syncAggregates(tableName, existing, merged);
                 syncRanks(tableName, id, existing, undefined);
 
-                cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
+                const indexKeys = rowIndexKeys(tableName, existing, merged);
+
+                cache?.invalidate(tableName, id, indexKeys);
 
                 recordCdc(tableName, id, "update", merged);
-                broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
+                broadcast({ indexKeys, key: id, op: "update", row: merged, table: tableName });
 
                 // `delete()` was called, so fire the DELETE triggers (the flag flip
                 // is an implementation detail of how the delete is recorded).
@@ -3368,10 +3430,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             syncAggregates(tableName, existing, undefined);
             syncRanks(tableName, id, existing, undefined);
 
-            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing));
+            const indexKeys = rowIndexKeys(tableName, existing);
+
+            cache?.invalidate(tableName, id, indexKeys);
 
             recordCdc(tableName, id, "delete");
-            broadcast({ indexKeys: rowIndexKeys(tableName, existing), key: id, op: "delete", table: tableName });
+            broadcast({ indexKeys, key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
@@ -3387,14 +3451,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const chunkSize = Math.max(1, allOptions?.chunkSize ?? DEFAULT_BATCH_LIMIT);
             const deleteOptions = allOptions?.hard === undefined ? undefined : { hard: allOptions.hard };
-            // A `.global()` row's id lives in D1, not this DO, so the by-id delete only
-            // reaches it through the `globalDb` fallback — which is gated on NO table being
-            // pinned (the IDOR guard: a non-global by-id facade must not reach a global
-            // row). Pinning `tableName` here would therefore make every global delete a
-            // silent no-op: the count would inflate, the rows would survive, and a table
-            // with at least `chunkSize` rows would loop forever because `findMany` kept
-            // returning the same page. Leave the table unpinned for a global table.
-            const expectedTable = isGlobalTable(tableName) ? undefined : tableName;
+            // A global table's ids never live in this DO, so they skip the local probe
+            // and go straight to the D1 writer; shard-local tables keep the pinned path.
+            const global = globalWriterFor(tableName, "deleteAll");
             let deleted = 0;
 
             // Resolve-then-delete in chunks until the table is empty. Deliberately
@@ -3422,7 +3481,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                     for (const id of ids) {
                         // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                        await writer.delete(id, expectedTable, deleteOptions);
+                        await (global === undefined ? writer.delete(id, tableName, deleteOptions) : deleteGlobalByIds(global, tableName, [id], deleteOptions));
                         deleted += 1;
                     }
 
@@ -3462,9 +3521,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // writer's own `findMany` (which rejects an unknown table). The
             // mutation-span (if any) keeps the read and the subsequent deletes
             // consistent.
-            const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
-            const matches = await readBatchMatches(source, tableName, where, batchOptions?.limit, "deleteWhere");
+            const global = globalWriterFor(tableName, "deleteWhere");
+            const matches = await readBatchMatches(global ?? writer, tableName, where, batchOptions?.limit, "deleteWhere");
             const ids = matches.map((row) => String(row["_id"]));
+
+            // A global table's rows live in D1, never in this DO: skip the local
+            // by-id probe and hand the ids straight to the global writer.
+            if (global) {
+                return deleteGlobalByIds(global, tableName, ids, undefined, { options: batchOptions });
+            }
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always
@@ -3883,6 +3948,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
             } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                assertStorableRowId(withDefaults["_id"]);
                 id = withDefaults["_id"];
             } else {
                 id = generateId();
@@ -3941,6 +4007,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // No raw multi-row path across the D1 boundary — fall back to the
                 // per-row global writer (the throughput win is shard-local only).
                 const globalIds: string[] = [];
+
+                assertBatchRowIds(schema.tables[tableName], documents, batchOptions?.allowExplicitId, auth);
 
                 // Charge the WHOLE batch before writing any of it, the way the
                 // shard-local branch below does. These rows land in D1, which the
@@ -4010,7 +4078,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const rows = documents.map((document, index) => {
                 const defaulted = applyInsertDefaults(definition, document, auth);
                 const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
-                const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
+                const explicitId = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : undefined;
+
+                // Checked on the value stored: the rows are all built before any is written, so a refusal writes nothing.
+                if (explicitId !== undefined) {
+                    assertStorableRowId(explicitId);
+                }
+
+                const id = explicitId ?? generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
                 // `_id` above — the default path mints from `clock()`.
                 const creationTime =
@@ -4243,10 +4318,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // both images additionally covers a patch that MOVES the row
             // between index slices: the slice it left is only derivable from
             // the before-image.
-            cache?.invalidate(tableName, id, rowIndexKeys(tableName, existing, merged));
+            const indexKeys = rowIndexKeys(tableName, existing, merged);
+
+            cache?.invalidate(tableName, id, indexKeys);
 
             recordCdc(tableName, id, "update", merged);
-            broadcast({ indexKeys: rowIndexKeys(tableName, existing, merged), key: id, op: "update", row: merged, table: tableName });
+            broadcast({ indexKeys, key: id, op: "update", row: merged, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -4830,7 +4907,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         : writer;
 };
 
-export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export { assertStorableRowId, assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
 export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";

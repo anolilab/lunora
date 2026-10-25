@@ -69,6 +69,8 @@ export interface PaymentSession {
     readonly provider: ProviderId;
     readonly referenceId: string;
     readonly refundedAmount: Money;
+    /** Store-maintained write counter, absent on rows written before it existed. Ignored on write. */
+    readonly revision?: number;
     readonly state: PaymentState;
 
     /**
@@ -108,6 +110,8 @@ export interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    /** Store-maintained write counter, absent on rows written before it existed. Ignored on write. */
+    readonly revision?: number;
     readonly state: SubscriptionState;
     readonly updatedAt: number;
 }

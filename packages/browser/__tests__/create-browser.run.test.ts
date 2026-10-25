@@ -209,7 +209,13 @@ describe("crawl", () => {
 
         expect(calls[0]?.url).toBe(crawlEndpoint);
         expect(calls[0]?.init.method).toBe("POST");
-        expect(JSON.parse(calls[0]?.init.body as string)).toStrictEqual({ contentUse: "reference", formats: ["markdown"], url: "https://example.com/" });
+        expect(JSON.parse(calls[0]?.init.body as string)).toStrictEqual({
+            contentUse: "reference",
+            depth: 3,
+            formats: ["markdown"],
+            limit: 10,
+            url: "https://example.com/",
+        });
     });
 
     it("refuses a private starting url without calling the API", async () => {
@@ -219,6 +225,66 @@ describe("crawl", () => {
         const browser = createBrowser({ binding: plainBinding, restApi });
 
         await expect(browser.crawl("http://10.0.0.1/")).rejects.toThrow(/private\/internal address/u);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("refuses external links and subdomains unless allowPrivateTargets opts out of the guard", async () => {
+        expect.assertions(4);
+
+        const calls = stubFetch(() => Response.json({ result: "job-1", success: true }));
+        const guarded = createBrowser({ binding: plainBinding, restApi });
+
+        await expect(guarded.crawl("https://example.com", { options: { includeExternalLinks: true } })).rejects.toThrow(/SSRF guard/u);
+        await expect(guarded.crawl("https://example.com", { options: { includeSubdomains: true } })).rejects.toThrow(/SSRF guard/u);
+        expect(calls).toHaveLength(0);
+
+        const open = createBrowser({ allowPrivateTargets: true, binding: plainBinding, restApi });
+
+        await expect(open.crawl("https://example.com", { options: { includeExternalLinks: true } })).resolves.toBe("job-1");
+    });
+
+    it("clamps limit and depth to the defaults, and to raised ceilings", async () => {
+        expect.assertions(5);
+
+        const calls = stubFetch(() => Response.json({ result: "job-1", success: true }));
+        const body = () => JSON.parse(calls.at(-1)?.init.body as string) as { depth?: number; limit?: number };
+
+        await createBrowser({ binding: plainBinding, restApi }).crawl("https://example.com", { depth: 50, limit: 100_000 });
+
+        expect(body()).toMatchObject({ depth: 3, limit: 100 });
+
+        await createBrowser({ binding: plainBinding, restApi }).crawl("https://example.com", { depth: 2, limit: 5 });
+
+        expect(body()).toMatchObject({ depth: 2, limit: 5 });
+
+        await createBrowser({ binding: plainBinding, maxCrawlDepth: 10, maxCrawlPages: 1000, restApi }).crawl("https://example.com", {
+            depth: 50,
+            limit: 5000,
+        });
+
+        expect(body()).toMatchObject({ depth: 10, limit: 1000 });
+
+        // Omitted values are still sent, so Browser Run's own defaults (a far deeper crawl) never apply.
+        await createBrowser({ binding: plainBinding, restApi }).crawl("https://example.com");
+
+        expect(body()).toStrictEqual({ depth: 3, limit: 10, url: "https://example.com/" });
+
+        await createBrowser({ binding: plainBinding, maxCrawlPages: 4, restApi }).crawl("https://example.com");
+
+        expect(body()).toStrictEqual({ depth: 3, limit: 4, url: "https://example.com/" });
+    });
+
+    it("rejects a non-integer or non-positive limit, depth and ceiling", async () => {
+        expect.assertions(6);
+
+        const calls = stubFetch(() => Response.json({ result: "job-1", success: true }));
+        const browser = createBrowser({ binding: plainBinding, restApi });
+
+        await expect(browser.crawl("https://example.com", { limit: Number.NaN })).rejects.toThrow(/limit must be an integer/u);
+        await expect(browser.crawl("https://example.com", { limit: -1 })).rejects.toThrow(/limit must be an integer/u);
+        await expect(browser.crawl("https://example.com", { depth: 1.5 })).rejects.toThrow(/depth must be an integer/u);
+        expect(() => createBrowser({ binding: plainBinding, maxCrawlPages: 0, restApi })).toThrow(/maxCrawlPages/u);
+        expect(() => createBrowser({ binding: plainBinding, maxCrawlDepth: Number.NaN, restApi })).toThrow(/maxCrawlDepth/u);
         expect(calls).toHaveLength(0);
     });
 

@@ -2,9 +2,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runCodegen } from "@lunora/codegen";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handlePolicyScaffoldRequest } from "../../src/studio-host/policy-scaffold-handler";
+import { consumeStudioWrite } from "../../src/studio-host/studio-writes";
+
+// The real codegen, wrapped so a test can make one run fail.
+vi.mock(import("@lunora/codegen"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen) };
+});
 
 const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
@@ -54,6 +63,24 @@ describe("handlePolicyScaffoldRequest", () => {
         expect(result.status).toBe(200);
         expect(existsSync(join(lunoraDirectory, "invoices.policies.ts"))).toBe(true);
         expect(readFileSync(join(lunoraDirectory, "invoices.policies.ts"), "utf8")).toContain("when: () => false");
+    });
+
+    it("records the write for the dev watcher only once codegen has emitted from it", () => {
+        expect.assertions(4);
+
+        const scaffold = (name: string) =>
+            handlePolicyScaffoldRequest({ body: { kind: "scaffoldPolicy", name, table: "invoices" }, method: "POST", projectRoot });
+
+        vi.mocked(runCodegen).mockImplementationOnce(() => {
+            throw new Error("codegen exploded");
+        });
+
+        // A failed run leaves the event to the watcher, which retries it.
+        expect(scaffold("invoices").status).toBe(500);
+        expect(consumeStudioWrite(join(lunoraDirectory, "invoices.policies.ts"))).toBe(false);
+
+        expect(scaffold("ledger").status).toBe(200);
+        expect(consumeStudioWrite(join(lunoraDirectory, "ledger.policies.ts"))).toBe(true);
     });
 
     it("writes the stub but skips codegen when the codegen switch is off", () => {

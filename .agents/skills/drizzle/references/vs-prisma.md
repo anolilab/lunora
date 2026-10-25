@@ -52,7 +52,7 @@ export const runtime = 'edge';
 
 export async function GET() {
   const sql = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sql); // ~35KB bundle, <10ms cold start
+  const db = drizzle({ client: sql }); // ~35KB bundle, <10ms cold start
 
   const users = await db.select().from(users);
   return Response.json(users);
@@ -117,8 +117,8 @@ export async function GET() {
 
 **Drizzle** (TypeScript-first):
 ```typescript
+// db/schema.ts
 import { pgTable, serial, text, integer } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -131,8 +131,14 @@ export const posts = pgTable('posts', {
   authorId: integer('author_id').notNull().references(() => users.id),
 });
 
-export const usersRelations = relations(users, ({ many }) => ({
-  posts: many(posts),
+// db/relations.ts: relations live in one defineRelations(...) call, not per table
+import { defineRelations } from 'drizzle-orm';
+import * as schema from './schema';
+
+export const relations = defineRelations(schema, (r) => ({
+  users: {
+    posts: r.many.posts({ from: r.users.id, to: r.posts.authorId }),
+  },
 }));
 ```
 
@@ -207,7 +213,7 @@ const usersWithPosts = await prisma.user.findMany({
 # Generate migration
 npx drizzle-kit generate
 
-# Output: drizzle/0000_migration.sql
+# Output: drizzle/<timestamp>_migration/migration.sql (plus snapshot.json)
 # CREATE TABLE "users" (
 #   "id" serial PRIMARY KEY,
 #   "email" text NOT NULL UNIQUE
@@ -334,21 +340,21 @@ npm install -D drizzle-kit
 
 ```typescript
 // drizzle.config.ts
-import type { Config } from 'drizzle-kit';
+import { defineConfig } from 'drizzle-kit';
 
-export default {
+export default defineConfig({
+  dialect: 'postgresql',
   schema: './db/schema.ts',
   out: './drizzle',
-  dialect: 'postgresql',
   dbCredentials: {
     url: process.env.DATABASE_URL!,
   },
-} satisfies Config;
+});
 ```
 
 ```bash
-# Generate Drizzle schema from existing database
-npx drizzle-kit introspect
+# Generate Drizzle schema from existing database (`introspect` was renamed to `pull`)
+npx drizzle-kit pull
 ```
 
 ### Step 3: Convert Queries
