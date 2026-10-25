@@ -4,6 +4,7 @@ import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 
@@ -78,9 +79,8 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 ): PresenceHandle<L> => {
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
-    }
+    assertPresenceInterval(intervalMs);
+
     const sessionId = options.sessionId ?? randomSessionId();
 
     let latestData: Record<string, unknown> | undefined = options.data;

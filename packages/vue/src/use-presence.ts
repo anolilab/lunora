@@ -3,6 +3,7 @@ import type { ShallowRef } from "vue";
 import { shallowRef } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 import onScopeDisposeOrWarn from "./scope-dispose";
@@ -71,9 +72,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
-    }
+    assertPresenceInterval(intervalMs);
 
     // One session id per composable call unless the caller pins one.
     const sessionId = options.sessionId ?? randomSessionId();
