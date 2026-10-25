@@ -798,7 +798,6 @@ interface InferredBindings {
     usesR2sql: boolean;
     usesRequestSecretTool: boolean;
     usesScheduler: boolean;
-    usesShardRegistryClient: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
     usesX402: boolean;

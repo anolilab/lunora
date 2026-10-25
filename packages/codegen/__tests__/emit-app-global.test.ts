@@ -49,7 +49,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
 
         const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
 
-        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {");
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {");
         expect(output).toContain(
             "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
         );

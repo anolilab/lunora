@@ -329,6 +329,9 @@ interface MissingSecretsOutcome {
     mintedSecretsFile?: string;
 }
 
+/** An angle-bracket template such as `<your-value>`: a placeholder the operator has not replaced. */
+const ANGLE_TEMPLATE = /^<[^>]+>$/u;
+
 /**
  * The secrets check for a target with no secret store: its only channel is the
  * `vars` of the config projection the deploy ships (for a Vite virtual entry,
@@ -352,7 +355,18 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
     const isUnset = (key: string): boolean => {
         const value = deployed[key];
 
-        return typeof value !== "string" || isPlaceholderValue(value);
+        if (typeof value !== "string") {
+            return true;
+        }
+
+        const trimmed = value.trim();
+
+        if (trimmed === "" || ANGLE_TEMPLATE.test(trimmed)) {
+            return true;
+        }
+
+        // The token heuristic is for secret-shaped keys: a real URL such as `https://todo.acme.com` is a value.
+        return isSecretKeyName(key) && isPlaceholderValue(value);
     };
     const describe = (key: string): string => (Object.hasOwn(deployed, key) ? `${key} (empty or a placeholder)` : key);
     const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);

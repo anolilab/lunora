@@ -713,8 +713,16 @@ describe("the relay secret is minted by its host only", () => {
         expect.assertions(3);
 
         expect(mintableSecretKeysFor(["@lunora/do:shardRegistry"]).has("LUNORA_RELAY_SECRET")).toBe(true);
-        expect(mintableSecretKeysFor(["@lunora/do:shardRegistryClient"]).has("LUNORA_RELAY_SECRET")).toBe(false);
+        expect(mintableSecretKeysFor([]).has("LUNORA_RELAY_SECRET")).toBe(false);
         expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(false);
+    });
+
+    it("generates a blank relay line, which a host's dev file can carry before its first fill", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({ existingContent: 'LUNORA_RELAY_SECRET=""\n', randomHex: fixedHex });
+
+        expect(plan.filledKeys).toContain("LUNORA_RELAY_SECRET");
     });
 
     it("generates the relay line a host scaffolded, and leaves a client's template for the operator", () => {

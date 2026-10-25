@@ -76,6 +76,12 @@ describe(toolchainExecArgs, () => {
 });
 
 describe(projectCelldConfig, () => {
+    it("refuses to give an id-less binding a fleet-wide id when the Worker has no name", () => {
+        expect.assertions(1);
+
+        expect(() => projectCelldConfig({ kv_namespaces: [{ binding: "CACHE" }] })).toThrow(/needs the Worker's `name`/u);
+    });
+
     it("turns an exports workflow into a workflows[] binding named after the class", () => {
         expect.assertions(2);
 

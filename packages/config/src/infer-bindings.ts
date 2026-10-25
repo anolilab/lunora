@@ -21,7 +21,6 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname } from "node:path";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
 import {
@@ -37,7 +36,7 @@ import {
 } from "@lunora/codegen";
 // `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
 import { init as initLexer } from "es-module-lexer";
-import { Node, Project, SyntaxKind } from "ts-morph";
+import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
@@ -78,95 +77,6 @@ const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
-
-/**
- * Text that may name a registry client call: a cheap prefilter ahead of the parse in
- * {@link callsShardRegistryClient}. A registry request is signed, so a call to either
- * API needs `LUNORA_RELAY_SECRET`, whichever worker owns the registry.
- */
-const SHARD_REGISTRY_CLIENT_PATTERN = /\bcreateDynamicShardRegistry\b|\.shardRegistry\b/u;
-
-/** Parses single files for {@link callsShardRegistryClient}; its files are dropped after each parse. */
-const registryProbe = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
-
-const REGISTRY_CLIENT_FACTORY = "createDynamicShardRegistry";
-const APP_BUILDER_FACTORY = "defineApp";
-const BUILDER_REGISTRY_METHOD = "shardRegistry";
-
-/** The identifier a call or property chain starts from: `defineApp` in `defineApp<Env>().shard(x).shardRegistry(y)`. */
-const chainRoot = (expression: Node): string | undefined => {
-    let current = expression;
-
-    while (Node.isCallExpression(current) || Node.isPropertyAccessExpression(current)) {
-        current = current.getExpression();
-    }
-
-    return Node.isIdentifier(current) ? current.getText() : undefined;
-};
-
-/**
- * Whether a file calls the registry client: `createDynamicShardRegistry(...)` under any
- * import alias or as a namespace member, or the builder's `.shardRegistry(...)` on a chain
- * that starts at `defineApp` (or a variable initialised from one). Only a parsed call counts,
- * so a comment or a string that names either one does not. The file's own extension picks
- * the parser, so a `.ts` generic arrow is not read as JSX.
- */
-const callsShardRegistryClient = (code: string, file: string): boolean => {
-    const probe = registryProbe.createSourceFile(`registry-probe${extname(file)}`, code, { overwrite: true });
-
-    try {
-        const clients = new Set<string>([REGISTRY_CLIENT_FACTORY]);
-        const builders = new Set<string>([APP_BUILDER_FACTORY]);
-
-        for (const declaration of probe.getImportDeclarations()) {
-            for (const named of declaration.getNamedImports()) {
-                const local = named.getAliasNode()?.getText() ?? named.getName();
-
-                if (named.getName() === REGISTRY_CLIENT_FACTORY) {
-                    clients.add(local);
-                }
-
-                if (named.getName() === APP_BUILDER_FACTORY) {
-                    builders.add(local);
-                }
-            }
-        }
-
-        const rootsAtBuilder = (expression: Node): boolean => {
-            const root = chainRoot(expression);
-
-            return root !== undefined && builders.has(root);
-        };
-
-        for (const variable of probe.getVariableDeclarations()) {
-            const initializer = variable.getInitializer();
-
-            if (initializer !== undefined && rootsAtBuilder(initializer)) {
-                builders.add(variable.getName());
-            }
-        }
-
-        return probe.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => {
-            const callee = call.getExpression();
-
-            if (Node.isIdentifier(callee)) {
-                return clients.has(callee.getText());
-            }
-
-            if (!Node.isPropertyAccessExpression(callee)) {
-                return false;
-            }
-
-            if (callee.getName() === REGISTRY_CLIENT_FACTORY) {
-                return true;
-            }
-
-            return callee.getName() === BUILDER_REGISTRY_METHOD && rootsAtBuilder(callee.getExpression());
-        });
-    } finally {
-        probe.forget();
-    }
-};
 
 // Provisioning behaviour per capability (see plans 027/028/031/032/035/036):
 //   kv          → kv_namespaces             → written without an id (wrangler creates the namespace on deploy)
@@ -275,7 +185,6 @@ const SECRET_SOURCE_FLAGS = [
     // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
     // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
     ["hostsShardRegistry", "@lunora/do:shardRegistry"],
-    ["usesShardRegistryClient", "@lunora/do:shardRegistryClient"],
     // The secret store behind `requestSecretTool`. The tool's own import is the
     // signal, not `@lunora/agent`: an app that imports the package for something
     // else needs no key.
@@ -450,8 +359,6 @@ interface InferredBindings {
     usesRequestSecretTool: boolean;
     /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
-    /** The app calls a registry (`createDynamicShardRegistry`, `.shardRegistry(`) without hosting one, so it needs the host's `LUNORA_RELAY_SECRET` and must not mint its own. */
-    usesShardRegistryClient: boolean;
     /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
     /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
@@ -471,10 +378,7 @@ interface InferredBindings {
  * the two not driven by a package import, so they are added explicitly. A `Pick`
  * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader"> & {
-    /** The scanned sources call a registry client; whether this app also hosts the registry is decided by the bindings. */
-    callsShardRegistry: boolean;
-};
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
 /** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
 const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
@@ -559,7 +463,6 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     const targets = createTargetScope();
     let usesEnvAi = false;
     let usesEnvDatabase = false;
-    let usesShardRegistryClient = false;
 
     for (const relativeDirectory of scanDirectories) {
         const absolute = join(projectRoot, relativeDirectory);
@@ -578,7 +481,6 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
             usesEnvAi ||= ENV_AI_PATTERN.test(code);
             usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
-            usesShardRegistryClient ||= SHARD_REGISTRY_CLIENT_PATTERN.test(code) && callsShardRegistryClient(code, file);
 
             // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
             // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
@@ -613,7 +515,6 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         ...flags,
         needsD1: usesEnvDatabase,
         usesRequestSecretTool: lunora.requestSecretTool,
-        callsShardRegistry: usesShardRegistryClient,
         usesAi: used.has("ai") || usesEnvAi,
         // A sandbox `browserTool` provisions BROWSER even without a direct
         // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
@@ -846,7 +747,6 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
         hostsShardRegistry: hostsRegistry,
-        usesShardRegistryClient: capabilities.callsShardRegistry && !hostsRegistry,
         workflows,
     };
 };

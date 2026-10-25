@@ -53,7 +53,7 @@
  * cross-shard export, sync and migration reaches, and any code holding the
  * namespace binding can address it, so network isolation alone is not enough.
  */
-import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "@lunora/shard-engine";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, stubByName, verifySiblingBody } from "@lunora/shard-engine";
 
 import { jsonResponse } from "../../../shared/json-response";
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
@@ -447,4 +447,95 @@ const registerShardKey = async (stub: RegistryStub, table: string, shardKey: str
 const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string, secret: string | undefined): Promise<void> =>
     postRegistration(stub, "/unregister", table, shardKey, secret);
 
-export { registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };
+/**
+ * `GET` a read route of {@link ShardRegistryDO} with the same signed frame the DO
+ * verifies. Throws on a non-2xx answer, like {@link postRegistration}.
+ */
+const readRegistration = async (stub: RegistryStub, path: string, secret: string | undefined): Promise<Record<string, unknown>> => {
+    if (secret === undefined) {
+        throw new Error("the shard registry requires LUNORA_RELAY_SECRET; set it on the worker and every Durable Object");
+    }
+
+    const url = `https://shard-registry.internal${path}`;
+    const response = await stub.fetch(url, {
+        headers: { [RELAY_SIGNATURE_HEADER]: await signSiblingBody(secret, shardRegistryFrame("GET", url, "")) },
+        method: "GET",
+        signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+        throw new Error(`shard registry ${path.split("?")[0] ?? path} returned ${String(response.status)}: ${await response.text()}`);
+    }
+
+    // The registry answers its own routes, so the body is its JSON shape, parsed once here.
+    return await response.json();
+};
+
+/**
+ * The registry's read and write surface, as a worker calls it. Each method is an
+ * RPC on the worker that hosts the registry, so a caller that holds only that
+ * worker's service binding needs no secret.
+ */
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+
+/**
+ * Whether a registry binding is a Durable Object namespace, which this worker signs
+ * into directly, rather than the RPC surface of the worker that hosts the registry.
+ */
+
+/**
+ * Whether a binding is a service binding's RPC surface for the registry: the methods the host's
+ * `ShardRegistryEntrypoint` defines. Anything without them is neither a namespace nor a registry.
+ */
+const isRegistryRpc = (binding: unknown): binding is ShardRegistryRpc => {
+    // A service binding's stub has no static type here, so the methods are checked by shape.
+    const rpc = binding as Partial<ShardRegistryRpc> | undefined;
+
+    return typeof rpc?.register === "function" && typeof rpc.unregister === "function";
+};
+
+const isRegistryNamespace = (binding: unknown): boolean =>
+    typeof binding === "object" && binding !== null && "idFromName" in binding && typeof binding.idFromName === "function";
+
+/**
+ * The registry, as the host worker calls its own Durable Object namespace. The
+ * generated `ShardRegistryEntrypoint` delegates to this: its methods are the RPC
+ * surface a client worker reaches through a service binding. Signed with
+ * `LUNORA_RELAY_SECRET`, which only the host holds.
+ */
+const hostedShardRegistry = (env: unknown): ShardRegistryRpc => {
+    const registry = (): RegistryStub => {
+        const binding = typeof env === "object" && env !== null && "SHARD_REGISTRY" in env ? env.SHARD_REGISTRY : undefined;
+        const stub = stubByName(binding, SHARD_REGISTRY_DO_NAME);
+
+        if (stub === undefined) {
+            throw new Error("the shard registry binding is not a Durable Object namespace in this worker");
+        }
+
+        return stub;
+    };
+    const secret = (): string | undefined => siblingSecretOf(env);
+
+    return {
+        listShardKeys: async (table) => {
+            const body = await readRegistration(registry(), `/list?table=${encodeURIComponent(table)}`, secret());
+
+            return body["shardKeys"] as string[];
+        },
+        register: async (table, shardKey) => registerShardKey(registry(), table, shardKey, secret()),
+        snapshot: async () => {
+            const body = await readRegistration(registry(), "/snapshot", secret());
+
+            return body["tables"] as Record<string, string[]>;
+        },
+        unregister: async (table, shardKey) => unregisterShardKey(registry(), table, shardKey, secret()),
+    };
+};
+
+export type { ShardRegistryRpc };
+export { hostedShardRegistry, isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };

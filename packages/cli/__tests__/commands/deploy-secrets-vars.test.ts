@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveDeployDriver } from "@lunora/config";
+import { requiredSecrets, resolveDeployDriver } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { offerMissingSecrets } from "../../src/commands/deploy/secrets";
@@ -47,6 +47,19 @@ describe("celld secrets gate", () => {
         await expect(offerMissingSecrets(root, { logger }, true, resolveDeployDriver("celld"))).resolves.toStrictEqual({
             error: expect.stringMatching(/missing required secret\(s\) in the wrangler vars: .*LUNORA_ADMIN_TOKEN/u),
         });
+    });
+
+    // A real URL that happens to contain a placeholder word is a value: the token heuristic judges secret-shaped keys only.
+    it("passes when a required URL names a placeholder word", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(root, "lunora"), { recursive: true });
+        writeFileSync(join(root, "lunora", "auth.ts"), 'import "@lunora/auth";\n', "utf8");
+        writeBuildConfig(
+            Object.fromEntries(requiredSecrets(["@lunora/auth"]).map((entry) => [entry.key, entry.key === "AUTH_URL" ? "https://todo.acme.com" : "set"])),
+        );
+
+        await expect(offerMissingSecrets(root, { logger }, true, resolveDeployDriver("celld"))).resolves.toStrictEqual({});
     });
 
     it("passes when the build's vars carry the key", async () => {

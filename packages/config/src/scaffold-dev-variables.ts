@@ -122,7 +122,7 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  * from `lunora env doctor`, whose job is to report it as unfilled.
  */
 const isMintableSecretKey = (key: string, value: string): boolean =>
-    key === SHARD_RELAY_SECRET_KEY ? value === SHARD_RELAY_HOST_PLACEHOLDER : MINTABLE_SECRET_KEYS.has(key);
+    key === SHARD_RELAY_SECRET_KEY ? value.trim() === "" || value === SHARD_RELAY_HOST_PLACEHOLDER : MINTABLE_SECRET_KEYS.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`

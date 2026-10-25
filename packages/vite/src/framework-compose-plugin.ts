@@ -222,10 +222,14 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
     const durableObjects = durableObjectWiring(base, classModules, mergeDurableObjects);
-    const classReexports = classModules
-        .filter((module) => durableObjects.reexported(module))
-        .map((module) => `\nexport * from "${base}/${module}";\n`)
-        .join("");
+    // A merged app forwards only `LunoraDO`, so the registry module's RPC entrypoint is named here: a client worker binds it.
+    const registryEntrypoint =
+        mergeDurableObjects && classModules.includes("shardRegistry") ? `\nexport { ShardRegistryEntrypoint } from "${base}/shardRegistry";\n` : "";
+    const classReexports =
+        classModules
+            .filter((module) => durableObjects.reexported(module))
+            .map((module) => `\nexport * from "${base}/${module}";\n`)
+            .join("") + registryEntrypoint;
 
     // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
     // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so

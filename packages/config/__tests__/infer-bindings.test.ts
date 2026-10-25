@@ -560,8 +560,19 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
     });
 
+    it("declares no relay secret for a worker that only calls a registry another worker hosts", async () => {
+        expect.assertions(1);
+
+        // Such a worker takes the host's RPC over a service binding, so the binding is its capability and no secret is needed.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/registry.ts", "export const registry = createDynamicShardRegistry({ namespace: env.SERVICE_REGISTRY });\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+    });
+
     it("does not make a sharded app a registry host just because codegen wrote the registry module", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         // Codegen writes `shardRegistry.ts` for every `.shardBy()` schema; this entry exports only the shard.
         write("wrangler.jsonc", WRANGLER);
@@ -571,11 +582,10 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
 
         expect(sources).not.toContain("@lunora/do:shardRegistry");
-        expect(sources).not.toContain("@lunora/do:shardRegistryClient");
     });
 
     it("gives a worker that hosts the registry the host's secret, and not the client's", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
@@ -583,80 +593,6 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
 
         expect(sources).toContain("@lunora/do:shardRegistry");
-        expect(sources).not.toContain("@lunora/do:shardRegistryClient");
-    });
-
-    it("reports the relay secret for a worker that only calls the registry through a binding to another worker", async () => {
-        expect.assertions(2);
-
-        // A client exports no registry class and generates no module; it selects the registry the worker
-        // binds to, and every request it sends is signed with the secret.
-        write("wrangler.jsonc", WRANGLER);
-        write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/app.ts", "export const app = defineApp().shardRegistry((env) => env.SHARD_REGISTRY);\n");
-
-        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistryClient");
-
-        write("lunora/app.ts", "export const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n");
-
-        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistryClient");
-    });
-
-    it("reports the relay secret for a registry client imported under an alias or called as a namespace member", async () => {
-        expect.assertions(2);
-
-        write("wrangler.jsonc", WRANGLER);
-        write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write(
-            "lunora/registry.ts",
-            'import { createDynamicShardRegistry as makeRegistry } from "@lunora/runtime";\nexport const registry = makeRegistry({ env, namespace: env.SHARD_REGISTRY });\n',
-        );
-
-        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistryClient");
-
-        write(
-            "lunora/registry.ts",
-            'import * as runtime from "@lunora/runtime";\nexport const registry = runtime.createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n',
-        );
-
-        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistryClient");
-    });
-
-    it("does not report the relay secret for a shardRegistry method on an object that is not the app builder", async () => {
-        expect.assertions(1);
-
-        write("wrangler.jsonc", WRANGLER);
-        write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/cache.ts", "const cache = { shardRegistry: () => undefined };\nexport const hit = cache.shardRegistry();\n");
-
-        expect(
-            secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root })).filter((source) => source.startsWith("@lunora/do:shardRegistry")),
-        ).toStrictEqual([]);
-    });
-
-    it("reads a .ts file as TypeScript, so a generic arrow before a registry call does not hide the call", async () => {
-        expect.assertions(1);
-
-        write("wrangler.jsonc", WRANGLER);
-        write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write(
-            "lunora/registry.ts",
-            "export const identity = <T>(value: T): T => value;\nexport const registry = createDynamicShardRegistry({ env, namespace: env.SHARD_REGISTRY });\n",
-        );
-
-        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistryClient");
-    });
-
-    it("does not report the relay secret for a comment or a string that names the registry client", async () => {
-        expect.assertions(1);
-
-        write("wrangler.jsonc", WRANGLER);
-        write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/notes.ts", '// createApp().shardRegistry((env) => env.SHARD_REGISTRY);\nexport const note = "createDynamicShardRegistry({ env })";\n');
-
-        expect(
-            secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root })).filter((source) => source.startsWith("@lunora/do:shardRegistry")),
-        ).toStrictEqual([]);
     });
 
     it("reconciles a fresh merged app into a config the validator accepts", async () => {

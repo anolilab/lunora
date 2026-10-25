@@ -145,17 +145,6 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
         },
     ],
-    // A worker that only calls a registry another worker hosts signs with the same value,
-    // so it is required but never generated here: a fresh value would not match the host's.
-    "@lunora/do:shardRegistryClient": [
-        {
-            description:
-                "Signs every request this worker sends to a ShardRegistryDO that another worker hosts. Copy the value from the worker that hosts the registry; a generated one would be refused.",
-            docsUrl: "https://lunora.sh/docs/concepts/sharding#the-shard-registry",
-            key: SHARD_RELAY_SECRET_KEY,
-            placeholderValue: "<copy-from-the-worker-that-hosts-the-registry>",
-        },
-    ],
     // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to

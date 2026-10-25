@@ -2,7 +2,7 @@ import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
-import { ShardRegistryDO } from "../src/shard-registry-do";
+import { hostedShardRegistry, ShardRegistryDO } from "../src/shard-registry-do";
 
 const SECRET = "test-relay-secret";
 const ENV = { LUNORA_RELAY_SECRET: SECRET };
@@ -403,5 +403,24 @@ describe("shardRegistryDO", () => {
         const list = await listResponse.json();
 
         expect((list as { shardKeys: string[] }).shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["alpha", "beta"]);
+    });
+});
+
+describe("hostedShardRegistry", () => {
+    it("serves the registry's writes and reads through the host's own namespace, signed with its secret", async () => {
+        expect.assertions(2);
+
+        const registry = new ShardRegistryDO(createFakeState(), ENV);
+        const namespace = {
+            get: () => {return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) }},
+            getByName: () => {return { fetch: async (url: string, init?: RequestInit) => registry.fetch(new Request(url, init)) }},
+            idFromName: (name: string) => name,
+        };
+        const host = hostedShardRegistry({ ...ENV, SHARD_REGISTRY: namespace });
+
+        await host.register("messages", "alpha");
+
+        await expect(host.listShardKeys("messages")).resolves.toStrictEqual(["alpha"]);
+        await expect(host.snapshot()).resolves.toStrictEqual({ messages: ["alpha"] });
     });
 });

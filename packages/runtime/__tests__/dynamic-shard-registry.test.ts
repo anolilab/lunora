@@ -1,5 +1,5 @@
 import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 import { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "../src/dynamic-shard-registry";
@@ -94,6 +94,32 @@ const createFakeNamespace = (stub: { fetch: (request: Request) => Promise<Respon
         instanceCalls,
     };
 };
+
+describe("createDynamicShardRegistry through a service binding", () => {
+    it("reads and writes the host's RPC surface with no secret, and caches the list", async () => {
+        expect.assertions(4);
+
+        const rows = new Map<string, string[]>([["messages", ["a"]]]);
+        const listShardKeys = vi.fn(async (table: string) => [...(rows.get(table) ?? [])]);
+        const rpc = {
+            listShardKeys,
+            register: vi.fn(async (table: string, shardKey: string) => {
+                rows.set(table, [...(rows.get(table) ?? []), shardKey]);
+            }),
+            snapshot: async () => Object.fromEntries(rows),
+            unregister: async () => {},
+        };
+        const registry = createDynamicShardRegistry({ namespace: rpc });
+
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+        expect(listShardKeys).toHaveBeenCalledTimes(1);
+
+        await registry.register("messages", "b");
+
+        expect(rpc.register).toHaveBeenCalledWith("messages", "b");
+    });
+});
 
 describe("createDynamicShardRegistry", () => {
     it("listShardKeys returns the keys the DO has registered", async () => {
