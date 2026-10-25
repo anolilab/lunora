@@ -283,7 +283,7 @@ func TestEmptyShardKeyNeverReachesTheWire(t *testing.T) {
 		return 200, []byte(`{"result":null}`), nil
 	})
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	if _, err := client.Submit(SubmitOptions{Args: map[string]any{}, FunctionPath: "messages:send"}); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -417,7 +417,7 @@ func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
 	frames, _ := streamCase["frames"].([]any)
 	client := NewClient("https://app.example", nil)
 
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	events, unsubscribe := client.Stream("messages:list", map[string]any{"channel": "general"}, "")
 
@@ -467,11 +467,7 @@ func TestServerFrameConsumer(t *testing.T) {
 			var sent []map[string]any
 
 			client := NewClient("https://app.example", nil)
-			client.AttachSocket(func(frame map[string]any) error {
-				sent = append(sent, frame)
-
-				return nil
-			})
+			client.AttachSocket(recordSubscriptionFrames(&sent), nil)
 
 			var seen []any
 
@@ -687,7 +683,7 @@ func TestShapeSubscriptionsResendAfterReconnect(t *testing.T) {
 	covers("shape_subscriptions_resend_after_reconnect")
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 	client.Subscribe("messages:list", map[string]any{"channel": "general"}, func(any) {}, nil, "")
 	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, nil)
 
@@ -706,11 +702,7 @@ func TestShapeSubscriptionsResendAfterReconnect(t *testing.T) {
 
 	var resent []map[string]any
 
-	client.AttachSocket(func(frame map[string]any) error {
-		resent = append(resent, frame)
-
-		return nil
-	})
+	client.AttachSocket(recordSubscriptionFrames(&resent), nil)
 
 	if err := client.ResendSubscriptions(); err != nil {
 		t.Fatalf("resend: %v", err)
@@ -765,7 +757,7 @@ func TestErrorFrameReachesAShapeSubscription(t *testing.T) {
 	covers("server_frame_consumer")
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	var reported []SubscriptionError
 
@@ -795,7 +787,7 @@ func TestARefusedPayloadStaysOnItsOwnSubscription(t *testing.T) {
 	covers("server_frame_consumer")
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	var (
 		firstErrors []SubscriptionError
@@ -847,7 +839,7 @@ func TestPokeSequenceMaterialisesRows(t *testing.T) {
 	}
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	var delivered [][]any
 
@@ -885,7 +877,7 @@ func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
 	sequence, _ := shape["pokeSequence"].([]any)
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	fired := 0
 
@@ -934,7 +926,7 @@ func TestResetPokeReplacesTheView(t *testing.T) {
 	}
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	var delivered [][]any
 

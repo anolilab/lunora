@@ -28,6 +28,7 @@ const serve = async (cwd: string, options: McpOptions): Promise<{ code: number }
     const { code } = await runMcpServe({
         allowWrites: options.allowWrites === true,
         cwd,
+        functions: options.functions === true,
         // cerebro exposes `--no-docs` as `docs: false`.
         noDocs: options.docs === false,
         version: VERSION,

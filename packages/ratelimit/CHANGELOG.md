@@ -1,3 +1,50 @@
+## @lunora/ratelimit [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.166...@lunora/ratelimit@1.0.0-alpha.167) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/d1:** upgraded to 1.0.0-alpha.205
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+
+## @lunora/ratelimit [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.165...@lunora/ratelimit@1.0.0-alpha.166) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/d1:** upgraded to 1.0.0-alpha.204
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+
+## @lunora/ratelimit [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.164...@lunora/ratelimit@1.0.0-alpha.165) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.203
+* **@lunora/server:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/ratelimit [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.163...@lunora/ratelimit@1.0.0-alpha.164) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+
+## @lunora/ratelimit [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.162...@lunora/ratelimit@1.0.0-alpha.163) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.202
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/ratelimit [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.161...@lunora/ratelimit@1.0.0-alpha.162) (2026-10-22)
 
 

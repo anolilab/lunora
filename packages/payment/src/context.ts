@@ -14,6 +14,7 @@ import { createPayment } from "./create-payment";
 import type { PaymentDatabase, PaymentRow } from "./database-store";
 import { createDatabasePaymentStore } from "./database-store";
 import type { EntitlementsConfig } from "./entitlements";
+import { LunoraPaymentError } from "./errors";
 import type { PaymentObserver } from "./observability";
 
 /**
@@ -34,6 +35,12 @@ export interface LunoraDatabaseLike {
     ) => Promise<{ continueCursor: null | string; page: Record<string, unknown>[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    /** Atomic conditional patch; optional on ctx.db, and a guarded payment write fails without it. */
+    patchIf?: (
+        table: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
 }
 
 /**
@@ -77,6 +84,15 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
         },
         insert: async (table, document) => database.insert(table, document),
         patch: async (id, patch) => database.patch(id, patch),
+        patchIf: async (table, id, where, patch) => {
+            if (database.patchIf === undefined) {
+                throw new LunoraPaymentError("CONFIG_INVALID", "@lunora/payment: a guarded write needs ctx.db.patchIf, which this database does not provide");
+            }
+
+            const { applied } = await database.patchIf(table, id, { patch, where });
+
+            return applied;
+        },
     };
 };
 

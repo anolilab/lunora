@@ -198,6 +198,24 @@ class LunoraClient {
   String wsUrl({String? shardKey, String? ticket}) => transport.wsUrl(shardKey: shardKey, ticket: ticket);
 
   LunoraFrameSender? _send;
+  String? _sessionToken;
+
+  /// Bumped whenever the session credential changes. A socket records the
+  /// generation it opened under; see [detachSocket].
+  int _credentialGeneration = 0;
+  int _socketGeneration = 0;
+
+  /// Bumped by attach and detach, so a superseded attach does not install its sender.
+  int _attachGeneration = 0;
+
+  /// The generation a 4003 was last reported for, so one credential's refusal
+  /// reports once however many retries repeat it.
+  int? _lastRefusedGeneration;
+  final List<void Function()> _tokenExpiredListeners = <void Function()>[];
+
+  /// The listeners on each whisper topic. A topic is joined on the server while
+  /// it has any, and left when the last one goes.
+  final Map<String, List<LunoraDataCallback>> _whisperListeners = <String, List<LunoraDataCallback>>{};
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
   final ShapeRegistry _shapeRegistry = ShapeRegistry();
   int _nextId = 0;
@@ -211,17 +229,138 @@ class LunoraClient {
   bool _wasEverConnected = false;
   bool _closed = false;
 
-  /// Registers the sender used for subscription frames. Call once the socket is
-  /// open.
-  void attachSocket(LunoraFrameSender sender) {
+  /// Registers the sender for this socket and writes its `connect` frame first.
+  ///
+  /// The frame carries the [sessionToken] when one is set, and [context] when
+  /// given. Whisper topics joined so far are rejoined right after it. Subscriptions
+  /// are not replayed here: call [resendSubscriptions] after this.
+  void attachSocket(LunoraFrameSender sender, {Map<String, Object?>? context}) {
+    // Offline until every write below has returned: a write that throws leaves the client offline, and a
+    // detach the sender makes during the writes supersedes this attach.
+    _send = null;
+    final attachGeneration = ++_attachGeneration;
+
+    if (_closed) {
+      return;
+    }
+
+    // The credential generation is read with the frames, before any sender callback can change it, so the
+    // socket is tagged with the credential it presented.
+    final credential = _credentialGeneration;
+
+    // Built before any is sent, for the reason [resendSubscriptions] gives: the
+    // sender is the caller's code.
+    final connect = buildConnectFrame(clientId: transport.clientId, context: context, token: _sessionToken);
+
+    // A sender that detaches or re-attaches during a write supersedes this attach: nothing more is written to
+    // a socket that is no longer attached.
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
+    sender(connect);
+
+    // A sender may register a topic while connect is written, and such a topic is in no earlier snapshot, so
+    // every topic is joined until none is left. A topic that has since been left is not joined.
+    final joined = <String>{};
+
+    while (attachGeneration == _attachGeneration) {
+      String? next;
+
+      for (final topic in _whisperListeners.keys) {
+        if (!joined.contains(topic)) {
+          next = topic;
+          break;
+        }
+      }
+
+      if (next == null) {
+        break;
+      }
+
+      joined.add(next);
+      sender(buildWhisperSubscribeFrame(next));
+    }
+
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
     _send = sender;
+    _socketGeneration = credential;
   }
 
   /// Forgets the sender, so a subscription made while the socket is down is
   /// held for [resendSubscriptions] instead of written to the dead socket.
   /// Unlike [close], the client stays usable and keeps its subscriptions.
-  void detachSocket() {
+  ///
+  /// [code] and [reason] are the close frame the socket ended with, when there
+  /// was one. They decide whether the server refused the credential:
+  ///
+  /// - 4001 means the token expired, and always notifies [onTokenExpired].
+  /// - 4003 refuses the credential, and notifies once per credential. A socket
+  ///   opened under a credential that has since been replaced notifies nothing,
+  ///   because it was refused a credential no longer in force. The connect
+  ///   deadline also closes with 4003, but it refuses no credential.
+  /// - Any other close notifies nothing.
+  void detachSocket([int? code, String? reason]) {
+    final openedUnder = _socketGeneration;
+
+    // Offline before any listener runs, so a listener that reattaches is not
+    // undone by this method clearing the sender afterwards.
     _send = null;
+    _attachGeneration++;
+
+    if (code == 4001) {
+      _notifyTokenExpired();
+    } else if (code == 4003 && reason != 'connect deadline' && openedUnder == _credentialGeneration && openedUnder != _lastRefusedGeneration) {
+      _lastRefusedGeneration = openedUnder;
+      _notifyTokenExpired();
+    }
+  }
+
+  /// The session credential: the WebSocket identity sent as `connect.token` on
+  /// every socket open. Never the RPC bearer ([authToken]) and never in the URL.
+  ///
+  /// Setting a different value supersedes the socket open under the old one, so
+  /// that socket's refusal is no longer reported; see [detachSocket]. Setting the
+  /// same value changes nothing. It takes effect on the next [attachSocket].
+  String? get sessionToken => _sessionToken;
+
+  set sessionToken(String? value) {
+    if (value == _sessionToken) {
+      return;
+    }
+
+    _sessionToken = value;
+    _credentialGeneration += 1;
+  }
+
+  /// Calls [listener] when the server says the session credential has expired
+  /// or refused it. Returns the handle that removes it.
+  LunoraUnsubscribe onTokenExpired(void Function() listener) {
+    _tokenExpiredListeners.add(listener);
+
+    var registered = true;
+
+    return () {
+      if (registered) {
+        registered = false;
+        _tokenExpiredListeners.remove(listener);
+      }
+    };
+  }
+
+  void _notifyTokenExpired() {
+    for (final listener in List<void Function()>.of(_tokenExpiredListeners)) {
+      // A listener is the app's code. Its failure must not stop this socket's
+      // close handling or the frame that reported the expiry.
+      try {
+        listener();
+      } on Object {
+        // Deliberately not rethrown: see above.
+      }
+    }
   }
 
   // ─── Connectivity ─────────────────────────────────────────────────────────
@@ -332,10 +471,13 @@ class LunoraClient {
   /// discard writes the next session will restore.
   void close() {
     _closed = true;
+    // An attach still in flight is superseded, so its sender is never installed after shutdown.
+    _attachGeneration++;
     _connectedShards.clear();
     _replayer.cancelRetries(all: true);
     _send = null;
     _subscriptions.clear();
+    _whisperListeners.clear();
     _shapeRegistry.clear();
 
     final streams = List<MultiStreamController<Object?>>.of(_streams);
@@ -539,6 +681,18 @@ class LunoraClient {
 
   static Map<String, Object?> buildShapeUnsubscribeFrame(String id) => ShapeRegistry.buildUnsubscribeFrame(id);
 
+  static Map<String, Object?> buildWhisperSubscribeFrame(String topic) => <String, Object?>{'topic': topic, 'type': 'whisper_subscribe'};
+
+  static Map<String, Object?> buildWhisperUnsubscribeFrame(String topic) => <String, Object?>{'topic': topic, 'type': 'whisper_unsubscribe'};
+
+  /// A whisper to the topic's other members. [data] is wire-encoded here, so it
+  /// is passed as the application's value.
+  static Map<String, Object?> buildWhisperFrame(String topic, Object? data) => <String, Object?>{
+        'data': encodeWire(data),
+        'topic': topic,
+        'type': 'whisper',
+      };
+
   // ─── Subscriptions ────────────────────────────────────────────────────────
 
   LunoraUnsubscribe subscribe(String functionPath, {Object? args, LunoraDataCallback? onData, LunoraErrorCallback? onError}) {
@@ -630,6 +784,63 @@ class LunoraClient {
     }
   }
 
+  // ─── Whisper and rooms ────────────────────────────────────────────────────
+
+  /// Joins [topic] and calls [listener] with every whisper sent to it, from any
+  /// member. The join goes out now if a socket is attached, and again after each
+  /// reconnect. Returns the handle that leaves it; the last listener to leave
+  /// sends `whisper_unsubscribe`.
+  LunoraUnsubscribe whisperSubscribe(String topic, LunoraDataCallback listener) {
+    final listeners = _whisperListeners[topic];
+
+    if (listeners == null) {
+      _whisperListeners[topic] = <LunoraDataCallback>[listener];
+      _send?.call(buildWhisperSubscribeFrame(topic));
+    } else {
+      listeners.add(listener);
+    }
+
+    var subscribed = true;
+
+    return () {
+      final current = _whisperListeners[topic];
+
+      if (!subscribed || current == null) {
+        return;
+      }
+
+      subscribed = false;
+      current.remove(listener);
+
+      if (current.isEmpty) {
+        _whisperListeners.remove(topic);
+        _send?.call(buildWhisperUnsubscribeFrame(topic));
+      }
+    };
+  }
+
+  /// Sends [data] to [topic]'s other members. Returns false, and sends nothing,
+  /// when no socket is attached: a whisper is transient, so it is not queued.
+  bool whisper(String topic, Object? data) {
+    final sender = _send;
+
+    if (sender == null) {
+      return false;
+    }
+
+    sender(buildWhisperFrame(topic, data));
+
+    return true;
+  }
+
+  /// Joins the room [name] (the topic `room:<name>`) and returns a handle to
+  /// send to it and to leave it. It does not wait for an acknowledgement.
+  LunoraRoom connectRoom(String name, LunoraDataCallback listener) {
+    final topic = 'room:$name';
+
+    return LunoraRoom._(this, topic, whisperSubscribe(topic, listener));
+  }
+
   // ─── Inbound frames ───────────────────────────────────────────────────────
 
   /// Applies one server frame and returns its type. Unknown types are ignored,
@@ -708,6 +919,15 @@ class LunoraClient {
       case 'error':
         final envelope = frame['error'];
         final coded = envelope is Map<String, Object?> ? envelope : const <String, Object?>{};
+
+        // The session expired. This is the credential's news, not the query's, so
+        // it notifies and reaches no subscription, whether or not it has an id.
+        if (coded['code'] == 'TOKEN_EXPIRED') {
+          _notifyTokenExpired();
+
+          return kind;
+        }
+
         final error = LunoraSubscriptionError(
           coded['code'] is String ? coded['code'] as String : null,
           frame['message'] is String
@@ -746,6 +966,35 @@ class LunoraClient {
         return kind;
       case 'pokeEnd':
         _shapeRegistry.applyPoke(frame, sender: _send);
+
+        return kind;
+      case 'whisper':
+        final topic = frame['topic'];
+        final listeners = topic is String && topic.isNotEmpty ? _whisperListeners[topic] : null;
+
+        if (listeners == null) {
+          return kind;
+        }
+
+        final Object? value;
+
+        try {
+          value = decodeWire(frame['data']);
+        } on WireFormatException {
+          // Dropped. A payload that does not decode is not the read loop's failure.
+          return kind;
+        }
+
+        // A copy, so a listener that leaves its topic mid-delivery does not
+        // change the list being walked.
+        for (final listener in List<LunoraDataCallback>.of(listeners)) {
+          // An app listener must not end frame handling, nor skip the listeners after it.
+          try {
+            listener(value);
+          } on Object {
+            // Deliberately not rethrown: see above.
+          }
+        }
 
         return kind;
       default:
@@ -870,6 +1119,30 @@ class LunoraClient {
     );
 
     return completer.future;
+  }
+}
+
+/// A joined room, from [LunoraClient.connectRoom].
+class LunoraRoom {
+  LunoraRoom._(this._client, this.topic, this._leave);
+
+  final LunoraClient _client;
+
+  /// The whisper topic this room is joined on, `room:<name>`.
+  final String topic;
+
+  final LunoraUnsubscribe _leave;
+
+  bool _closed = false;
+
+  /// Sends [message] to the room's other members. False when no socket is
+  /// attached, or when the room has been closed; see [LunoraClient.whisper].
+  bool send(Object? message) => !_closed && _client.whisper(topic, message);
+
+  /// Leaves the room. Calling it again does nothing.
+  void close() {
+    _closed = true;
+    _leave();
   }
 }
 

@@ -63,6 +63,7 @@ class TestFrameSafety < Minitest::Test
     # based past them: the view drops, tells the callback, and re-seeds cold.
     sent = []
     client.attach_socket(->(sent_frame) { sent << sent_frame })
+    sent.clear # attach sends connect first; this asserts only what the gap triggers
     fired = delivered.length
     feed(client, shape["gapPokeSequence"])
 

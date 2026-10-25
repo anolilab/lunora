@@ -85,6 +85,8 @@ interface PollingFallbackOptions {
 
 /** The polling state machine for ONE shard connection. */
 export interface PollingFallback {
+    /** `true` once a connect attempt has failed to reach `open` since the last one that did. */
+    hasFailedOpen: () => boolean;
     /** `true` while the interval is armed AND the latest pass reached the origin. */
     isPolling: () => boolean;
     /** A connect attempt ended without ever reaching `open`. Starts polling at the threshold. */
@@ -170,6 +172,7 @@ export const createPollingFallback = (options: PollingFallbackOptions): PollingF
     };
 
     return {
+        hasFailedOpen: () => failures > 0,
         isPolling: () => timer !== undefined && live,
         noteFailedOpen: () => {
             failures += 1;

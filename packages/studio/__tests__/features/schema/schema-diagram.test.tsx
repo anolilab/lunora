@@ -183,8 +183,50 @@ describe("schemaDiagram (component)", () => {
     });
 });
 
+const ENUM_TABLES: DiagramTable[] = [
+    {
+        columns: [
+            { name: "_id", optional: false, pk: true, type: "id" },
+            { enumValues: ["draft", "live"], name: "status", optional: false, type: "string" },
+            { enumValues: ["draft", "live", "archived", "deleted", "purged"], name: "state", optional: false, type: "string" },
+            { name: "mixed", optional: false, type: "string" },
+        ],
+        name: "posts",
+        tier: "shard",
+    },
+];
+
+describe("schemaDiagram (enum columns)", () => {
+    it("shows a string-literal union's allowed values in place of its type label", () => {
+        expect.assertions(2);
+
+        render(<SchemaDiagram tables={ENUM_TABLES} testIdPrefix="sd" />);
+
+        expect(screen.getByTestId("sd-col-posts-status").textContent).toContain('"draft" | "live"');
+        expect(screen.getByTestId("sd-col-posts-status").textContent).not.toContain("string");
+    });
+
+    it("collapses a wide union to its first three values plus a count, with every value in the title", () => {
+        expect.assertions(2);
+
+        render(<SchemaDiagram tables={ENUM_TABLES} testIdPrefix="sd" />);
+
+        expect(screen.getByTestId("sd-col-posts-state").textContent).toContain('"draft" | "live" | "archived" +2 more');
+        expect(screen.getByTitle('"draft" | "live" | "archived" | "deleted" | "purged"')).toBeDefined();
+    });
+
+    it("keeps the plain type label for a column whose enum was not named (mixed union)", () => {
+        expect.assertions(2);
+
+        render(<SchemaDiagram tables={ENUM_TABLES} testIdPrefix="sd" />);
+
+        expect(screen.getByTestId("sd-col-posts-mixed").textContent).toContain("string");
+        expect(screen.getByTestId("sd-col-posts-mixed").textContent).not.toContain("|");
+    });
+});
+
 /** A shard mock whose `messages` table carries a `v.id("users")` ref + typed columns via describeTables. */
-const createClient = (): MockClientHooks =>
+const createClient = (columnsByTable: Record<string, ColumnMeta[]> = COLUMNS_BY_TABLE): MockClientHooks =>
     createMockClient({
         listGlobalTables: () => [],
         query: (reference, args): unknown => {
@@ -206,7 +248,7 @@ const createClient = (): MockClientHooks =>
             if (reference === ADMIN_FUNCTIONS.describeTables) {
                 const { tables } = args as { tables: string[] };
 
-                return { columnsByTable: Object.fromEntries(tables.map((table) => [table, COLUMNS_BY_TABLE[table] ?? []])) };
+                return { columnsByTable: Object.fromEntries(tables.map((table) => [table, columnsByTable[table] ?? []])) };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -258,6 +300,21 @@ describe("schemaDiagram (viewer integration)", () => {
         const column = await screen.findByTestId("sd-col-messages-author");
 
         expect(column.textContent).toContain("author");
+    });
+
+    it("shows a union column's allowed values on the graph node from the describeTables payload", async () => {
+        expect.assertions(1);
+
+        const withStatus: Record<string, ColumnMeta[]> = {
+            ...COLUMNS_BY_TABLE,
+            messages: [...MESSAGES_COLUMNS, { enumValues: ["sent", "read"], name: "status", optional: false, type: "string" }],
+        };
+
+        render(renderViewer(createClient(withStatus)));
+
+        const column = await screen.findByTestId("sd-col-messages-status");
+
+        expect(column.textContent).toContain('"sent" | "read"');
     });
 
     it("shows the columns-unavailable hint when the describeTables probe rejects", async () => {

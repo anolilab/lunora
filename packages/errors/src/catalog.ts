@@ -563,6 +563,8 @@ export const ERROR_CATALOG = {
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
+    /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
+    CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
 
     /**

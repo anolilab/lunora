@@ -45,5 +45,24 @@ const shouldPrune = (sql: object, bucket: number, key = ""): boolean => {
     return true;
 };
 
+/**
+ * Run `trim` once per `(handle, key, bucket)`. A trim that throws gives its
+ * claim back, so the next write in the same window retries it instead of
+ * skipping the prune for the rest of the window.
+ */
+const pruneOncePerWindow = (sql: object, bucket: number, key: string, trim: () => void): void => {
+    if (!shouldPrune(sql, bucket, key)) {
+        return;
+    }
+
+    try {
+        trim();
+    } catch (error: unknown) {
+        lastPrunedBucket.get(sql)?.delete(key);
+
+        throw error;
+    }
+};
+
 // eslint-disable-next-line import/prefer-default-export -- named export by repo convention (no default exports)
-export { shouldPrune };
+export { pruneOncePerWindow };

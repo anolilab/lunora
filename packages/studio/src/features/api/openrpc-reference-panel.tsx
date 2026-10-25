@@ -6,7 +6,8 @@ import { Skeleton } from "../../components/ui/skeleton";
 import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
 import { useT } from "../../i18n/i18n-context";
-import parseOpenRpc from "./openapi/openrpc-model";
+import type { OpenRpcDocument } from "./openapi/openrpc-model";
+import { parseOpenRpc, rpcMethodsOf } from "./openapi/openrpc-model";
 import ReferenceView from "./openapi/reference-view";
 
 interface OpenRpcReferencePanelProps {
@@ -19,11 +20,8 @@ interface OpenRpcReferencePanelProps {
     readonly spec?: unknown;
 }
 
-/** The OpenRPC document shape the panel inspects to classify it (only `methods`). */
-type OpenRpcDocument = { methods?: unknown[] };
-
-/** A document with no `methods` (or an empty array) is the worker's "not configured" sentinel. */
-const isEmptyDocument = (document: OpenRpcDocument): boolean => document.methods === undefined || document.methods.length === 0;
+/** A document with no RPC method (streams do not count) is the worker's "not configured" sentinel. */
+const isEmptyDocument = (document: OpenRpcDocument): boolean => rpcMethodsOf(document).length === 0;
 
 /** Classify a resolved document into the `ready`/`empty` terminal states (see {@link useAdminSpec}). */
 const classifyDocument = (spec: unknown): SpecFetchState<OpenRpcDocument> => {

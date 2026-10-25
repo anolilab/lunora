@@ -112,7 +112,7 @@ const envProvider = (options: EnvProviderOptions = {}): FlagsProviderFactory => 
 
                 const parsed = Number(value);
 
-                if (value.trim() === "" || Number.isNaN(parsed)) {
+                if (value.trim() === "" || !Number.isFinite(parsed)) {
                     return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) value is not a number`);
                 }
 
@@ -125,14 +125,22 @@ const envProvider = (options: EnvProviderOptions = {}): FlagsProviderFactory => 
                     return missing(defaultValue);
                 }
 
+                let parsed: unknown;
+
                 try {
-                    return staticDetails(JSON.parse(value) as T);
+                    parsed = JSON.parse(value);
                 } catch (error) {
                     return parseError(
                         defaultValue,
                         `env flag "${flagKey}" (${nameOf(flagKey)}) is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
                     );
                 }
+
+                if (typeof parsed !== "object" || parsed === null) {
+                    return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) is not a JSON object`);
+                }
+
+                return staticDetails(parsed as T);
             },
             resolveStringEvaluation: (flagKey, defaultValue): Promise<ResolutionDetails<string>> => {
                 const value = raw(flagKey);

@@ -1,7 +1,8 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import type { TableIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
-import { hasShardedTables } from "./app-helpers";
+import { hasLiveStreamMounts, hasShardedTables } from "./app-helpers";
+import { assertIdentifier, IMPORT_PATH_RE } from "./shared";
 
 /**
  * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
@@ -53,11 +54,62 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
               `        const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry, secret: (env as { SHARD_REGISTRY_DO_SECRET?: string }).SHARD_REGISTRY_DO_SECRET }) });
         }`,
           ]
         : []),
 ];
+
+/**
+ * One `liveStreamRouter` mount per declared stream, as the lines of an array literal. Each stream's module loads on its
+ * first request, so a worker starts without evaluating the live modules.
+ */
+const liveStreamMountEntries = (options: ResolvedAppOptions): string[] =>
+    (options.liveStreamDeclarations ?? []).map((stream) => {
+        assertIdentifier(stream.exportName, "live stream export name");
+
+        if (!IMPORT_PATH_RE.test(stream.filePath)) {
+            throw new Error(`@lunora/codegen: live stream file path is not safe to import: ${JSON.stringify(stream.filePath)}`);
+        }
+
+        return `                { id: ${JSON.stringify(stream.id)}, load: () => import("../${stream.filePath}.js").then((m) => m.${stream.exportName}) },`;
+    });
+
+/**
+ * The worker's `httpRouter`. With live streams to mount, the router serves each declared stream's connect and control
+ * routes and hands every other request to the app's own router. A framework host ignores this key and composes its
+ * own router, so {@link buildFrameworkHostLine} wraps the host instead.
+ */
+const buildHttpRouterLines = (options: ResolvedAppOptions): string[] => {
+    if (!hasLiveStreamMounts(options)) {
+        return [`            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`];
+    }
+
+    return [`            httpRouter: liveStreamRouter([`, ...liveStreamMountEntries(options), `            ], this.httpRouterApp),`];
+};
+
+/**
+ * The `"METHOD path"` keys of the declared stream routes, so the runtime dispatches them ahead of the app's explicit
+ * `.route()` entries. The paths are the ones `@lunora/server` derives from each stream's `id`.
+ */
+const buildLiveStreamRouteLines = (options: ResolvedAppOptions): string[] =>
+    hasLiveStreamMounts(options)
+        ? [
+              `            liveStreamRoutes: [`,
+              ...(options.liveStreamDeclarations ?? []).flatMap((stream) => [
+                  `                ${JSON.stringify(`GET /live/${stream.id}/connect`)},`,
+                  `                ${JSON.stringify(`POST /live/${stream.id}/control`)},`,
+              ]),
+              `            ],`,
+          ]
+        : [];
+
+/**
+ * The router a framework host is composed with, as an expression. The live-stream routes come first, so `/live/...`
+ * reaches the worker before the host's own handler sees it. Without live streams the host is used as it is.
+ */
+const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
+    hasLiveStreamMounts(options) ? `liveStreamRouter([\n${liveStreamMountEntries(options).join("\n")}\n            ], host)` : "host";
 
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
@@ -460,10 +512,11 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the
     // emitted options object reads as "not configured" either way.
-    `            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`,
+    ...buildHttpRouterLines(options),
+    ...buildLiveStreamRouteLines(options),
     `            routes: this.routeMap,`,
     ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
 ];
 
-export { buildBaseWorkerOptions, buildWorkerOptionLines };
+export { buildBaseWorkerOptions, buildFrameworkHostLine, buildWorkerOptionLines };

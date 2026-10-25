@@ -11,20 +11,31 @@
  * editor spawns this process when the project opens — routinely before
  * `lunora dev` is running — and keeps it alive across every restart afterwards.
  */
+import type { FSWatcher } from "node:fs";
+import { existsSync, readFileSync, statSync, watch } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { readLiveDevServerState } from "@lunora/config";
 import { resolveAdminToken } from "@lunora/config/studio-host";
-import type { LocalDeployment, LocalMcpServerOptions } from "@lunora/mcp";
-import { connectLocalStdio } from "@lunora/mcp";
+import type { FunctionMcpServerOptions, LocalDeployment, LocalMcpServerOptions } from "@lunora/mcp";
+import { connectFunctionStdio, connectLocalStdio } from "@lunora/mcp";
 
 import { devTools } from "./dev-tools";
 
 interface McpServeOptions {
     /** Expose the deployment write tools (mutations/actions). Default: read-only. */
     allowWrites?: boolean;
+
     /** The project directory to serve. */
     cwd: string;
     /** Docs site origin backing the documentation tools. */
     docsUrl?: string;
+
+    /**
+     * Serve one tool per function of this app instead of the generic deployment tools.
+     * Needs `lunora/_generated/openrpc.json`, which codegen writes for `apiSpec: "openrpc"`.
+     */
+    functions?: boolean;
     /** Omit the documentation tools. */
     noDocs?: boolean;
     /** Bearer token override; defaults to the project's resolved admin token. */
@@ -51,7 +62,22 @@ interface McpServeResult {
  * test drive the blocking path with a stub.
  */
 interface ClosableServer {
+    /** Closes the server and releases what it holds, such as a cached client's socket. */
+    close?: () => Promise<void>;
     onclose?: () => void;
+    /** Tells the connected client its tool list changed. Only a function server has one to change. */
+    sendToolListChanged?: () => Promise<void>;
+}
+
+/** A document with no functions: what the server serves once the document has been removed. */
+const NO_FUNCTIONS: unknown = { methods: [], openrpc: "1.3.2" };
+
+const isMissing = (error: unknown): boolean => error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+
+/** The OpenRPC document as it was last read, with the mtime it was read at. */
+interface LoadedSpec {
+    mtimeMs: number;
+    spec: unknown;
 }
 
 /** Hostnames that are unambiguously this machine. */
@@ -157,6 +183,174 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
     return `lunora mcp serve: ready — deployment at ${deployment.url} (${why})\n`;
 };
 
+/** Diagnostics go to stderr: stdout is the MCP wire. */
+const writeToStderr = (message: string): void => {
+    process.stderr.write(message);
+};
+
+/**
+ * `--functions`: one MCP tool per function of this app, from the OpenRPC document
+ * codegen wrote to `lunora/_generated/openrpc.json`.
+ *
+ * Identity is the caller's, so the bearer is the explicit `--token` and nothing
+ * else. The project's admin token is never used here: these tools run as the
+ * caller, and handing them the admin bearer would turn each one into an admin call.
+ */
+const serveFunctions = async (options: McpServeOptions, connect: (options: FunctionMcpServerOptions) => Promise<ClosableServer>): Promise<McpServeResult> => {
+    const writeError = options.writeError ?? writeToStderr;
+    const specPath = join(options.cwd, "lunora", "_generated", "openrpc.json");
+
+    // Resolved on every call, not once: the editor starts this process before `lunora dev`
+    // is running, and the server keeps the URL current when the dev server moves.
+    const deploymentUrl = (): string | undefined => options.url ?? readLiveDevServerState(options.cwd)?.url;
+
+    // A document that exists but cannot be parsed is reported once per modification time, so a
+    // file that stays broken is not repeated on every `tools/list`.
+    let reportedMtime: number | undefined;
+    let reportedStatFailure: string | undefined;
+    const reloadFailed = (error: unknown): void => {
+        writeError(`lunora mcp serve --functions: kept the last tool list — the rewritten document did not load: ${String(error)}\n`);
+    };
+
+    // Codegen rewrites the file in place, so the tools follow it: each `tools/list` and `tools/call`
+    // re-reads it when its mtime has moved. A half-written rewrite fails to parse, and the last
+    // complete document keeps serving. A missing file means no functions yet (the editor may start
+    // before codegen has run) or that OpenRPC was turned off, so the tools are removed until it exists.
+    let loaded: LoadedSpec = { mtimeMs: -1, spec: NO_FUNCTIONS };
+    const specNow = (): unknown => {
+        let mtimeMs: number;
+
+        try {
+            mtimeMs = statSync(specPath).mtimeMs;
+            reportedStatFailure = undefined;
+        } catch (error: unknown) {
+            if (!isMissing(error)) {
+                // A persistent error such as EACCES would otherwise repeat on every request.
+                const failure = (error as NodeJS.ErrnoException).code ?? String(error);
+
+                if (reportedStatFailure !== failure) {
+                    reportedStatFailure = failure;
+                    reloadFailed(error);
+                }
+            } else if (loaded.spec !== NO_FUNCTIONS) {
+                loaded = { mtimeMs: -1, spec: NO_FUNCTIONS };
+            }
+
+            return loaded.spec;
+        }
+
+        if (mtimeMs !== loaded.mtimeMs) {
+            try {
+                loaded = { mtimeMs, spec: JSON.parse(readFileSync(specPath, "utf8")) as unknown };
+            } catch (error: unknown) {
+                if (reportedMtime !== mtimeMs) {
+                    reportedMtime = mtimeMs;
+                    reloadFailed(error);
+                }
+            }
+        }
+
+        return loaded.spec;
+    };
+
+    let server: ClosableServer;
+
+    try {
+        server = await connect({
+            allowWrites: options.allowWrites === true,
+            onReloadError: reloadFailed,
+            openRpcSpec: specNow,
+            url: deploymentUrl,
+            version: options.version,
+            ...(options.token === undefined || options.token.length === 0 ? {} : { token: options.token }),
+        });
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        writeError(`lunora mcp serve --functions: failed to start — ${message}\n`);
+
+        return { code: 1, deployment: undefined };
+    }
+
+    const withoutBearer = options.token === undefined || options.token.length === 0;
+    const url = deploymentUrl();
+    const target = url === undefined || url.length === 0 ? "no deployment yet (start `lunora dev` or pass --url; calls fail until one runs)" : url;
+
+    const awaitingDocument = existsSync(specPath) ? "" : " (no openrpc.json yet: run `lunora codegen --api-spec openrpc`; the functions appear once it exists)";
+
+    writeError(
+        `lunora mcp serve --functions: ready — ${target}${withoutBearer ? " (no --token: only public functions answer, and writes are refused)" : ""}${awaitingDocument}\n`,
+    );
+
+    // The editor keeps its tool list until it hears otherwise, so announce each change to the document,
+    // including its arrival on a fresh checkout. The watch sits on the nearest directory that exists, and
+    // moves down to `_generated` once codegen creates it. A watch that cannot start or fails costs only
+    // those announcements: each call still reads the file.
+    const generatedDirectory = dirname(specPath);
+    const watchFailed = (error: unknown): void => {
+        writeError(`lunora mcp serve --functions: the tool list will not be announced on a change — ${String(error)}\n`);
+    };
+    const watchTarget = (): string => {
+        if (existsSync(generatedDirectory)) {
+            return generatedDirectory;
+        }
+
+        const lunoraDirectory = dirname(generatedDirectory);
+
+        return existsSync(lunoraDirectory) ? lunoraDirectory : options.cwd;
+    };
+    let documentPresent = existsSync(specPath);
+    let watched: { directory: string; watcher: FSWatcher } | undefined;
+    const watchChanges = (): void => {
+        const directory = watchTarget();
+
+        if (watched?.directory === directory) {
+            return;
+        }
+
+        watched?.watcher.close();
+        watched = undefined;
+
+        try {
+            const watcher = watch(directory, (_event, fileName) => {
+                const present = existsSync(specPath);
+                const changed = fileName === "openrpc.json" || present !== documentPresent;
+
+                documentPresent = present;
+                watchChanges();
+
+                if (changed) {
+                    server.sendToolListChanged?.().catch((error: unknown) => {
+                        writeError(`lunora mcp serve --functions: could not announce the tool list change — ${String(error)}\n`);
+                    });
+                }
+            });
+
+            watcher.on("error", watchFailed);
+            watched = { directory, watcher };
+        } catch (error: unknown) {
+            watchFailed(error);
+        }
+    };
+
+    watchChanges();
+
+    try {
+        await waitForClose(server);
+    } finally {
+        watched?.watcher.close();
+
+        // Closing the server releases its cached client, which may hold a stream's socket open.
+        try {
+            await server.close?.();
+        } catch (error: unknown) {
+            writeError(`lunora mcp serve --functions: could not close the server — ${String(error)}\n`);
+        }
+    }
+
+    return { code: 0, deployment: undefined };
+};
+
 /**
  * Start the stdio server and serve until the client disconnects.
  *
@@ -167,12 +361,13 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
 const runMcpServe = async (
     options: McpServeOptions,
     connect: (options: LocalMcpServerOptions) => Promise<ClosableServer> = connectLocalStdio,
+    connectFunctions: (options: FunctionMcpServerOptions) => Promise<ClosableServer> = connectFunctionStdio,
 ): Promise<McpServeResult> => {
-    const writeError =
-        options.writeError ??
-        ((message: string): void => {
-            process.stderr.write(message);
-        });
+    if (options.functions === true) {
+        return serveFunctions(options, connectFunctions);
+    }
+
+    const writeError = options.writeError ?? writeToStderr;
 
     let server: ClosableServer;
 

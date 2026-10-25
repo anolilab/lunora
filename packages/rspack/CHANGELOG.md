@@ -1,3 +1,56 @@
+## @lunora/rspack [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.99...@lunora/rspack@1.0.0-alpha.100) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.351
+* **@lunora/config:** upgraded to 1.0.0-alpha.404
+* **@lunora/studio:** upgraded to 1.0.0-alpha.339
+
+## @lunora/rspack [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.98...@lunora/rspack@1.0.0-alpha.99) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.350
+* **@lunora/config:** upgraded to 1.0.0-alpha.403
+* **@lunora/studio:** upgraded to 1.0.0-alpha.338
+
+## @lunora/rspack [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.97...@lunora/rspack@1.0.0-alpha.98) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.402
+* **@lunora/studio:** upgraded to 1.0.0-alpha.337
+
+## @lunora/rspack [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.96...@lunora/rspack@1.0.0-alpha.97) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.349
+* **@lunora/config:** upgraded to 1.0.0-alpha.401
+* **@lunora/studio:** upgraded to 1.0.0-alpha.336
+
+## @lunora/rspack [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.95...@lunora/rspack@1.0.0-alpha.96) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.348
+* **@lunora/config:** upgraded to 1.0.0-alpha.400
+* **@lunora/studio:** upgraded to 1.0.0-alpha.335
+
+## @lunora/rspack [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.94...@lunora/rspack@1.0.0-alpha.95) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.347
+* **@lunora/config:** upgraded to 1.0.0-alpha.399
+* **@lunora/studio:** upgraded to 1.0.0-alpha.334
+
 ## @lunora/rspack [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.93...@lunora/rspack@1.0.0-alpha.94) (2026-10-22)
 
 

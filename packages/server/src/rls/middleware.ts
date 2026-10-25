@@ -70,6 +70,7 @@ import { isPlainObject } from "@lunora/wire";
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
 // options bag. See `./where-match` for the full story.
+import { assertWithinBatchCap, DEFAULT_BATCH_LIMIT, resolveBatchCap } from "../../../../shared/batch-cap";
 import { previewPatch } from "../../../../shared/field-operators";
 import type { Middleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
@@ -417,33 +418,20 @@ interface DatabaseWriterLike {
 type RlsDatabase = DatabaseWriterLike;
 
 /**
- * Mirror of `@lunora/do`'s batch-write cap. The middleware's `deleteMany` /
- * `patchMany` loop per-id (locating + policy-checking each row routes some ids
+ * `BATCH_LIMIT_EXCEEDED`, the code the writer's own cap throws: a client that
+ * catches it to chunk and retry must see the same code under `.rls()`.
+ */
+const batchLimitError = (message: string): LunoraError => new LunoraError("BATCH_LIMIT_EXCEEDED", message, { status: 400 });
+
+/**
+ * The writer's batch-write cap, re-checked here. The middleware's `deleteMany` /
+ * `patchMany` loop per id (locating + policy-checking each row routes some ids
  * through `raw` and others through `base`), so they never delegate to the
  * underlying writer's batch method — meaning that writer's own cap check never
- * runs. We re-enforce it here so the limit holds on the RLS path too. Keep this
- * value in sync with `DEFAULT_BATCH_LIMIT` in `@lunora/do`'s `ctx-db.ts`
- * (the two packages share no code, so the constant is duplicated by necessity).
+ * runs.
  */
-const DEFAULT_BATCH_LIMIT = 500;
-
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
-
-    if (count > cap) {
-        // `BATCH_LIMIT_EXCEEDED`, matching the writer's own cap in
-        // `@lunora/shard-engine`'s `ctx-db.ts`. This threw `BAD_REQUEST` while the
-        // message and the cap were byte-identical, so a client catching
-        // `err.code === "BATCH_LIMIT_EXCEEDED"` to chunk-and-retry worked against
-        // a plain table and silently failed to match under a `.rls("required")`
-        // schema — same status, same text, different code. `@lunora/server`'s own
-        // types document that code as the one a caller reasons about.
-        throw new LunoraError(
-            "BATCH_LIMIT_EXCEEDED",
-            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
-            { status: 400 },
-        );
-    }
+    assertWithinBatchCap(count, resolveBatchCap(limit, op, batchLimitError), op, batchLimitError);
 };
 
 /**
@@ -1436,13 +1424,17 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // delete. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validated before the read, so a bad limit never reaches it.
+            const cap = resolveBatchCap(options?.limit, "deleteWhere", batchLimitError);
+            // `cap + 1` rows is enough to see an over-cap match without reading it all; an `Infinity` cap reads every match.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(where, baseWhere),
+                ...(Number.isFinite(cap) ? { limit: cap + 1 } : {}),
                 relationBaseWhere: relationReadFilter,
             });
             const ids = resolved.page.map((row) => String(row["_id"]));
 
-            assertBatchLimit(ids.length, options?.limit, "deleteWhere");
+            assertWithinBatchCap(ids.length, cap, "deleteWhere", batchLimitError);
 
             return { deleted: await deleteReadRows(tableName, resolved.page, undefined, where) };
         },
@@ -1727,15 +1719,19 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // patch. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validated before the read, so a bad limit never reaches it.
+            const cap = resolveBatchCap(options?.limit, "patchWhere", batchLimitError);
+            // `cap + 1` rows is enough to see an over-cap match without reading it all; an `Infinity` cap reads every match.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(args.where, baseWhere),
+                ...(Number.isFinite(cap) ? { limit: cap + 1 } : {}),
                 relationBaseWhere: relationReadFilter,
             });
             const patches = resolved.page.map((row) => {
                 return { id: String(row["_id"]), patch: args.patch };
             });
 
-            assertBatchLimit(patches.length, options?.limit, "patchWhere");
+            assertWithinBatchCap(patches.length, cap, "patchWhere", batchLimitError);
 
             return wrapped.patchMany(patches, options);
         },

@@ -212,11 +212,14 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             // length normalisation) and `metadata` (for the filter) are needed
             // to score; the bodies are fetched below, for the survivors only.
             const rows: Record<string, unknown>[] = [];
+            // Metadata is only read when a filter needs it: an unfiltered search would otherwise pull every match's metadata for nothing.
+            const filtered = searchOptions.filter !== undefined && Object.keys(searchOptions.filter).length > 0;
+            const metadataColumn = filtered ? ", d.metadata AS metadata" : "";
 
             for (const batch of inListBatches(queryTerms)) {
                 // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; a query rarely has more than 64 distinct terms
                 const batchRows = await exec(
-                    `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length, d.metadata AS metadata ` +
+                    `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length${metadataColumn} ` +
                         `FROM ${terms} t JOIN ${documents} d ON d.id = t.id AND d.namespace = t.namespace ` +
                         `WHERE t.namespace = ? AND t.term IN (${placeholderList(batch.length)})`,
                     [namespace, ...batch],
@@ -238,7 +241,7 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             const scores = new Map<string, number>();
 
             for (const row of rows) {
-                const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
+                const metadata = filtered ? (readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined) : undefined;
 
                 // Honour the same predicate the vector leg gets — the filter
                 // carries the tenant/RBAC scope, so a hit it excludes must never

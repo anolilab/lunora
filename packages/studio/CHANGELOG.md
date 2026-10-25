@@ -1,3 +1,76 @@
+## @lunora/studio [1.0.0-alpha.339](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.338...@lunora/studio@1.0.0-alpha.339) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.255
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/react:** upgraded to 1.0.0-alpha.260
+* **@lunora/mail:** upgraded to 1.0.0-alpha.122
+* **@lunora/notify:** upgraded to 1.0.0-alpha.95
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
+## @lunora/studio [1.0.0-alpha.338](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.337...@lunora/studio@1.0.0-alpha.338) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.254
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/react:** upgraded to 1.0.0-alpha.259
+* **@lunora/mail:** upgraded to 1.0.0-alpha.121
+* **@lunora/notify:** upgraded to 1.0.0-alpha.94
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
+## @lunora/studio [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.336...@lunora/studio@1.0.0-alpha.337) (2026-10-23)
+
+### Features
+
+* **studio:** show enum values in the schema graph ([#1319](https://github.com/anolilab/lunora/issues/1319)) ([ad062ac](https://github.com/anolilab/lunora/commit/ad062ac318896082b79e2a6af5b79be2ddb1481c))
+* **studio:** show SQL run time in the results header ([#1317](https://github.com/anolilab/lunora/issues/1317)) ([27f3e8e](https://github.com/anolilab/lunora/commit/27f3e8ea19e6ec528835f7a0af708794815796d2))
+
+## @lunora/studio [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.335...@lunora/studio@1.0.0-alpha.336) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.253
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/react:** upgraded to 1.0.0-alpha.258
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/studio [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.334...@lunora/studio@1.0.0-alpha.335) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.252
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/react:** upgraded to 1.0.0-alpha.257
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
+## @lunora/studio [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.333...@lunora/studio@1.0.0-alpha.334) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.251
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/react:** upgraded to 1.0.0-alpha.256
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/studio [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.332...@lunora/studio@1.0.0-alpha.333) (2026-10-22)
 
 ### Bug Fixes

@@ -47,13 +47,14 @@ const makeDb = (): ProbedDatabase => {
     };
 
     // Equality, plus the `{ gte }` range operator `ctx.db` accepts (the only one the store uses).
+    // A column the row never wrote reads as SQL NULL, so `{ col: null }` matches it, as `ctx.db` does.
     const matches = (row: PaymentRow, where: Record<string, unknown>): boolean =>
         Object.entries(where).every(([key, value]) => {
             if (typeof value === "object" && value !== null && "gte" in value) {
                 return (row[key] as number) >= (value.gte as number);
             }
 
-            return row[key] === value;
+            return (row[key] ?? null) === value;
         });
 
     // `ctx.db.patch` REJECTS a key whose value is explicitly `undefined` (shard-engine's
@@ -117,6 +118,19 @@ const makeDb = (): ProbedDatabase => {
                     return;
                 }
             }
+        },
+        patchIf: async (table, id, where, patch) => {
+            assertNoExplicitUndefined(patch);
+
+            const row = tableOf(table).get(id);
+
+            if (row === undefined || !matches(row, where)) {
+                return false;
+            }
+
+            tableOf(table).set(id, { ...row, ...patch });
+
+            return true;
         },
         rowsRead: () => rowsRead,
     };
@@ -243,8 +257,93 @@ describe("createDatabasePaymentStore", () => {
 
         const loaded = await store.getPaymentSession("stripe", "pi_1");
 
-        expect(loaded).toEqual(session);
+        expect(loaded).toEqual({ ...session, revision: 1 });
         expect(loaded?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("applies a guarded write only while the stored revision is still the one it read", async () => {
+        expect.assertions(4);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertPaymentSession(session);
+
+        await expect(store.upsertPaymentSession({ ...session, updatedAt: 2 }, { ifRevision: 1 })).resolves.toBe(true);
+        // The second writer read revision 1 too; the first has already moved the row on.
+        await expect(store.upsertPaymentSession({ ...session, updatedAt: 3 }, { ifRevision: 1 })).resolves.toBe(false);
+
+        const loaded = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(loaded?.revision).toBe(2);
+        expect(loaded?.updatedAt).toBe(2);
+    });
+
+    it("treats an undefined guard as 'the row must not exist yet'", async () => {
+        expect.assertions(3);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await expect(store.upsertPaymentSession(session, { ifRevision: 3 })).resolves.toBe(false);
+        await expect(store.upsertPaymentSession(session, { ifRevision: undefined })).resolves.toBe(true);
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ revision: 1 });
+    });
+
+    it("loses a guarded insert to a row a concurrent writer inserted after the read, instead of failing", async () => {
+        expect.assertions(2);
+
+        const base = makeDb();
+        const webhook = createDatabasePaymentStore(base);
+        let raced = false;
+        // The unique `by_provider_session` index, which the plain double does not model, plus a
+        // webhook that inserts the same session between the guarded write's read and its insert.
+        const racing: PaymentDatabase = {
+            ...base,
+            findFirst: async (table, where) => {
+                const row = await base.findFirst(table, where);
+
+                if (row === null && !raced) {
+                    raced = true;
+                    await webhook.upsertPaymentSession({ ...session, updatedAt: 5 });
+                }
+
+                return row;
+            },
+            insert: async (table, document) => {
+                if ((await base.findFirst(table, { provider: document["provider"], providerSessionId: document["providerSessionId"] })) !== null) {
+                    throw new Error("UNIQUE constraint failed: payment_sessions.by_provider_session");
+                }
+
+                return base.insert(table, document);
+            },
+        };
+
+        await expect(createDatabasePaymentStore(racing).upsertPaymentSession(session, { ifRevision: undefined })).resolves.toBe(false);
+        await expect(webhook.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ revision: 1, updatedAt: 5 });
+    });
+
+    it("rethrows a failed guarded insert when no concurrent row explains it", async () => {
+        expect.assertions(1);
+
+        const failing: PaymentDatabase = {
+            ...makeDb(),
+            insert: async () => {
+                throw new Error("storage unavailable");
+            },
+        };
+
+        await expect(createDatabasePaymentStore(failing).upsertPaymentSession(session, { ifRevision: undefined })).rejects.toThrow("storage unavailable");
+    });
+
+    it("bumps the revision on an unguarded write, so a guard taken before it fails", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertPaymentSession(session);
+        await store.upsertPaymentSession({ ...session, updatedAt: 9 });
+
+        await expect(store.upsertPaymentSession({ ...session, updatedAt: 10 }, { ifRevision: 1 })).resolves.toBe(false);
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ revision: 2 });
     });
 
     it("refuses a stored money column that is not a safe integer", async () => {

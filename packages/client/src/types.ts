@@ -415,6 +415,15 @@ export interface LunoraClientOptions {
      * `/api/auth` (matching `@lunora/auth`'s `DEFAULT_AUTH_BASE_PATH`).
      */
     authBasePath?: string;
+
+    /**
+     * Whether the `WebSocket` transport sends the `setAuthToken` bearer on the
+     * upgrade, as `@lunora/react-native` does on native. Then a
+     * sign-in from signed-out reconnects the shard sockets so the server sees the
+     * bearer. A browser socket cannot carry it, so the default `false` leaves its
+     * sockets (and their live values) alone.
+     */
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
 
     /**

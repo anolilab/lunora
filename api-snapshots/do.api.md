@@ -602,9 +602,11 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected ctxDbTuning(): {
         cache?: ReactiveCache;
+        companionMemo: CompanionMemo;
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
+    protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;

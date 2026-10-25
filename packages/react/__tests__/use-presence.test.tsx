@@ -96,6 +96,26 @@ describe("usePresence", () => {
         expect(onError).toHaveBeenCalledWith({ code: "UNAUTHORIZED", message: "room closed" });
     });
 
+    it("throws a RangeError for a non-positive intervalMs", () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        const Bad = (): ReactElement => {
+            usePresence("room-1", { heartbeat: HEARTBEAT, intervalMs: 0, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+            return <div />;
+        };
+
+        expect(() =>
+            renderToString(
+                <LunoraProvider client={mock.asClient}>
+                    <Bad />
+                </LunoraProvider>,
+            ),
+        ).toThrow(RangeError);
+    });
+
     it("heartbeats on mount and again on each interval tick", async () => {
         expect.hasAssertions();
 
