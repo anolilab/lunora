@@ -591,6 +591,67 @@ describe("startCodegenWatch", () => {
             }
         });
 
+        it("runs the hook after the current one for a studio write made while it runs", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // Events that land while a hook runs are dropped as its own writes, but a studio write is not one, and its handler ran
+            // codegen without the hook.
+            const workdir = projectWithPostCodegen();
+            const schemaPath = join(workdir, "schema.ts");
+            const hookRuns = runCounter();
+            let releaseStartupHook: (() => void) | undefined;
+            const startupHook = new Promise<void>((resolve) => {
+                releaseStartupHook = resolve;
+            });
+            let spawned = 0;
+            const spawner = async (): Promise<{ code: number }> => {
+                spawned += 1;
+                hookRuns.report();
+
+                if (spawned === 1) {
+                    await startupHook;
+                }
+
+                return { code: 0 };
+            };
+
+            vi.mocked(consumeStudioWrite).mockImplementation((path) => path === schemaPath);
+
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            vi.useFakeTimers({ toFake: ["Date"] });
+
+            const handle = startCodegenWatch({ debounceMs: 50, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+            try {
+                // Not `handle.ready`: it waits for the startup hook, which is held open here.
+                await hookRuns.reached(1);
+
+                emit?.("rename", `schema.ts${STUDIO_WRITE_TEMP_SUFFIX}`);
+                emit?.("rename", "schema.ts");
+                emit?.("change", "schema.ts");
+
+                releaseStartupHook?.();
+
+                await hookRuns.reached(2);
+
+                // Startup only: the studio handler already ran codegen for its write.
+                expect(runCodegen).toHaveBeenCalledTimes(1);
+            } finally {
+                vi.useRealTimers();
+                await handle.close();
+                rmSync(workdir, { force: true, recursive: true });
+            }
+        });
+
         it("is a no-op for a project that declares no postcodegen script", async () => {
             expect.assertions(1);
 

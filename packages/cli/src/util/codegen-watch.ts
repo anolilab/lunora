@@ -406,7 +406,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     const onEvent = (path: string | undefined, label: string): void => {
         // Skip anything a `postcodegen` run wrote, so a hook that touches a
         // watched file doesn't retrigger it: while it runs, and for a settle
-        // window after it exits. See HOOK_SETTLE_MS.
+        // window after it exits. See HOOK_SETTLE_MS. Studio writes are the
+        // exception below.
         if (hookRunning || Date.now() - settledAt < HOOK_SETTLE_MS) {
             // Also drop a debounce an earlier event already scheduled —
             // otherwise the hook's first write still lands a queued rerun on
@@ -416,8 +417,18 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 timer = undefined;
             }
 
+            // A studio write is the one event here the hook cannot have made, and
+            // its handler ran codegen but not the hook, so it still gets a
+            // hook-only run once this one settles. Every record is spent, so a
+            // second event for the same write cannot queue another.
+            const echoes = [...burst, path].map((changed) => changed !== undefined && consumeStudioWrite(changed));
+
             burst.clear();
             burstNeedsCodegen = false;
+
+            if (echoes.includes(true)) {
+                enqueue(`change: ${label}`, false);
+            }
 
             return;
         }
