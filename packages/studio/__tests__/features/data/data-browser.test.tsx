@@ -3661,6 +3661,35 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
         expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }]);
     });
 
+    it("pins an AI-suggested null equality as null, so the nested clause tests for null and not for an empty string", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "unset" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a"], value: null }]);
+    });
+
     it("sends an AI-suggested membership value with the type the model gave it, and leaves a bound's number a number", async () => {
         expect.assertions(2);
 

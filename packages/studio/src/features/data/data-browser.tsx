@@ -61,12 +61,17 @@ const isFilterableCellValue = (value: unknown): boolean =>
     typeof value === "bigint";
 
 /**
- * The box text and pinned literal for an AI-suggested value. Only membership is pinned:
- * `has` reads unquoted box text by type, so the model's `"10"` would search for the number
- * 10. A text value is shown in quotes, the form the box reads as text. Other operators keep
- * the box's own coercion, since a model that writes `18` for a numeric bound means a number.
+ * The box text and pinned literal for an AI-suggested value. Membership is pinned: `has`
+ * reads unquoted box text by type, so the model's `"10"` would search for the number 10. A
+ * text value is shown in quotes, the form the box reads as text. A null equality is pinned as
+ * null, since a blank box would test for the empty string. Other operators keep the box's own
+ * coercion, since a model that writes `18` for a numeric bound means a number.
  */
 const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { literal?: [unknown]; value: string } => {
+    if (raw === null && (operator === "eq" || operator === "ne")) {
+        return { literal: [null], value: "null" };
+    }
+
     if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
         return { value: "" };
     }
