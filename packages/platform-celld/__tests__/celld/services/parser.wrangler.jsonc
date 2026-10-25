@@ -1,0 +1,8 @@
+// The service the app in wrangler.jsonc binds twice: its `fetch` handler as a
+// fetch service, and its `TckMath` entrypoint as an RPC service.
+{
+    "name": "lunora-celld-parser",
+    "main": "parser.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+}

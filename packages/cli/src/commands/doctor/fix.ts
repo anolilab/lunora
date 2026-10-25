@@ -19,18 +19,23 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => {
+/** A `database_id` that is empty or an angle-bracket template such as `<replace-with-d1-create-id>`. */
+const isTemplateD1Id = (databaseId: string): boolean => {
     const value = databaseId.trim();
 
-    if (value === "") {
-        return true;
-    }
-
-    const lower = value.toLowerCase();
-
-    return lower.includes("replace") || (lower.startsWith("<") && lower.endsWith(">"));
+    return value === "" || (value.startsWith("<") && value.endsWith(">"));
 };
+
+const REPLACE_STAND_IN = /replace[-_\s]?(?:with|me)(?![a-z])/iu;
+
+/**
+ * A `database_id` a celld project never finished: empty, an angle-bracket template, or a replace-with / replace-me
+ * stand-in such as `REPLACE_WITH_ID`. A word that merely starts with "replace" (`replacement-orders`) is an identity.
+ */
+const isUnfinishedD1Id = (databaseId: string): boolean => isTemplateD1Id(databaseId) || REPLACE_STAND_IN.test(databaseId);
+
+/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
+const isD1PlaceholderId = (databaseId: string): boolean => isTemplateD1Id(databaseId) || databaseId.trim().toLowerCase().includes("replace");
 
 const LINE_BREAK = /\r?\n/u;
 
@@ -292,7 +297,7 @@ const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: 
             continue;
         }
 
-        if (isMintableSecretKey(entry.key)) {
+        if (isMintableSecretKey(entry.key, entry.value)) {
             minted.push(entry.key);
         } else {
             result.skipped.push(`${DEV_VARS_FILE}: ${entry.key} is a provider key and cannot be minted here; fill it in by hand.`);
@@ -354,5 +359,5 @@ const applyDoctorFixes = async (options: DoctorFixOptions): Promise<DoctorFixRes
     return result;
 };
 
-export { applyDoctorFixes, isD1PlaceholderId };
+export { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id };
 export type { DoctorFixOptions, DoctorFixResult };

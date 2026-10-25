@@ -540,6 +540,61 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
     });
 
+    it("reports the shard registry's relay secret for an app that binds the registry, merged or not", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+
+        // A merged app exports `LunoraDO` and binds no `SHARD_REGISTRY`; the generated module still says it has one.
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("declares no relay secret for a worker that only calls a registry another worker hosts", async () => {
+        expect.assertions(1);
+
+        // Such a worker takes the host's RPC over a service binding, so the binding is its capability and no secret is needed.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/registry.ts", "export const registry = createDynamicShardRegistry({ namespace: env.SERVICE_REGISTRY });\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("does not make a sharded app a registry host just because codegen wrote the registry module", async () => {
+        expect.assertions(1);
+
+        // Codegen writes `shardRegistry.ts` for every `.shardBy()` schema; this entry exports only the shard.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("gives a worker that hosts the registry the host's secret, and not the client's", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).toContain("@lunora/do:shardRegistry");
+    });
+
     it("reconciles a fresh merged app into a config the validator accepts", async () => {
         expect.assertions(3);
 
