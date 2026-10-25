@@ -1165,7 +1165,8 @@ class LunoraClient {
      * after a cold reconnect, and the server acks a `subscribe` before it seeds
      * it, so neither `lastValue` nor `ack` says the value is current. A queued
      * write whose snapshot precondition reads one of them is not evaluated yet:
-     * see {@link LunoraClient.snapshotAnswer}.
+     * see {@link LunoraClient.snapshotAnswer}. On a follower the open is the
+     * leader's, see {@link LunoraClient.awaitLeaderAnswers}.
      */
     private readonly awaitingAnswer = new WeakSet<SubscriptionState>();
 
@@ -1179,6 +1180,9 @@ class LunoraClient {
 
     /** Connection keys whose last flush left a write waiting on {@link LunoraClient.awaitingAnswer}; an answer there flushes again. */
     private readonly answerHeldShards = new Set<string>();
+
+    /** Gives up on the leader relaying an answer, see {@link LunoraClient.awaitLeaderAnswers}. */
+    private leaderAnswerTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
      * Per-shard replay backoff, keyed by {@link connectionKey} exactly as the
@@ -4421,6 +4425,9 @@ class LunoraClient {
         this.replayRetryTimers.clear();
         this.replayRetryState.clear();
 
+        clearTimeout(this.leaderAnswerTimer);
+        this.leaderAnswerTimer = undefined;
+
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
 
@@ -4806,6 +4813,9 @@ class LunoraClient {
         const leadership: TabLeadershipHost = {
             activeShapes: () => [...this.shapeSubscriptions.values()],
             activeSubscriptions: () => this.subscriptions.all(),
+            awaitLeaderAnswers: () => {
+                this.awaitLeaderAnswers();
+            },
             broadcastStatus: (status, identity) => this.tabCoordinator?.broadcastConnectionStatus(status, identity),
             closeConnections: () => {
                 for (const [key, conn] of this.connections) {
@@ -8140,6 +8150,19 @@ class LunoraClient {
         // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
         state.pendingDeltaRun = undefined;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+
+        // Relayed as a value, because a follower is answered only by one: its held writes are judged against the
+        // value this resume just proved current. The base, never `lastValue`, which carries this tab's optimistic layers.
+        if (this.tabCoordinator?.isLeader() && state.serverBase !== undefined) {
+            this.tabCoordinator.broadcastSubscriptionData(
+                SubscriptionRegistry.keyOf(state),
+                state.serverBase,
+                state.serverCursor,
+                state.serverEpoch,
+                this.identityFingerprint(),
+            );
+        }
+
         this.settleAwaitedAnswer(state, true);
     }
 
@@ -9451,6 +9474,34 @@ class LunoraClient {
         registerSnapshotSource(guarded, source);
 
         return guarded;
+    }
+
+    /**
+     * A follower's counterpart of a socket open in {@link markShardPendingAck}: every
+     * subscription awaits the leader's next relay. A follower cannot ask the leader for
+     * one, and the leader relays only the queries it holds itself, so the wait is bounded
+     * by the leader's own (an ack window and one retry) and ends unreadable, as the
+     * leader's does when it gives up.
+     */
+    private awaitLeaderAnswers(): void {
+        for (const state of this.subscriptions.all()) {
+            this.awaitingAnswer.add(state);
+            this.answeredUnreadable.delete(state);
+        }
+
+        clearTimeout(this.leaderAnswerTimer);
+        this.leaderAnswerTimer = setTimeout(() => {
+            this.leaderAnswerTimer = undefined;
+
+            // A tab promoted since is answered by its own socket, which bounds its own wait.
+            if (!this.isCrossTabFollower()) {
+                return;
+            }
+
+            for (const state of this.subscriptions.all()) {
+                this.settleAwaitedAnswer(state, false);
+            }
+        }, 2 * RESUBSCRIBE_ACK_TIMEOUT_MS);
     }
 
     /**

@@ -21,6 +21,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
         activeShapes: vi.fn<() => ShapeSubscriptionState[]>(() => []),
         activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
+        awaitLeaderAnswers: vi.fn<() => void>(),
         broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
         clientIdentifier: vi.fn<() => string>(() => "client-a"),
         closeConnections: vi.fn<() => void>(),
@@ -210,6 +211,28 @@ describe("onLeaderStatus", () => {
         expect(host.flushOfflineQueues).toHaveBeenCalledTimes(1);
 
         expect(host.emitConnectionStatus).toHaveBeenCalledTimes(3);
+    });
+
+    it("un-answers the relayed values before that flush, so a snapshot-guarded write waits for the next relay", () => {
+        expect.assertions(2);
+
+        const calls: string[] = [];
+        const { host } = fakeHost(
+            {
+                awaitLeaderAnswers: vi.fn<() => void>(() => calls.push("await")),
+                flushOfflineQueues: vi.fn<() => void>(() => calls.push("flush")),
+            },
+            { status: "offline" },
+        );
+
+        onLeaderStatus(host, "connected", undefined);
+        onLeaderStatus(host, "connected", undefined);
+
+        expect(calls).toStrictEqual(["await", "flush"]);
+
+        onLeaderStatus(host, "offline", undefined);
+
+        expect(host.awaitLeaderAnswers).toHaveBeenCalledTimes(1);
     });
 
     it("drops a status stamped for another identity, changing nothing", () => {

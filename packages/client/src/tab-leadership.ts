@@ -35,6 +35,12 @@ export interface TabLeadershipHost {
     /** Every subscription, snapshotted, so a resubscribe cannot change the set it walks. */
     activeSubscriptions: () => SubscriptionState[];
 
+    /**
+     * The leader's socket just came up, before it answered anything on it: what it relayed before is the previous
+     * socket's value, so hold every write guarded by a snapshot of one until the leader relays again.
+     */
+    awaitLeaderAnswers: () => void;
+
     broadcastStatus: (status: ConnectionStatus, identity: string | null) => void;
 
     /** This client's id, which a `settled` frame echoes so only its own watermark is advanced. */
@@ -128,7 +134,8 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
 /**
  * The leader reported its status. A frame stamped for another identity is dropped. The
  * mirror and the status emit always run. Offline writes flush when the leader becomes
- * reachable, because they replay over HTTP and need no socket of this tab.
+ * reachable, because they replay over HTTP and need no socket of this tab; one guarded by a
+ * snapshot waits for the leader's next relay, which is the answer its socket gives.
  */
 export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus, identity: string | null | undefined): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
@@ -147,6 +154,7 @@ export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus
     host.emitConnectionStatus();
 
     if (transitioned) {
+        host.awaitLeaderAnswers();
         host.flushOfflineQueues();
     }
 };
