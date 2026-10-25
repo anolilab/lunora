@@ -926,4 +926,26 @@ describe("exportImportPanel", () => {
         expect(error.textContent).toBe("Nothing was written, because some rows would be refused. Fix the rows listed below and import again.");
         expect(importCalls(mock)).toHaveLength(0);
     });
+
+    it("reads a CSV file once for each of its three passes, the check, the dry run and the write, and never holds it whole", async () => {
+        expect.assertions(2);
+
+        const mock = createCsvServer();
+        const file = new File([mixedCsv()], "rows.csv", { type: "text/csv" });
+        const slice = vi.spyOn(file, "slice");
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [file] } });
+        fireEvent.click(await screen.findByTestId("ei-csv-table"));
+        pickOption(await screen.findByRole("option", { name: "messages" }));
+        fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
+
+        await screen.findByTestId("ei-import-result");
+
+        // The file is under one read piece, so each pass is one slice.
+        expect(slice).toHaveBeenCalledTimes(3);
+        expect(importCalls(mock)).toHaveLength(2);
+    });
 });

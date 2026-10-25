@@ -47,81 +47,143 @@ interface CsvDocument {
     record: number;
 }
 
-/** The characters that end an unquoted field. A quote is only special at the start of a field. */
-const DELIMITERS = ",\r\n";
-
-/** How a field is followed: by a comma, by a line break, or by the end of the text. */
-interface FieldEnd {
-    end: "comma" | "end" | "newline";
-    next: number;
-}
-
-interface Field extends FieldEnd {
-    cell: CsvCell;
-}
-
-const fieldEnd = (text: string, at: number): FieldEnd => {
-    const char = text.charAt(at);
-
-    if (char === ",") {
-        return { end: "comma", next: at + 1 };
-    }
-
-    if (char === "\r" && text.charAt(at + 1) === "\n") {
-        return { end: "newline", next: at + 2 };
-    }
-
-    if (char === "\n" || char === "\r") {
-        return { end: "newline", next: at + 1 };
-    }
-
-    return { end: "end", next: at };
-};
+/** The byte-order mark some spreadsheet exports write at the start of a file. */
+const BYTE_ORDER_MARK = "\uFEFF";
 
 /**
- * A quoted field runs to the closing quote; a doubled quote inside it is one literal quote. Newlines and commas inside it are data.
- * Anything but a delimiter after the closing quote is an error, since it would otherwise be silently glued to the value.
+ * Where the scanner is within a field: `start` before its first character, `unquoted` in a field with no leading quote, `quoted` inside a
+ * quoted field, and `closing` just after a quote, which either closes the field or is the first half of a doubled quote.
  */
-const readQuoted = (text: string, start: number, record: number): Field => {
+type ScanState = "closing" | "quoted" | "start" | "unquoted";
+
+/**
+ * Splits CSV text into records one character at a time, so the text can arrive in pieces and a file is never held whole. A record may span
+ * pieces: a quoted field may hold line breaks, and a quote at the end of a piece waits for the next character. A CR ends a record on its
+ * own, and a CRLF ends one record even when the LF starts the next piece.
+ *
+ * A quote is special only at the start of a field, so a quote inside an unquoted field is text (`5" disk`).
+ */
+interface CsvScanner {
+    /** The records still open at the end of the text. A quoted field that was never closed is a problem. */
+    finish: () => CsvRecord[];
+    /** The records that `text` completes. Throws a {@link CsvFormatError} at the first structural problem. */
+    push: (text: string) => CsvRecord[];
+}
+
+const createCsvScanner = (): CsvScanner => {
+    let cells: CsvCell[] = [];
+    let number = 1;
+    let skipLf = false;
+    let started = false;
+    let state: ScanState = "start";
     let value = "";
-    let from = start + 1;
-    let quote = text.indexOf('"', from);
 
-    while (quote !== -1 && text.charAt(quote + 1) === '"') {
-        value += `${text.slice(from, quote)}"`;
-        from = quote + 2;
-        quote = text.indexOf('"', from);
-    }
+    /** Ends the field being read. An unquoted empty field is omitted; a quoted one is an empty string. */
+    const endField = (): void => {
+        cells.push(state === "closing" || value !== "" ? value : undefined);
+        state = "start";
+        value = "";
+    };
 
-    if (quote === -1) {
-        throw new CsvFormatError({ kind: "unterminated-quote", record });
-    }
+    /** Ends the field and the record being read. A record of only omitted cells is blank: it is left out, but still takes its number. */
+    const endRecord = (records: CsvRecord[]): void => {
+        endField();
 
-    value += text.slice(from, quote);
+        if (cells.some((cell) => cell !== undefined)) {
+            records.push({ cells, number });
+        }
 
-    const after = text.charAt(quote + 1);
+        cells = [];
+        number += 1;
+    };
 
-    if (after !== "" && !DELIMITERS.includes(after)) {
-        throw new CsvFormatError({ kind: "text-after-quote", record });
-    }
+    const step = (char: string, records: CsvRecord[]): void => {
+        const afterCr = skipLf;
 
-    return { cell: value, ...fieldEnd(text, quote + 1) };
-};
+        skipLf = false;
 
-const readField = (text: string, start: number, record: number): Field => {
-    if (text.charAt(start) === '"') {
-        return readQuoted(text, start, record);
-    }
+        if (afterCr && char === "\n") {
+            return;
+        }
 
-    let stop = start;
+        if (state === "quoted") {
+            if (char === '"') {
+                state = "closing";
+            } else {
+                value += char;
+            }
 
-    while (stop < text.length && !DELIMITERS.includes(text.charAt(stop))) {
-        stop += 1;
-    }
+            return;
+        }
 
-    const raw = text.slice(start, stop);
+        if (state === "closing" && char === '"') {
+            value += char;
+            state = "quoted";
 
-    return { cell: raw === "" ? undefined : raw, ...fieldEnd(text, stop) };
+            return;
+        }
+
+        if (char === ",") {
+            endField();
+
+            return;
+        }
+
+        if (char === "\r") {
+            endRecord(records);
+            skipLf = true;
+
+            return;
+        }
+
+        if (char === "\n") {
+            endRecord(records);
+
+            return;
+        }
+
+        if (state === "closing") {
+            throw new CsvFormatError({ kind: "text-after-quote", record: number });
+        }
+
+        if (state === "start" && char === '"') {
+            state = "quoted";
+
+            return;
+        }
+
+        state = "unquoted";
+        value += char;
+    };
+
+    return {
+        finish: () => {
+            if (state === "quoted") {
+                throw new CsvFormatError({ kind: "unterminated-quote", record: number });
+            }
+
+            const records: CsvRecord[] = [];
+
+            endRecord(records);
+
+            return records;
+        },
+        push: (text) => {
+            const records: CsvRecord[] = [];
+            let index = 0;
+
+            if (!started && text !== "") {
+                started = true;
+                index = text.startsWith(BYTE_ORDER_MARK) ? 1 : 0;
+            }
+
+            for (; index < text.length; index += 1) {
+                step(text.charAt(index), records);
+            }
+
+            return records;
+        },
+    };
 };
 
 /**
@@ -130,38 +192,28 @@ const readField = (text: string, start: number, record: number): Field => {
  *
  * A record whose every field is an unquoted empty field is blank and is left out of the result, whatever its column count: a line of commas, or a
  * one-column empty line. A quoted `""` is a value, so it is kept.
- *
- * A quote inside an unquoted field is kept as text rather than rejected: spreadsheets write that for values like `5" disk`, and the
- * server validator is the place that judges the value.
  */
-const parseCsvRecords = (input: string): CsvRecord[] => {
-    const text = input.startsWith("﻿") ? input.slice(1) : input;
-    const records: CsvRecord[] = [];
-    let cells: CsvCell[] = [];
-    let index = 0;
-    // Counts every record, blank ones included, so a number always names the same place in the file.
-    let number = 1;
-    let field: Field;
+const parseCsvRecords = (text: string): CsvRecord[] => {
+    const scanner = createCsvScanner();
 
-    do {
-        field = readField(text, index, number);
-        cells.push(field.cell);
-        index = field.next;
-
-        if (field.end !== "comma") {
-            if (cells.some((cell) => cell !== undefined)) {
-                records.push({ cells, number });
-            }
-
-            cells = [];
-            number += 1;
-        }
-    } while (field.end !== "end");
-
-    return records;
+    return [...scanner.push(text), ...scanner.finish()];
 };
 
 const parseCsv = (input: string): CsvCell[][] => parseCsvRecords(input).map((record) => record.cells);
+
+/**
+ * The records of CSV text that arrives in pieces, in file order. A piece may end anywhere: mid-field, or between a CR and its LF. Each record
+ * is yielded as soon as it is complete, so the caller holds one record at a time and pulls pieces only as far as it needs.
+ */
+const readCsvRecords = async function* (pieces: AsyncIterable<string> | Iterable<string>): AsyncGenerator<CsvRecord> {
+    const scanner = createCsvScanner();
+
+    for await (const piece of pieces) {
+        yield* scanner.push(piece);
+    }
+
+    yield* scanner.finish();
+};
 
 /**
  * Set an own data property. A plain assignment to `__proto__` sets the prototype instead, so a column named that way would be dropped
@@ -171,19 +223,12 @@ const setField = (target: Record<string, unknown>, key: string, value: unknown):
     Object.defineProperty(target, key, { configurable: true, enumerable: true, value, writable: true });
 };
 
-/**
- * Turn a CSV file into one document per data record, keyed by the header names. Every record is checked here, before any caller writes:
- * a blank or repeated header name, and a row whose cell count differs from the header, throw a {@link CsvFormatError}.
- *
- * Cells are passed through as strings. The server validator decides what a column accepts, so this does not coerce `"42"` or `"true"`.
- * A header-only file yields no documents.
- */
-const parseCsvDocuments = (text: string): CsvDocument[] => {
-    const [header = { cells: [], number: 1 }, ...records] = parseCsvRecords(text);
+/** The column names of a header record, in order. A blank or repeated name throws, naming the first bad column. */
+const headerColumns = (cells: CsvCell[]): string[] => {
     const columns: string[] = [];
     const seen = new Set<string>();
 
-    header.cells.forEach((cell, index) => {
+    cells.forEach((cell, index) => {
         const name = (cell ?? "").trim();
 
         if (name === "") {
@@ -198,23 +243,45 @@ const parseCsvDocuments = (text: string): CsvDocument[] => {
         columns.push(name);
     });
 
-    return records.map(({ cells, number: record }) => {
-        if (cells.length !== columns.length) {
-            throw new CsvFormatError({ expected: columns.length, found: cells.length, kind: "ragged", record });
+    return columns;
+};
+
+/** The document a data record makes, keyed by the header names. A record whose cell count differs from the header's throws. */
+const recordDocument = ({ cells, number: record }: CsvRecord, columns: ReadonlyArray<string>): CsvDocument => {
+    if (cells.length !== columns.length) {
+        throw new CsvFormatError({ expected: columns.length, found: cells.length, kind: "ragged", record });
+    }
+
+    const fields: Record<string, string> = {};
+
+    columns.forEach((name, column) => {
+        const cell = cells[column];
+
+        if (cell !== undefined) {
+            setField(fields, name, cell);
         }
-
-        const fields: Record<string, string> = {};
-
-        columns.forEach((name, column) => {
-            const cell = cells[column];
-
-            if (cell !== undefined) {
-                setField(fields, name, cell);
-            }
-        });
-
-        return { doc: fields, record };
     });
+
+    return { doc: fields, record };
+};
+
+/**
+ * Turn a CSV text into one document per data record, keyed by the header names. Every record is checked here, before any caller writes:
+ * a blank or repeated header name, and a row whose cell count differs from the header, throw a {@link CsvFormatError}.
+ *
+ * Cells are passed through as strings. The server validator decides what a column accepts, so this does not coerce `"42"` or `"true"`.
+ * A header-only file yields no documents.
+ */
+const parseCsvDocuments = (text: string): CsvDocument[] => {
+    const [header, ...records] = parseCsvRecords(text);
+
+    if (header === undefined) {
+        return [];
+    }
+
+    const columns = headerColumns(header.cells);
+
+    return records.map((record) => recordDocument(record, columns));
 };
 
 /** A cell's text, read as its column kind. `rejected` names the kind the text failed to be. */
@@ -438,35 +505,124 @@ const coerceCell = (text: string, kind: string | undefined): CoercedCell => {
 };
 
 /**
- * Coerce every cell of parsed documents to the type of its column, from the table's declared kinds (`kinds` maps a column name to its
- * validator kind). A cell that does not fit its kind throws a {@link CsvFormatError} naming the record and column, so a file with one bad
- * cell is refused before anything is written. An omitted cell stays omitted, and a column the table does not declare is passed through as
- * text for the server to reject.
+ * Coerce a document's cells to the type of their columns, from the table's declared kinds (`kinds` maps a column name to its validator
+ * kind). A cell that does not fit its kind throws a {@link CsvFormatError} naming the record and column. An omitted cell stays omitted, and
+ * a column the table does not declare is passed through as text for the server to reject.
  */
-const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string, string>): CoercedDocument[] =>
-    documents.map(({ doc, record }) => {
-        const coerced: Record<string, unknown> = {};
+const coerceCsvDocument = ({ doc, record }: CsvDocument, kinds: ReadonlyMap<string, string>): CoercedDocument => {
+    const coerced: Record<string, unknown> = {};
 
-        for (const [column, text] of Object.entries(doc)) {
-            const cell = coerceCell(text, kinds.get(column));
+    for (const [column, text] of Object.entries(doc)) {
+        const cell = coerceCell(text, kinds.get(column));
 
-            if (cell.kind === "rejected") {
-                throw new CsvFormatError({
-                    column,
-                    expected: cell.expected,
-                    ...(cell.inexact === true && { inexact: true as const }),
-                    kind: "cell-type",
-                    record,
-                    value: text,
-                    ...(cell.zoneless === true && { zoneless: true as const }),
-                });
-            }
-
-            setField(coerced, column, cell.value);
+        if (cell.kind === "rejected") {
+            throw new CsvFormatError({
+                column,
+                expected: cell.expected,
+                ...(cell.inexact === true && { inexact: true as const }),
+                kind: "cell-type",
+                record,
+                value: text,
+                ...(cell.zoneless === true && { zoneless: true as const }),
+            });
         }
 
-        return { doc: coerced, record };
-    });
+        setField(coerced, column, cell.value);
+    }
 
-export { coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments };
-export type { CellType, CoercedDocument, CsvCell, CsvDocument, CsvProblem, CsvValue };
+    return { doc: coerced, record };
+};
+
+/** Coerce every document, as {@link coerceCsvDocument} does for one. The first bad cell throws, in file order. */
+const coerceCsvDocuments = (documents: CsvDocument[], kinds: ReadonlyMap<string, string>): CoercedDocument[] =>
+    documents.map((document) => coerceCsvDocument(document, kinds));
+
+/**
+ * The coerced documents of CSV text that arrives in pieces, in file order. The first problem throws at its record, so a caller that
+ * writes as it reads must check the file first: {@link checkCsvDocuments} reports the problem a whole-file check reports.
+ */
+const readCsvDocuments = async function* (
+    pieces: AsyncIterable<string> | Iterable<string>,
+    kinds: ReadonlyMap<string, string>,
+): AsyncGenerator<CoercedDocument> {
+    let columns: string[] | undefined;
+
+    for await (const record of readCsvRecords(pieces)) {
+        if (columns === undefined) {
+            columns = headerColumns(record.cells);
+        } else {
+            yield coerceCsvDocument(recordDocument(record, columns), kinds);
+        }
+    }
+};
+
+/** The problem a check threw. Anything else is a bug in the check, not a problem with the file, so it is rethrown. */
+const asFormatError = (error: unknown): CsvFormatError => {
+    if (error instanceof CsvFormatError) {
+        return error;
+    }
+
+    throw error;
+};
+
+/**
+ * Check CSV text that arrives in pieces, and throw the problem the whole-file check would throw. The stages come in order: a quote error,
+ * then the header, then a row of the wrong width, then a cell that does not fit its column, each the first in file order. A quote error
+ * stops the read at once; the other stages keep the first problem of each and read on, so the file is not held. `onDocument` receives every
+ * document that passes its checks, in file order.
+ */
+const checkCsvDocuments = async (
+    pieces: AsyncIterable<string> | Iterable<string>,
+    kinds: ReadonlyMap<string, string>,
+    onDocument: (document: CoercedDocument) => void,
+): Promise<void> => {
+    let columns: string[] | undefined;
+    let headerProblem: CsvFormatError | undefined;
+    let raggedProblem: CsvFormatError | undefined;
+    let cellProblem: CsvFormatError | undefined;
+
+    for await (const record of readCsvRecords(pieces)) {
+        if (columns === undefined) {
+            try {
+                columns = headerColumns(record.cells);
+            } catch (error) {
+                headerProblem = asFormatError(error);
+                // No header to check rows against, so every later row is read for a quote error alone.
+                columns = [];
+            }
+
+            continue;
+        }
+
+        let document: CsvDocument;
+
+        try {
+            document = recordDocument(record, columns);
+        } catch (error) {
+            raggedProblem ??= asFormatError(error);
+
+            continue;
+        }
+
+        let coerced: CoercedDocument;
+
+        try {
+            coerced = coerceCsvDocument(document, kinds);
+        } catch (error) {
+            cellProblem ??= asFormatError(error);
+
+            continue;
+        }
+
+        onDocument(coerced);
+    }
+
+    const problem = headerProblem ?? raggedProblem ?? cellProblem;
+
+    if (problem !== undefined) {
+        throw problem;
+    }
+};
+
+export { checkCsvDocuments, coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments, parseCsvRecords, readCsvDocuments, readCsvRecords };
+export type { CellType, CoercedDocument, CsvCell, CsvDocument, CsvProblem, CsvRecord, CsvValue };

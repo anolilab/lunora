@@ -17,7 +17,7 @@ import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/in
 import { recordShard } from "../../lib/shard-history";
 import { downloadFile } from "../data/grid-features";
 import type { CsvProblem } from "./csv";
-import { coerceCsvDocuments, CsvFormatError, parseCsvDocuments } from "./csv";
+import { checkCsvDocuments, CsvFormatError, readCsvDocuments } from "./csv";
 
 interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -137,26 +137,34 @@ const ndjsonEntries = async function* (file: Blob): AsyncGenerator<ImportEntry> 
 };
 
 /**
- * Every record of a CSV file as an import entry for `table`. The whole file is decoded and parsed before anything is returned, so a
- * malformed record fails here and nothing is written. The file is held whole because that is the only way to know every record is valid
- * before the first chunk is sent.
+ * The text of a file, decoded from UTF-8 a piece at a time, so a CSV is parsed as it is read and never held whole. Fatal on bad UTF-8: a
+ * non-UTF-8 file fails the check instead of importing U+FFFD in place of its characters.
  */
-const csvEntries = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<ImportEntry[]> => {
-    const lines: string[] = [];
+const fileText = async function* (file: Blob): AsyncGenerator<string> {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
 
-    for await (const { line } of fileLines(file)) {
-        lines.push(line);
+    for (let offset = 0; offset < file.size; offset += FILE_PIECE_BYTES) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- a piece can only be decoded after the one before it, so the reads are serial by design
+        const bytes = await file.slice(offset, offset + FILE_PIECE_BYTES).arrayBuffer(); // eslint-disable-line no-await-in-loop -- pieces are read in file order; each decode depends on the one before
+
+        yield decoder.decode(bytes, { stream: true });
     }
 
-    return coerceCsvDocuments(parseCsvDocuments(lines.join("\n")), kinds).map(({ doc, record }) => {
-        return { line: record, row: { doc, table } };
-    });
+    const last = decoder.decode();
+
+    if (last !== "") {
+        yield last;
+    }
 };
 
-const openCsvSource = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<ImportSource> => {
-    const entries = await csvEntries(file, table, kinds);
-
-    return () => entries;
+/**
+ * Every record of a CSV file as an import entry for `table`. Each pass reads the file again and coerces a row only when it is reached.
+ * {@link checkCsv} has read the whole file first, so a malformed record is refused before anything is written and never surfaces here.
+ */
+const csvEntries = async function* (file: Blob, table: string, kinds: ReadonlyMap<string, string>): AsyncGenerator<ImportEntry> {
+    for await (const { doc, record } of readCsvDocuments(fileText(file), kinds)) {
+        yield { line: record, row: { doc, table } };
+    }
 };
 
 /**
@@ -190,22 +198,47 @@ const IMPORT_CHUNK_BYTES = 900_000;
 /** Bytes a row adds to a request: the wire-encoded JSON the client sends, which can be larger than the NDJSON line it came from. */
 const wireBytes = (row: ExportRow): number => new TextEncoder().encode(JSON.stringify(encodeWire(row))).byteLength;
 
+/** The error for a row too wide to send alone, so nothing is written for a file that cannot be imported whole. */
+const wideRowError = (line: number): LunoraError =>
+    new LunoraError("INTERNAL", `line ${line.toString()}: a single row is over the ${IMPORT_CHUNK_BYTES.toString()}-byte import limit`);
+
 /**
- * Count the rows to import, and throw on a row too wide to send alone, so nothing is written for a file that cannot be imported whole. The
- * rows arrive already parsed and checked: a malformed line or record throws in its parser before this runs.
+ * Count the rows of an NDJSON file, and throw on a row too wide to send alone. A malformed line throws in its parser before this runs.
  */
 const countRows = async (entries: AsyncIterable<ImportEntry> | Iterable<ImportEntry>): Promise<number> => {
     let rows = 0;
 
     for await (const { line, row } of entries) {
         if (wireBytes(row) > IMPORT_CHUNK_BYTES) {
-            throw new LunoraError("INTERNAL", `line ${line.toString()}: a single row is over the ${IMPORT_CHUNK_BYTES.toString()}-byte import limit`);
+            throw wideRowError(line);
         }
 
         rows += 1;
     }
 
     return rows;
+};
+
+/**
+ * Read a CSV file once: check every record, count its rows, and throw on a row too wide to send alone. A wide row is held back until the
+ * whole file has parsed, so a malformed record is reported first, as a whole-file parse would report it. Nothing is written by this pass.
+ */
+const checkCsv = async (file: Blob, table: string, kinds: ReadonlyMap<string, string>): Promise<number> => {
+    const count: { rows: number; wide?: number } = { rows: 0 };
+
+    await checkCsvDocuments(fileText(file), kinds, ({ doc, record }) => {
+        count.rows += 1;
+
+        if (count.wide === undefined && wireBytes({ doc, table }) > IMPORT_CHUNK_BYTES) {
+            count.wide = record;
+        }
+    });
+
+    if (count.wide !== undefined) {
+        throw wideRowError(count.wide);
+    }
+
+    return count.rows;
 };
 
 /**
@@ -393,9 +426,9 @@ const insertedRowCount = (inserted: Record<string, number>): number => Object.va
 
 /**
  * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show and how many rows were
- * written before it stopped. The rows are read and checked in full first, so a malformed line or record is rejected before anything is
- * written; the second pass sends them in chunks as they go, so a large NDJSON file is never held whole. `csvTable` is the target of a
- * CSV file and `null` for NDJSON, whose lines carry their own table.
+ * written before it stopped. The file is read in full first, so a malformed line or record is rejected before anything is written. Each later
+ * pass reads the file again and sends its rows in chunks as they go, so neither format is held whole. `csvTable` is the target of a CSV
+ * file and `null` for NDJSON, whose lines carry their own table.
  */
 const sendImport = async (
     client: ImportClient,
@@ -419,9 +452,15 @@ const sendImport = async (
     const { kinds } = kindsRead;
 
     try {
-        const source: ImportSource = csvTable === null ? () => ndjsonEntries(file) : await openCsvSource(file, csvTable, kinds);
+        if (csvTable === null) {
+            const source: ImportSource = () => ndjsonEntries(file);
 
-        prepared = { rows: await countRows(source()), source };
+            prepared = { rows: await countRows(source()), source };
+        } else {
+            const table = csvTable;
+
+            prepared = { rows: await checkCsv(file, table, kinds), source: () => csvEntries(file, table, kinds) };
+        }
     } catch (error_) {
         return { failure: { message: describeInvalidFile(csvTable, error_, t), rows: 0 }, total };
     }

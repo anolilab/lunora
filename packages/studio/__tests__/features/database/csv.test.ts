@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { coerceCsvDocuments, CsvFormatError, parseCsv, parseCsvDocuments } from "../../../src/features/database/csv";
+import type { CsvRecord } from "../../../src/features/database/csv";
+import {
+    checkCsvDocuments,
+    coerceCsvDocuments,
+    CsvFormatError,
+    parseCsv,
+    parseCsvDocuments,
+    parseCsvRecords,
+    readCsvDocuments,
+    readCsvRecords,
+} from "../../../src/features/database/csv";
 
 /** The problem a parse throws, so each test can assert the kind and the record it names. */
 const problemOf = (run: () => unknown): unknown => {
@@ -453,6 +463,167 @@ describe("coerceCsvDocuments", () => {
         expect.assertions(1);
 
         expect(problemOf(() => coerceCsvDocuments(parseCsvDocuments("id,count\nm1,x\nm2,y\n"), kinds))).toMatchObject({ record: 2, value: "x" });
+    });
+});
+
+/** The text cut into pieces three ways: whole, at each line break, and one character at a time. */
+const cuttings = (text: string): string[][] => [[text], text.split(/(?<=\n)/u), Array.from(text, (character) => character)];
+
+/** Every item of an async source, in order. */
+const collect = async <T>(source: AsyncIterable<T>): Promise<T[]> => {
+    const items: T[] = [];
+
+    for await (const item of source) {
+        items.push(item);
+    }
+
+    return items;
+};
+
+/** The records a stream of pieces yields, in order. */
+const streamedRecords = (pieces: Iterable<string>): Promise<CsvRecord[]> => collect(readCsvRecords(pieces));
+
+/** The problem an async run throws, as {@link problemOf} gives it for a sync run. */
+const asyncProblemOf = async (run: () => Promise<unknown>): Promise<unknown> => {
+    try {
+        await run();
+    } catch (error) {
+        return error instanceof CsvFormatError ? error.problem : error;
+    }
+
+    return undefined;
+};
+
+describe("streamed parsing", () => {
+    const shapes = [
+        'id,body\r\n1,"two\r\nlines"\r\n',
+        'id,body\n1,"say ""hi"""\n2,x',
+        "id,body\r1,a\r2,b\r",
+        "﻿id,body\n\n1,a\n\n",
+        'id,body\n1,"ends with a CR\r"\n',
+        'a,b\n5" disk,x\n',
+        'id,body\n1,""\n2,\n',
+    ];
+
+    it("reads the same records however the text is cut into pieces, including a CR or a closing quote at a piece's end", async () => {
+        expect.assertions(21);
+
+        const results = await Promise.all(shapes.map((text) => Promise.all(cuttings(text).map((pieces) => streamedRecords(pieces)))));
+
+        for (const [index, text] of shapes.entries()) {
+            for (const records of results[index] ?? []) {
+                expect(records).toStrictEqual(parseCsvRecords(text));
+            }
+        }
+    });
+
+    it("reports the same problem however the text is cut into pieces", async () => {
+        expect.assertions(9);
+
+        const texts = ['id,body\n1,"open', 'id,body\n1,"ok"oops\n', 'id,body\n1,"a""'];
+        const problems = await Promise.all(texts.map((text) => Promise.all(cuttings(text).map((pieces) => asyncProblemOf(() => streamedRecords(pieces))))));
+
+        for (const [index, text] of texts.entries()) {
+            for (const problem of problems[index] ?? []) {
+                expect(problem).toStrictEqual(problemOf(() => parseCsvRecords(text)));
+            }
+        }
+    });
+
+    it("counts a CRLF as one record break, however its CR and LF are split across pieces", async () => {
+        expect.assertions(3);
+
+        const results = await Promise.all(cuttings("a,b\r\n1,2\r\n3,4\r\n").map((pieces) => streamedRecords(pieces)));
+
+        for (const records of results) {
+            expect(records.map((record) => record.number)).toStrictEqual([1, 2, 3]);
+        }
+    });
+
+    it("ends a record at a lone CR, numbering the records after it by their place", () => {
+        expect.assertions(1);
+
+        expect(parseCsvRecords("a,b\r1,2\r\r3,4")).toStrictEqual([
+            { cells: ["a", "b"], number: 1 },
+            { cells: ["1", "2"], number: 2 },
+            { cells: ["3", "4"], number: 4 },
+        ]);
+    });
+
+    it("pulls only the pieces it needs for the first record", async () => {
+        expect.assertions(2);
+
+        let pulled = 0;
+
+        const pieces = function* (): Generator<string> {
+            for (const piece of ["id,body\n", "1,a\n", "2,b\n"]) {
+                pulled += 1;
+
+                yield piece;
+            }
+        };
+
+        const first = await readCsvRecords(pieces()).next();
+
+        expect(first.value).toStrictEqual({ cells: ["id", "body"], number: 1 });
+        expect(pulled).toBe(1);
+    });
+
+    it("reads a multi-chunk CSV to the documents of the eager parse, and refuses the same row", async () => {
+        expect.assertions(4);
+
+        const kinds = new Map([["count", "number"]]);
+        const rows = Array.from({ length: 1200 }, (_, index) => `m${index.toString()},${index.toString()}`);
+        const text = `\nid,count\n${rows.join("\r\n")}\n`;
+
+        // One character per piece: the hardest cut, since every quote and CR lands at a piece's end.
+        const documents = await collect(
+            readCsvDocuments(
+                Array.from(text, (character) => character),
+                kinds,
+            ),
+        );
+
+        expect(documents).toStrictEqual(coerceCsvDocuments(parseCsvDocuments(text), kinds));
+
+        const refused = text.replace("m699,699", "m699,x");
+        const seen: number[] = [];
+        const problem = await asyncProblemOf(() =>
+            checkCsvDocuments(
+                Array.from(refused, (character) => character),
+                kinds,
+                () => seen.push(1),
+            ),
+        );
+
+        expect(problem).toStrictEqual(problemOf(() => coerceCsvDocuments(parseCsvDocuments(refused), kinds)));
+        // Every row but the refused one is a valid document, and the check keeps reading past the refused row to find the first problem.
+        expect(seen).toHaveLength(1199);
+
+        const whole = await asyncProblemOf(() => checkCsvDocuments([text], kinds, () => undefined));
+
+        expect(whole).toBeUndefined();
+    });
+
+    it("reports the same two-problem file as the eager check, however the text is cut", async () => {
+        expect.assertions(9);
+
+        const cases: [string, Map<string, string>][] = [
+            ['a,b\n1\n2,"open', new Map()],
+            ["a,a\n1", new Map()],
+            ["id,count\nm1,x\nm2\n", new Map([["count", "number"]])],
+        ];
+        const problems = await Promise.all(
+            cases.map(([text, kinds]) => Promise.all(cuttings(text).map((pieces) => asyncProblemOf(() => checkCsvDocuments(pieces, kinds, () => undefined))))),
+        );
+
+        for (const [index, [text, kinds]] of cases.entries()) {
+            const eager = problemOf(() => coerceCsvDocuments(parseCsvDocuments(text), kinds));
+
+            for (const problem of problems[index] ?? []) {
+                expect(problem).toStrictEqual(eager);
+            }
+        }
     });
 });
 
