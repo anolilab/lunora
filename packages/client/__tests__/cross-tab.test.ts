@@ -1550,3 +1550,188 @@ describe("lunoraClient.isCrossTabFollower", () => {
         }
     });
 });
+
+/**
+ * A socket open leaves every subscription awaiting an answer, and a write guarded by a snapshot of one waits for it.
+ * A tab demoted before that answer arrives no longer has the socket that would carry it, so the new leader's
+ * mirrored value has to answer it, and the write is judged against that value.
+ */
+describe("lunoraClient — a snapshot-guarded write held across a leader handover", () => {
+    interface Frames {
+        close: () => void;
+        open: () => void;
+        receive: (payload: unknown) => void;
+        sent: Record<string, unknown>[];
+    }
+
+    const createManualWebSocket = (sockets: Frames[]): typeof WebSocket => {
+        class WS {
+            public readyState = 0;
+
+            private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+            private readonly sent: Record<string, unknown>[] = [];
+
+            public constructor() {
+                sockets.push({
+                    close: () => {
+                        this.close();
+                    },
+                    open: () => {
+                        this.readyState = 1;
+                        this.emit("open");
+                    },
+                    receive: (payload) => {
+                        this.emit("message", { data: JSON.stringify(payload) });
+                    },
+                    sent: this.sent,
+                });
+            }
+
+            public addEventListener(type: string, listener: (event?: unknown) => void): void {
+                this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+            }
+
+            public close(): void {
+                this.readyState = 3;
+                this.emit("close", { code: 1000 });
+            }
+
+            public removeEventListener(type: string): void {
+                this.listeners.delete(type);
+            }
+
+            public send(raw: string): void {
+                this.sent.push(JSON.parse(raw) as Record<string, unknown>);
+            }
+
+            private emit(type: string, event?: unknown): void {
+                for (const listener of this.listeners.get(type) ?? []) {
+                    listener(event);
+                }
+            }
+        }
+
+        return WS as unknown as typeof WebSocket;
+    };
+
+    const subscribeId = (socket: Frames | undefined): unknown => socket?.sent.find((message) => message.type === "subscribe")?.id;
+    const isRpc = ([input]: Parameters<typeof fetch>): boolean => !String(input instanceof Request ? input.url : input).includes("get-session");
+
+    /** Lead, answer `todos.list`, snapshot it, then queue a write it guards across a reconnect and demote before that socket answers. */
+    const demotedWithHeldWrite = async () => {
+        vi.useFakeTimers();
+
+        const sockets: Frames[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: false,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: TEST_URL,
+            WebSocket: createManualWebSocket(sockets),
+        });
+        const rogue = new BroadcastChannel(clientChannel(client));
+
+        // Solo self-promotion after the coordinator's default leader timeout.
+        await vi.advanceTimersByTimeAsync(3100);
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const first = sockets.at(-1);
+
+        first?.open();
+        first?.receive({ id: subscribeId(first), type: "ack" });
+        first?.receive({ cursor: 1, data: [{ _id: "t1" }], id: subscribeId(first), type: "data" });
+
+        const precondition = client.snapshotPrecondition(fnRef("todos.list"), {});
+
+        first?.close();
+
+        // Read synchronously, so a write that never settles fails an assertion instead of timing the test out.
+        const outcome: { settled: string | undefined } = { settled: "pending" };
+
+        client
+            .mutation(fnRef("todos.set"), { text: "a" }, { precondition })
+            .then(
+                () => "sent",
+                (error: unknown) => (error as { code?: string }).code,
+            )
+            .then((settled) => {
+                outcome.settled = settled;
+
+                return settled;
+            })
+            .catch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(10);
+        // The open flushes the queue and holds the write until this socket answers `todos.list`, which it never does.
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        rogue.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" });
+        await vi.advanceTimersByTimeAsync(20);
+
+        // The new leader comes up: this flushes the follower's queue, with `todos.list` still unanswered here.
+        rogue.postMessage({ status: "connected", tabId: SMALLER_ID, type: "connection-status" } satisfies RawLeaderMessage);
+        await vi.advanceTimersByTimeAsync(20);
+
+        const rpcCalls = (): number => fetchMock.mock.calls.filter((call) => isRpc(call)).length;
+
+        return { client, outcome, rogue, rpcCalls };
+    };
+
+    it("sends it once the new leader's mirrored value matches the snapshot", async () => {
+        expect.assertions(4);
+
+        const { client, outcome, rogue, rpcCalls } = await demotedWithHeldWrite();
+
+        try {
+            expect(client.isCrossTabFollower()).toBe(true);
+            // Still held: the mirror has not answered yet, and the old socket's value is no evidence.
+            expect(rpcCalls()).toBe(0);
+
+            rogue.postMessage({
+                cursor: 2,
+                data: [{ _id: "t1" }],
+                key: SubscriptionRegistry.key("todos.list", {}),
+                tabId: SMALLER_ID,
+                type: "subscription-data",
+            } satisfies RawLeaderMessage);
+            await vi.advanceTimersByTimeAsync(20);
+
+            expect(outcome.settled).toBe("sent");
+            expect(rpcCalls()).toBe(1);
+        } finally {
+            rogue.close();
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it("drops it when the new leader's mirrored value differs from the snapshot", async () => {
+        expect.assertions(2);
+
+        const { client, outcome, rogue, rpcCalls } = await demotedWithHeldWrite();
+
+        try {
+            rogue.postMessage({
+                cursor: 2,
+                data: [{ _id: "t1" }, { _id: "t2" }],
+                key: SubscriptionRegistry.key("todos.list", {}),
+                tabId: SMALLER_ID,
+                type: "subscription-data",
+            } satisfies RawLeaderMessage);
+            await vi.advanceTimersByTimeAsync(20);
+
+            expect(outcome.settled).toBe("OFFLINE_PRECONDITION_FAILED");
+            expect(rpcCalls()).toBe(0);
+        } finally {
+            rogue.close();
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+});

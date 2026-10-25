@@ -4837,6 +4837,9 @@ class LunoraClient {
             ackAndAdvanceCursor: (state, cursor, epoch) => {
                 this.ackAndAdvanceCursor(state, cursor, epoch);
             },
+            settleAwaitedAnswer: (state, readable) => {
+                this.settleAwaitedAnswer(state, readable);
+            },
             subscription: (key) => this.subscriptions.get(key),
         };
 

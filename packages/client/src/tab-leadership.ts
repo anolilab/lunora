@@ -59,6 +59,12 @@ export interface TabLeadershipHost {
 
     queueResubscribe: (state: SubscriptionState) => void;
 
+    /**
+     * `state` has been answered (`readable`) or refused, so release any write held for its answer. A tab demoted
+     * after its socket opened still waits on that socket's answer, and only the mirror can deliver it now.
+     */
+    settleAwaitedAnswer: (state: SubscriptionState, readable: boolean) => void;
+
     /** The subscription a frame addresses, or `undefined` when this tab holds none under `key`. */
     subscription: (key: string) => SubscriptionState | undefined;
 }
@@ -201,6 +207,9 @@ export const onFollowerSubscriptionData = (
     if (firstValue) {
         host.emitConnectionStatus();
     }
+
+    // Last, so a held write is judged against the value just committed.
+    host.settleAwaitedAnswer(state, true);
 };
 
 /** The leader reported an error for `key`. Fan it to this tab's subscribers. */
@@ -221,6 +230,8 @@ export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string
         if (firstAnswer) {
             host.emitConnectionStatus();
         }
+
+        host.settleAwaitedAnswer(state, false);
     }
 };
 

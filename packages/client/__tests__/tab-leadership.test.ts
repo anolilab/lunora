@@ -34,6 +34,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         leader,
         queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
         queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
+        settleAwaitedAnswer: vi.fn<(state: SubscriptionState, readable: boolean) => void>(),
         subscription: vi.fn<(key: string) => SubscriptionState | undefined>(() => undefined),
         ...overrides,
     };
@@ -312,6 +313,22 @@ describe("onFollowerSubscriptionData", () => {
         expect(state.serverEpoch).toBe("e0");
     });
 
+    it("settles the answer a write may be held on, after the value it is judged against is committed", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverBase: "before" });
+        const committedAtSettle: unknown[] = [];
+        const { host } = fakeHost({
+            settleAwaitedAnswer: vi.fn<(settled: SubscriptionState, readable: boolean) => void>((settled) => committedAtSettle.push(settled.serverBase)),
+            subscription: () => state,
+        });
+
+        onFollowerSubscriptionData(host, "s1", "after", 5, "e1", "subj:a");
+
+        expect(host.settleAwaitedAnswer).toHaveBeenCalledWith(state, true);
+        expect(committedAtSettle).toStrictEqual(["after"]);
+    });
+
     it("drops a frame stamped for another identity, changing nothing", () => {
         expect.assertions(2);
 
@@ -346,6 +363,17 @@ describe("onFollowerSubscriptionError", () => {
         onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
 
         expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "no" }]);
+    });
+
+    it("settles a held write's wait as unreadable, as a refusal on this tab's own socket would", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription();
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
+
+        expect(host.settleAwaitedAnswer).toHaveBeenCalledWith(state, false);
     });
 
     it("drops an error stamped for another identity", () => {

@@ -115,6 +115,7 @@ describe("sync status", () => {
             dropCacheSeed: () => undefined,
             emitConnectionStatus,
             identityFingerprint: () => null,
+            settleAwaitedAnswer: () => undefined,
             subscription: () => state,
         } as unknown as TabLeadershipHost;
 
@@ -131,7 +132,12 @@ describe("sync status", () => {
         const onError = vi.fn<() => void>();
         const state = { errorCallbacks: new Set([onError]), valueReceived: false } as unknown as SubscriptionState;
         const emitConnectionStatus = vi.fn<() => void>();
-        const host = { emitConnectionStatus, identityFingerprint: () => null, subscription: () => state } as unknown as TabLeadershipHost;
+        const host = {
+            emitConnectionStatus,
+            identityFingerprint: () => null,
+            settleAwaitedAnswer: () => undefined,
+            subscription: () => state,
+        } as unknown as TabLeadershipHost;
 
         onFollowerSubscriptionError(host, "key", { message: "denied" }, undefined);
         onFollowerSubscriptionError(host, "key", { message: "denied" }, undefined);
