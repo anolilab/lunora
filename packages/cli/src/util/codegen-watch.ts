@@ -421,12 +421,18 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             // its handler ran codegen but not the hook, so it still gets a
             // hook-only run once this one settles. Every record is spent, so a
             // second event for the same write cannot queue another.
-            const echoes = [...burst, path].map((changed) => changed !== undefined && consumeStudioWrite(changed));
+            let studioWrite = false;
+
+            for (const changed of [...burst, path]) {
+                if (changed !== undefined && consumeStudioWrite(changed)) {
+                    studioWrite = true;
+                }
+            }
 
             burst.clear();
             burstNeedsCodegen = false;
 
-            if (echoes.includes(true)) {
+            if (studioWrite) {
                 enqueue(`change: ${label}`, false);
             }
 
