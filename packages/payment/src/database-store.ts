@@ -303,8 +303,10 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
     };
 
     // Every write bumps the row's revision. An unguarded write applies unconditionally; a guarded one
-    // applies only while the stored revision still matches the guard, decided in a single conditional
-    // patch so nothing lands between the check and the write.
+    // applies only while the stored revision still matches the guard. For an existing row that is one
+    // conditional patch. For an absent row there is no conditional insert, so the unique index decides:
+    // a writer that inserted the row after our read makes ours fail, and that loss is reported like a
+    // revision mismatch rather than as an error.
     const upsertRevisioned = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>, guard?: RevisionGuard): Promise<boolean> => {
         const existing = await database.findFirst(table, where);
         const current = existing === null ? undefined : readOptionalNumber(existing, "revision");
@@ -316,7 +318,21 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         const revised = { ...row, revision: (current ?? 0) + 1 };
 
         if (existing === null) {
-            await database.insert(table, revised);
+            if (guard === undefined) {
+                await database.insert(table, revised);
+
+                return true;
+            }
+
+            try {
+                await database.insert(table, revised);
+            } catch (error) {
+                if ((await database.findFirst(table, where)) !== null) {
+                    return false;
+                }
+
+                throw error;
+            }
 
             return true;
         }

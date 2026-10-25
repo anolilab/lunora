@@ -288,6 +288,52 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ revision: 1 });
     });
 
+    it("loses a guarded insert to a row a concurrent writer inserted after the read, instead of failing", async () => {
+        expect.assertions(2);
+
+        const base = makeDb();
+        const webhook = createDatabasePaymentStore(base);
+        let raced = false;
+        // The unique `by_provider_session` index, which the plain double does not model, plus a
+        // webhook that inserts the same session between the guarded write's read and its insert.
+        const racing: PaymentDatabase = {
+            ...base,
+            findFirst: async (table, where) => {
+                const row = await base.findFirst(table, where);
+
+                if (row === null && !raced) {
+                    raced = true;
+                    await webhook.upsertPaymentSession({ ...session, updatedAt: 5 });
+                }
+
+                return row;
+            },
+            insert: async (table, document) => {
+                if ((await base.findFirst(table, { provider: document["provider"], providerSessionId: document["providerSessionId"] })) !== null) {
+                    throw new Error("UNIQUE constraint failed: payment_sessions.by_provider_session");
+                }
+
+                return base.insert(table, document);
+            },
+        };
+
+        await expect(createDatabasePaymentStore(racing).upsertPaymentSession(session, { ifRevision: undefined })).resolves.toBe(false);
+        await expect(webhook.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ revision: 1, updatedAt: 5 });
+    });
+
+    it("rethrows a failed guarded insert when no concurrent row explains it", async () => {
+        expect.assertions(1);
+
+        const failing: PaymentDatabase = {
+            ...makeDb(),
+            insert: async () => {
+                throw new Error("storage unavailable");
+            },
+        };
+
+        await expect(createDatabasePaymentStore(failing).upsertPaymentSession(session, { ifRevision: undefined })).rejects.toThrow("storage unavailable");
+    });
+
     it("bumps the revision on an unguarded write, so a guard taken before it fails", async () => {
         expect.assertions(2);
 
