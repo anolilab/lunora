@@ -484,15 +484,12 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
             // enum, and the very case `docs/index.mdx` names ("a three-literal
             // `v.union()` … is refused at plan time"). The generator picks a
             // member per row WITH replacement, so without a deal here eight rows
-            // over a two-literal union simply repeat and nothing refuses.
-            const members = metaOf(field.validator).members ?? [];
-            const literals = members.filter((member) => member.kind === "literal").map((member) => metaOf(member).value);
+            // over a two-literal union simply repeat and nothing refuses. Any union
+            // whose every member has a finite domain (booleans, enums, `null`, and
+            // nested unions of those) is closed the same way.
+            const domain = finiteDomain(field.validator);
 
-            if (literals.length > 0 && literals.length === members.length) {
-                return domainDeal(literals, table, field.name);
-            }
-
-            return anonymousDeal;
+            return domain === undefined ? anonymousDeal : domainDeal(domain, table, field.name);
         }
 
         default: {

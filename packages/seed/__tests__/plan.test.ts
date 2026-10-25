@@ -508,6 +508,17 @@ describe("seedPlan — unique columns beyond enums and strings", () => {
         expect(() => rowsOf(shape, 8)).toThrow(/unique column "u" has only 2 possible values/);
     });
 
+    it("deals a unique union of booleans as a closed domain and refuses past its two values", () => {
+        expect.hasAssertions();
+
+        // A union of boolean validators is finite too. Left as an open member it was
+        // generated per row with replacement, so three rows could repeat a value.
+        const shape = { u: v.union(v.boolean(), v.boolean()).unique() };
+
+        expect(new Set(rowsOf(shape, 2).map((row) => row.u))).toStrictEqual(new Set([false, true]));
+        expect(() => rowsOf(shape, 3)).toThrow(/unique column "u" has only 2 possible values/);
+    });
+
     it("honours declared bigint bounds on the plain path, not just the unique one", () => {
         expect.hasAssertions();
 
