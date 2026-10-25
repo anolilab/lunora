@@ -230,19 +230,19 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
  */
 const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
 
-/** The placeholder-id advisory for a DB binding reconcile just wrote. Cloudflare only: celld takes any id. */
+/** The placeholder-id advisory for a DB binding reconcile just wrote. Cloudflare only: celld projects the placeholder onto the database name. */
 const placeholderWarnings = (added: ReadonlyArray<string>, target: string | undefined): string[] =>
     added.includes("DB (D1)") && createsCloudflareResources(target)
         ? [`wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`]
         : [];
 
 /**
- * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. celld takes
- * whatever id it is given, so the database name serves as one. Every other target
- * keeps the placeholder `wrangler d1 create` replaces: the binding outlives a later
- * switch to Cloudflare, whose deploy gate recognises only the placeholder.
+ * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. Every target
+ * writes the placeholder `wrangler d1 create` replaces: the file outlives the target,
+ * and a later switch to Cloudflare must find a placeholder, not a fake id. celld
+ * derives the database's identity from the placeholder when it projects the config.
  */
-const reconcileD1 = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
+const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
     const d1Bindings = parsed.d1_databases ?? [];
 
     if (d1Bindings.some((binding) => binding.binding === "DB")) {
@@ -250,8 +250,7 @@ const reconcileD1 = (text: string, parsed: WranglerShape, target: string | undef
     }
 
     const databaseName = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
-    const databaseId = target === "celld" ? databaseName : D1_PLACEHOLDER_ID;
-    const nextD1 = [...d1Bindings, { binding: "DB", database_id: databaseId, database_name: databaseName }];
+    const nextD1 = [...d1Bindings, { binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: databaseName }];
 
     return { added: ["DB (D1)"], text: applyModify(text, ["d1_databases"], nextD1) };
 };
@@ -1030,7 +1029,7 @@ const reconcileWranglerBindings = (
     // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
-        { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed, target) },
+        { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
         { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
         { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, inferred.jurisdiction, target) },

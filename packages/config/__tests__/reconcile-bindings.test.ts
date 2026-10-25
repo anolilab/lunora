@@ -341,19 +341,19 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
     });
 
-    it("names the D1 database id after the worker on celld, which takes any id, and does not warn", () => {
+    it("writes the placeholder D1 id on celld, which projects it onto the database name, and does not warn", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "celld" });
 
-        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "lunora-app", database_name: "lunora-app" }]);
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-app" }]);
         expect(result.warnings.join(" ")).not.toMatch(/placeholder database_id/u);
     });
 
-    it("keeps the placeholder D1 id on node, so a later Cloudflare deploy still finds it", () => {
+    it.each([["celld"], ["node"]])("keeps the placeholder D1 id on %s, so a later Cloudflare deploy still finds it", (target) => {
         expect.assertions(2);
 
-        reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "node" });
+        reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target });
         const cloudflare = reconcileWranglerBindings(root, baseInferred({ needsD1: true }));
 
         // The deploy gate refuses only this literal; a name-derived id would ship an unbound DB.
