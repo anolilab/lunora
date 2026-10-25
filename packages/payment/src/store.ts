@@ -11,6 +11,24 @@ const customerKey = (provider: ProviderId, referenceId: string): string => `${pr
 
 const recordKey = (provider: ProviderId, id: string): string => `${provider}:${id}`;
 
+/** Applies a write to a revisioned row, returning whether it applied. An unguarded write always applies. */
+const applyRevisioned = <T extends { readonly revision?: number }>(
+    rows: Map<string, T>,
+    key: string,
+    record: Omit<T, "revision">,
+    guard: RevisionGuard | undefined,
+): boolean => {
+    const current = rows.get(key)?.revision;
+
+    if (guard !== undefined && current !== guard.ifRevision) {
+        return false;
+    }
+
+    rows.set(key, { ...record, revision: (current ?? 0) + 1 } as T);
+
+    return true;
+};
+
 export interface PaymentStore {
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
@@ -85,8 +103,18 @@ export interface PaymentStore {
     /** Period usage totals for many features in one read — the batch form of {@link PaymentStore.sumUsage}. */
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
-    upsertPaymentSession: (session: PaymentSession) => Promise<void>;
-    upsertSubscription: (subscription: Subscription) => Promise<void>;
+
+    /**
+     * Writes a session. With a `guard` the write applies only while the stored revision still equals
+     * `guard.ifRevision`; the result says whether it did. Without one it always applies.
+     */
+    upsertPaymentSession: (session: PaymentSession, guard?: RevisionGuard) => Promise<boolean>;
+    upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
+}
+
+/** The revision a guarded write expects to find: `undefined` means the row must not exist yet. */
+export interface RevisionGuard {
+    readonly ifRevision: number | undefined;
 }
 
 /**
@@ -250,15 +278,11 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve();
     }
 
-    public upsertPaymentSession(session: PaymentSession): Promise<void> {
-        this.sessions.set(recordKey(session.provider, session.id), session);
-
-        return Promise.resolve();
+    public upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.sessions, recordKey(session.provider, session.id), session, guard));
     }
 
-    public upsertSubscription(subscription: Subscription): Promise<void> {
-        this.subscriptions.set(recordKey(subscription.provider, subscription.id), subscription);
-
-        return Promise.resolve();
+    public upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.subscriptions, recordKey(subscription.provider, subscription.id), subscription, guard));
     }
 }

@@ -149,8 +149,8 @@ const rowChanged = (before: unknown, after: unknown): boolean => JSON.stringify(
 //
 // The row is read on both sides of the provider call: a webhook that lands while the adapter call
 // is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
-// call can see it change. `PaymentStore` has no conditional upsert, so a write racing the window
-// between `after` and the upsert is still possible; that window holds no network round-trip.
+// call can see it change. The write is then guarded on the revision read at `after`, so a webhook
+// that lands after that read makes the write a no-op rather than an overwrite.
 const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
     const before = await store.getSubscription(adapter.identifier, id);
     const current = await adapter.getSubscriptionStatus(id);
@@ -166,7 +166,12 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    await store.upsertSubscription(overlayProviderSubscription(after, current));
+    const written = await store.upsertSubscription(overlayProviderSubscription(after, current), { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
@@ -188,7 +193,12 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
         return false;
     }
 
-    await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt });
+    const written = await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt }, { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;

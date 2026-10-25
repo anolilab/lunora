@@ -9,7 +9,7 @@
  */
 import { LunoraPaymentError } from "./errors";
 import { money } from "./money";
-import type { PaymentStore } from "./store";
+import type { PaymentStore, RevisionGuard } from "./store";
 import { foldUsage } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 
@@ -71,6 +71,13 @@ interface PaymentDatabase {
     findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Applies `patch` to row `id` only if the row still matches `where`, in one atomic step, and says
+     * whether it did. A guarded write needs this: a read-then-patch leaves a window a webhook can write
+     * through.
+     */
+    patchIf: (table: string, id: string, where: Record<string, unknown>, patch: Record<string, unknown>) => Promise<boolean>;
 }
 
 const readString = (row: PaymentRow, key: string): string => (typeof row[key] === "string" ? row[key] : "");
@@ -203,6 +210,7 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
         provider: readString(row, "provider") as ProviderId,
         referenceId: readString(row, "referenceId"),
         refundedAmount: money(readMinorUnits(row, "refundedMinor"), currency),
+        revision: readOptionalNumber(row, "revision"),
         state: readString(row, "state") as PaymentState,
         subscriptionId: readOptionalString(row, "subscriptionId"),
         updatedAt: readNumber(row, "updatedAt"),
@@ -238,6 +246,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         id: readString(row, "providerSubscriptionId"),
         lastEventAt: readOptionalNumber(row, "lastEventAt"),
         priceId: readString(row, "priceId"),
+        revision: readOptionalNumber(row, "revision"),
         // Absent on a row written before the column existed, and on one the webhook path wrote (it
         // carries a single price id). `undefined` is what makes the entitlement read fall back to
         // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
@@ -280,16 +289,34 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
 };
 
 export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentStore => {
-    const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
+    // Every write bumps the row's revision. An unguarded write applies unconditionally; a guarded one
+    // applies only while the stored revision still matches the guard, decided in a single conditional
+    // patch so nothing lands between the check and the write.
+    const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>, guard?: RevisionGuard): Promise<boolean> => {
         const existing = await database.findFirst(table, where);
+        const current = existing === null ? undefined : readOptionalNumber(existing, "revision");
 
-        if (existing) {
-            await database.patch(existing._id, row);
-
-            return;
+        if (guard !== undefined && current !== guard.ifRevision) {
+            return false;
         }
 
-        await database.insert(table, row);
+        const revised = { ...row, revision: (current ?? 0) + 1 };
+
+        if (existing === null) {
+            await database.insert(table, revised);
+
+            return true;
+        }
+
+        if (guard === undefined) {
+            await database.patch(existing._id, revised);
+
+            return true;
+        }
+
+        // An absent revision is the column's SQL NULL, which `where` expresses as null.
+        // eslint-disable-next-line unicorn/no-null -- SQL bind value: `where` matches an unwritten column with null, not undefined.
+        return database.patchIf(table, existing._id, { revision: guard.ifRevision ?? null }, revised);
     };
 
     // Range read through `by_reference_feature_created`: only the current period's events are
@@ -451,14 +478,20 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         // Keyed on `(provider, referenceId)` — the same key `getCustomerByReference` reads and the
         // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
         // reference's row in place instead of forking a second row the read path can never find.
-        upsertCustomer: async (customer) =>
-            upsert(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
+        upsertCustomer: async (customer) => {
+            await upsert(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer));
+        },
 
-        upsertPaymentSession: async (session) =>
-            upsert(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),
+        upsertPaymentSession: async (session, guard) =>
+            upsert(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session), guard),
 
-        upsertSubscription: async (subscription) =>
-            upsert(PAYMENT_TABLES.subscriptions, { provider: subscription.provider, providerSubscriptionId: subscription.id }, subscriptionToRow(subscription)),
+        upsertSubscription: async (subscription, guard) =>
+            upsert(
+                PAYMENT_TABLES.subscriptions,
+                { provider: subscription.provider, providerSubscriptionId: subscription.id },
+                subscriptionToRow(subscription),
+                guard,
+            ),
     };
 };
 

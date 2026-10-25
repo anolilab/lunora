@@ -41,6 +41,40 @@ const truthAdapter = (): PaymentAdapter =>
     }) as unknown as PaymentAdapter;
 
 describe("reconcile", () => {
+    it("does not overwrite a webhook that lands between its read and its write", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("past_due"));
+
+        // The second read is the one reconcile takes just before deciding to write. A webhook lands
+        // right after it returns, so the write that follows was decided on a row that is now stale.
+        const storedRead = store.getSubscription.bind(store);
+        const storedWrite = store.upsertSubscription.bind(store);
+        let reads = 0;
+
+        store.getSubscription = async (provider, id) => {
+            reads += 1;
+
+            const row = await storedRead(provider, id);
+
+            if (reads === 2) {
+                await storedWrite({ ...subscription("canceled"), updatedAt: 200 });
+            }
+
+            return row;
+        };
+
+        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+
+        expect(result.updatedSubscriptions).toBe(0);
+
+        const stored = await storedRead("stripe", "sub_1");
+
+        expect(stored?.state).toBe("canceled");
+    });
+
     it("repairs a subscription the store missed (drift from a dropped webhook)", async () => {
         expect.assertions(3);
 
