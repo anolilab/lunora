@@ -361,11 +361,8 @@ type RetentionStart = "endOfCalendarYear" | "from";
 
 ```ts
 type RetryResult = {
-    readonly kind: "ran";
-    readonly outcome: ExportOutcome;
-} | {
-    readonly kind: "restart";
     readonly requestId: string;
+    readonly type: RequestRecord["type"];
 };
 ```
 
@@ -422,6 +419,7 @@ interface TableSpec {
 ```ts
 interface TombstonePort {
     readonly add: (key: string, erasedAt: Date) => Promise<void>;
+    readonly has: (key: string) => Promise<boolean>;
     readonly keys: () => Promise<ReadonlySet<string>>;
 }
 ```
