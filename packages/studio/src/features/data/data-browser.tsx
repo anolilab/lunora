@@ -60,6 +60,24 @@ const isFilterableCellValue = (value: unknown): boolean =>
     typeof value === "boolean" ||
     typeof value === "bigint";
 
+/**
+ * The box text and pinned literal for an AI-suggested value. Only membership is pinned:
+ * `has` reads unquoted box text by type, so the model's `"10"` would search for the number
+ * 10. A text value is shown in quotes, the form the box reads as text. Other operators keep
+ * the box's own coercion, since a model that writes `18` for a numeric bound means a number.
+ */
+const suggestedValue = (operator: FilterClause["operator"], raw: unknown): { literal?: [unknown]; value: string } => {
+    if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
+        return { value: "" };
+    }
+
+    if (operator !== "has") {
+        return { value: String(raw) };
+    }
+
+    return { literal: [raw], value: typeof raw === "string" ? `"${raw}"` : String(raw) };
+};
+
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
@@ -306,14 +324,13 @@ export const DataBrowser = ({
                     clauses.map((clause) => {
                         // The wire value is `unknown`; a filter row is a string
                         // input, so only scalars round-trip meaningfully.
-                        const raw: unknown = clause.value;
-                        const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+                        const { literal, value } = suggestedValue(clause.operator, clause.value);
 
                         // The validated clause may address a field nested under the column;
                         // without its path the row would test the parent column instead.
                         const nested = clause.path === undefined || clause.path.length === 0 ? {} : { path: clause.path.join("."), pathSegments: clause.path };
 
-                        return { column: clause.column, operator: clause.operator, ...nested, value };
+                        return { column: clause.column, operator: clause.operator, ...nested, ...(literal === undefined ? {} : { literal }), value };
                     }),
                 );
             }

@@ -3661,6 +3661,50 @@ describe("dataBrowser — nested paths on suggested and linked filters", () => {
         expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }]);
     });
 
+    it("sends an AI-suggested membership value with the type the model gave it, and leaves a bound's number a number", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return {
+                        result: {
+                            clauses: [
+                                { column: "text", operator: "has", value: "10" },
+                                { column: "text", operator: "has", value: "true" },
+                                { column: "text", operator: "gt", value: "18" },
+                                { column: "text", operator: "has", value: 10 },
+                            ],
+                            degraded: false,
+                        },
+                    };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "typed" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        // All four suggestions land as filter rows in the same commit that issues the filtered read.
+        await expect(screen.findAllByTestId("db-filter-row")).resolves.toHaveLength(4);
+        expect(readFilters(mock).at(-1)).toStrictEqual([
+            { column: "text", operator: "has", value: "10" },
+            { column: "text", operator: "has", value: "true" },
+            { column: "text", operator: "gt", value: 18 },
+            { column: "text", operator: "has", value: 10 },
+        ]);
+    });
+
     it("sends a linked clause's dotted field name as one segment", async () => {
         expect.assertions(1);
 
