@@ -324,14 +324,17 @@ const createAlarms = (
         armFromRow();
     };
 
-    /** Deliver the alarm armed for `ms`, once no other task holds a transaction open. */
-    const fire = (ms: number): void => {
+    /**
+     * Deliver the alarm armed for `ms`, once no other task holds a transaction
+     * open. `claimFailures` counts claims of this same timestamp that threw.
+     */
+    const fire = (ms: number, claimFailures = 0): void => {
         // The timer is not a boundary, so the consume below would join an open
         // `BEGIN`: delivered now, then restored by that transaction's rollback
         // and delivered again.
         if (database.open && database.inTransaction) {
             afterTransaction(() => {
-                fire(ms);
+                fire(ms, claimFailures);
             });
 
             return;
@@ -360,12 +363,33 @@ const createAlarms = (
         // it on the next construction over this database. Conditional on
         // the timestamp: a transaction may have persisted a newer alarm
         // while this timer was still armed, and that row is not ours.
-        if (!consume(ms)) {
-            // Another process over this file claimed the row first (or a
-            // newer alarm replaced it); delivering again would fire it twice.
-            // A replacing alarm is armed by its own commit, but a timer that
-            // was armed for it may have been dropped, so re-arm from the row.
-            armFromRow();
+        try {
+            if (!consume(ms)) {
+                // Another process over this file claimed the row first (or a
+                // newer alarm replaced it); delivering again would fire it twice.
+                // A replacing alarm is armed by its own commit, but a timer that
+                // was armed for it may have been dropped, so re-arm from the row.
+                armFromRow();
+
+                return;
+            }
+        } catch {
+            // Another process holds the file's lock (`SQLITE_BUSY`) during the
+            // claim or the row lookup. A throw here is uncaught in a timer
+            // callback and ends the process.
+            // The failed delete left the row in place, so back off and claim it
+            // again; past the limit the row stays for the next construction.
+            alarmAt = ms;
+
+            if (claimFailures < ALARM_RETRY_LIMIT) {
+                alarmTimeout = setTimeout(
+                    () => {
+                        alarmTimeout = undefined;
+                        fire(ms, claimFailures + 1);
+                    },
+                    ALARM_RETRY_BASE_MS * 2 ** claimFailures,
+                );
+            }
 
             return;
         }

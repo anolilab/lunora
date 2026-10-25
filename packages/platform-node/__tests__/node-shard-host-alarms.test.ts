@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 
 import { createNodeShardHost } from "../src/node-shard-host";
@@ -293,6 +293,50 @@ describe("createNodeShardHost alarms", () => {
         } finally {
             first.dispose();
             first.database.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("retries the claim of an alarm another process holds the write lock over", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-"));
+        const path = join(directory, "shard.sqlite3");
+        let delivered = 0;
+        const { database, dispose, host } = createNodeShardHost({
+            onAlarm: () => {
+                delivered += 1;
+            },
+            path,
+        });
+        // Another process over the same file, holding its write lock.
+        const other = new Database(path);
+
+        try {
+            // Fail the claim at once instead of blocking the event loop for the default busy timeout.
+            database.pragma("busy_timeout = 0");
+            await host.alarms.set(Date.now() + 10);
+
+            other.exec("BEGIN IMMEDIATE");
+            // The claim throws SQLITE_BUSY inside the timer; it must not escape it.
+            await vi.advanceTimersByTimeAsync(50);
+
+            expect(delivered).toBe(0);
+            expect(alarmRowCount(database)).toBe(1);
+
+            other.exec("ROLLBACK");
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect(delivered).toBe(1);
+            expect(host.alarms.get()).toBeNull();
+            expect(alarmRowCount(database)).toBe(0);
+        } finally {
+            other.close();
+            dispose();
+            database.close();
             vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }
