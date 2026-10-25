@@ -1,3 +1,18 @@
+## @lunora/shard-engine [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.155...@lunora/shard-engine@1.0.0-alpha.156) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+
+## @lunora/shard-engine [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.154...@lunora/shard-engine@1.0.0-alpha.155) (2026-10-23)
+
+### Bug Fixes
+
+* **sql-store:** probe only the pinned table on a by-id get ([#1313](https://github.com/anolilab/lunora/issues/1313)) ([4c98434](https://github.com/anolilab/lunora/commit/4c98434b8aa19fe9fbe39b6efbc6f5dfaa59ae93))
+
 ## @lunora/shard-engine [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.153...@lunora/shard-engine@1.0.0-alpha.154) (2026-10-22)
 
 ### Performance Improvements

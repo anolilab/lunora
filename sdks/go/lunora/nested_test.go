@@ -101,7 +101,7 @@ func TestNamedScalarTypesEncode(t *testing.T) {
 // error on a concurrent read/write, so this is a process kill, not a glitch.
 func TestConcurrentSubscribeAndHandleFrame(t *testing.T) {
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	done := make(chan struct{})
 

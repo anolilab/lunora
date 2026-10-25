@@ -46,7 +46,12 @@
  * GET  /snapshot                (debug: returns the full table → [keys] map)
  *
  * Responses are JSON; the client shapes them. Keep the surface narrow.
+ *
+ * When the `SHARD_REGISTRY_DO_SECRET` env var is set, every route requires it in
+ * the `x-lunora-shard-registry-do-secret` header (401 otherwise). Unset keeps the
+ * routes open so a deployment that has not provisioned a secret keeps working.
  */
+import { hasInternalSecret, SHARD_REGISTRY_SECRET_ENV, SHARD_REGISTRY_SECRET_HEADER } from "../../../shared/internal-secret";
 import { jsonResponse } from "../../../shared/json-response";
 
 /** Ceiling on one registry round trip from a shard. */
@@ -180,6 +185,10 @@ class ShardRegistryDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
+        if (!hasInternalSecret(request, SHARD_REGISTRY_SECRET_HEADER, (this.env as Record<string, unknown> | undefined)?.[SHARD_REGISTRY_SECRET_ENV])) {
+            return jsonResponse({ error: { code: "UNAUTHORIZED", message: "missing or invalid shard registry secret" } }, 401);
+        }
+
         await this.ensureLoaded();
 
         const url = new URL(request.url);
@@ -340,10 +349,10 @@ type RegistryStub = { fetch: (url: string, init?: RequestInit) => Promise<Respon
  * runtime's `createDynamicShardRegistry` is the worker-side twin). Throws on a
  * non-2xx answer.
  */
-const postRegistration = async (stub: RegistryStub, route: "/register" | "/unregister", table: string, shardKey: string): Promise<void> => {
+const postRegistration = async (stub: RegistryStub, route: "/register" | "/unregister", table: string, shardKey: string, secret?: string): Promise<void> => {
     const response = await stub.fetch(`https://shard-registry.internal${route}`, {
         body: JSON.stringify({ shardKey, table }),
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...(secret ? { [SHARD_REGISTRY_SECRET_HEADER]: secret } : {}) },
         method: "POST",
         // Bounded, so a stuck registry cannot pin the shard's background work.
         signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
@@ -354,8 +363,10 @@ const postRegistration = async (stub: RegistryStub, route: "/register" | "/unreg
     }
 };
 
-const registerShardKey = async (stub: RegistryStub, table: string, shardKey: string): Promise<void> => postRegistration(stub, "/register", table, shardKey);
+const registerShardKey = async (stub: RegistryStub, table: string, shardKey: string, secret?: string): Promise<void> =>
+    postRegistration(stub, "/register", table, shardKey, secret);
 
-const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string): Promise<void> => postRegistration(stub, "/unregister", table, shardKey);
+const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string, secret?: string): Promise<void> =>
+    postRegistration(stub, "/unregister", table, shardKey, secret);
 
 export { registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };

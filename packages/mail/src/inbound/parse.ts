@@ -31,6 +31,8 @@ interface InboundAttachment {
     filename: string | null;
     /** Declared MIME type (e.g. `image/png`). */
     mimeType: string;
+    /** Binary content dropped because the forwarded envelope exceeded the attachment byte budget. */
+    truncated?: boolean;
 }
 
 /** One reported `method=result [ptype.property=value]` clause of an `Authentication-Results` header. */

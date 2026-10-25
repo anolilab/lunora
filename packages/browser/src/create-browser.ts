@@ -1210,8 +1210,10 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         return options.binding.quickAction(action, { ...(guardedOptions as QuickActionOptions), url: target });
     };
 
-    const { cancelCrawl, crawl, crawlResult } = createCrawlClient(options.restApi, allowedHosts !== undefined, async (url) =>
-        assertTargetAllowed(url, defaultDohTimeout()),
+    const { cancelCrawl, crawl, crawlResult } = createCrawlClient(
+        options.restApi,
+        { allowPrivateTargets, hasAllowlist: allowedHosts !== undefined, maxCrawlDepth: options.maxCrawlDepth, maxCrawlPages: options.maxCrawlPages },
+        async (url) => assertTargetAllowed(url, defaultDohTimeout()),
     );
 
     return {

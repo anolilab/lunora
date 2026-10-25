@@ -1,3 +1,34 @@
+## @lunora/runtime [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.234...@lunora/runtime@1.0.0-alpha.235) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.167
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.93
+
+## @lunora/runtime [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.233...@lunora/runtime@1.0.0-alpha.234) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.166
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/runtime [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.232...@lunora/runtime@1.0.0-alpha.233) (2026-10-23)
+
+### Features
+
+* **server:** mount declared live streams without app routes ([#1314](https://github.com/anolilab/lunora/issues/1314)) ([45f31b6](https://github.com/anolilab/lunora/commit/45f31b6781c3e0bfe300264b9d8f59175424d47a)), closes [#1204](https://github.com/anolilab/lunora/issues/1204)
+
+### Bug Fixes
+
+* **runtime:** share one /list request across concurrent registry misses ([#1312](https://github.com/anolilab/lunora/issues/1312)) ([ae0f1cd](https://github.com/anolilab/lunora/commit/ae0f1cd300613af2f5fc3228b392132ff3d94cac))
+
 ## @lunora/runtime [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.231...@lunora/runtime@1.0.0-alpha.232) (2026-10-22)
 
 

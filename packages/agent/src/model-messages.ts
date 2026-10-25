@@ -35,6 +35,62 @@ const toolMessage = (row: AgentMessageRow): ModelMessage => {
 };
 
 /**
+ * A synthetic tool-result for a persisted tool call that never got a result row.
+ * Providers reject an unpaired `toolCallId`, which would wedge the thread, so the
+ * call is paired even though it has no result. A call still awaiting approval has
+ * not been interrupted; its text says so, rather than reporting an unknown outcome.
+ */
+const unexecutedToolMessage = (call: { id: string; name: string }, awaitingApproval: boolean): ModelMessage => {
+    const value = awaitingApproval
+        ? "Tool call is awaiting approval and has not run."
+        : "Tool call outcome unknown: the run was interrupted before its result was recorded.";
+
+    return {
+        content: [
+            {
+                output: { type: "text" as const, value },
+                toolCallId: call.id,
+                toolName: call.name,
+                type: "tool-result" as const,
+            },
+        ],
+        role: "tool",
+    };
+};
+
+interface TurnAnswers {
+    answered: Set<string>;
+    awaitingApproval: Set<string>;
+}
+
+/**
+ * The call ids each assistant row's following tool rows answer. A call is answered
+ * only by a tool row between its assistant row and the next one: a provider may
+ * reuse a call id in a later turn, so an earlier turn's result must not answer it.
+ * The awaiting-approval and awaiting-secret placeholders are not results, so
+ * neither answers its call.
+ */
+const groupToolRowsByTurn = (history: ReadonlyArray<AgentMessageRow>): Map<AgentMessageRow, TurnAnswers> => {
+    const turns = new Map<AgentMessageRow, TurnAnswers>();
+    let currentTurn: TurnAnswers | undefined;
+
+    for (const row of history) {
+        if (row.role === "assistant") {
+            currentTurn = { answered: new Set(), awaitingApproval: new Set() };
+            turns.set(row, currentTurn);
+        } else if (row.role === "tool" && row.toolCallId !== undefined && currentTurn !== undefined) {
+            if (row.status === "awaiting_approval") {
+                currentTurn.awaitingApproval.add(row.toolCallId);
+            } else if (row.status !== "awaiting_secret") {
+                currentTurn.answered.add(row.toolCallId);
+            }
+        }
+    }
+
+    return turns;
+};
+
+/**
  * Assemble the AI SDK conversation for one LLM turn: instructions, then the
  * retrieved memory context (when any), then the persisted thread history with
  * tool calls/results correlated the way providers expect (assistant tool-call
@@ -64,19 +120,38 @@ const buildModelMessages = (options: {
         messages.push({ content: `Summary of the earlier conversation:\n\n${options.summary}`, role: "system" });
     }
 
+    const turns = groupToolRowsByTurn(options.history);
+
+    // Synthetic results for the current assistant row's unanswered calls, emitted
+    // after its persisted tool rows and before the next non-tool row.
+    let unanswered: ModelMessage[] = [];
+    const flushUnanswered = (): void => {
+        messages.push(...unanswered);
+        unanswered = [];
+    };
+
     for (const row of options.history) {
         // The awaiting-approval and awaiting-secret placeholders are UI/observability
         // markers, not real tool results — feeding them to the model would double the
         // tool-call's tool-result part (breaking provider pairing). Skip them; the
-        // actual result carries the call's own toolCallId. A secret marker's toolCallId
-        // is its request slot (`<turn>:<callId>`), so it never pairs with a call anyway.
+        // actual result carries the call's own toolCallId.
         if (row.status === "awaiting_approval" || row.status === "awaiting_secret") {
             continue;
+        }
+
+        if (row.role !== "tool") {
+            flushUnanswered();
         }
 
         switch (row.role) {
             case "assistant": {
                 messages.push(assistantMessage(row));
+
+                const turn = turns.get(row);
+
+                unanswered = (row.toolCalls ?? [])
+                    .filter((call) => turn?.answered.has(call.id) !== true)
+                    .map((call) => unexecutedToolMessage(call, turn?.awaitingApproval.has(call.id) === true));
 
                 break;
             }
@@ -100,6 +175,8 @@ const buildModelMessages = (options: {
             }
         }
     }
+
+    flushUnanswered();
 
     return messages;
 };

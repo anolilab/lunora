@@ -72,6 +72,8 @@ var attempt = 0
 val shard: String? = null // this socket's shard key; null is the default shard
 val jitter = { backoff: Long -> backoff / 2 + Random.nextLong(backoff / 2 + 1) }
 while (isActive) {
+    var closeCode: Int? = null
+    var closeReason: String? = null
     try {
         coroutineScope {
             var retry: Job? = null
@@ -101,6 +103,9 @@ while (isActive) {
                         val raw = socket.receive() ?: break
                         if (client.handleFrame(raw) == "ack") attempt = 0
                     }
+                    // the close frame, from your socket library; 4001 and 4003 drive token-expiry listeners
+                    closeCode = socket.closeCode
+                    closeReason = socket.closeReason
                 }
             } finally {
                 retry?.cancel() // the socket run ended: stop the retry timer
@@ -111,7 +116,7 @@ while (isActive) {
     } catch (e: Exception) {
         // an ordinary failure takes the retry path below
     } finally {
-        client.detachSocket()
+        client.detachSocket(closeCode, closeReason)
     }
     val ms = minOf(30_000L, 1_000L shl minOf(attempt++, 5))
     delay(ms / 2 + Random.nextLong(ms / 2 + 1))
@@ -119,6 +124,18 @@ while (isActive) {
 ```
 
 A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a child coroutine retries the flush, and that coroutine is cancelled when the socket run ends.
+
+**Socket credentials.** Every `attachSocket` sends `connect` first: `clientId`, the connection context when one is given (`attachSocket(context) { … }`), and `token`, the session credential from `wsToken`. The credential travels only in that frame. `wsUrl()` carries only the admin ticket from `wsTicket`. The RPC bearer (`authToken`) is a different credential and never goes on the socket. Subscriptions and whisper joins are sent after `connect`, so do not send `connect` yourself.
+
+**Token expiry.** `onTokenExpired { … }` registers a listener and returns its unregister. Pass the socket's close code and reason to `detachSocket(closeCode, reason)`:
+
+- `4001` (token expired) always notifies.
+- `4003` (refused credential) notifies once per credential generation, and only for a socket that opened under the current generation. A socket opened under a superseded credential notifies nothing. Assigning `wsToken` starts a new generation, so re-assign it when the credential you hand out changes. A reason of exactly `connect deadline` refuses no credential and notifies nothing.
+- Any other close, or no close frame, notifies nothing.
+
+A `TOKEN_EXPIRED` error frame notifies and is not routed to its subscription. An `UNAUTHENTICATED` error frame is routed like any other error. Every detach leaves the client offline, and a throwing listener does not stop the others.
+
+**Whispers and rooms.** `whisperSubscribe(topic) { value -> … }` joins a topic, rejoins it after every reconnect, and returns its leave handle; leaving the last listener sends `whisper_unsubscribe`. `whisper(topic, value)` relays a message to a topic and returns `false`, without queueing, when no socket is attached. `connectRoom(name) { … }` joins `room:<name>` and returns a `Room` with `send(message)` and `close()`. It does not wait for an ack, because a room topic is never acknowledged.
 
 A reply the RPC cannot read — a body that is not a JSON object, whatever its
 status — throws `ApiException` (`INTERNAL`), never a parser or cast exception. A

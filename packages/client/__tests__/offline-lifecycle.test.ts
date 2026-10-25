@@ -589,9 +589,12 @@ describe("offline lifecycle (e2e)", () => {
         // tick later, once the app's own token read resolves. Signed-out is the
         // normal state of EVERY reload up to that point — not a different user.
         const client = new LunoraClient({
+            // The React Native transport: its upgrade carries the bearer.
+            authTokenOnUpgrade: true,
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
             queryCache: createIndexedDbQueryCache({ indexedDB }),
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
@@ -615,7 +618,11 @@ describe("offline lifecycle (e2e)", () => {
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
 
         // --- The app's session resolves — as the SAME user -------------------
+        // A bearer landing on an anonymous socket reconnects it, so the bearer
+        // rides the next upgrade; the held write replays once that socket opens.
         client.setAuthToken("token-a", "user-a");
+        await flushMicrotasks();
+        latestSocket().open();
         await settleIndexedDb();
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -844,6 +851,50 @@ describe("offline lifecycle (e2e)", () => {
         expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
         // FIFO order preserved in the request.
         expect(sentCalls.map((call) => call.id)).toEqual([0, 1, 2]);
+
+        client.close();
+    });
+
+    it("settles every write in a whole-batch rejection with the batch reply's headers", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        // A terminal verdict on the whole flush (a 400, not a retryable 429), so each write settles rather than re-queues.
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({ error: { code: "BAD_REQUEST", message: "nope" } }, { headers: { "x-edge": "cf" }, status: 400 });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.allSettled([client.mutation(fnRef("posts:create"), { title: "a" }), client.mutation(fnRef("posts:create"), { title: "b" })]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const settled = await pending;
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+        expect(settled).toMatchObject([{ reason: { headers: { "x-edge": "cf" } } }, { reason: { headers: { "x-edge": "cf" } } }]);
 
         client.close();
     });

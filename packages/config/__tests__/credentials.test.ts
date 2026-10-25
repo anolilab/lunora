@@ -208,16 +208,16 @@ describe("hasCloudflareCredentials with a wrangler login file", () => {
         expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
     });
 
-    it("does not remember an answer it could not get", () => {
-        expect.assertions(2);
+    it("remembers a silent answer as logged in, so an offline probe is paid once", () => {
+        expect.assertions(3);
 
-        installWrangler('console.error("A fetch request failed"); process.exit(1);');
+        const asked = join(project, "asked");
+
+        installWrangler(`require("node:fs").appendFileSync(${JSON.stringify(asked)}, "x"); console.error("A fetch request failed"); process.exit(1);`);
 
         expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
-
-        installWrangler("console.log(JSON.stringify({ loggedIn: false }));");
-
-        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+        expect(readFileSync(asked, "utf8")).toBe("x");
     });
 
     it("asks wrangler once for the workers of one dev start", () => {

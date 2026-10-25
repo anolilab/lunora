@@ -319,4 +319,128 @@ describe("createDynamicShardRegistry", () => {
 
         expect(DEFAULT_REGISTRY_CACHE_TTL_MS).toBe(30_000);
     });
+
+    it("shares one /list request across concurrent misses on an empty cache", async () => {
+        expect.assertions(2);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
+        const namespace = createFakeNamespace(fakeDO);
+        const registry = createDynamicShardRegistry({ namespace });
+
+        const results = await Promise.all(Array.from({ length: 20 }, async () => registry.listShardKeys("messages")));
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(1);
+        expect(results.map((keys) => [...keys].toSorted((a, b) => a.localeCompare(b)))).toStrictEqual(Array.from({ length: 20 }, () => ["a", "b"]));
+    });
+
+    it("clears the in-flight request on failure, so the next call retries", async () => {
+        expect.assertions(3);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        const flaky = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname === "/list") {
+                    listAttempts += 1;
+
+                    if (listAttempts === 1) {
+                        return new Response("boom", { status: 500 });
+                    }
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ namespace: createFakeNamespace(flaky) });
+
+        const first = registry.listShardKeys("messages");
+        const second = registry.listShardKeys("messages");
+
+        await expect(first).rejects.toThrow("shard registry /list returned 500");
+        await expect(second).rejects.toThrow("shard registry /list returned 500");
+
+        expect([...(await registry.listShardKeys("messages"))]).toStrictEqual(["a"]);
+    });
+
+    it("does not join a list that started before a register on the same worker", async () => {
+        expect.assertions(4);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+        });
+        const gated = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname !== "/list") {
+                    return fakeDO.fetch(request);
+                }
+
+                listAttempts += 1;
+
+                // The first list reads the table before the register, then its reply is held.
+                if (listAttempts === 1) {
+                    const response = await fakeDO.fetch(request);
+
+                    await firstHeld;
+
+                    return response;
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ namespace: createFakeNamespace(gated) });
+
+        const beforeRegister = registry.listShardKeys("messages");
+
+        await registry.register("messages", "b");
+
+        const afterRegister = registry.listShardKeys("messages");
+
+        // Checked before the held list is released: a call that joined it would never get a reply.
+        expect(listAttempts).toBe(2);
+        expect([...(await afterRegister)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+
+        releaseFirst();
+
+        expect([...(await beforeRegister)]).toStrictEqual(["a"]);
+        // The held list finished after the fresh one; its stale reply must not replace the fresh cache entry.
+        expect([...(await registry.listShardKeys("messages"))].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+    });
+
+    it("does not share a request when caching is off, so every call reaches the DO", async () => {
+        expect.assertions(1);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace: createFakeNamespace(fakeDO) });
+
+        await Promise.all([registry.listShardKeys("messages"), registry.listShardKeys("messages")]);
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
+    });
+});
+
+describe("createDynamicShardRegistry secret", () => {
+    it("sends the secret header on reads and writes", async () => {
+        expect.assertions(1);
+
+        const seen: (string | null)[] = [];
+        const namespace = createFakeNamespace({
+            fetch: async (request) => {
+                seen.push(request.headers.get("x-lunora-shard-registry-do-secret"));
+
+                return Response.json({ ok: true, shardKeys: [], tables: {} });
+            },
+        });
+        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace, secret: "s3cret" });
+
+        await registry.register("messages", "a");
+        await registry.unregister("messages", "a");
+        await registry.listShardKeys("messages");
+        await registry.snapshot();
+
+        expect(seen).toStrictEqual(["s3cret", "s3cret", "s3cret", "s3cret"]);
+    });
 });

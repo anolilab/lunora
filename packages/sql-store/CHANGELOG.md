@@ -1,3 +1,24 @@
+## @lunora/sql-store [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.204...@lunora/sql-store@1.0.0-alpha.205) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+
+## @lunora/sql-store [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.203...@lunora/sql-store@1.0.0-alpha.204) (2026-10-23)
+
+### Bug Fixes
+
+* **sql-store:** probe only the pinned table on a by-id get ([#1313](https://github.com/anolilab/lunora/issues/1313)) ([4c98434](https://github.com/anolilab/lunora/commit/4c98434b8aa19fe9fbe39b6efbc6f5dfaa59ae93))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+
 ## @lunora/sql-store [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.202...@lunora/sql-store@1.0.0-alpha.203) (2026-10-22)
 
 

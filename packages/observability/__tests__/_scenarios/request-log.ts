@@ -257,8 +257,9 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
             try {
                 const total = REQUEST_LOG_RETENTION + 25;
 
+                // The trim is windowed per minute, so land the last append in the next window to trigger it.
                 for (let index = 0; index < total; index += 1) {
-                    appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: 1000 + index }));
+                    appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: index === total - 1 ? 61_000 : 1000 + index }));
                 }
 
                 const rows = readRequestLog(database.sql, { limit: REQUEST_LOG_RETENTION + 100 });
@@ -280,8 +281,11 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
             const database = createHarness();
 
             try {
+                // The last append lands in the next one-minute trim window, which triggers the trim.
                 for (let index = 0; index < 5; index += 1) {
-                    appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: 1000 + index }), { retention: 2 });
+                    appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: index === 4 ? 61_000 : 1000 + index }), {
+                        retention: 2,
+                    });
                 }
 
                 const rows = readRequestLog(database.sql, { limit: 100 });
@@ -289,6 +293,28 @@ const runRequestLogScenarios = (factory: () => SqlHarness): void => {
                 // Trimmed to the override, newest two surviving.
                 expect(rows).toHaveLength(2);
                 expect(rows.map((row) => row.functionPath)).toEqual(["fn:4", "fn:3"]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("trims once per minute window rather than on every append", () => {
+            expect.assertions(2);
+
+            const database = createHarness();
+
+            try {
+                // Same minute: only the first append trims (over a one-row table), so all three stay.
+                for (let index = 0; index < 3; index += 1) {
+                    appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: 1000 + index }), { retention: 1 });
+                }
+
+                expect(readRequestLog(database.sql, { limit: 100 })).toHaveLength(3);
+
+                // First append of the next minute runs the trim back to `retention`.
+                appendRequestLogEntry(database.sql, entry({ functionPath: "fn:3", ts: 61_000 }), { retention: 1 });
+
+                expect(readRequestLog(database.sql, { limit: 100 }).map((row) => row.functionPath)).toEqual(["fn:3"]);
             } finally {
                 database.close();
             }

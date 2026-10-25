@@ -82,7 +82,8 @@ creates, or reuses, the TanStack `QueryClient` they need).
 ## `@lunora/react-native/auth`
 
 The better-auth Expo bridge. Auth is a **bearer** token: the session rides the
-`Authorization` header: the HTTP RPC, and the socket's upgrade through `getAuthHeaders`.
+`Authorization` header on HTTP RPC and, on native, on the WebSocket upgrade —
+never the URL.
 
 React Native **does** have a cookie jar — `fetch` is backed by the platform HTTP
 stack (`NSURLSession` / `OkHttp`) and its shared cookie store — so a `Set-Cookie`
@@ -95,8 +96,10 @@ every request so the jar never rides along; a caller supplying its own `fetch`
 should wrap it in `withoutAmbientCookies`.
 
 - **`expoBearerToken(authClient)`**: reads the better-auth Expo session token
-  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and in the
-  socket upgrade's `Authorization` header via `getAuthHeaders`; returns `null` when signed out.
+  (from `getCookie()`) for use with `client.setAuthToken`, which covers HTTP and,
+  on native, the WebSocket upgrade's `Authorization` header; returns `null` when
+  signed out. Never pass it to `client.setWsToken`: that carries the shared
+  `LUNORA_WS_BEARER` value in the `connect` frame.
 - **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`**: re-exported
   from `@better-auth/expo/client`.
 
@@ -126,7 +129,6 @@ useEffect(() => {
     void (async () => {
         const token = await expoBearerToken(authClient);
         if (cancelled) return;
-        setSessionBearer(token);
         client.setAuthToken(token);
     })();
 
@@ -136,6 +138,15 @@ useEffect(() => {
 }, [session]);
 ```
 
-On the server, add better-auth's `expo()` **and** `bearer()` plugins. The socket
-upgrade carries the same `Authorization` header, so `resolveIdentity` reads the
-headers as it does for HTTP (see [`@lunora/auth`](/docs/packages/auth)).
+The bearer is never sent in the URL. `setWsToken` is not for the session token:
+it sends its value in the `connect` frame, which the server checks against the
+shared `LUNORA_WS_BEARER` gate. Leave that variable unset for an Expo app: a
+shipped app cannot hold the shared secret, and a server that sets it closes
+every Expo socket with `4003`. Under
+`react-native-web` the browser socket cannot set a header; the better-auth
+session cookie authenticates it there, so serve the worker same-site with the
+web app.
+
+On the server, add better-auth's `expo()` **and** `bearer()` plugins and read
+the session from the request headers in `resolveIdentity` (see
+[`@lunora/auth`](/docs/packages/auth)).

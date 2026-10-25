@@ -1323,6 +1323,12 @@ interface WorkerOptions {
     listSchemaTables?: () => ReadonlyArray<string>;
 
     /**
+     * The `"METHOD path"` keys of the declared live-stream routes served by `httpRouter`. They are dispatched ahead of
+     * {@link WorkerOptions.routes}, so an explicit route at one of those keys can not shadow a declared stream.
+     */
+    liveStreamRoutes?: ReadonlyArray<string>;
+
+    /**
      * Whether the target serves live topic streams. Defaults to `true`. `false` keeps
      * `ctx.live` on the HTTP action context and on a direct queue consumer, but its `publish`
      * rejects with `LIVE_STREAMS_UNSUPPORTED`, so no publish reaches a shard with no subscriber
@@ -5698,6 +5704,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the narrowed map (not just a boolean) lets the handler index it without a non-null
     // assertion.
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
+    const liveStreamRouteKeys = new Set(options.liveStreamRoutes);
+
+    // The explicit `routes` entry for a request, if any. A declared live-stream route has none here: it goes straight to the
+    // router. Resolved in one place so the dispatch below stays a single lookup.
+    const explicitRouteFor = (request: Request, url: URL): Route | undefined => {
+        if (!customRoutes) {
+            return undefined;
+        }
+
+        const methodAndPath = `${request.method} ${url.pathname}`;
+
+        if (liveStreamRouteKeys.has(methodAndPath)) {
+            return undefined;
+        }
+
+        return customRoutes[methodAndPath] ?? customRoutes[url.pathname];
+    };
 
     assertNoReservedRoutes(customRoutes);
 
@@ -5889,13 +5912,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // whole lookup behind `customRoutes` (resolved once at construction) so the
         // common composed-worker path (no custom routes) skips the `"METHOD path"`
         // string allocation and the two object reads on every request.
-        if (customRoutes) {
-            const methodAndPath = `${request.method} ${url.pathname}`;
-            const route = customRoutes[methodAndPath] ?? customRoutes[url.pathname];
+        const route = explicitRouteFor(request, url);
 
-            if (route) {
-                return route(request, env, context);
-            }
+        if (route) {
+            return route(request, env, context);
         }
 
         // The WfP fan-out entrypoints need the execution `context`, which the

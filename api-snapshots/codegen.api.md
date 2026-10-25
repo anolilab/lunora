@@ -293,6 +293,7 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     liveStreamsWithheld?: boolean;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
@@ -357,6 +358,7 @@ interface FunctionIR {
         kind: "room";
         name: string;
     };
+    description?: string;
     exportName: string;
     expose?: {
         cache?: ExposeCacheIR;

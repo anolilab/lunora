@@ -593,6 +593,7 @@ interface DynamicShardRegistryOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: ShardNamespaceLike;
+    secret?: string;
 }
 ```
 
@@ -2332,6 +2333,7 @@ interface WorkerOptions {
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreamRoutes?: ReadonlyArray<string>;
     liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;

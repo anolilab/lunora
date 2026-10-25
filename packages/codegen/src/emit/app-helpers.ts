@@ -1,6 +1,6 @@
 import type { AppMethodFacet, CapabilityKey } from "../capabilities";
 import { APP_METHOD_CAPABILITIES } from "../capabilities";
-import type { IdentityIR, JurisdictionIR, TableIR } from "../ir";
+import type { IdentityIR, JurisdictionIR, LiveStreamIR, TableIR } from "../ir";
 import { isShardByTable } from "../ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
@@ -102,6 +102,12 @@ interface EmitAppOptions {
     jurisdictionPinsAuth?: boolean;
 
     /**
+     * Every `defineLiveStream` the app declares, read from its literals. With `liveStreams` set, the worker mounts
+     * each stream's connect and control routes itself (`liveStreamRouter`), so the app mounts none.
+     */
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
+
+    /**
      * The app declares a `defineLiveStream` the target serves (post platform gate) →
      * the queue consumer forwards the runtime's publisher as `ctx.live`. Absent or
      * `false` leaves the consumer without `ctx.live`.
@@ -184,6 +190,9 @@ const hasEmailAgents = (options: ResolvedAppOptions): boolean => (options.emailA
 
 /** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
 const hasShardedTables = (options: ResolvedAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
+
+/** The worker mounts live-stream routes: the target serves live streams and the app declares at least one. */
+const hasLiveStreamMounts = (options: ResolvedAppOptions): boolean => options.liveStreams === true && (options.liveStreamDeclarations?.length ?? 0) > 0;
 
 /**
  * The scheduler resolver — one private builder method shared by every consumer.
@@ -554,5 +563,14 @@ const buildGlobalCdcApplier =
 `
         : "";
 
-export { buildGlobalHelpers, buildSchedulerHelper, buildStorageHelpers, hasEmailAgents, hasShardedTables, hasShardExtras, shardExtrasMethods };
+export {
+    buildGlobalHelpers,
+    buildSchedulerHelper,
+    buildStorageHelpers,
+    hasEmailAgents,
+    hasLiveStreamMounts,
+    hasShardedTables,
+    hasShardExtras,
+    shardExtrasMethods,
+};
 export type { EmitAppOptions, ResolvedAppOptions };

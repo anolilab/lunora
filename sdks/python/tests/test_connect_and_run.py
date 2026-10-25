@@ -22,6 +22,7 @@ import threading
 import types
 import unittest
 import unittest.mock
+from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,6 +34,22 @@ from lunora.submit import SubmitOptions
 # Generous: every wait below is satisfied in microseconds when the loop is
 # correct, and this only bounds how long a REGRESSION hangs the suite.
 TIMEOUT = 5.0
+
+
+class _FakeConnectionClosedError(Exception):
+    """Stands in for websockets' ``ConnectionClosedError``: the server's close frame is on ``rcvd``."""
+
+    def __init__(self, code: int, reason: str) -> None:
+        super().__init__(f"closed {code}")
+        self.rcvd = types.SimpleNamespace(code=code, reason=reason)
+
+
+class _UpgradeRefusedError(Exception):
+    """Stands in for websockets' ``InvalidStatus``: the upgrade was answered with an HTTP status."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.response = types.SimpleNamespace(status_code=status)
 
 
 class _FakeSocket:
@@ -68,10 +85,13 @@ class _FakeSocket:
         raw = await self.inbound.get()
         if raw is None:
             raise StopAsyncIteration
+        if isinstance(raw, BaseException):
+            raise raw
         return raw
 
-    def close(self) -> None:
-        self.inbound.put_nowait(None)
+    def close(self, code: Optional[int] = None, reason: str = "") -> None:
+        """End the stream; a ``code`` ends it the way a server close frame does."""
+        self.inbound.put_nowait(None if code is None else _FakeConnectionClosedError(code, reason))
 
 
 class _FakeWebsockets:
@@ -278,6 +298,98 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
+    async def test_a_session_provider_that_raises_fails_the_attempt_without_a_socket(self):
+        """A session credential that cannot be resolved fails the attempt: no socket opens and no frame is sent.
+
+        A tokenless socket would be refused with 4003 on a deployment that requires the
+        credential, or admitted as anonymous on one that does not. Failing and letting the
+        reconnect backoff re-resolve the credential is what the TS client does.
+        """
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+
+        def failing_provider():
+            raise RuntimeError("mint endpoint down")
+
+        client = LunoraClient("http://example.invalid", ws_token=failing_provider)
+
+        with self.assertRaises(RuntimeError):
+            await asyncio.wait_for(client.connect_and_run(), TIMEOUT)
+
+        self.assertEqual(fake.urls, [], "no socket URL is dialed")
+        self.assertEqual(socket.sent, [], "no frame, connect included, is sent")
+        self.assertFalse(client.online)
+
+    async def test_a_server_close_code_is_classified_on_detach_through_connect_and_run(self):
+        """The close frame rides the ``ConnectionClosed`` out of the read loop and reaches detach.
+
+        A 4001 always notifies. A 4003 notifies once per credential, and a rotation re-arms
+        it. The connect deadline refuses no credential and notifies nothing.
+        """
+
+        fake = self._install(_FakeSocket())
+        client = LunoraClient("http://example.invalid", ws_token="session-1")
+        notified: list = []
+        client.on_token_expired(lambda: notified.append(1))
+
+        steps = [
+            ("token-expired", 4001, "", 1),
+            ("connect deadline", 4003, "connect deadline", 1),
+            ("refused", 4003, "refused", 2),
+            ("refused again, same credential", 4003, "refused", 2),
+            ("refused after a rotation", None, None, 2),
+            ("refused under the new credential", 4003, "refused", 3),
+        ]
+        for name, code, reason, expected in steps:
+            with self.subTest(step=name):
+                if code is None:
+                    client.ws_token = "session-2"
+                    continue
+                socket = _FakeSocket()
+                fake._socket = socket
+                run = asyncio.ensure_future(client.connect_and_run())
+                await asyncio.wait_for(socket.sent_at_least(1).wait(), TIMEOUT)
+                self.assertEqual([frame["type"] for frame in socket.sent], ["connect"])
+                socket.close(code, reason)
+                with self.assertRaises(_FakeConnectionClosedError):
+                    await asyncio.wait_for(run, TIMEOUT)
+                self.assertFalse(client.online)
+                self.assertEqual(len(notified), expected)
+
+    async def test_a_503_at_upgrade_is_retried_with_backoff_and_refuses_no_credential(self):
+        """A 503 is transient (protocol/README.md 6): back off and retry; it is not a credential refusal."""
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+        attempts: list = []
+
+        def connect(url, **_options):
+            attempts.append(url)
+            if len(attempts) == 1:
+                raise _UpgradeRefusedError(503)
+            return fake
+
+        fake.connect = connect
+        notified: list = []
+        delays: list = []
+
+        async def sleep(seconds):
+            delays.append(seconds)
+
+        client = LunoraClient("http://example.invalid", ws_token="session-1")
+        client.on_token_expired(lambda: notified.append(1))
+        with self.assertLogs("lunora", level="WARNING"):
+            run = asyncio.ensure_future(client.reconnect_forever(sleep=sleep, rand=lambda: 1.0))
+            await asyncio.wait_for(socket.sent_at_least(1).wait(), TIMEOUT)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(delays), 1)
+        self.assertEqual(notified, [])
+
+        client.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
     async def test_a_failing_send_surfaces_instead_of_stranding_the_writer(self):
         """A lost frame must end the run, not leave a dead writer under a live reader.
 
@@ -426,6 +538,40 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
             socket.inbound.put_nowait("null")
             socket.inbound.put_nowait(json.dumps({"type": "nonsense"}))
             socket.close()
+
+        delays = []
+
+        async def sleep(seconds):
+            delays.append(seconds)
+
+        client = LunoraClient("http://example.invalid")
+        run = asyncio.ensure_future(client.reconnect_forever(sleep=sleep, rand=lambda: 1.0))
+
+        await asyncio.wait_for(third_open.wait(), TIMEOUT)
+        self.assertEqual(delays, [1.0, 2.0])
+
+        client.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_token_expired_frame_does_not_reset_the_backoff(self):
+        """TOKEN_EXPIRED arrives just before a 4001 close: counting it as liveness retries at the initial delay forever."""
+
+        sockets = [_FakeSocket(), _FakeSocket(), _FakeSocket()]
+        fake = self._install(sockets[0])
+        opened = []
+        third_open = asyncio.Event()
+
+        def connect(url, **_options):
+            opened.append(url)
+            fake._socket = sockets[len(opened) - 1]
+            if len(opened) == 3:
+                third_open.set()
+            return fake
+
+        fake.connect = connect
+        for socket in sockets[:2]:
+            socket.inbound.put_nowait(json.dumps({"type": "error", "error": {"code": "TOKEN_EXPIRED"}}))
+            socket.close(4001, "")
 
         delays = []
 

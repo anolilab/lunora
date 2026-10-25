@@ -134,33 +134,71 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     };
 };
 
-// Re-sync one subscription against the provider's truth. Returns whether the store changed.
-const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
-    const current = await adapter.getSubscriptionStatus(id);
-    const existing = await store.getSubscription(adapter.identifier, id);
+// Amounts are bigints, which `JSON.stringify` refuses without a replacer.
+const bigintAsString = (_key: string, value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value);
 
-    if (!subscriptionDrifted(existing, current)) {
+/**
+ * Whether a store row changed between two reads. The whole row is compared, not
+ * `updatedAt`/`lastEventAt`: those are milliseconds (a write in the same one would
+ * pass) and `lastEventAt` is optional, so a webhook could change a row and leave
+ * both standing.
+ */
+const rowChanged = (before: unknown, after: unknown): boolean => JSON.stringify(after, bigintAsString) !== JSON.stringify(before, bigintAsString);
+
+// Re-sync one subscription against the provider's truth. Returns whether the store changed.
+//
+// The row is read on both sides of the provider call: a webhook that lands while the adapter call
+// is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
+// call can see it change. The write is then guarded on the revision read at `after`, so a webhook
+// that lands after that read makes the write a no-op rather than an overwrite.
+const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getSubscription(adapter.identifier, id);
+    const current = await adapter.getSubscriptionStatus(id);
+    const after = await store.getSubscription(adapter.identifier, id);
+
+    if (rowChanged(before, after)) {
+        return false;
+    }
+
+    if (!subscriptionDrifted(after, current)) {
         return false;
     }
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    await store.upsertSubscription(overlayProviderSubscription(existing, current));
+    const written = await store.upsertSubscription(overlayProviderSubscription(after, current), { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
+// Same before/after guard as `reconcileSubscription`.
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getPaymentSession(adapter.identifier, id);
     const providerTruth = await adapter.getPaymentStatus(id);
-    const existing = await store.getPaymentSession(adapter.identifier, id);
-    const current = mergePaymentTruth(existing, providerTruth);
+    const after = await store.getPaymentSession(adapter.identifier, id);
 
-    if (!paymentDrifted(existing, current)) {
+    if (rowChanged(before, after)) {
         return false;
     }
 
-    await store.upsertPaymentSession({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    const current = mergePaymentTruth(after, providerTruth);
+
+    if (!paymentDrifted(after, current)) {
+        return false;
+    }
+
+    const written = await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt }, { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
@@ -250,6 +288,9 @@ interface SweepCounts {
     readonly updated: number;
 }
 
+// ponytail: fixed guess under Stripe's rate limit; make it an option when a provider needs another value.
+const RECONCILE_CONCURRENCY = 8;
+
 // Fan out over a batch with per-id fault isolation: a single failing id (a 404'd/deleted row, a
 // transient 5xx, a 429) must never abort the whole sweep, or drift for every other id would never
 // self-heal. Each rejection is surfaced as a `reconcile.error` signal rather than thrown.
@@ -260,7 +301,26 @@ const sweep = async (
     adapter: PaymentAdapter,
     observer?: PaymentObserver,
 ): Promise<SweepCounts> => {
-    const settled = await Promise.allSettled(ids.map((id) => reconcileOne(id)));
+    // Bounded: one provider read per id, so an unbounded fan-out over a large batch trips the
+    // provider's rate limit. Workers pull the next id off a shared cursor.
+    const settled: PromiseSettledResult<boolean>[] = Array.from({ length: ids.length });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+        while (cursor < ids.length) {
+            const index = cursor;
+
+            cursor += 1;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each worker reconciles serially; the pool is the concurrency
+                settled[index] = { status: "fulfilled", value: await reconcileOne(ids[index] ?? "") };
+            } catch (error) {
+                settled[index] = { reason: error, status: "rejected" };
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(RECONCILE_CONCURRENCY, ids.length) }, () => worker()));
 
     let updated = 0;
     let failed = 0;

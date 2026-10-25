@@ -16,6 +16,7 @@
  * await client.append([{ type: "chat.messageSent", payload: { text: "hi" } }]);
  * ```
  */
+import { EVENT_LOG_SECRET_HEADER } from "../../../shared/internal-secret";
 import type { EventLogEntry } from "./event-log";
 import type { InputEvent, Seq } from "./seq";
 
@@ -57,6 +58,8 @@ export interface EventLogDOClientOptions {
      * ```
      */
     fetch: (request: Request) => Promise<Response>;
+    /** The DO's `EVENT_LOG_DO_SECRET`, sent on every request; omit when none is provisioned. */
+    secret?: string;
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
@@ -71,8 +74,11 @@ export interface EventLogDOClientOptions {
 export class EventLogDOClient {
     readonly #fetch: (request: Request) => Promise<Response>;
 
+    readonly #secretHeaders: Record<string, string>;
+
     public constructor(options: EventLogDOClientOptions) {
         this.#fetch = options.fetch;
+        this.#secretHeaders = options.secret ? { [EVENT_LOG_SECRET_HEADER]: options.secret } : {};
     }
 
     // ── Append ─────────────────────────────────────────────────────────
@@ -92,7 +98,7 @@ export class EventLogDOClient {
         const response = await this.#fetch(
             new Request("https://do/append", {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: { "content-type": "application/json", ...this.#secretHeaders },
                 body,
             }),
         );
@@ -158,7 +164,7 @@ export class EventLogDOClient {
 
     /** GET `path` from the DO, throwing a descriptive error on a non-OK status. */
     async #get<T>(path: string, method: string): Promise<T> {
-        const response = await this.#fetch(new Request(`https://do${path}`));
+        const response = await this.#fetch(new Request(`https://do${path}`, { headers: this.#secretHeaders }));
 
         if (!response.ok) {
             throw await EventLogDOClient.#toError(response, method);

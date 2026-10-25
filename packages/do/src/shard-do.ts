@@ -163,6 +163,7 @@ import {
     clearCapturedMail,
     clearCompanionSignatures,
     clearQueueMessages,
+    CompanionMemo,
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
@@ -282,6 +283,7 @@ import {
 } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
+import { SHARD_REGISTRY_SECRET_ENV } from "../../../shared/internal-secret";
 import { jsonResponse } from "../../../shared/json-response";
 import {
     encodeLiveFrame,
@@ -309,6 +311,7 @@ import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
+    ADMIN_WILDCARD,
     batchedTableLookup,
     readAdminAuditLog,
     readAdminDurableSignal,
@@ -403,6 +406,8 @@ import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import type { SubscriptionMemo } from "./socket-table-index";
+import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
 
 // Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
@@ -1258,34 +1263,6 @@ interface SocketDelivery {
     pageDeltas: boolean;
 }
 
-/** Per-subscription memo used to suppress no-op pushes. */
-interface SubscriptionMemo {
-    clientWatermark?: number;
-    cursor?: number;
-    epoch?: string;
-
-    /**
-     * {@link ShardDO.writeGeneration} captured before the run that produced this
-     * baseline started reading. A later push carrying a LOWER generation read
-     * state older than this baseline and is dropped instead of sent.
-     */
-    generation: number;
-
-    lastJson: string;
-
-    /**
-     * Index slices this subscription's reads were provably confined to, keyed
-     * by table. A table present here was read ONLY through the listed ranges,
-     * so a write landing outside all of them cannot change the result. A table
-     * in {@link SubscriptionMemo.tables} but absent here was read in some
-     * unnarrowable way (a scan, a search, a join) and always re-runs.
-     */
-    ranges?: Map<string, KeyRange[]>;
-    /** A later unrelated write cannot settle past a value the socket never received. */
-    retryData?: boolean;
-    tables: Set<string>;
-}
-
 /**
  * Sentinel diff baseline meaning "no value has ever been delivered to this
  * socket for this subscription". Stored as a memo's `lastJson` when the very
@@ -1619,15 +1596,6 @@ const ROOT_SHARD_NAME = "__root__";
 const SHARD_REGISTRY_RETRY_MS = 30_000;
 
 /**
- * Dependency-set sentinel for admin introspection subscriptions that aren't
- * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
- * `migrationStatus`). It is `"*"` — a name no real SQLite table can take, so it
- * never collides with a tracked write — and `refreshSubscriptions` treats
- * a memo carrying it as "re-run on every write-flush".
- */
-const ADMIN_WILDCARD = "*";
-
-/**
  * Whether a subscription's memo proves this write cannot have changed its
  * result — the skip `refreshSubscriptions` applies before re-running a query.
  *
@@ -1762,6 +1730,9 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
  * buffer, and the flush that drains it, without bound.
  */
 const MAX_STMT_SAMPLES_PER_DISPATCH = 200;
+
+/** Dispatches per durable metric write by default; an evicted DO loses at most 7 of them. */
+const DEFAULT_METRICS_FLUSH_EVERY = 8;
 
 /**
  * `event.name` of the per-dispatch wide event. Namespaced so it never collides
@@ -2315,6 +2286,9 @@ abstract class ShardDO {
      */
     protected readonly secretValues: SecretValueHost;
 
+    /** Companions the per-dispatch ctx-db has verified, shared across dispatches through {@link ShardDO.ctxDbTuning}. */
+    private readonly companionMemo = new CompanionMemo();
+
     private readonly deliveryAuthorization: DeliveryAuthorization | undefined;
     private readonly deliveryFence = new DeliveryFence(() => this.shardHost.sql);
     private readonly deliveryResponsePermits = new WeakMap<Response, DeliveryPermit>();
@@ -2726,14 +2700,8 @@ abstract class ShardDO {
     /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
     private refreshInFlight = false;
 
-    /**
-     * Last pushed result per `(socket, subId)`, keyed by socket. Lets
-     * `refreshSubscriptions` skip re-running queries whose tables were
-     * untouched and suppress pushes when the re-run result is unchanged. Held
-     * in memory only — it does not survive hibernation, which is safe: a cold
-     * memo simply forces one re-run and (at most) one redundant push.
-     */
-    private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+    /** Subscription memos and the socket table index the write-flush fan-outs filter on. */
+    private readonly socketIndex = new SocketTableIndex();
 
     /**
      * Decoded socket attachments, so a write flush's two fan-out passes do not each
@@ -2751,7 +2719,7 @@ abstract class ShardDO {
     /**
      * Subscriptions whose refresh keeps throwing, so a deterministic failure is
      * not re-run (and re-announced) on every write flush. In memory only, like
-     * {@link ShardDO.subMemos}: a cold DO forgets and simply retries.
+     * the subscription memos: a cold DO forgets and simply retries.
      */
     private readonly subscriptionFailures = new SubscriptionFailureLatch();
 
@@ -3185,7 +3153,7 @@ abstract class ShardDO {
     /**
      * Exact per-path metric deltas not yet written to `__lunora_metrics*`. Every
      * dispatch folds in here; {@link ShardDO.maybeFlushMetrics} writes the sum once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 1), so rates stay exact
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 8), so rates stay exact
      * and only write frequency drops. In memory only: an evicted DO loses at most
      * N-1 dispatches of counters (no alarm flush).
      */
@@ -3561,7 +3529,7 @@ abstract class ShardDO {
             // the socket in the WeakMap until GC and (more importantly) keep the
             // stale memo set around if the same socket id is reused after a
             // bounce. Cheap to recompute on the next subscribe.
-            this.subMemos.delete(ws);
+            this.socketIndex.forgetSocket(ws);
             this.subscriptionFailures.clearSocket(ws);
             this.shapeMemos.delete(ws);
             this.globalShapeSnapshots.delete(ws);
@@ -4347,63 +4315,74 @@ abstract class ShardDO {
         // `onCommitted` below, which the runner calls before it releases the gate.
         let flushed: Promise<void> = Promise.resolve();
 
-        const result = await this.runner.runInTransaction(
-            async () => {
-                // Reached only once the gate admits this call, so a queued independent caller sees
-                // 0 here. A call that re-entered the gate from inside an open transaction sees 1
-                // and must fail before touching the outer transaction's bookkeeping, which its
-                // `finally` below would otherwise clear while that transaction is still running.
-                // The Node host never reaches this for a re-entrant call: its lock is re-entrant, so the
-                // nested `BEGIN` fails in SQLite first, which is just as loud.
-                if (this.transactionDepth > 0) {
-                    throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
-                }
+        let result: T;
 
-                // Another dispatch may have run while this caller waited on the gate, leaving its
-                // identity in the shared per-request fields; pin this caller's back before its handler.
-                this.restoreRequestScope(requestScope);
-                this.transactionDepth = 1;
-                this.transactionRequestScope = requestScope;
-                queued = [];
-                this.afterCommitQueue = queued;
+        try {
+            result = await this.runner.runInTransaction(
+                async () => {
+                    // Reached only once the gate admits this call, so a queued independent caller sees
+                    // 0 here. A call that re-entered the gate from inside an open transaction sees 1
+                    // and must fail before touching the outer transaction's bookkeeping, which its
+                    // `finally` below would otherwise clear while that transaction is still running.
+                    // The Node host never reaches this for a re-entrant call: its lock is re-entrant, so the
+                    // nested `BEGIN` fails in SQLite first, which is just as loud.
+                    if (this.transactionDepth > 0) {
+                        throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
+                    }
 
-                try {
-                    return await handler();
-                } finally {
-                    this.transactionDepth = 0;
-                    this.transactionRequestScope = undefined;
-                    this.afterCommitQueue = undefined;
-                }
-            },
-            () => {
-                // The hooks themselves must NOT run under the gate — one is a
-                // remote embed plus a Vectorize upsert, and holding the gate for
-                // that stalls every dispatch on the shard. But run loose, two of
-                // them race: the gate admits the next mutation the moment this
-                // one commits, so a slow hook for `body: "v1"` can land AFTER the
-                // fast hook for the `"v2"` that overwrote it — and the row then
-                // says "v2" while its vector says "v1", permanently, until the
-                // next write to that row. Insert-then-delete is the worse shape:
-                // the delete's hook lands first, the insert's upsert after it,
-                // and the vector outlives the row it points at.
-                //
-                // So only the LINKING happens here, inside the gate, where commit
-                // order is the one thing that is knowable; the work itself runs
-                // on the chain, outside it. Ordered, not serialized: the next
-                // transaction still commits while this hook is in flight.
-                // A transaction that queued nothing has no hooks to order, so it
-                // takes no link: an empty one would grow the chain on every
-                // mutation of a shard that has no hooks at all, and — the reason
-                // it matters here — would make such a mutation inherit the wait
-                // of a stalled hook it has nothing to do with.
-                if (queued.length === 0) {
-                    return;
-                }
+                    // Another dispatch may have run while this caller waited on the gate, leaving its
+                    // identity in the shared per-request fields; pin this caller's back before its handler.
+                    this.restoreRequestScope(requestScope);
+                    this.transactionDepth = 1;
+                    this.transactionRequestScope = requestScope;
+                    queued = [];
+                    this.afterCommitQueue = queued;
 
-                // Stall recovery rides on the link itself — see `linkAfterCommit`.
-                flushed = this.linkAfterCommit(async () => flushAfterCommit(queued));
-            },
-        );
+                    try {
+                        return await handler();
+                    } finally {
+                        this.transactionDepth = 0;
+                        this.transactionRequestScope = undefined;
+                        this.afterCommitQueue = undefined;
+                    }
+                },
+                () => {
+                    // The hooks themselves must NOT run under the gate — one is a
+                    // remote embed plus a Vectorize upsert, and holding the gate for
+                    // that stalls every dispatch on the shard. But run loose, two of
+                    // them race: the gate admits the next mutation the moment this
+                    // one commits, so a slow hook for `body: "v1"` can land AFTER the
+                    // fast hook for the `"v2"` that overwrote it — and the row then
+                    // says "v2" while its vector says "v1", permanently, until the
+                    // next write to that row. Insert-then-delete is the worse shape:
+                    // the delete's hook lands first, the insert's upsert after it,
+                    // and the vector outlives the row it points at.
+                    //
+                    // So only the LINKING happens here, inside the gate, where commit
+                    // order is the one thing that is knowable; the work itself runs
+                    // on the chain, outside it. Ordered, not serialized: the next
+                    // transaction still commits while this hook is in flight.
+                    // A transaction that queued nothing has no hooks to order, so it
+                    // takes no link: an empty one would grow the chain on every
+                    // mutation of a shard that has no hooks at all, and — the reason
+                    // it matters here — would make such a mutation inherit the wait
+                    // of a stalled hook it has nothing to do with.
+                    if (queued.length === 0) {
+                        return;
+                    }
+
+                    // Stall recovery rides on the link itself — see `linkAfterCommit`.
+                    flushed = this.linkAfterCommit(async () => flushAfterCommit(queued));
+                },
+            );
+        } catch (error) {
+            // The rollback undid any companion marker this transaction verified; a memo
+            // that still held it would skip the re-check on the next write. Here rather
+            // than in the RPC catch, so every caller (reactors included) is covered.
+            this.invalidateCompanionMemo();
+
+            throw error;
+        }
 
         // Wait for THIS transaction's link (and, transitively, every earlier one)
         // rather than for `afterCommitTail`, which a later transaction may have
@@ -6128,8 +6107,9 @@ abstract class ShardDO {
         // Drop the diff baseline. A (re)subscribe asks for the current value, so
         // the seed must go out as a full snapshot; diffed against the old memo it
         // is answered `settled` (or a delta against a value the client just
-        // discarded) and the client never gets the snapshot it asked for.
-        this.subMemos.get(ws)?.delete(subId);
+        // discarded) and the client never gets the snapshot it asked for. The new
+        // subscription has no memo yet, so the socket is visited on every flush until one indexes it.
+        this.socketIndex.resubscribed(ws, subId);
         // New args or a re-snapshot request: a subscription that was failing is retried at once.
         this.subscriptionFailures.clear(ws, subId);
 
@@ -6166,7 +6146,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.subMemos.get(ws)?.delete(subId);
+        this.socketIndex.forgetMemo(ws, subId);
         this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
@@ -6205,6 +6185,8 @@ abstract class ShardDO {
 
             return "serialize_failed";
         }
+
+        this.socketIndex.markHoldsShapes(ws);
 
         return "ok";
     }
@@ -7305,11 +7287,28 @@ abstract class ShardDO {
      * accessor made reading the slice — in a test, or to log it — silently disarm
      * the invalidation backstop in {@link ShardDO.recordChangedTable}.
      */
-    protected ctxDbTuning(): { cache?: ReactiveCache; maxRelationKeys?: number; relationExistsPushDown?: "always" | "auto" | "never" } {
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        companionMemo: CompanionMemo;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    } {
         return {
             ...this.ctxDbRelationOptions,
+            companionMemo: this.companionMemo,
             ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
         };
+    }
+
+    /**
+     * Forget every companion the ctx-db memo holds as verified, so the next write
+     * re-checks each against its durable marker. Called wherever a marker or a
+     * companion can change behind the memo: a migration (the generated
+     * `ensureMigrated`), a rolled-back transaction, and the `rebuildCompanions`
+     * admin op.
+     */
+    protected invalidateCompanionMemo(): void {
+        this.companionMemo.invalidate();
     }
 
     /**
@@ -9223,7 +9222,7 @@ abstract class ShardDO {
             return;
         }
         this.unsubscribe(ws, subId);
-        this.subMemos.get(ws)?.delete(subId);
+        this.socketIndex.forgetMemo(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
         this.sendSubscriptionError(ws, subId, "FORBIDDEN", "AccessDenied");
     }
@@ -9290,7 +9289,7 @@ abstract class ShardDO {
             try {
                 // The host's structured-clone budget includes the permit and decoded query arguments.
                 this.writeAttachment(ws, next);
-                const memo = this.subMemos.get(ws)?.get(subId);
+                const memo = this.socketIndex.memo(ws, subId);
                 if (memo !== undefined) {
                     memo.lastJson = UNDELIVERED_BASELINE;
                 }
@@ -10106,7 +10105,7 @@ abstract class ShardDO {
      * The durable write is COALESCED, not per-dispatch: the call is folded into
      * {@link ShardDO.pendingFunctionMetrics} (exact counts, durations, scans and
      * index hits) and {@link ShardDO.maybeFlushMetrics} writes the whole delta once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 1 = every dispatch),
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 8; 1 = every dispatch),
      * so the durable counters stay exact and only the write frequency drops.
      */
     private recordFunctionCall(
@@ -10404,9 +10403,10 @@ abstract class ShardDO {
 
     /**
      * Dispatches per durable metric write (env `LUNORA_METRICS_FLUSH_EVERY`): a positive
-     * integer, default 1 (write on every dispatch). Unset, blank, fractional,
-     * non-numeric or < 1 values fall back to 1. An evicted DO loses at most N-1
-     * dispatches of un-flushed counters.
+     * integer, default {@link DEFAULT_METRICS_FLUSH_EVERY} (8). Unset, blank, fractional,
+     * non-numeric or < 1 values fall back to the default. An evicted DO loses at most N-1
+     * dispatches of un-flushed counters (7 by default); errored or conflicted dispatches
+     * and minute-boundary crossings still flush immediately. Set 1 to write every dispatch.
      */
     private metricsFlushEvery(): number {
         // A bare number in wrangler config arrives as a number, not a string.
@@ -10419,7 +10419,7 @@ abstract class ShardDO {
             value = Number(raw);
         }
 
-        return Number.isInteger(value) && value >= 1 ? value : 1;
+        return Number.isInteger(value) && value >= 1 ? value : DEFAULT_METRICS_FLUSH_EVERY;
     }
 
     /**
@@ -11702,6 +11702,7 @@ abstract class ShardDO {
      */
     private handleRebuildCompanions(): Response {
         clearCompanionSignatures(this.shardHost.sql);
+        this.invalidateCompanionMemo();
         this.recordAudit("rebuildCompanions");
 
         return adminResponse({ ok: true });
@@ -13122,6 +13123,13 @@ abstract class ShardDO {
         return run;
     }
 
+    /** The `SHARD_REGISTRY_DO_SECRET` the registry requires of its callers, when one is provisioned. */
+    private registrySecret(): string | undefined {
+        const secret = (this.env as Record<string, unknown> | undefined)?.[SHARD_REGISTRY_SECRET_ENV];
+
+        return typeof secret === "string" ? secret : undefined;
+    }
+
     /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
     private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
         return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
@@ -13177,7 +13185,7 @@ abstract class ShardDO {
                     this.registeredTables.add(table);
 
                     try {
-                        await registerShardKey(stub, table, shardKey);
+                        await registerShardKey(stub, table, shardKey, this.registrySecret());
                     } catch (error: unknown) {
                         this.registeredTables.delete(table);
                         this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
@@ -13229,7 +13237,7 @@ abstract class ShardDO {
 
                 if (!dryRun) {
                     // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await unregisterShardKey(stub, table, shardKey);
+                    await unregisterShardKey(stub, table, shardKey, this.registrySecret());
                     this.registeredTables.delete(table);
                 }
 
@@ -13444,7 +13452,7 @@ abstract class ShardDO {
      * observable behavior rather than being a pure optimization:
      *
      * (a) Per-socket memo divergence. The frame a socket receives depends on its
-     * OWN `subMemos` entry (`pushSubscriptionData`): one socket may need a
+     * OWN subscription memo (`pushSubscriptionData`): one socket may need a
      * `{type:"delta"}`, a freshly-subscribed socket a full `{type:"data"}`
      * snapshot, and an up-to-date socket nothing at all. So only the QUERY RUN +
      * its result can be shared — `pushSubscriptionData` must still run per socket.
@@ -13541,8 +13549,24 @@ abstract class ShardDO {
         this.sendSubscriptionError(ws, subId, body.code, body.message, body.why);
     }
 
+    /**
+     * Whether the subscription's memo proves its result unchanged by this flush, so
+     * an authorized run can settle from the memo instead of re-running the query.
+     */
+    private memoSkipsRun(ws: ShardSocketLike, subId: string, changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): boolean {
+        const memo = this.socketIndex.memo(ws, subId);
+
+        return (
+            this.deliveryAuthorization !== undefined &&
+            memo !== undefined &&
+            memo.lastJson !== UNDELIVERED_BASELINE &&
+            memoProvesUnchanged(memo, changed, changedKeys)
+        );
+    }
+
     private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
-        const sockets = [...this.runner.sockets()];
+        // Delivery authorization settles every subscription on every flush, so it never skips a socket.
+        const sockets = [...this.runner.sockets()].filter((ws) => this.deliveryAuthorization !== undefined || this.socketIndex.mayCare(ws, changed));
 
         // The post-write high-watermark is the same for every sub flushed in
         // this pass (they all observe the committed state), so resolve it once
@@ -13559,6 +13583,9 @@ abstract class ShardDO {
         const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
 
         const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
+            // Claimed before the first await; see `SocketTableIndex.beginVisit`.
+            const finishIndexVisit = this.socketIndex.beginVisit(ws);
+
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
             // the load-bearing check — a passive subscriber never sends an inbound
@@ -13614,13 +13641,7 @@ abstract class ShardDO {
                     if (backingOff) {
                         return;
                     }
-                    const memo = this.subMemos.get(ws)?.get(subId);
-                    if (
-                        this.deliveryAuthorization &&
-                        memo !== undefined &&
-                        memo.lastJson !== UNDELIVERED_BASELINE &&
-                        memoProvesUnchanged(memo, changed, changedKeys)
-                    ) {
+                    if (this.memoSkipsRun(ws, subId, changed, changedKeys)) {
                         this.sendSubscriptionSettlement(ws, subId, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit, true);
                         return;
                     }
@@ -13708,7 +13729,7 @@ abstract class ShardDO {
                     continue;
                 }
 
-                const memo = this.subMemos.get(ws)?.get(subId);
+                const memo = this.socketIndex.memo(ws, subId);
 
                 if (!this.deliveryAuthorization && memoProvesUnchanged(memo, changed, changedKeys)) {
                     continue;
@@ -13724,6 +13745,8 @@ abstract class ShardDO {
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
                 await refreshQuery(subId, functionPath, structuredClone(query.args ?? {}), isAdmin, backingOff);
             }
+
+            finishIndexVisit(subs);
         };
 
         // Bounded fan-out (default 8 in flight): each worker drains its sockets
@@ -14153,7 +14176,7 @@ abstract class ShardDO {
             this.rejectRetainedShapesAndRooms();
             return;
         }
-        const sockets = [...this.runner.sockets()];
+        const sockets = [...this.runner.sockets()].filter((ws) => !this.socketIndex.isShapeFree(ws));
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
@@ -14184,7 +14207,9 @@ abstract class ShardDO {
             }
             const { shapes } = attachment;
 
-            if (!shapes) {
+            if (!shapes || Object.keys(shapes).length === 0) {
+                this.socketIndex.markShapeFree(ws);
+
                 return;
             }
 
@@ -15932,10 +15957,10 @@ abstract class ShardDO {
      * its next result in full. Summed on demand over a socket's few memos (the
      * per-socket subscription cap), so there is nothing to keep in step.
      */
-    private boundedBaseline(memos: Map<string, SubscriptionMemo>, subId: string, json: string): string {
+    private boundedBaseline(memos: ReadonlyMap<string, SubscriptionMemo> | undefined, subId: string, json: string): string {
         let held = json.length;
 
-        for (const [id, memo] of memos) {
+        for (const [id, memo] of memos ?? []) {
             if (id !== subId && memo.lastJson !== UNDELIVERED_BASELINE) {
                 held += memo.lastJson.length;
             }
@@ -15951,11 +15976,11 @@ abstract class ShardDO {
      * write-flush can diff against it.
      */
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
-        const memos = socketMap(this.subMemos, ws);
+        const memos = this.socketIndex.socketMemos(ws);
 
         // A refresh that started after this seed already recorded a newer baseline. Checked BEFORE the size cap: a stale
         // oversized result must not throw and unsubscribe a query whose newer, smaller result was already delivered.
-        if ((memos.get(subId)?.generation ?? -1) > generation) {
+        if ((memos?.get(subId)?.generation ?? -1) > generation) {
             return;
         }
 
@@ -15965,7 +15990,7 @@ abstract class ShardDO {
         // so it answers to the same per-result cap as a full seed.
         this.assertResultWithinLimit(json);
 
-        memos.set(subId, {
+        this.socketIndex.setMemo(ws, subId, {
             generation,
             lastJson: this.boundedBaseline(memos, subId, json),
             ranges: outcome.ranges,
@@ -16010,8 +16035,7 @@ abstract class ShardDO {
         if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
-        const memos = socketMap(this.subMemos, ws);
-        const existing = memos.get(subId);
+        const existing = this.socketIndex.memo(ws, subId);
 
         const { cursor, epoch, generation } = stamp;
         const cursorSuffix = cdcSuffix(cursor, epoch);
@@ -16035,7 +16059,7 @@ abstract class ShardDO {
 
             existing.generation = generation;
             existing.retryData = false;
-            existing.tables = outcome.tables;
+            this.socketIndex.retable(ws, subId, outcome.tables);
             // `ranges` legitimately shifts run-to-run even when the result is
             // byte-identical (a recency-windowed query is the obvious case) — it's
             // recomputed per execution from the index slices actually touched, not
@@ -16091,20 +16115,20 @@ abstract class ShardDO {
         const delivered = frames.map((frame) => this.sendFrame(ws, frame, { subId, permit })).every(Boolean);
 
         const guardedFailure = this.deliveryAuthorization !== undefined && !delivered;
-        if (guardedFailure && existing !== undefined && memos.get(subId) === existing) {
+        if (guardedFailure && existing !== undefined && this.socketIndex.memo(ws, subId) === existing) {
             existing.retryData = true;
         }
         if (guardedFailure) {
             return;
         }
-        memos.set(subId, {
+        this.socketIndex.setMemo(ws, subId, {
             cursor: delivered ? cursor : existing?.cursor,
             epoch: delivered ? epoch : existing?.epoch,
             clientWatermark: delivered ? clientWatermark : existing?.clientWatermark,
             // Tracks `lastJson`: an undelivered value leaves the baseline, and so
             // its generation, where the last delivered one put it.
             generation: delivered ? generation : (existing?.generation ?? generation),
-            lastJson: delivered ? this.boundedBaseline(memos, subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            lastJson: delivered ? this.boundedBaseline(this.socketIndex.socketMemos(ws), subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
@@ -16118,7 +16142,7 @@ abstract class ShardDO {
         permit: SubscriptionDeliveryPermit | undefined,
         advanceOnly = false,
     ): boolean {
-        const memo = this.subMemos.get(ws)?.get(subId);
+        const memo = this.socketIndex.memo(ws, subId);
         if (memo === undefined || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return false;
         }
@@ -16153,7 +16177,7 @@ abstract class ShardDO {
         // current baseline read older state; sending it would roll the client
         // back to a value a later write already replaced (and stamp a cursor on
         // it). The baseline's own run already delivered the newer value.
-        const existing = this.subMemos.get(ws)?.get(subId);
+        const existing = this.socketIndex.memo(ws, subId);
         return existing === undefined || generation >= existing.generation;
     }
 
@@ -16260,17 +16284,18 @@ abstract class ShardDO {
             return false;
         }
 
-        // Read the header once: it is the first choice for the token, and the only
-        // place the master token is admitted from.
+        // Each channel is checked for a minted sub-token on its own, as the worker
+        // does: a native client carries its session bearer in the header and an
+        // admin ticket in `?token=`, and the header must not shadow the ticket.
+        // The header is the only place the master token is admitted from.
         const headerBearer = extractBearerToken(request.headers.get("authorization"));
-        const supplied = headerBearer ?? new URL(request.url).searchParams.get("token") ?? undefined;
+        const queryToken = new URL(request.url).searchParams.get("token") ?? undefined;
 
-        if (supplied === undefined) {
-            return false;
-        }
-
-        if (await verifyWsAdminToken(adminToken, supplied)) {
-            return true;
+        for (const supplied of [headerBearer, queryToken]) {
+            // eslint-disable-next-line no-await-in-loop -- at most two candidates, checked in order
+            if (supplied !== undefined && (await verifyWsAdminToken(adminToken, supplied))) {
+                return true;
+            }
         }
 
         return headerBearer !== undefined && constantTimeEqual(headerBearer, adminToken);

@@ -38,17 +38,14 @@
  *     onSubscribe: async ({ ctx, topic, key }) => topic === "post" && (await ctx.runQuery(api.posts.canRead, { postId: key.postId })),
  * });
  *
- * // mount the two routes on the app's http router
- * app.get(posts.connectPath, posts.connect);
- * app.post(posts.controlPath, posts.control);
- *
  * // publish from any HTTP action: the reference names the stream and the topic, and types the payload
  * import { live } from "./_generated/live";
  * await ctx.live.publish(live.posts.post({ postId }), { event: "comment_added", commentId });
  * ```
  *
- * Codegen reads the stream from its literals (`id`, topic names, key fields in order) and
- * writes `_generated/live.ts`, whose references carry no server code and so can be handed to
+ * Codegen reads the stream from its literals (`id`, topic names, key fields in order), mounts its
+ * connect and control routes on the worker (see {@link liveStreamRouter}), and writes
+ * `_generated/live.ts`, whose references carry no server code and so can be handed to
  * a framework hook in the browser. A publish is checked against the declaration: a payload the
  * topic's validator rejects, or a topic the stream never declared, rejects with `BAD_REQUEST`.
  *
@@ -112,6 +109,8 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { isStringValidator, parseValidatorMap } from "@lunora/values";
+import type { ExecutionContext } from "hono";
+import { Hono } from "hono";
 
 import {
     isLiveIdentifier,
@@ -123,7 +122,7 @@ import {
     parseLiveTopic,
 } from "../../../shared/live-stream";
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "./http";
-import { httpAction } from "./http";
+import { httpAction, httpRouter } from "./http";
 
 /** One declared topic: the key that addresses it (string-valued fields, in order) and the payload it carries. */
 interface LiveTopicDeclaration {
@@ -191,11 +190,11 @@ interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
 
 /** The two route handlers {@link defineLiveStream} produces, plus the declaration they enforce. */
 interface LiveStream<Topics extends LiveTopics = LiveTopics> {
-    /** Mount with `app.get(stream.connectPath, stream.connect)`. Returns the SSE response. */
+    /** Served at `connectPath` by the worker's live-stream router. Returns the SSE response. */
     connect: LunoraRouteHandler;
     /** `GET` path for the SSE connection. */
     connectPath: string;
-    /** Mount with `app.post(stream.controlPath, stream.control)`. Returns a JSON ack. */
+    /** Served at `controlPath` by the worker's live-stream router. Returns a JSON ack. */
     control: LunoraRouteHandler;
     /** `POST` path for subscribe / unsubscribe control. */
     controlPath: string;
@@ -408,7 +407,135 @@ const defineLiveStream = <const Topics extends LiveTopics>(config: LiveStreamCon
     return { connect, connectPath, control, controlPath, id: config.id, topics: config.topics, validatePublish };
 };
 
-export { defineLiveStream };
-export type { LiveStream, LiveStreamConfig, LiveSubscribeHandler, LiveSubscribeOptions, LiveTopicDeclaration, LiveTopicKey, LiveTopicPayload, LiveTopics };
+/** A declared stream {@link liveStreamRouter} serves. `load` runs on the first request that reaches the stream. */
+interface LiveStreamMount {
+    /** The stream's `id`, which names its routes: `/live/<id>/connect` and `/live/<id>/control`. */
+    id: string;
+    /** The stream's two handlers, deferred so a worker starts without evaluating every live module. */
+    load: () => Promise<Pick<LiveStream, "connect" | "control">>;
+}
+
+/** Anything with a `fetch` a request can be handed to: `httpRouter()`, or a framework host's router. */
+interface LiveRouterApp {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- bivariant params let a hono app, typed against its own bindings, assign here
+    fetch(request: Request, env?: Record<string, unknown>, context?: ExecutionContext): Promise<Response> | Response;
+}
+
+/** The triggers a framework host may carry beside its `fetch`, which the runtime reads by name. */
+interface LiveHostTriggers {
+    email?: unknown;
+    queue?: unknown;
+    scheduled?: unknown;
+}
+
+/** The router a live-stream router hands every other request to: an app with a `fetch`, or a bare `fetch` handler. */
+type LiveRouterFallback =
+    (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+
+/**
+ * A framework host's triggers, copied by name as the runtime reads them. Spreading the host instead would also copy
+ * the own properties of a class-instance host, which the router has no use for.
+ */
+const hostTriggersOf = (host: LiveRouterFallback | undefined): LiveHostTriggers => {
+    if (typeof host !== "object") {
+        return {};
+    }
+
+    return {
+        ...(typeof host.email === "function" ? { email: host.email } : {}),
+        ...(typeof host.queue === "function" ? { queue: host.queue } : {}),
+        ...(typeof host.scheduled === "function" ? { scheduled: host.scheduled } : {}),
+    };
+};
+
+/** Hono apps that already carry their stream routes. Registering them again would add duplicate routes on every build. */
+const mountedApps = new WeakSet<object>();
+
+/**
+ * Register each stream's connect and control routes on `app`. A route loads its stream on the first request and then
+ * runs the stream's own handler, so the middleware `app` already has runs for these routes as well.
+ */
+const mountStreams = (app: Pick<ReturnType<typeof httpRouter>, "get" | "post">, mounts: ReadonlyArray<LiveStreamMount>): void => {
+    for (const mount of mounts) {
+        let loaded: Promise<Pick<LiveStream, "connect" | "control">> | undefined;
+        const stream = (): Promise<Pick<LiveStream, "connect" | "control">> => {
+            loaded ??= mount.load().catch((error: unknown) => {
+                // A failed load is forgotten, so the next request retries it rather than replaying the rejection.
+                loaded = undefined;
+
+                throw error;
+            });
+
+            return loaded;
+        };
+
+        app.get(liveConnectPath(mount.id), async (context) => {
+            const { connect } = await stream();
+
+            return connect(context);
+        });
+        app.post(liveControlPath(mount.id), async (context) => {
+            const { control } = await stream();
+
+            return control(context);
+        });
+    }
+};
+
+/**
+ * Serve each declared stream's connect and control routes. Codegen emits this as the worker's `httpRouter`, or wraps
+ * a framework host with it, so a stream needs no `app.get` / `app.post` of its own.
+ *
+ * A Hono `fallback` (the app's `httpRouter()`) gets the stream routes registered on it, so its middleware runs for
+ * them, and it is returned as the router. Any other `fallback` is a framework host: the stream routes are matched
+ * first on a router of their own, and every other request goes to the host. With no `fallback`, the router is the
+ * stream routes alone.
+ *
+ * Only the exact method and path of a stream's two routes are taken. Calling this again with the same Hono app adds
+ * nothing, so the same app can be passed on every build.
+ */
+const liveStreamRouter = (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback): LiveRouterApp => {
+    if (fallback instanceof Hono) {
+        if (!mountedApps.has(fallback)) {
+            mountStreams(fallback, mounts);
+            mountedApps.add(fallback);
+        }
+
+        return fallback;
+    }
+
+    const streams = httpRouter();
+
+    mountStreams(streams, mounts);
+
+    if (fallback === undefined) {
+        return streams;
+    }
+
+    const streamKeys = new Set(mounts.flatMap((mount) => [`GET ${liveConnectPath(mount.id)}`, `POST ${liveControlPath(mount.id)}`]));
+    const delegate = (request: Request, env: Record<string, unknown> | undefined, context: ExecutionContext | undefined): Promise<Response> | Response =>
+        typeof fallback === "function" ? fallback(request, env, context) : fallback.fetch(request, env, context);
+
+    return {
+        ...hostTriggersOf(fallback),
+        fetch: (request, env, context) =>
+            streamKeys.has(`${request.method} ${new URL(request.url).pathname}`) ? streams.fetch(request, env, context) : delegate(request, env, context),
+    };
+};
+
+export { defineLiveStream, liveStreamRouter };
+export type {
+    LiveRouterApp,
+    LiveRouterFallback,
+    LiveStream,
+    LiveStreamConfig,
+    LiveStreamMount,
+    LiveSubscribeHandler,
+    LiveSubscribeOptions,
+    LiveTopicDeclaration,
+    LiveTopicKey,
+    LiveTopicPayload,
+    LiveTopics,
+};
 
 export { type LiveTopicRef } from "../../../shared/live-stream";

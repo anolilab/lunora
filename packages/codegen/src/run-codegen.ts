@@ -822,6 +822,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Declared AND not rejected by the gate, as on the shard's action ctx.
         liveStreams: platformGate.signals.liveStreams === true,
         liveStreamsWithheld: platformGate.liveStreamsWithheld,
+        liveStreamDeclarations: liveStreams,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field

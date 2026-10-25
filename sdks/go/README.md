@@ -40,6 +40,8 @@ retries and socket library:
 ```go
 client := lunora.NewClient("https://my-app.example.com", myPoster)
 client.SetAuthToken("…")
+// The WebSocket session credential (connect.token) is separate from the RPC bearer above.
+client.SetSessionToken("…")
 // ClientID is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -48,8 +50,8 @@ messages, err := client.Query("messages:list", map[string]any{"channel": "genera
 _, err = client.Mutation("messages:send", map[string]any{"channel": "general", "text": "hi"}, "", "")
 _, err = client.Mutation("ledger:add", map[string]any{"amount": lunora.BigInt{Value: big.NewInt(1000)}}, "", "")
 
-// Live subscription: attach your socket, then feed it frames.
-client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) })
+// Live subscription: attach your socket (it sends connect first), then feed it frames.
+client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) }, nil)
 unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
 ```
 
@@ -72,16 +74,39 @@ view, checkpoint and epoch untouched and reaches its error callback as
 the view's, is not spliced on: unless it is a `reset`, the view is emptied, its
 callback receives `[]`, and a cold `shape_subscribe` (no `sinceCheckpoint` or
 `sinceEpoch`) goes out at once so the server re-seeds it.
-Send `BuildConnectFrame(clientID, context, token)` as the first frame on every open,
-before `ResendSubscriptions()`. A deployment with `LUNORA_WS_BEARER` closes a socket
-whose first frame is not that `connect` with a matching `token` (close code 4003). The
-session credential never goes in the socket URL; `WSURL` carries only an admin ticket.
+`AttachSocket(send, context)` opens the socket channel. It sends `connect` as the first
+frame of every open, carrying the client id, `context` when it is non-nil, and the session
+credential set with `SetSessionToken`. It then rejoins the whisper topics and only after
+that routes frames to `send`, so call `ResendSubscriptions()` after it. A deployment with
+`LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a
+matching `token` (close code 4003). The session credential never goes in the socket URL,
+and `SetAuthToken` (the RPC bearer) never goes in `connect`; `WSURL` carries only an admin
+ticket. If the connect write fails, the client stays offline (`Online()` is false) and the
+socket should be dropped.
+
+`DetachSocket(closeCode, reason)` ends the channel. Pass the close code and reason of the
+socket close, or `0` and `""` when there is none. It classifies the close for the
+`OnTokenExpired` listeners: 4001 always notifies; 4003 notifies once per credential
+generation (a `SetSessionToken` with a new value starts one), and only for a socket that
+opened under the credential in force, since a socket opened under an earlier one refused a
+credential no longer in use; a 4003 whose reason is exactly `connect deadline` refuses no
+credential; any other close notifies nothing.
+A `TOKEN_EXPIRED` error frame notifies too and is not delivered to its subscription. An
+`UNAUTHENTICATED` error frame is delivered to its subscription's error callback like any
+other error.
+
+Whisper topics: `WhisperSubscribe(topic, listener)` joins a topic (`whisper_subscribe` when
+a socket is attached, and again after every reconnect) and returns an unsubscribe.
+`Whisper(topic, data)` relays a value to that topic and reports whether it was sent; it is
+never queued. `ConnectRoom(name, listener)` joins `room:<name>` and returns a `*Room` with
+`Send` and `Close`. A room join is never acknowledged, so there is nothing to wait for.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`HandleFrame` returns the frame's type). Each new socket sends `connect` first, then
-resubscribes and flushes that shard's offline queue; if the connect or the resend fails,
-the socket is dropped and the loop backs off. A flush that requeues writes (or returns
-`RetryAfterMs`) must schedule its own retry, or those writes wait for the next reconnect.
+(`HandleFrame` returns the frame's type). Each new socket attaches (which sends `connect`
+first), then resubscribes and flushes that shard's offline queue; if the attach or the
+resend fails, the socket is dropped and the loop backs off. A flush that requeues writes
+(or returns `RetryAfterMs`) must schedule its own retry, or those writes wait for the next
+reconnect.
 The retry is a `time.AfterFunc` timer owned by one socket run: the run marks itself
 finished and stops the timer under a mutex, and a flush still in flight at that moment
 schedules no further retry.
@@ -118,7 +143,7 @@ for attempt := 0; ; attempt++ {
 			})
 		}
 
-		// The sender and the connect frame both write, and subscribe calls reach the
+		// The sender and AttachSocket's connect both write, and subscribe calls reach the
 		// sender from other goroutines, so every write takes the same lock.
 		var wmu sync.Mutex
 		write := func(f map[string]any) error {
@@ -126,20 +151,21 @@ for attempt := 0; ; attempt++ {
 			defer wmu.Unlock()
 			return conn.WriteJSON(f)
 		}
-		// connect goes out before the sender is attached, so a subscribe on another
-		// goroutine cannot write ahead of it.
-		if err := write(lunora.BuildConnectFrame(client.ClientID(), nil, session)); err == nil {
-			client.AttachSocket(write)
-			if client.ResendSubscriptions() == nil {
-				scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard
-				for {
-					_, raw, err := conn.ReadMessage()
-					if err != nil {
-						break
-					}
-					if t, _ := client.HandleFrame(raw); t == "ack" {
-						attempt = 0
-					}
+		// AttachSocket sends connect before it routes anything to write, so a subscribe
+		// on another goroutine cannot write ahead of connect.
+		var closeCode int     // 0 until the socket reports a close
+		var closeReason string // "" with no close frame
+		client.AttachSocket(write, nil)
+		if client.Online() && client.ResendSubscriptions() == nil {
+			scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					closeCode, closeReason = closeFrameOf(err) // your library's close code and reason
+					break
+				}
+				if t, _ := client.HandleFrame(raw); t == "ack" {
+					attempt = 0
 				}
 			}
 		}
@@ -149,7 +175,7 @@ for attempt := 0; ; attempt++ {
 			timer.Stop()
 		}
 		mu.Unlock()
-		client.DetachSocket()
+		client.DetachSocket(closeCode, closeReason)
 		conn.Close()
 	}
 	d := min(30*time.Second, time.Second<<min(attempt, 5))
