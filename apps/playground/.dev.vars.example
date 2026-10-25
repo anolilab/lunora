@@ -18,6 +18,11 @@ AUTH_URL="http://localhost:5173"
 # request reached the worker on, so the same config works on any port or host.
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 
+# Required — the worker's shard registry (`createDynamicShardRegistry`) throws on
+# every request without it. Signs the calls between the worker and the registry
+# and event-log Durable Objects. Any strong random value, distinct from the others.
+LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"
+
 # The origin the SchedulerDO dispatches jobs back into, and the one
 # `.global({ origin })` fans reverse cross-shard relations across. The DO reads
 # it off its own env only (a caller-supplied target would be an SSRF vector), so
