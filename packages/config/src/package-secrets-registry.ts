@@ -77,7 +77,6 @@ const SHARD_RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
 /** The value a host's `.dev.vars` carries for the relay key until it is generated. A client's line carries its angle-bracket template instead, so it is never generated. */
 const SHARD_RELAY_HOST_PLACEHOLDER = "replace-with-openssl-rand-hex-32";
 const SHARD_REGISTRY_HOST_SOURCE = "@lunora/do:shardRegistry";
-const SHARD_REGISTRY_CLIENT_SOURCE = "@lunora/do:shardRegistryClient";
 
 /**
  * Secret keys Lunora mints locally that no PACKAGE declares, so
@@ -366,8 +365,6 @@ export {
     mintableSecretKeysFor,
     PACKAGE_SECRETS_REGISTRY,
     secretsForPackages,
-    SHARD_REGISTRY_CLIENT_SOURCE,
-    SHARD_REGISTRY_HOST_SOURCE,
     SHARD_RELAY_HOST_PLACEHOLDER,
     SHARD_RELAY_SECRET_KEY,
 };

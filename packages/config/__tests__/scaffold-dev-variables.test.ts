@@ -710,6 +710,8 @@ describe("the relay secret is minted by its host only", () => {
     const CLIENT_TEMPLATE = "<copy-from-the-worker-that-hosts-the-registry>";
 
     it("mints the relay secret for a host, not for a client", () => {
+        expect.assertions(3);
+
         expect(mintableSecretKeysFor(["@lunora/do:shardRegistry"]).has("LUNORA_RELAY_SECRET")).toBe(true);
         expect(mintableSecretKeysFor(["@lunora/do:shardRegistryClient"]).has("LUNORA_RELAY_SECRET")).toBe(false);
         expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(false);

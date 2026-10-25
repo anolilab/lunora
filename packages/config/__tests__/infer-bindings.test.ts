@@ -554,9 +554,24 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
 
         // A merged app exports `LunoraDO` and binds no `SHARD_REGISTRY`; the generated module still says it has one.
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
         write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
 
         expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("does not make a sharded app a registry host just because codegen wrote the registry module", async () => {
+        expect.assertions(2);
+
+        // Codegen writes `shardRegistry.ts` for every `.shardBy()` schema; this entry exports only the shard.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).not.toContain("@lunora/do:shardRegistry");
+        expect(sources).not.toContain("@lunora/do:shardRegistryClient");
     });
 
     it("gives a worker that hosts the registry the host's secret, and not the client's", async () => {

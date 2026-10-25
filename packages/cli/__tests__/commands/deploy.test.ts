@@ -409,7 +409,26 @@ describe("lunora deploy", () => {
 
                 const withoutRelaySecret = Object.fromEntries(Object.entries(CELLD_VARS).filter(([key]) => key !== "LUNORA_RELAY_SECRET"));
 
-                writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: withoutRelaySecret }), "utf8");
+                const hosting = {
+                    ...JSON.parse(VALID_WRANGLER),
+                    durable_objects: {
+                        bindings: [
+                            { name: "SHARD", class_name: "ShardDO" },
+                            { name: "SHARD_REGISTRY", class_name: "ShardRegistryDO" },
+                        ],
+                    },
+                    migrations: [{ tag: "v1", new_sqlite_classes: ["ShardDO", "ShardRegistryDO"] }],
+                    vars: withoutRelaySecret,
+                };
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify(hosting), "utf8");
+                // The app hosts the registry: it exports the class codegen wrote. A sharded app that only has the module does not need the secret.
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(
+                    join(workdir, "src", "index.ts"),
+                    'export { ShardDO } from "../lunora/_generated/shard.js";\nexport { ShardRegistryDO } from "../lunora/_generated/shardRegistry.js";\n',
+                    "utf8",
+                );
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();

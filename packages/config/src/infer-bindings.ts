@@ -369,7 +369,7 @@ interface InferredBindings {
      */
     flagshipBinding?: string;
 
-    /** The app hosts the registry (binds `ShardRegistryDO` as `SHARD_REGISTRY`, or wrote its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
     hostsShardRegistry: boolean;
 
     /**
@@ -380,7 +380,6 @@ interface InferredBindings {
     jurisdiction?: SchemaInfo["jurisdiction"];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
-
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
     queues: InferredQueue[];
 
@@ -398,7 +397,6 @@ interface InferredBindings {
     usesAiSearch: boolean;
     /** `@lunora/bindings/analytics` is imported or `ctx.analytics` read → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
-
     /** `@lunora/bindings/analytics-sql` is value-imported or `ctx.analyticsSql` read → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
     usesAnalyticsSql: boolean;
 
@@ -735,6 +733,15 @@ const describeSignals = (
 };
 
 /**
+ * Whether the app hosts `ShardRegistryDO`: it exports or binds the class, or a merged app carries the
+ * registry in `LunoraDO`. codegen writes `shardRegistry.ts` for every `.shardBy()` schema, so the file's
+ * presence alone does not host the registry.
+ */
+const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, generatedDirectory: string): boolean =>
+    durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+    (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
+
+/**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
@@ -789,10 +796,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
-    // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
-    const hostsRegistry =
-        durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
-        existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts"));
+    const hostsRegistry = hostsShardRegistry(durableObjects, join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
@@ -841,7 +845,6 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         usesFlags: flags !== undefined,
         usesNotifyFcm: notifyChannels?.hasFcm ?? false,
         usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
-        // A merged app exports `LunoraDO` instead, so the generated module is what still says it has a registry.
         hostsShardRegistry: hostsRegistry,
         usesShardRegistryClient: capabilities.callsShardRegistry && !hostsRegistry,
         workflows,
