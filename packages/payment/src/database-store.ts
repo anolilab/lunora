@@ -289,10 +289,23 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
 };
 
 export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentStore => {
+    // Customers carry no revision: they are not reconciled against the provider, so nothing guards them.
+    const upsertPlain = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
+        const existing = await database.findFirst(table, where);
+
+        if (existing) {
+            await database.patch(existing._id, row);
+
+            return;
+        }
+
+        await database.insert(table, row);
+    };
+
     // Every write bumps the row's revision. An unguarded write applies unconditionally; a guarded one
     // applies only while the stored revision still matches the guard, decided in a single conditional
     // patch so nothing lands between the check and the write.
-    const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>, guard?: RevisionGuard): Promise<boolean> => {
+    const upsertRevisioned = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>, guard?: RevisionGuard): Promise<boolean> => {
         const existing = await database.findFirst(table, where);
         const current = existing === null ? undefined : readOptionalNumber(existing, "revision");
 
@@ -478,14 +491,14 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
         // reference's row in place instead of forking a second row the read path can never find.
         upsertCustomer: async (customer) => {
-            await upsert(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer));
+            await upsertPlain(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer));
         },
 
         upsertPaymentSession: async (session, guard) =>
-            upsert(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session), guard),
+            upsertRevisioned(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session), guard),
 
         upsertSubscription: async (subscription, guard) =>
-            upsert(
+            upsertRevisioned(
                 PAYMENT_TABLES.subscriptions,
                 { provider: subscription.provider, providerSubscriptionId: subscription.id },
                 subscriptionToRow(subscription),

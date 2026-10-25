@@ -107,7 +107,7 @@ export interface PaymentStore {
     upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
 }
 
-/** The revision a guarded write expects to find: `undefined` means the row must not exist yet. */
+/** The revision a guarded write expects to find. `undefined` matches a row with no revision yet, which includes a row that does not exist. */
 export interface RevisionGuard {
     readonly ifRevision: number | undefined;
 }
