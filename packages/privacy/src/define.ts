@@ -102,10 +102,10 @@ interface Privacy {
 
         /**
          * Retry a failed export or erasure; any other status is refused. The Art. 12(3) clock keeps
-         * running throughout. An export runs again in this call and returns `ran` with its outcome. An
-         * erasure is moved to `processing` in this call and returns `restart`: the app then starts its
-         * erasure workflow for the request, in the same mutation, and the workflow resumes it. Because
-         * the request leaves `failed` here, a second retry is refused rather than starting a second run.
+         * running throughout. The request is moved to `processing` in this call and the result names its
+         * type: the app then starts the workflow for that type, in the same mutation, and the workflow
+         * resumes it. The retry itself never reads the tombstone store. Because the request leaves
+         * `failed` here, a second retry is refused rather than starting a second run.
          */
         readonly retry: (requestId: string) => Promise<RetryResult>;
 
@@ -194,15 +194,14 @@ const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOu
 };
 
 /**
- * What `admin.retry` did: an export ran again (`ran`), or an erasure was moved out of `failed` and the
- * app must now start its erasure workflow for `requestId` (`restart`).
+ * What `admin.retry` did: the request of `requestId` was moved out of `failed`, and the app must now start the
+ * workflow for its `type`. Only a workflow reaches the tombstone store, so a retry never runs the request here.
  */
-type RetryResult = { readonly kind: "ran"; readonly outcome: ExportOutcome } | { readonly kind: "restart"; readonly requestId: string };
+type RetryResult = { readonly requestId: string; readonly type: RequestRecord["type"] };
 
 /**
- * Retry a failed request from the operator console. Only a failed request may be retried. An erasure
- * reaches the tombstone store only from its workflow, so it is not run here: it moves to `processing`,
- * which the workflow's start step continues from, and the move is what refuses a second retry.
+ * Retry a failed request from the operator console. Only a failed request may be retried. The request moves to
+ * `processing`, which the workflow's start step continues from, and the move is what refuses a second retry.
  */
 const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResult> => {
     const record = await requireRequest(scope.ports.store, requestId);
@@ -211,24 +210,20 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    if (record.type === "erasure") {
-        // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
-        if (!(await scope.ports.store.claim(requestId, "failed", { status: transition("failed", "processing") }))) {
-            throw new LunoraError("UNPROCESSABLE", "This request was already retried.");
-        }
-
-        await scope.ports.store.addEvent(requestId, scope.ports.now(), "processing", "retry");
-
-        return { kind: "restart", requestId };
-    }
-
     // An erasure rewrote this export's subject to the tombstone key; a run now would collect under that key and
     // publish an archive without the subject's data. The completed erasure shares the key, so the log shows it.
-    if (await subjectWasErased(scope.ports.store, record.subjectId)) {
+    if (record.type === "export" && (await subjectWasErased(scope.ports.store, record.subjectId))) {
         throw new LunoraError("UNPROCESSABLE", "This export's subject was erased; it cannot be retried.");
     }
 
-    return { kind: "ran", outcome: await exportRun(scope, inlineSteps, requestId) };
+    // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
+    if (!(await scope.ports.store.claim(requestId, "failed", { status: transition("failed", "processing") }))) {
+        throw new LunoraError("UNPROCESSABLE", "This request was already retried.");
+    }
+
+    await scope.ports.store.addEvent(requestId, scope.ports.now(), "processing", "retry");
+
+    return { requestId, type: record.type };
 };
 
 /** What `admin.sweep` did. */

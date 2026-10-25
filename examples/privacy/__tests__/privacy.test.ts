@@ -248,8 +248,26 @@ describe("privacy example", () => {
 
             await fail(request.id);
 
-            await expect(retry(request.id)).resolves.toStrictEqual({ requestId: request.id, status: "ready" });
+            // The retry hands the export to its workflow, as an erasure's retry does; the harness has no `ctx.workflows`.
+            await expect(retry(request.id)).rejects.toThrow(NO_WORKFLOWS);
+
+            // The workflow runs the export, the only place a read of the tombstone store is available.
+            await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
+
             await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+        });
+
+        it("hands a failed export to its workflow without reading the tombstone store in the mutation", async () => {
+            expect.assertions(1);
+
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await fail(request.id);
+
+            await expect(t.run(async (ctx) => privacyFor(appCtx(ctx)).admin.retry(request.id))).resolves.toStrictEqual({
+                requestId: request.id,
+                type: "export",
+            });
         });
 
         it("restarts a failed erasure's workflow rather than erasing without a tombstone", async () => {

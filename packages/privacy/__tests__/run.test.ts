@@ -152,19 +152,28 @@ describe("runExport", () => {
         expect(listed).toBe(0);
     });
 
-    it("records UNPROCESSABLE, not INTERNAL, when an erasure is found to have begun mid-export", async () => {
+    it("checks the tombstone store once per export run, not once per step", async () => {
         const tombstones = memoryTombstones();
         let checks = 0;
-        // The first check is the export's pre-run one; the second, inside the first collect step, finds the erasure.
         const port: TombstonePort = {
             add: tombstones.add,
-            has: async () => {
+            has: async (key) => {
                 checks += 1;
 
-                return checks > 1;
+                return tombstones.has(key);
             },
             keys: tombstones.keys,
         };
+        const { privacy } = setup({ data: memoryData({}).port, tombstones: port });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+        expect(checks).toBe(1);
+    });
+
+    it("records UNPROCESSABLE, not INTERNAL, when the subject was erased before the export ran", async () => {
+        const tombstones = memoryTombstones();
+        const port: TombstonePort = { add: tombstones.add, has: async () => true, keys: tombstones.keys };
         const store = memoryRequests();
         const details: string[] = [];
         const recording = {
@@ -178,7 +187,7 @@ describe("runExport", () => {
         const opened = await privacy.requestExport();
 
         await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "failed" });
-        expect(details.join("|")).toContain("UNPROCESSABLE: the run stopped before it finished");
+        expect(details.join("|")).toContain("UNPROCESSABLE: the subject was erased before the export ran");
         expect(details.join("|")).not.toContain("INTERNAL");
     });
 

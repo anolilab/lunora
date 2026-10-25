@@ -347,16 +347,10 @@ const erasureBegun = async (tombstones: TombstonePort | undefined, subjectId: st
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
  */
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
-    // Every export step reads the request's subject id afresh, so a step that finds an erasure has begun refuses to read any data:
-    // an erasure re-keys a failed export after its data is gone, and a retry can claim that export before the erasure completes.
+    // The erasure is checked once per run, by the `erased` step, so the tombstone store is read once. An erasure that completes
+    // mid-run fails the export in its own write (see `completeErasure`), and the ready claim needs `processing`.
     const step = async <T>(name: string, run: (request: RequestRecord) => Promise<T>): Promise<Checked<T>> =>
-        whileProcessing(scope, steps, requestId, name, async (request) => {
-            if (await erasureBegun(scope.ports.tombstones, request.subjectId)) {
-                throw new LunoraError("UNPROCESSABLE", "The subject was erased before the export ran.");
-            }
-
-            return run(request);
-        });
+        whileProcessing(scope, steps, requestId, name, run);
     let runId: string | undefined;
 
     // A run that stops after writing removes what it wrote, and only that: another run of the export keeps its files.
@@ -386,8 +380,14 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
     await loadStep(scope, steps, requestId);
 
     try {
-        // A failed export can still be started (an operator retry does it), so a queued run that outlives its
-        // subject's erasure is stopped here: it would collect under the tombstone key and publish an empty archive.
+        const started = await startStep(scope, steps, requestId);
+
+        if (started !== "processing") {
+            return { status: started };
+        }
+
+        // Checked after the claim: a failed export that an erasure re-keyed can be claimed later, and by then its tombstone key
+        // is on record. Checking before the claim would let such a run collect under that key and publish an empty archive.
         const erased = await steps.do("erased", async () => {
             const { subjectId } = await requireRequest(scope.ports.store, requestId);
 
@@ -396,12 +396,6 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
 
         if (erased) {
             return { status: await failStep(scope, steps, requestId, "UNPROCESSABLE: the subject was erased before the export ran") };
-        }
-
-        const started = await startStep(scope, steps, requestId);
-
-        if (started !== "processing") {
-            return { status: started };
         }
 
         // Every file this run writes is named under its own id, journaled so a replay keeps it.

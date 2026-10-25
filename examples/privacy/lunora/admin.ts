@@ -36,23 +36,17 @@ export const listOpenPrivacyRequests = internalQuery.query(async ({ ctx }): Prom
 
 /**
  * Re-run a failed request through the package's `admin.retry`, which refuses one that has not failed.
- * An export re-runs inline. An erasure comes back as `restart`: the package has already moved it out
- * of `failed`, so a second retry is refused, and only the workflow reaches the tombstone store, so
- * this starts it again. The workflow resumes from the status the package set.
+ * The package moves the request out of `failed` and names its type. Only the workflow reaches the
+ * tombstone store, so this starts that type's workflow, which resumes from the status the package set.
  */
 export const retryPrivacyRequest = internalMutation.input({ requestId: v.string().max(64) }).mutation(async ({ args: { requestId }, ctx }) => {
-    const result = await privacyFor(ctx).admin.retry(requestId);
+    const { type } = await privacyFor(ctx).admin.retry(requestId);
+    const workflow = type === "erasure" ? ctx.workflows.get("privacyErasure") : ctx.workflows.get("privacyExport");
 
-    if (result.kind === "restart") {
-        await ctx.workflows.get("privacyErasure").create({ id: `${result.requestId}-retry-${String(ctx.now)}`, params: { requestId: result.requestId } });
-        ctx.log.info("privacy erasure retry started", { requestId });
+    await workflow.create({ id: `${requestId}-retry-${String(ctx.now)}`, params: { requestId } });
+    ctx.log.info("privacy request retry started", { requestId, type });
 
-        return { requestId, status: "restarted" as const };
-    }
-
-    ctx.log.info("privacy export retried", { requestId, status: result.outcome.status });
-
-    return { requestId, status: result.outcome.status };
+    return { requestId, status: "restarted" as const };
 });
 
 /**

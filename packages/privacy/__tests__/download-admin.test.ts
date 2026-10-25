@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ErasureOptions } from "../src/define";
 import type { DataPort } from "../src/ports";
-import { codeOf, exportFileOf, memoryData, setup } from "./harness";
+import type { TombstonePort } from "../src/tombstones";
+import { codeOf, exportFileOf, memoryData, memoryTombstones, setup } from "./harness";
 
 describe("downloadUrl", () => {
     it("returns a fifteen-minute link to a finished export for its subject", async () => {
@@ -65,7 +66,7 @@ describe("admin", () => {
                 return healthy.collect(dataset, "u1");
             },
         };
-        const { operator, privacy, store } = setup({ data: flaky });
+        const { operator, privacy, runExportWorkflow, store } = setup({ data: flaky });
         const opened = await privacy.requestExport();
 
         const first = await privacy.runExport(opened.id);
@@ -74,7 +75,54 @@ describe("admin", () => {
 
         failing = false;
 
-        await expect(operator.admin.retry(opened.id)).resolves.toMatchObject({ kind: "ran", outcome: { status: "ready" } });
+        await expect(operator.admin.retry(opened.id)).resolves.toStrictEqual({ requestId: opened.id, type: "export" });
+
+        await runExportWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+    });
+
+    it("hands a failed export back to its workflow, which alone reads the tombstone store", async () => {
+        let failing = true;
+        let reachable = true;
+        const healthy = memoryData();
+        const flaky: DataPort = {
+            ...healthy,
+            collect: async (dataset) => {
+                if (failing) {
+                    throw new Error("disk full");
+                }
+
+                return healthy.collect(dataset, "u1");
+            },
+        };
+        const tombstones = memoryTombstones();
+        // The operator's mutation cannot reach the store, as in the example app; the workflow can.
+        const mutationBound: TombstonePort = {
+            add: tombstones.add,
+            has: async (key) => {
+                if (!reachable) {
+                    throw new Error("tombstone store unreachable");
+                }
+
+                return tombstones.has(key);
+            },
+            keys: tombstones.keys,
+        };
+        const { operator, privacy, runExportWorkflow, store } = setup({ data: flaky, tombstones: mutationBound });
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+        failing = false;
+        reachable = false;
+
+        await expect(operator.admin.retry(opened.id)).resolves.toStrictEqual({ requestId: opened.id, type: "export" });
+        expect(store.rows.get(opened.id)?.status).toBe("processing");
+        await expect(codeOf(operator.admin.retry(opened.id))).resolves.toBe("UNPROCESSABLE");
+
+        reachable = true;
+        await runExportWorkflow(opened.id);
+
         expect(store.rows.get(opened.id)?.status).toBe("ready");
     });
 
@@ -101,7 +149,7 @@ describe("admin", () => {
         failing = false;
 
         // Each retry is its own mutation, so the second one reads the status the first one wrote.
-        await expect(operator.admin.retry(opened.id)).resolves.toStrictEqual({ kind: "restart", requestId: opened.id });
+        await expect(operator.admin.retry(opened.id)).resolves.toStrictEqual({ requestId: opened.id, type: "erasure" });
         await expect(codeOf(operator.admin.retry(opened.id))).resolves.toBe("UNPROCESSABLE");
         expect(store.rows.get(opened.id)?.status).toBe("processing");
 
