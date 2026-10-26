@@ -1,20 +1,8 @@
 /**
- * Rate-limit schema extension + plugin — added by `lunora add ratelimit`.
+ * Rate-limit schema extension + plugin.
  *
- * This file is YOURS to own and edit. `lunora add` splices a managed
- * `.extend(ratelimit.extension)` into `lunora/schema.ts` so the `buckets` table
- * below merges into your schema as **`ratelimit_buckets`** (extension tables are
- * auto-prefixed with the plugin key — write the bare name here).
- *
- * The column layout matches what `@lunora/ratelimit`'s `createDbStore` reads and
- * writes for every `(limit-name, key)` pair:
- *
- *   - `key`   — opaque storage key the limiter derives from the limit name + sub-key.
- *   - `value` — tokens left (token bucket / fixed window) or requests made (sliding window).
- *   - `ts`    — last-refill time (token bucket) or window start (windowed algorithms).
- *   - `prev`  — previous-window count, sliding-window only (hence optional).
- *
- * The `by_key` index is what `createDbStore` looks rows up by; keep it.
+ * Defines the `ratelimit_buckets` table used by `createDbStore` for durable,
+ * DO-backed rate limiting. Included automatically in every Lunora project.
  */
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 import { createDbStore, RateLimiter } from "lunorash/ratelimit";
@@ -58,9 +46,9 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
 
 /**
  * The rate-limit plugin: a schema extension (`ratelimit_buckets`) + middleware
- * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in via the
- * managed `.extend(ratelimit.extension)` block; attach the middleware yourself
- * with `c.mutation.use(ratelimit.middleware)`.
+ * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in with
+ * `.extend(ratelimit.extension)`; attach the middleware yourself with
+ * `c.mutation.use(ratelimit.middleware)`.
  */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {

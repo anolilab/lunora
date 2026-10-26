@@ -62,9 +62,9 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
 
 /**
  * The rate-limit plugin: a schema extension (`ratelimit_buckets`) + middleware
- * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in via the
- * managed `.extend(ratelimit.extension)` block; attach the middleware yourself
- * with `c.mutation.use(ratelimit.middleware)`.
+ * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in with
+ * `.extend(ratelimit.extension)`; attach the middleware yourself with
+ * `c.mutation.use(ratelimit.middleware)`.
  */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {

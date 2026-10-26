@@ -6,9 +6,10 @@
  * The copies cannot come from `lunora add ratelimit`: examples are workspaces that
  * are never scaffolded, and templates already wire `.extend(ratelimit.extension)`
  * by hand. Left hand-maintained, they drifted (a missing `by_ts` index, other
- * imports). The one part that is legitimately per-app is the `limits` block —
- * each app enforces its own named limits — so that block (with the doc comment
- * directly above it) is kept from the existing copy and everything else is the
+ * imports). Two parts are legitimately per-app and are kept from the existing
+ * copy: the leading file doc comment (the item's describes `lunora add`, which
+ * never wrote these files) and the `limits` block with the doc comment directly
+ * above it (each app enforces its own named limits). Everything else is the
  * item's, with `@lunora/*` imports spelled `lunorash/*`.
  *
  * Usage:
@@ -44,8 +45,20 @@ const limitsBlock = (lines, file) => {
     return [start, end + 1];
 };
 
+/** `[0, end)` line range of the file's leading doc comment. */
+const headerBlock = (lines, file) => {
+    const end = lines.findIndex((line) => line.trim() === "*/");
+
+    if (lines[0] !== "/**" || end === -1) {
+        throw new Error(`${relative(ROOT, file)}: no leading /** … */ file doc comment`);
+    }
+
+    return [0, end + 1];
+};
+
 const itemPath = join(ROOT, "registry", "ratelimit", "schema.ts");
 const itemLines = readFileSync(itemPath, "utf8").replaceAll('from "@lunora/', 'from "lunorash/').split("\n");
+const [, itemHeaderEnd] = headerBlock(itemLines, itemPath);
 const [itemStart, itemEnd] = limitsBlock(itemLines, itemPath);
 
 const copies = ["templates", "examples"].flatMap((group) =>
@@ -59,8 +72,11 @@ const stale = [];
 for (const copy of copies) {
     const current = readFileSync(copy, "utf8");
     const lines = current.split("\n");
+    const [, headerEnd] = headerBlock(lines, copy);
     const [start, end] = limitsBlock(lines, copy);
-    const next = [...itemLines.slice(0, itemStart), ...lines.slice(start, end), ...itemLines.slice(itemEnd)].join("\n");
+    const next = [...lines.slice(0, headerEnd), ...itemLines.slice(itemHeaderEnd, itemStart), ...lines.slice(start, end), ...itemLines.slice(itemEnd)].join(
+        "\n",
+    );
 
     if (next === current) {
         continue;
