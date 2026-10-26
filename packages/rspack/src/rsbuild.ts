@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
-import { createStudioMiddleware, isNonLoopbackHost, studioMountPath } from "@lunora/config/studio-host";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
@@ -129,10 +128,15 @@ const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): P
  * every plugin's `modifyRsbuildConfig`, and before Rsbuild fills in defaults —
  * so an unset host (Rsbuild's `0.0.0.0` default) is told apart from an explicit
  * `--host`.
+ *
+ * `@lunora/config/studio-host` is imported inside the hooks, not at module scope:
+ * only a dev server ever needs it, and it pulls in `@lunora/seed` and faker —
+ * about 40 ms that every `rsbuild build` paid while loading its config.
  */
 const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
-    api.onBeforeStartDevServer(({ server }) => {
+    api.onBeforeStartDevServer(async ({ server }) => {
         const { base, host } = api.getRsbuildConfig().server ?? {};
+        const { createStudioMiddleware, isNonLoopbackHost } = await import("@lunora/config/studio-host");
 
         server.middlewares.use(
             createStudioMiddleware({
@@ -146,7 +150,9 @@ const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions):
         );
     });
 
-    api.onAfterStartDevServer(({ port }) => {
+    api.onAfterStartDevServer(async ({ port }) => {
+        const { studioMountPath } = await import("@lunora/config/studio-host");
+
         // eslint-disable-next-line no-console -- startup notice, beside Rsbuild's own URL banner
         console.info(lunoraLine(`studio on http://localhost:${String(port)}${studioMountPath(api.getRsbuildConfig().server?.base)}`));
     });

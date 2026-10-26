@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { findTsconfig, fingerprintSchemaSources, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
 import {
@@ -67,6 +67,23 @@ const readFileOrEmpty = (path: string): string => {
         return "";
     }
 };
+
+/**
+ * `path` with its directory resolved through symlinks, or `path` itself when that
+ * fails. The watcher reports a changed file under its real path (on macOS the temp
+ * directory alone is a symlink), so an input is matched in both forms. Only the
+ * directory is resolved, so a file that does not exist yet still gets one.
+ */
+const realPathOf = (path: string): string => {
+    try {
+        return join(realpathSync(dirname(path)), basename(path));
+    } catch {
+        return path;
+    }
+};
+
+/** Whether `changed` is `input`, lies under it, or is a directory holding it — all three mean the input may have moved. */
+const touches = (changed: string, input: string): boolean => changed === input || changed.startsWith(`${input}${sep}`) || input.startsWith(`${changed}${sep}`);
 
 /** Everything the plugin prints goes through the badge, so its lines read like `lunora dev`'s. */
 const consoleLogger: CodegenLogger = {
@@ -171,6 +188,13 @@ class LunoraRspackPlugin {
     /** The in-flight pass, so concurrent compilers share one instead of racing. */
     #inFlight: Promise<void> | undefined;
 
+    /**
+     * Every path a pass reads, in both the form registered and its real form, as of
+     * the last `afterCompile`: the schema directory and each watched config file.
+     * What {@link #untouched} matches a rebuild's changed files against.
+     */
+    #inputs: string[] = [];
+
     public constructor(options: ResolvedLunoraRspackOptions) {
         this.#options = options;
         this.#schemaDirectory = resolve(options.projectRoot, options.schemaDir);
@@ -233,7 +257,17 @@ class LunoraRspackPlugin {
             // `watchMode` is read HERE, not at tap time: `apply()` runs inside
             // `createCompiler()`, before `compiler.watch()` assigns it, so at tap
             // time it is always `false`.
-            await this.#run(compiler.watchMode === true);
+            const watching = compiler.watchMode === true;
+
+            // Ahead of the skip below: the warning is asked on every compile until it
+            // has fired, and `cloudflare.config.ts` is no input of the pass.
+            this.#announce();
+
+            if (watching && this.#untouched(compiler.modifiedFiles, compiler.removedFiles)) {
+                return;
+            }
+
+            await this.#run(watching);
         });
 
         compiler.hooks.afterCompile.tapPromise(PLUGIN_NAME, (compilation: CompilationLike) => {
@@ -274,6 +308,10 @@ class LunoraRspackPlugin {
                 }
             }
 
+            const inputs = [this.#schemaDirectory, ...(tsconfigPath === undefined ? [] : [tsconfigPath]), ...watched];
+
+            this.#inputs = [...new Set([...inputs, ...inputs.map((path) => realPathOf(path))])];
+
             for (const finding of this.#findings) {
                 compilation.errors.push(finding);
             }
@@ -294,6 +332,45 @@ class LunoraRspackPlugin {
         });
 
         await this.#inFlight;
+    }
+
+    /**
+     * Whether a watch rebuild changed nothing a pass reads, so it can skip the pass
+     * without even fingerprinting — which reads and hashes every `lunora/` source,
+     * and on a 200-module app was the whole of the plugin's cost on an app-code edit.
+     *
+     * Conservative on every axis; any doubt runs the pass, whose fingerprint then
+     * decides as before. It runs when there are no change sets (a one-shot build, the
+     * first watch compilation) or no compilation has registered the inputs yet; when
+     * no clean pass is on record, or a failing one is still being retried — that retry
+     * exists because the repair can be external, so it must not wait for an edit; when
+     * another compiler's pass is in flight, which this one must wait for; and when any
+     * changed or removed path touches an input. Rspack reports an edit under a context
+     * dependency as the DIRECTORY, so the schema directory itself is an input.
+     *
+     * ponytail: a `lunora/` source symlinked to a file OUTSIDE the directory changes
+     * under its target's path, which is not matched here, so its edit waits for the
+     * next `lunora/` change to regenerate. Record the sources' real paths if anyone
+     * keeps sources that way.
+     */
+    #untouched(modified: ReadonlySet<string> | undefined, removed: ReadonlySet<string> | undefined): boolean {
+        if (
+            modified === undefined ||
+            this.#inputs.length === 0 ||
+            this.#lastFingerprint === undefined ||
+            this.#failure !== undefined ||
+            this.#inFlight !== undefined
+        ) {
+            return false;
+        }
+
+        for (const changed of [...modified, ...(removed ?? [])]) {
+            if (this.#inputs.some((input) => touches(changed, input))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

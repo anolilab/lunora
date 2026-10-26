@@ -504,6 +504,42 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
+        "warns about a cloudflare.config.ts that appears mid-session even when the rebuild only touched app code",
+        async () => {
+            expect.assertions(1);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+            const root = fixture();
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                // An app-code rebuild skips the codegen pass outright (nothing it reads
+                // moved), but the Cloudflare CLI warning is asked on every compile. The
+                // first edit only lets the first pass's own writes settle, so the build
+                // that sees the new file is a pure app-code one.
+                await watchRun(
+                    root,
+                    (buildNumber) => {
+                        if (buildNumber === 2) {
+                            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+                        }
+
+                        writeFileSync(join(root, "index.js"), `console.log(${String(buildNumber)});\n`, "utf8");
+                    },
+                    { expectedBuilds: 3, settleMs: 1000 },
+                );
+
+                expect(cfWarnings(warn)).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
         "scaffolds .dev.vars, which only runs when watchMode is actually true",
         async () => {
             expect.assertions(3);
