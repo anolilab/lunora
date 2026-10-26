@@ -62,6 +62,20 @@ describe("request-log redaction memo", () => {
         expect(maskCredentials).not.toHaveBeenCalled();
     });
 
+    it("does not remember a value whose escaped text outgrows the cap the walk charged it under", () => {
+        expect.assertions(2);
+
+        // 300 characters to the walk, six times that once `JSON.stringify` escapes them.
+        const escaped = { note: "\u0001".repeat(300) };
+
+        expect(JSON.stringify(escaped).length).toBeGreaterThan(1024);
+
+        vi.mocked(maskCredentials).mockClear();
+        logAll([escaped, { ...escaped }]);
+
+        expect(maskCredentials).toHaveBeenCalledTimes(2);
+    });
+
     it("never shares a memo entry between an array with a toJSON and the object its JSON matches", () => {
         expect.assertions(2);
 

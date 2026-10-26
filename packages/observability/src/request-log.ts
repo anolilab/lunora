@@ -960,8 +960,12 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
 /** How many redacted request-log values {@link redactedJson} remembers per isolate. */
 const REDACTED_JSON_MEMO_ENTRIES = 256;
 
-/** The longest input (as JSON) {@link redactedJson} remembers; a larger one is redacted every time. */
-const REDACTED_JSON_MEMO_MAX_CHARS = 4096;
+/**
+ * The longest input (as JSON) {@link redactedJson} remembers; a larger one is
+ * redacted every time. The key is the caller's unredacted text, so this also
+ * caps how much raw input the memo holds per entry.
+ */
+const REDACTED_JSON_MEMO_MAX_CHARS = 1024;
 
 const redactedJsonMemo = new Map<string, string>();
 
@@ -984,6 +988,14 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
     }
 
     const key = JSON.stringify(value);
+
+    // The one size limit. `isSmallJsonData` charges at most the text's length, so
+    // it can pass a value whose text is longer (escapes, long numerals); this
+    // check is what bounds an entry.
+    if (key.length > REDACTED_JSON_MEMO_MAX_CHARS) {
+        return JSON.stringify(redactArgs(value));
+    }
+
     const remembered = redactedJsonMemo.get(key);
 
     if (remembered !== undefined) {
@@ -992,10 +1004,8 @@ const redactedJson = (value: unknown, captureRaw: boolean): string => {
 
     const redacted = JSON.stringify(redactArgs(value));
 
-    if (key.length <= REDACTED_JSON_MEMO_MAX_CHARS) {
-        evictOldestEntry(redactedJsonMemo, REDACTED_JSON_MEMO_ENTRIES);
-        redactedJsonMemo.set(key, redacted);
-    }
+    evictOldestEntry(redactedJsonMemo, REDACTED_JSON_MEMO_ENTRIES);
+    redactedJsonMemo.set(key, redacted);
 
     return redacted;
 };

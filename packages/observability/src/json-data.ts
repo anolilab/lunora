@@ -9,9 +9,11 @@ const JSON_DATA_MAX_DEPTH = 32;
  * `JSON.stringify` while the redactor sees it, so two different values could
  * share one text.
  *
- * "Small" is a running budget of `maxChars`, charged
- * one per value plus the length of every string and key, so the walk stops early
- * on a large payload and the caller never stringifies one just to key a memo.
+ * "Small" is a running budget of `maxChars`, charged one per value plus the
+ * length of every string and key. That never exceeds the length of the value's
+ * JSON text, so a value this rejects for size has text longer than `maxChars`
+ * too: the walk only stops early on what a length check on the text would refuse,
+ * without stringifying it first.
  */
 const isSmallJsonData = (value: unknown, maxChars: number): boolean => {
     let budget = maxChars;
