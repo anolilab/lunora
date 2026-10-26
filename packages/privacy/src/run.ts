@@ -648,11 +648,14 @@ const expireReadyExports = async (ports: PrivacyPorts, requestId: string): Promi
  * Completion does that for an erasure that finishes, and a failed erasure never completes.
  */
 const failErasure = async (scope: RunScope, steps: StepRunner, requestId: string, detail: string, rowsMayBeGone: boolean): Promise<RequestStatus> => {
+    // The request is failed first: an expiry that throws must not leave the erasure in processing, where admin.retry cannot reach it.
+    const status = await failStep(scope, steps, requestId, detail);
+
     if (rowsMayBeGone) {
         await steps.do("expire", async () => expireReadyExports(scope.ports, requestId));
     }
 
-    return failStep(scope, steps, requestId, detail);
+    return status;
 };
 
 /**

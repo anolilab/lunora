@@ -5,7 +5,7 @@ import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
 import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import { exportFileOf, memoryRequests, NOW, setup } from "./harness";
+import { exportFileOf, memoryFiles, memoryRequests, NOW, setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -166,6 +166,44 @@ describe("retention during erasure", () => {
 
         await expect(privacy.runErasure(erasure.id)).resolves.toMatchObject({ status: "failed" });
         expect(store.rows.get(exported.id)?.status).toBe("expired");
+    });
+
+    it("fails an erasure whose crash leaves an export's archive that cannot be deleted", async () => {
+        const { port } = rowData({ archive: false });
+        const files = memoryFiles();
+        let crashing = false;
+        const failing = {
+            ...port,
+            eraseBatch: async (...args: Parameters<DataPort["eraseBatch"]>) => {
+                if (crashing) {
+                    throw new Error("storage unavailable");
+                }
+
+                return port.eraseBatch(...args);
+            },
+        };
+        const flaky = {
+            ...files,
+            delete: async (key: string) => {
+                if (crashing && key.endsWith("/export.zip")) {
+                    throw new Error("archive delete unavailable");
+                }
+
+                await files.delete(key);
+            },
+        };
+        const { privacy, store } = setup({ data: failing, datasets: [billing], presets: [germany()], files: flaky });
+        const exported = await privacy.requestExport();
+
+        await expect(privacy.runExport(exported.id)).resolves.toMatchObject({ status: "ready" });
+
+        const erasure = await privacy.requestErasure();
+
+        store.rows.set(erasure.id, { ...store.rows.get(erasure.id)!, status: "received" });
+        crashing = true;
+
+        await expect(privacy.runErasure(erasure.id)).rejects.toThrow("archive delete unavailable");
+        expect(store.rows.get(erasure.id)?.status).toBe("failed");
     });
 
     it("marks a dataset with a retained table as restricted in the manifest", async () => {
