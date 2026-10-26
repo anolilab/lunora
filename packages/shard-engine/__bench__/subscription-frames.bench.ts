@@ -33,10 +33,10 @@ import { subscriptionFrames } from "../src/subscription-delivery";
  *
  * Pure functions over plain data — no DO, no socket, no SQLite.
  *
- * The diff is memoised per result object, so a case that measures the FIRST
- * socket's cost hands in a fresh (shallow-copied) list every call; the copy is a
- * 200-pointer array, noise next to the diff. The "same result" cases measure what
- * every further socket on that value pays.
+ * The diff is memoised per `diffKey` (one run's outcome). The change-ratio and
+ * fallback cases pass none, so every call pays the full diff a run's first socket
+ * pays. The "same result" cases prime one key outside the timed body and pass it,
+ * so they measure what every further socket on that run pays.
  */
 
 const row = (index: number, revision: number): Record<string, unknown> => {
@@ -71,7 +71,7 @@ describe("subscriptionFrames — change ratio", () => {
         const snapshotJson = JSON.stringify(encodeWire(nextResult));
 
         bench(`${String(changed)} of ${String(LIST_LENGTH)} rows changed`, () => {
-            subscriptionFrames({ ...envelope, nextResult: [...nextResult], previousJson, snapshotJson });
+            subscriptionFrames({ ...envelope, nextResult, previousJson, snapshotJson });
         });
     }
 });
@@ -80,9 +80,13 @@ describe("subscriptionFrames — further sockets on the same result and baseline
     for (const changed of [1, LIST_LENGTH]) {
         const { nextResult, previousJson } = buildCase(LIST_LENGTH, changed);
         const snapshotJson = JSON.stringify(encodeWire(nextResult));
+        const diffKey = {};
+
+        // The run's first socket, outside the timed body: it leaves the diff in the memo.
+        subscriptionFrames({ ...envelope, diffKey, nextResult, previousJson, snapshotJson });
 
         bench(`${String(changed)} of ${String(LIST_LENGTH)} rows changed, same result`, () => {
-            subscriptionFrames({ ...envelope, nextResult, previousJson, snapshotJson });
+            subscriptionFrames({ ...envelope, diffKey, nextResult, previousJson, snapshotJson });
         });
     }
 });
@@ -97,7 +101,7 @@ describe("subscriptionFrames — snapshot fallbacks", () => {
     const reorderedSnapshotJson = JSON.stringify(encodeWire(reordered));
 
     bench(`${String(LIST_LENGTH)} rows, survivors reordered → rejected`, () => {
-        subscriptionFrames({ ...envelope, nextResult: [...reordered], previousJson, snapshotJson: reorderedSnapshotJson });
+        subscriptionFrames({ ...envelope, nextResult: reordered, previousJson, snapshotJson: reorderedSnapshotJson });
     });
 
     // The shape `.paginate()` returns, and therefore what every `usePaginatedQuery`
