@@ -1,3 +1,10 @@
+## @lunora/container [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.91...@lunora/container@1.0.0-alpha.92) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/container [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.90...@lunora/container@1.0.0-alpha.91) (2026-10-25)
 
 ### Bug Fixes

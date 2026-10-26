@@ -48,12 +48,17 @@ const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 const capturingImportFetch =
     (calls: string[]): StreamingFetchLike =>
     async (url) => {
-        calls.push(url);
+        // The check before the import writes nothing, so it is not one of the calls the import made.
+        const check = new URL(url).searchParams.get("dryRun") === "true";
+
+        if (!check) {
+            calls.push(url);
+        }
 
         return {
             body: null,
             json: async () => {
-                return { inserted: { users: 1 } };
+                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}) };
             },
             ok: true,
             status: 200,

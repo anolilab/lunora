@@ -37,6 +37,19 @@ export default defineSchema({
 });
 `;
 
+/** The answer to the `dryRun` POST that precedes an import: a worker that honours the flag writes nothing and echoes it. */
+const checkResponse = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 let workDir: string;
 
 const writeSchema = (): void => {
@@ -128,6 +141,11 @@ describe("lunora seed", () => {
 
         const calls: { body: string; url: string }[] = [];
         const fetchImpl: StreamingFetchLike = async (url, init) => {
+            // A `dryRun` POST is the check before the import: it writes nothing and is not one of the batches.
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             const body = typeof init?.body === "string" ? init.body : new TextDecoder().decode(init?.body);
 
             calls.push({ body, url });
@@ -174,7 +192,11 @@ describe("lunora seed", () => {
 
         const logger = silentLogger();
         const warnSpy = vi.spyOn(logger, "warn");
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 // The import path reports every row as an already-existing-id conflict.
@@ -250,7 +272,11 @@ describe("lunora seed", () => {
         mkdirSync(statePath, { recursive: true });
         writeFileSync(join(statePath, "stale.sqlite"), "old", "utf8");
 
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 json: async () => {

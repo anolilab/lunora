@@ -1235,6 +1235,7 @@ interface ImportError {
 
 ```ts
 interface ImportShardAdminArgs {
+    dryRun: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1244,6 +1245,7 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    dryRun?: boolean;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

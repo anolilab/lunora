@@ -1,3 +1,17 @@
+## @lunora/d1 [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.206...@lunora/d1@1.0.0-alpha.207) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.208
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+
 ## @lunora/d1 [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.205...@lunora/d1@1.0.0-alpha.206) (2026-10-25)
 
 

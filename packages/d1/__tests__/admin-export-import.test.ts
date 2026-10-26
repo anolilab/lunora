@@ -217,6 +217,22 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
+        it("a dry run reports the shape error and writes none of the rows, the good one included", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                dryRun: true,
+                rows: [
+                    { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
+                    { doc: { _id: "s2", name: 42, value: "en" }, table: "settings" },
+                ],
+            });
+
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 2, table: "settings" });
+            await expect(writer.get("s1", "settings")).resolves.toBeNull();
+        });
+
         it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
             expect.assertions(3);
 
