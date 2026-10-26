@@ -17,6 +17,8 @@ const lazyTarget = (): Record<string, unknown> => {
 
 describe("defineLazyFacade assignment", () => {
     it("accepts an assignment before the first read", () => {
+        expect.assertions(1);
+
         const target = lazyTarget();
 
         target["users"] = "replaced";
@@ -25,6 +27,8 @@ describe("defineLazyFacade assignment", () => {
     });
 
     it("accepts an assignment after the first read", () => {
+        expect.assertions(2);
+
         const target = lazyTarget();
 
         expect(target["users"]).toBeDefined();
