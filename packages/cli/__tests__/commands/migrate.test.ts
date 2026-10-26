@@ -29,6 +29,19 @@ const captureStdout = async (body: () => Promise<void>): Promise<string> => {
     return chunks.join("");
 };
 
+/** The answer to the `dryRun` POST that precedes an import: a worker that honours the flag writes nothing and echoes it. */
+const checkResponse = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 const silentLogger = (): Logger => {
     return {
         error: () => {},
@@ -1122,6 +1135,11 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const fetchImpl: StreamingFetchLike = async (input: string) => {
             calls.push(input);
 
+            // The check before the import writes nothing and reports no rows inserted.
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             if (input.includes("/_lunora/admin/export")) {
                 return {
                     body: new ReadableStream<Uint8Array>({
@@ -1255,7 +1273,12 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         // Export streams rows, but the import batch POST returns a hard failure,
         // which makes runImportCommand throw — the temp dir must still be removed.
+        // The dry-run check and its probe are answered by a worker that honours the flag, so the failure lands on the real batch.
         const fetchImpl: StreamingFetchLike = async (input: string) => {
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             if (input.includes("/_lunora/admin/export")) {
                 return {
                     body: new ReadableStream<Uint8Array>({

@@ -4388,6 +4388,54 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(columns.get("slug")).not.toHaveProperty("nullable");
         });
 
+        it("reports v.union(<scalar>, v.null()) as the scalar's kind and nullable, the way .nullable() is", () => {
+            expect.assertions(8);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // Either order, and `v.literal(null)` spells the null member too.
+                                score: { kind: "union", members: [{ kind: "number" }, { kind: "null" }] },
+                                shown: { kind: "union", members: [{ kind: "literal", literalValue: "null" }, { kind: "boolean" }] },
+                                // `v.union(v.optional(v.number()), v.null())`: the scalar sits inside an optional member.
+                                rating: { kind: "union", members: [{ inner: { kind: "number" }, kind: "optional" }, { kind: "null" }] },
+                                // The wrapper may be the field's own too; the field stays insert-optional.
+                                maybe: {
+                                    inner: { kind: "union", members: [{ kind: "null" }, { inner: { kind: "timestamp" }, kind: "optional" }] },
+                                    kind: "optional",
+                                },
+                                // Not a nullable scalar: a string accepts the text a number cell would be turned from.
+                                label: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                                // Two non-null members: the column holds more than one type.
+                                mixed: { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            const columns = columnsOf(output, "posts");
+
+            expect(columns.get("score")).toMatchObject({ nullable: true, type: "number" });
+            expect(columns.get("shown")).toMatchObject({ nullable: true, type: "boolean" });
+            expect(columns.get("rating")).toMatchObject({ nullable: true, optional: false, type: "number" });
+            expect(columns.get("maybe")).toMatchObject({ nullable: true, optional: true, type: "timestamp" });
+            expect(columns.get("label")).toMatchObject({ type: "union" });
+            expect(columns.get("label")).not.toHaveProperty("nullable");
+            expect(columns.get("mixed")).toMatchObject({ type: "union" });
+            expect(columns.get("mixed")).not.toHaveProperty("nullable");
+        });
+
         it("names the bucket a v.storage(bucket) column's keys live in", () => {
             expect.assertions(2);
 
