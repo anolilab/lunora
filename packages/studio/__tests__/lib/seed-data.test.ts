@@ -144,6 +144,20 @@ describe("requestSeedRows", () => {
         });
     });
 
+    it("shows the planner's message for a seed-refused refusal", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(false, { error: "seed-refused", message: 'cannot seed "nodes": required foreign key "parentId"', ok: false })),
+        );
+
+        await expect(requestSeedRows(request)).resolves.toStrictEqual({
+            kind: "error",
+            message: 'cannot seed "nodes": required foreign key "parentId"',
+        });
+    });
+
     it("survives an fk-parents-empty refusal whose tables field is not an array", async () => {
         expect.assertions(1);
 

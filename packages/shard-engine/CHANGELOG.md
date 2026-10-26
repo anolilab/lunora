@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.159...@lunora/shard-engine@1.0.0-alpha.160) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
 ## @lunora/shard-engine [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.158...@lunora/shard-engine@1.0.0-alpha.159) (2026-10-26)
 
 ### Features

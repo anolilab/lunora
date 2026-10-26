@@ -29,6 +29,11 @@ const seedCommand: Command = {
             type: Number,
         },
         { description: "Print the generated NDJSON instead of inserting", name: "dry-run", type: Boolean },
+        {
+            description: "Let a required foreign key with no row to point at take a dangling id instead of failing",
+            name: "allow-orphans",
+            type: Boolean,
+        },
         OUTPUT_FORMAT_OPTION,
         { description: "Wipe local .wrangler/state before seeding (local dev only)", name: "reset", type: Boolean },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
@@ -46,6 +51,7 @@ const seedCommand: Command = {
 export { seedCommand };
 
 export type SeedOptions = CreateOptions<{
+    "allow-orphans": boolean | undefined;
     "batch-size": number | undefined;
     count: number | undefined;
     "dry-run": boolean | undefined;
