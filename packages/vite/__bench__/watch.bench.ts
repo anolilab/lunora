@@ -18,8 +18,14 @@ import { createFixture, removeFixture, resolvedOptions } from "./fixture";
 //     paths (the first one used to build a whole ts-morph program from cold).
 //
 // The 100ms debounce is real time and identical on both sides of an A/B.
+//
+// Under CodSpeed only the synchronous rows run: every started instance pays a cold
+// codegen pass under its instrumentation, and the end-to-end rows are mostly debounce
+// and watcher wall time, which it does not measure.
 const reduced = process.env["CODSPEED_ENV"] !== undefined || process.env["CI"] === "true";
-const saveIterations = reduced ? 2 : 6;
+const saveIterations = 6;
+// The synchronous rows cost the same on any project size; a small one keeps their startup cheap there.
+const procedures = reduced ? 10 : 40;
 
 type Listener = (file: string) => void;
 
@@ -135,14 +141,14 @@ let scheduling: Started;
 const firstSavePool: Started[] = [];
 
 beforeAll(async () => {
-    fixture = createFixture("watch");
+    fixture = createFixture("watch", procedures);
     steady = await start(fixture);
-    schedulingFixture = createFixture("watch-scheduling");
+    schedulingFixture = createFixture("watch-scheduling", procedures);
     scheduling = await start(schedulingFixture);
 
     // One started server per measured first save (plus warmup), made outside
     // the timed body: the first save is only "first" once.
-    for (let index = 0; index < saveIterations + 1; index += 1) {
+    for (let index = 0; index < (reduced ? 0 : saveIterations + 1); index += 1) {
         // eslint-disable-next-line no-await-in-loop -- sequential on purpose: each run writes the same `_generated/`.
         firstSavePool.push(await start(fixture));
     }
@@ -163,7 +169,7 @@ describe("watcher handlers (synchronous part)", () => {
     });
 });
 
-describe("Lunora save → HMR notify (end to end)", () => {
+describe.skipIf(reduced)("Lunora save → HMR notify (end to end)", () => {
     bench(
         "first save after startup",
         async () => {
