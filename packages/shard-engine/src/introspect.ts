@@ -1976,10 +1976,10 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     // on why the uncursored (delete) read must keep its unordered scan.
     const orderSql = options.after === undefined ? "" : " ORDER BY id";
 
-    // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
-    // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
     assertParameterBudget(table, parameters.length + 1);
 
+    // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
+    // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
     const fetched = sql.exec<{ id: string }>(`SELECT id FROM ${quoted}${whereSql}${orderSql} LIMIT ?`, ...parameters, limit + 1).toArray();
 
     const hasMore = fetched.length > limit;
@@ -2069,11 +2069,11 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
     const whereParams = predicate?.parameters ?? [];
 
+    assertParameterBudget(table, resolved.params.length * 2 + whereParams.length + 1);
+
     // The grouped expression's bound path params appear twice (SELECT + GROUP BY),
     // so they bracket the WHERE params on each side in SQL order. Over-fetch one
     // row past the cap to detect (and report) truncation.
-    assertParameterBudget(table, resolved.params.length * 2 + whereParams.length + 1);
-
     const rows = sql
         .exec<{
             count: bigint | number;
