@@ -80,45 +80,46 @@ describe("lunora init — interactive offer", () => {
         expect(lines.join("\n")).toMatch(/lunora add/);
     });
 
-    it("scaffolds and wires an external provider chosen with --auth on a Vite-first template", async () => {
-        expect.assertions(5);
+    // Every template: the resolver must land where that template's worker reads it, or init must say it could not.
+    it.each([
+        ["analog", "lunora/server.ts"],
+        ["astro", "src/server.ts"],
+        ["expo", undefined],
+        ["next", "lunora/server.ts"],
+        ["nuxt", "lunora/server.ts"],
+        ["rspack-react", "src/server.ts"],
+        ["solid-v2", "src/server.ts"],
+        ["standalone", "src/server.ts"],
+        ["sveltekit", "lunora/app.ts"],
+        ["tanstack-start-react", "lunora.config.ts"],
+        ["tanstack-start-react-rspack", "src/app.ts"],
+        ["tanstack-start-solid", "lunora.config.ts"],
+        ["vinext", "lunora.config.ts"],
+        ["vinext-pages", "lunora.config.ts"],
+    ] as const)("wires --auth=clerk into the %s template (%s)", async (template, wiredFile) => {
+        expect.assertions(4);
 
+        const { lines, logger } = makeLogger();
         const result = await runInitCommand({
             auth: "clerk",
             cwd: workdir,
             from: templatesRoot,
-            logger: makeLogger().logger,
-            name: "app3",
+            logger,
+            name: template,
             registryFrom: registryRoot,
-            templateType: "tanstack-start-react",
+            templateType: template,
             yes: true,
         });
-        const app = join(workdir, "app3");
+        const app = join(workdir, template);
 
         expect(result.code).toBe(0);
         expect(existsSync(join(app, "lunora", "identity", "clerk.ts"))).toBe(true);
-        expect(readFileSync(join(app, "lunora.config.ts"), "utf8")).toContain("memoizeIdentity(clerkIdentity(env))");
-        expect(readFileSync(join(app, "src", "routes", "__root.tsx"), "utf8")).toContain("authTokenOnUpgrade: true");
-        expect(readFileSync(join(app, ".dev.vars"), "utf8")).toContain("CLERK_AUTHORIZED_PARTIES=");
-    });
+        expect(readFileSync(join(app, ".dev.vars.example"), "utf8")).toContain("CLERK_AUTHORIZED_PARTIES=");
 
-    it("wires --auth into a hand-written worker entry", async () => {
-        expect.assertions(3);
+        // Wired into the file the template's worker reads, or (expo builds its worker with createWorker) a warning saying what to add.
+        const evidence =
+            wiredFile === undefined ? lines.filter((line) => line.startsWith("warn: auth:")).join("\n") : readFileSync(join(app, wiredFile), "utf8");
 
-        const result = await runInitCommand({
-            auth: "auth0",
-            cwd: workdir,
-            from: templatesRoot,
-            logger: makeLogger().logger,
-            name: "app4",
-            registryFrom: registryRoot,
-            templateType: "standalone",
-            yes: true,
-        });
-        const app = join(workdir, "app4");
-
-        expect(result.code).toBe(0);
-        expect(readFileSync(join(app, "src", "server.ts"), "utf8")).toContain("memoizeIdentity(auth0Identity(env))");
-        expect(readFileSync(join(app, ".dev.vars"), "utf8")).toContain("AUTH0_AUDIENCE=");
+        expect(evidence).toContain("resolveIdentity: memoizeIdentity(clerkIdentity(env))");
     });
 });

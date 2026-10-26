@@ -9,9 +9,10 @@
  * resolver to the Worker as `resolveIdentity` and lets the client's sockets
  * carry the bearer.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { projectUsesUmbrella } from "@lunora/config";
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, projectUsesUmbrella } from "@lunora/config";
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, join, relative } from "@visulima/path";
 
 import type { Logger } from "../../util/logger";
@@ -34,6 +35,8 @@ const AUTH_CHOICES: ReadonlyArray<AuthChoice> = AUTH_CHOICE_OPTIONS.map((option)
 interface ExternalAuthSpec {
     /** The client-side token wiring, printed as the next step (the provider SDK and its framework binding are the app's choice). */
     clientSnippet: string;
+    /** The env vars the registry item writes to `.dev.vars`, recorded in the committed `.dev.vars.example` too. */
+    envVars: ReadonlyArray<string>;
     /** The resolver the registry item's `lunora/identity/<file>.ts` exports. */
     identity: string;
     /** `lunora/identity/<file>.ts`. */
@@ -52,6 +55,7 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
             "});",
             "const stop = setAuthTokenProvider(client, fetchToken, { subject: user.sub });",
         ].join("\n"),
+        envVars: ["AUTH0_DOMAIN", "AUTH0_AUDIENCE"],
         identity: "auth0Identity",
         identityFile: "auth0",
         item: "auth-auth0-jwt",
@@ -61,6 +65,7 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
             "// @clerk/react: const { getToken, isSignedIn, userId } = useAuth();",
             "const stop = setAuthTokenProvider(client, getToken, { subject: userId });",
         ].join("\n"),
+        envVars: ["CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES"],
         identity: "clerkIdentity",
         identityFile: "clerk",
         item: "auth-clerk-jwt",
@@ -74,6 +79,7 @@ const EXTERNAL_AUTH: Readonly<Record<ExternalAuthProvider, ExternalAuthSpec>> = 
             "});",
             "const stop = setAuthTokenProvider(client, fetchToken, { subject: user.id });",
         ].join("\n"),
+        envVars: ["WORKOS_CLIENT_ID"],
         identity: "workosIdentity",
         identityFile: "workos",
         item: "auth-workos-jwt",
@@ -95,8 +101,24 @@ const parseAuthChoice = (raw: string, warn: (message: string) => void): AuthChoi
     return undefined;
 };
 
-/** Hand-written Worker entries a template may ship, in the order the registry probes them, plus TanStack Start's `src/app.ts`. */
-const ENTRY_CANDIDATES = ["src/server.ts", "src/app.ts", "src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"];
+/**
+ * Where the templates build their app with `defineApp()`. The shared builders
+ * (`lunora/app.ts`, `src/app.ts`) come first: two Worker entries finish them, so
+ * auth wired there reaches both dev and deploy.
+ */
+const ENTRY_CANDIDATES = [
+    "lunora/app.ts",
+    "src/app.ts",
+    "lunora/server.ts",
+    "src/server.ts",
+    "src/server/index.ts",
+    "src/server/index.tsx",
+    "src/index.ts",
+    "src/worker.ts",
+];
+
+/** A Vite-first app's wrangler `main`: `@lunora/vite` composes the worker and applies `lunora.config.ts`'s `app` hook. */
+const COMPOSED_WORKER = "virtual:lunora/worker";
 
 const CONFIG_FILES = ["lunora.config.ts", "lunora.config.mts", "lunora.config.js", "lunora.config.mjs"];
 
@@ -105,7 +127,13 @@ const CLIENT_DIRECTORIES = ["src", "app", "pages", "plugins"];
 
 const CLIENT_FILE = /\.(?:[jt]sx?|svelte|vue)$/u;
 const NEW_CLIENT = "new LunoraClient({";
-const BUILD_CALL = /\n([\t ]*)\.build\(\)/u;
+
+/**
+ * The end of the `defineApp()` chain: its `.build()`, or, for a shared builder
+ * finished elsewhere, the `;` closing the statement.
+ */
+// ponytail: text match on the template shapes, not a parse; a chain with a `;` inside an arrow body would need ts-morph.
+const CHAIN_END = /\n([\t ]*)\.build\(\)|;\n/u;
 
 const runtimeModule = (projectDirectory: string): string => (projectUsesUmbrella(projectDirectory) ? "lunorash/runtime" : "@lunora/runtime");
 
@@ -117,9 +145,9 @@ const identitySpecifier = (projectDirectory: string, fromFile: string, spec: Ext
 };
 
 /**
- * Chain `.extend((env) => ({ resolveIdentity }))` onto the entry's `defineApp()`
- * builder, just before its `.build()`, and import what it uses. Returns the
- * patched file, or `undefined` when no entry calls `defineApp()`.
+ * Chain `.extend((env) => ({ resolveIdentity }))` onto the app's `defineApp()`
+ * builder, at the end of the chain, and import what it uses. Returns the
+ * patched file, or `undefined` when no candidate calls `defineApp()`.
  */
 const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): string | undefined => {
     for (const candidate of ENTRY_CANDIDATES) {
@@ -131,14 +159,14 @@ const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): string | u
 
         const source = readFileSync(path, "utf8");
         const start = source.indexOf("defineApp<");
-        const build = start === -1 ? undefined : (BUILD_CALL.exec(source.slice(start)) ?? undefined);
+        const end = start === -1 ? undefined : (CHAIN_END.exec(source.slice(start)) ?? undefined);
 
-        if (build === undefined) {
+        if (end === undefined) {
             continue;
         }
 
-        const indent = build[1] ?? "    ";
-        const at = start + build.index;
+        const indent = end[1] ?? "    ";
+        const at = start + end.index;
         const extend = `\n${indent}// Verify the provider's token on every request and feed it into ctx.auth (memoized for 5 s).\n${indent}.extend((env) => ({ resolveIdentity: memoizeIdentity(${spec.identity}(env)) }))`;
         const imports = `import { memoizeIdentity } from "${runtimeModule(projectDirectory)}";\nimport { ${spec.identity} } from "${identitySpecifier(projectDirectory, candidate, spec)}";\n`;
 
@@ -154,9 +182,19 @@ const wireEntry = (projectDirectory: string, spec: ExternalAuthSpec): string | u
     return undefined;
 };
 
-/** A Vite-first app has no entry: its builder calls go in `lunora.config.ts`'s `app` hook. Only a project without a config file gets one written. */
+const composesWorker = (projectDirectory: string): boolean => {
+    const wranglerPath = findWranglerFile(projectDirectory);
+
+    return wranglerPath !== undefined && readWranglerJsonc<{ main?: string }>(wranglerPath).parsed?.main === COMPOSED_WORKER;
+};
+
+/**
+ * A Vite-first app has no entry: its builder calls go in `lunora.config.ts`'s
+ * `app` hook, which only the composed worker reads. Only such a project without
+ * a config file gets one written.
+ */
 const wireConfig = (projectDirectory: string, spec: ExternalAuthSpec): string | undefined => {
-    if (CONFIG_FILES.some((file) => existsSync(join(projectDirectory, file)))) {
+    if (!composesWorker(projectDirectory) || CONFIG_FILES.some((file) => existsSync(join(projectDirectory, file)))) {
         return undefined;
     }
 
@@ -212,6 +250,30 @@ const enableUpgradeBearer = (projectDirectory: string): string[] =>
     });
 
 /**
+ * Record the provider's env vars in `.dev.vars.example`, the committed list of
+ * what to fill in (`.dev.vars` itself is gitignored), with the placeholder the
+ * registry item wrote to `.dev.vars`. Keys already listed are left alone.
+ */
+const recordEnvExample = (projectDirectory: string, spec: ExternalAuthSpec): boolean => {
+    const examplePath = join(projectDirectory, DEV_VARS_EXAMPLE_FILE);
+    const devVariablesPath = join(projectDirectory, DEV_VARS_FILE);
+    const example = existsSync(examplePath) ? readFileSync(examplePath, "utf8") : "";
+    const devVariables = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8").split("\n") : [];
+    const missing = spec.envVars.filter((key) => !example.split("\n").some((line) => line.startsWith(`${key}=`)));
+
+    if (missing.length === 0) {
+        return false;
+    }
+
+    const lines = missing.map((key) => devVariables.find((line) => line.startsWith(`${key}=`)) ?? `${key}=`);
+    const separator = example.length === 0 || example.endsWith("\n") ? "" : "\n";
+
+    appendFileSync(examplePath, `${separator}# ${spec.item}: the identity provider the Worker verifies tokens from.\n${lines.join("\n")}\n`);
+
+    return true;
+};
+
+/**
  * Connect an installed `auth-<p>-jwt` item: `resolveIdentity` on the Worker
  * (the entry's `defineApp()` chain, else a new `lunora.config.ts`), and
  * `authTokenOnUpgrade` on the client. What it cannot place is printed, with
@@ -227,6 +289,10 @@ const wireExternalAuth = (projectDirectory: string, provider: ExternalAuthProvid
         );
     } else {
         logger.success(`auth: wired ${spec.identity} as resolveIdentity in ${server}`);
+    }
+
+    if (recordEnvExample(projectDirectory, spec)) {
+        logger.success(`auth: listed ${spec.envVars.join(", ")} in ${DEV_VARS_EXAMPLE_FILE}`);
     }
 
     for (const file of enableUpgradeBearer(projectDirectory)) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,9 @@ const CLIENT = `import { LunoraClient } from "lunorash/client";
 
 export const client = new LunoraClient({ url: location.origin });
 `;
+
+/** What the auth-auth0-jwt item writes to `.dev.vars`, shortened. */
+const AUTH0_ENV = ["AUTH0_DOMAIN=acme", "AUTH0_AUDIENCE=api"];
 
 const silentLogger = (): { lines: string[]; logger: Logger } => {
     const lines: string[] = [];
@@ -68,6 +71,8 @@ describe(wireExternalAuth, () => {
     it("writes lunora.config.ts for a Vite-first app with no entry", () => {
         expect.assertions(2);
 
+        writeFileSync(join(project, "wrangler.jsonc"), '{ "main": "virtual:lunora/worker" }');
+
         wireExternalAuth(project, "workos", silentLogger().logger);
 
         const config = readFileSync(join(project, "lunora.config.ts"), "utf8");
@@ -78,6 +83,8 @@ describe(wireExternalAuth, () => {
 
     it("leaves an existing lunora.config.ts alone and says what to add", () => {
         expect.assertions(2);
+
+        writeFileSync(join(project, "wrangler.jsonc"), '{ "main": "virtual:lunora/worker" }');
 
         writeFileSync(join(project, "lunora.config.ts"), "export default {};\n");
 
@@ -98,6 +105,30 @@ describe(wireExternalAuth, () => {
 
         expect(readFileSync(join(project, "src", "client.ts"), "utf8")).toContain("new LunoraClient({ authTokenOnUpgrade: true, url: location.origin })");
         expect(lines.join("\n")).toContain("setAuthTokenProvider(client, getToken, { subject: userId })");
+    });
+});
+
+describe("wireExternalAuth outside a composed worker", () => {
+    it("records the env vars in .dev.vars.example and warns instead of writing a config the worker would not read", () => {
+        expect.assertions(3);
+
+        const project = mkdtempSync(join(tmpdir(), "lunora-init-auth-"));
+
+        try {
+            writeFileSync(join(project, "package.json"), "{}");
+            writeFileSync(join(project, "wrangler.jsonc"), '{ "main": "worker.ts" }');
+            writeFileSync(join(project, ".dev.vars"), `${AUTH0_ENV.join("\n")}\n`);
+
+            const { lines, logger } = silentLogger();
+
+            wireExternalAuth(project, "auth0", logger);
+
+            expect(existsSync(join(project, "lunora.config.ts"))).toBe(false);
+            expect(lines.join("\n")).toContain("memoizeIdentity(auth0Identity(env))");
+            expect(readFileSync(join(project, ".dev.vars.example"), "utf8")).toContain(AUTH0_ENV.join("\n"));
+        } finally {
+            rmSync(project, { force: true, recursive: true });
+        }
     });
 });
 
